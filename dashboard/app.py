@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import hmac
 import json
+import math
 import os
 import re
+import threading
 import time
 from pathlib import Path
 
@@ -19,6 +21,7 @@ from flask import Flask, Response, jsonify, request, send_file
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE = ROOT / "state"
+START_TIME = time.time()  # démarrage du serveur dashboard (uptime)
 
 app = Flask(__name__)
 
@@ -48,6 +51,10 @@ def _guard():
         return Response("Accès refusé : définir DASHBOARD_PASSWORD pour l'accès distant.", 403)
 
 _cache: dict = {}
+# les objets ccxt ne sont pas thread-safe ; le serveur Flask sert les requêtes
+# en parallèle (7 fetchs simultanés au chargement de la page) → on sérialise
+# tous les appels exchange derrière un verrou pour éviter les races.
+_ex_lock = threading.Lock()
 
 
 def _cached(key: str, ttl: float, fn):
@@ -56,7 +63,8 @@ def _cached(key: str, ttl: float, fn):
     if hit and now - hit[0] < ttl:
         return hit[1]
     try:
-        value = fn()
+        with _ex_lock:
+            value = fn()
         _cache[key] = (now, value)
         return value
     except Exception:
@@ -95,6 +103,57 @@ def _read_equity(name: str) -> pd.Series:
     return pd.Series(df["equity"].values, index=ts).sort_index()
 
 
+def _timed(label: str, fn):
+    """Exécute fn en mesurant sa latence (ms), stockée dans le cache."""
+    t0 = time.time()
+    try:
+        return fn()
+    finally:
+        _cache[f"{label}_ms"] = round((time.time() - t0) * 1000, 1)
+
+
+def _combined_equity() -> pd.Series:
+    """Équity combinée trend + carry, alignée à la minute."""
+    trend = _read_equity("equity_trend.csv")
+    carry = _read_equity("equity_carry.csv")
+    if not len(trend) or not len(carry):
+        return pd.Series(dtype=float)
+    t = trend.resample("1min").last().ffill()
+    c = carry.resample("1min").last().ffill()
+    idx = t.index.intersection(c.index)
+    return (t[idx] + c[idx]).dropna()
+
+
+def _live_metrics() -> dict:
+    """Sharpe / Sortino / Calmar glissants + drawdown sur l'équity combinée
+    (rendements journaliers). Renvoie None quand l'historique est trop court."""
+    comb = _combined_equity()
+    out = {"sharpe": None, "sortino": None, "calmar": None, "cagr": None,
+           "max_dd": None, "cur_dd": None, "vol_annual": None, "days": 0}
+    if len(comb) < 3:
+        return out
+    daily = comb.resample("1D").last().dropna()
+    out["days"] = int((comb.index[-1] - comb.index[0]).total_seconds() // 86400)
+    max_dd = float((comb / comb.cummax() - 1.0).min())
+    out["max_dd"] = max_dd
+    out["cur_dd"] = float(comb.iloc[-1] / comb.cummax().iloc[-1] - 1.0)
+    years = (comb.index[-1] - comb.index[0]).total_seconds() / (365.25 * 86400)
+    if years > 0:
+        cagr = (comb.iloc[-1] / comb.iloc[0]) ** (1.0 / years) - 1.0
+        out["cagr"] = float(cagr)
+        if max_dd < 0:
+            out["calmar"] = float(cagr / abs(max_dd))
+    rets = daily.pct_change().dropna()
+    if len(rets) >= 2 and rets.std() > 0:
+        sq = math.sqrt(365)
+        out["sharpe"] = float(rets.mean() / rets.std() * sq)
+        out["vol_annual"] = float(rets.std() * sq)
+        downside = rets[rets < 0]
+        if len(downside) > 1 and downside.std() > 0:
+            out["sortino"] = float(rets.mean() / downside.std() * sq)
+    return out
+
+
 @app.route("/")
 def index():
     return send_file(Path(__file__).parent / "index.html")
@@ -129,10 +188,54 @@ def manifest():
     )
 
 
+SERVICE_WORKER = """
+// Service worker btcquant : cache offline léger + support notifications.
+const CACHE = 'btcq-v1';
+self.addEventListener('install', e => { self.skipWaiting(); });
+self.addEventListener('activate', e => { e.waitUntil(clients.claim()); });
+self.addEventListener('fetch', e => {
+  const url = new URL(e.request.url);
+  // les API passent toujours par le réseau ; le shell est mis en cache
+  if (url.pathname.startsWith('/api/')) return;
+  e.respondWith(
+    fetch(e.request).then(r => {
+      const copy = r.clone();
+      caches.open(CACHE).then(c => c.put(e.request, copy)).catch(()=>{});
+      return r;
+    }).catch(() => caches.match(e.request))
+  );
+});
+// affichage d'une notification demandée par la page (postMessage)
+self.addEventListener('message', e => {
+  if (e.data && e.data.type === 'notify') {
+    self.registration.showNotification(e.data.title, {
+      body: e.data.body, icon: '/icon.svg', badge: '/icon.svg', tag: e.data.tag,
+    });
+  }
+});
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(clients.matchAll({type:'window'}).then(cs => {
+    for (const c of cs) if ('focus' in c) return c.focus();
+    return clients.openWindow('/');
+  }));
+});
+"""
+
+
+@app.route("/sw.js")
+def service_worker():
+    return Response(SERVICE_WORKER, mimetype="application/javascript",
+                    headers={"Cache-Control": "no-cache"})
+
+
 @app.route("/api/summary")
 def summary():
-    ticker = _cached("ticker", 30, lambda: _spot().fetch_ticker("BTC/USDT"))
+    ticker = _cached("ticker", 30, lambda: _timed("api", lambda: _spot().fetch_ticker("BTC/USDT")))
     funding = _cached("funding", 300, lambda: _perp().fetch_funding_rate("BTC/USDT:USDT"))
+    # taux EUR/USDT pour l'affichage optionnel en euros (1 EUR = X USDT)
+    fx = _cached("fx_eur", 3600, lambda: _spot().fetch_ticker("EUR/USDT"))
+    eur_usd = float(fx["last"]) if fx and fx.get("last") else None
 
     trend_state = _read_json(STATE / "live_state_4x.json") or {}
     carry_state = _read_json(STATE / "carry_state.json") or {}
@@ -178,6 +281,20 @@ def summary():
         slots.append(row)
 
     next_funding = funding.get("fundingTimestamp") if funding else None
+
+    # exposition brute / levier effectif (somme des notionnels / équity totale)
+    trend_notional = 0.0
+    for sl in slots:
+        if sl.get("qty") and price:
+            trend_notional += abs(sl["qty"]) * price
+    carry_notional = carry_equity * 3.0 if carry_state.get("in_position") else 0.0
+    gross_notional = trend_notional + carry_notional
+    leverage = gross_notional / total if total else 0.0
+
+    # prochaine bougie 4h (le trend décide à la clôture des bougies 4h UTC)
+    now_ts = pd.Timestamp.now(tz="UTC")
+    next_bar = now_ts.floor("4h") + pd.Timedelta(hours=4)
+
     return jsonify(
         {
             "now": pd.Timestamp.now(tz="UTC").isoformat(),
@@ -216,7 +333,15 @@ def summary():
                 "pnl_pct": total / initial_total - 1.0,
                 "day_pnl_pct": day_pnl_pct,
                 "allocation_trend": trend_equity / total if total else None,
+                "gross_notional": gross_notional,
+                "leverage": leverage,
             },
+            "health": {
+                "server_uptime_s": time.time() - START_TIME,
+                "api_latency_ms": _cache.get("api_ms"),
+                "next_bar_ts": int(next_bar.timestamp() * 1000),
+            },
+            "fx": {"eur_usd": eur_usd},
         }
     )
 
@@ -231,14 +356,21 @@ def equity():
             s = s.resample("5min").last().dropna()
         return [[int(ts.timestamp() * 1000), round(float(v), 2)] for ts, v in s.items()]
 
-    combined = pd.Series(dtype=float)
-    if len(trend) and len(carry):
-        t = trend.resample("1min").last().ffill()
-        c = carry.resample("1min").last().ffill()
-        idx = t.index.intersection(c.index)
-        combined = (t[idx] + c[idx]).dropna()
+    combined = _combined_equity()
 
-    return jsonify({"trend": pack(trend), "carry": pack(carry), "combined": pack(combined)})
+    # buy & hold : prix BTC sur la même fenêtre (le front normalise en base 100)
+    buyhold = []
+    if len(combined):
+        start_ms = int(combined.index[0].timestamp() * 1000)
+        def fetch_bh():
+            raw = _spot().fetch_ohlcv("BTC/USDT", "1h", since=start_ms, limit=1000)
+            return [[r[0], round(r[4], 2)] for r in raw]
+        buyhold = _cached("buyhold", 600, fetch_bh) or []
+
+    return jsonify({
+        "trend": pack(trend), "carry": pack(carry),
+        "combined": pack(combined), "buyhold": buyhold,
+    })
 
 
 @app.route("/api/price")
@@ -315,19 +447,67 @@ def conformity():
     return jsonify(out)
 
 
+@app.route("/api/metrics")
+def metrics():
+    """Métriques live (Sharpe/Sortino/Calmar glissants) sur l'équity réalisée."""
+    return jsonify(_live_metrics())
+
+
 @app.route("/api/trades")
 def trades():
+    """Trades clôturés, filtrables par date (from/to = ISO ou YYYY-MM-DD),
+    par stratégie (strategy=trend_ls_20…) et paginables (limit, défaut 12)."""
     path = STATE / "trades.csv"
     if not path.exists():
         return jsonify({"stats": {"n": 0, "wins": 0, "pnl": 0.0}, "rows": []})
     df = pd.read_csv(path)
+    if "exit_ts" in df.columns:
+        et = pd.to_datetime(df["exit_ts"], utc=True, errors="coerce")
+        frm, to = request.args.get("from"), request.args.get("to")
+        if frm:
+            df = df[et >= pd.Timestamp(frm, tz="UTC")]
+        if to:
+            df = df[et <= pd.Timestamp(to, tz="UTC") + pd.Timedelta(days=1)]
+    strat = request.args.get("strategy")
+    if strat and "strategy" in df.columns:
+        df = df[df["strategy"].astype(str) == strat]
     stats = {
         "n": int(len(df)),
-        "wins": int((df["pnl"] > 0).sum()),
-        "pnl": float(df["pnl"].sum()),
+        "wins": int((df["pnl"] > 0).sum()) if len(df) else 0,
+        "pnl": float(df["pnl"].sum()) if len(df) else 0.0,
     }
-    rows = df.tail(12).iloc[::-1].to_dict("records")
+    try:
+        limit = min(int(request.args.get("limit", 12)), 500)
+    except ValueError:
+        limit = 12
+    rows = df.tail(limit).iloc[::-1].to_dict("records") if len(df) else []
     return jsonify({"stats": stats, "rows": rows})
+
+
+@app.route("/api/strategy/<name>")
+def strategy_detail(name: str):
+    """Drill-down d'un sous-système : sa position courante + ses trades + stats."""
+    trend_state = _read_json(STATE / "live_state_4x.json") or {}
+    slot = trend_state.get("slots", {}).get(name, {})
+    out = {"name": name, "position": slot.get("position"), "cash": slot.get("cash"),
+           "last_bar": slot.get("last_bar_ts"), "trades": [], "stats": {}}
+    tpath = STATE / "trades.csv"
+    if tpath.exists():
+        df = pd.read_csv(tpath)
+        if "strategy" in df.columns:
+            df = df[df["strategy"].astype(str) == name]
+        if len(df):
+            out["stats"] = {
+                "n": int(len(df)),
+                "wins": int((df["pnl"] > 0).sum()),
+                "pnl": float(df["pnl"].sum()),
+                "win_rate": float((df["pnl"] > 0).mean()),
+                "avg_pnl": float(df["pnl"].mean()),
+                "best": float(df["pnl"].max()),
+                "worst": float(df["pnl"].min()),
+            }
+            out["trades"] = df.tail(20).iloc[::-1].to_dict("records")
+    return jsonify(out)
 
 
 @app.route("/api/trades.csv")
