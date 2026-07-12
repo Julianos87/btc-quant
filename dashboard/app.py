@@ -605,7 +605,15 @@ def events():
                 continue
             msg = m.group(4)
             msg = re.sub(r"^\S*(btcquant\S*)\s+", "", msg)  # retire le nom du logger
-            out.append({"ts": m.group(1), "level": m.group(3), "source": source, "msg": msg.strip()})
+            # Un timestamp numérique permet d'aligner les événements sur l'equity UTC.
+            ts = pd.Timestamp(m.group(1), tz="UTC")
+            out.append({
+                "ts": m.group(1),
+                "ts_ms": int(ts.timestamp() * 1000),
+                "level": m.group(3),
+                "source": source,
+                "msg": msg.strip(),
+            })
     out.sort(key=lambda e: e["ts"], reverse=True)
     return jsonify(out[:60])
 

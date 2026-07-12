@@ -111,6 +111,38 @@
   #alert .ic { font-size:17px; }
   .beat { font-size:11px; color:var(--muted); font-weight:500; }
 
+  /* cockpit: saved layouts, system state, and data freshness */
+  .cockpitbar {
+    display:flex; align-items:center; gap:14px; margin:-8px 0 16px; padding:10px 12px 10px 15px;
+    border:1px solid var(--ring); border-radius:15px; background:var(--surface); backdrop-filter:var(--blur);
+    box-shadow:var(--shadow);
+  }
+  .view-control { display:flex; align-items:center; gap:10px; flex:none; }
+  .view-control .eyebrow { margin:0; white-space:nowrap; }
+  .view-control .chip { padding:5px 10px; }
+  .cockpit-status { display:flex; align-items:center; gap:10px; min-width:0; padding-left:14px; border-left:1px solid var(--grid); }
+  .status-signal { width:9px; height:9px; border-radius:99px; background:var(--good); box-shadow:0 0 0 4px var(--good-bg),0 0 12px var(--good); flex:none; }
+  .status-copy { min-width:0; display:flex; align-items:baseline; gap:8px; }
+  .status-title { font-size:12px; font-weight:750; white-space:nowrap; }
+  .status-detail { color:var(--muted); font-size:11.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .cockpit-status[data-status="warn"] .status-signal { background:var(--warn); box-shadow:0 0 0 4px var(--warn-bg),0 0 12px var(--warn); }
+  .cockpit-status[data-status="crit"] .status-signal { background:var(--crit); box-shadow:0 0 0 4px var(--crit-bg),0 0 12px var(--crit); }
+  .data-freshness { display:flex; align-items:center; gap:7px; margin-left:auto; color:var(--muted); font-size:11.5px; white-space:nowrap; }
+  .fresh-dot { width:6px; height:6px; border-radius:99px; background:var(--s1); box-shadow:0 0 8px var(--s1); animation:pulse 1.8s ease-in-out infinite; }
+  .data-freshness.stale .fresh-dot { background:var(--warn); box-shadow:0 0 8px var(--warn); animation:none; }
+  @media (max-width:780px) {
+    .cockpitbar { align-items:stretch; flex-wrap:wrap; gap:10px; }
+    .cockpit-status { order:3; width:100%; padding:10px 0 0; border-left:0; border-top:1px solid var(--grid); }
+    .data-freshness { margin-left:auto; }
+  }
+  @media (max-width:520px) {
+    .view-control { width:100%; justify-content:space-between; }
+    .view-control .chips { flex:1; justify-content:space-between; }
+    .view-control .chip { padding:5px 7px; font-size:11px; }
+    .status-copy { display:block; }
+    .status-detail { display:block; margin-top:1px; }
+  }
+
   /* ── cartes ─────────────────────────────────────────────── */
   .card {
     background:linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,0) 42%), var(--surface);
@@ -183,6 +215,10 @@
   .badge.long  { background:var(--good-bg); color:var(--good-text); }
   .badge.short { background:var(--crit-bg); color:var(--crit); }
   .badge.flat  { background:color-mix(in srgb,var(--muted) 12%,transparent); color:var(--muted); }
+  .stop-gap { display:flex; align-items:center; gap:5px; margin-top:4px; color:var(--muted); font-size:10px; white-space:nowrap; }
+  .stop-gap i { display:block; width:24px; height:4px; border-radius:99px; background:var(--s2); }
+  .stop-gap.urgent { color:var(--crit); }
+  .stop-gap.urgent i { background:var(--crit); }
   .kv { display:flex; justify-content:space-between; align-items:center; padding:9px 0; border-bottom:1px solid var(--grid); font-size:13px; }
   .kv:last-child { border-bottom:none; padding-bottom:2px; }
   .kv .k { color:var(--ink-2); }
@@ -286,7 +322,7 @@
 
   /* ── countdown ───────────────────────────────────────────── */
   .cd { font-variant-numeric:tabular-nums; }
-  [data-hidden="1"] { display:none !important; }
+  [data-hidden="1"], [data-view-hidden="1"] { display:none !important; }
 </style>
 </head>
 <body>
@@ -307,6 +343,22 @@
   <div class="hm"><div class="lab" data-i18n="h24">24 heures</div><div class="val num" id="h-change">—</div></div>
   <div class="hm"><div class="lab" data-i18n="funding_ann">Funding annualisé</div><div class="val num" id="h-funding">—</div></div>
 </header>
+
+<section class="cockpitbar" aria-label="Vue et état du portefeuille">
+  <div class="view-control">
+    <span class="eyebrow" data-i18n="workspace">Vue</span>
+    <div class="chips" id="dashboard-view" role="tablist" aria-label="Vue du dashboard">
+      <button class="chip" role="tab" data-view="monitor" data-i18n="view_monitor">Surveillance</button>
+      <button class="chip" role="tab" data-view="performance" data-i18n="view_performance">Performance</button>
+      <button class="chip" role="tab" data-view="risk" data-i18n="view_risk">Risque</button>
+    </div>
+  </div>
+  <div class="cockpit-status" id="cockpit-status" data-status="good" role="status" aria-live="polite">
+    <span class="status-signal"></span>
+    <div class="status-copy"><span class="status-title" id="status-title">Initialisation…</span><span class="status-detail" id="status-detail"></span></div>
+  </div>
+  <div class="data-freshness" id="data-freshness"><span class="fresh-dot"></span><span id="data-age">En attente des données</span></div>
+</section>
 
 <div id="alert"><span class="ic">⚠</span><span id="alert-msg"></span></div>
 
@@ -389,7 +441,7 @@
       <div class="esub">ensemble Donchian 20 / 55 / 100 · futures · <span id="trend-guard">—</span>
         <span class="beat num" id="trend-beat"></span></div>
       <table>
-        <thead><tr><th>Système</th><th>État</th><th>Entrée</th><th>Stop</th><th>PnL lat.</th></tr></thead>
+        <thead><tr><th>Système</th><th>État</th><th>Entrée</th><th>Stop / marge</th><th>PnL lat.</th></tr></thead>
         <tbody id="slots"></tbody>
       </table>
     </div>
@@ -520,7 +572,7 @@ const $ = id => document.getElementById(id);
 // ── préférences persistées ─────────────────────────────────
 const PREFS_DEFAULT = {
   lang: "fr", currency: "usd", accent: "#2a78d6", range: 0, refresh: 30000,
-  notif: false, notifPos: true, ddAlert: 12,
+  notif: false, notifPos: true, ddAlert: 12, view: "monitor",
   hidden: {}, // { cardKey: true }
 };
 let PREFS = Object.assign({}, PREFS_DEFAULT, JSON.parse(localStorage.getItem("btcq-prefs") || "{}"));
@@ -549,6 +601,12 @@ const I18N = {
     auto_refresh:"Actualisation automatique", real_data:"données réelles Binance, exécution simulée",
     equity_total:"Équity totale", pnl_day:"PnL du jour · UTC", since_midnight:"depuis 00:00 UTC",
     alloc_real:"Allocation réelle", online:"EN LIGNE", offline:"ARRÊTÉ",
+    workspace:"Vue", view_monitor:"Surveillance", view_performance:"Performance", view_risk:"Risque",
+    status_good:"Tout est nominal", status_warn:"Surveillance requise", status_crit:"Action requise",
+    status_nominal_detail:"Trend et Carry répondent · protections armées",
+    status_trend_down:"Trend ne répond plus", status_carry_down:"Carry ne répond plus",
+    status_kill:"Kill-switch actif", status_lockout:"Lockout journalier actif",
+    data_now:"données à l’instant", data_ago:"mis à jour il y a",
     sharpe:"Sharpe", sortino:"Sortino", calmar:"Calmar", vol:"Volatilité",
     cards:{chart:"Courbe d’équity", price:"Graphe prix", events:"Journal", trend:"Moteur Trend",
       carry:"Moteur Carry", breakdown:"Répartition & records", conformity:"Est-ce normal ?",
@@ -574,6 +632,12 @@ const I18N = {
     auto_refresh:"Auto refresh", real_data:"real Binance data, simulated execution",
     equity_total:"Total equity", pnl_day:"Daily PnL · UTC", since_midnight:"since 00:00 UTC",
     alloc_real:"Real allocation", online:"ONLINE", offline:"STOPPED",
+    workspace:"View", view_monitor:"Monitor", view_performance:"Performance", view_risk:"Risk",
+    status_good:"All systems nominal", status_warn:"Monitoring required", status_crit:"Action required",
+    status_nominal_detail:"Trend and Carry are responding · safeguards armed",
+    status_trend_down:"Trend is not responding", status_carry_down:"Carry is not responding",
+    status_kill:"Kill switch is active", status_lockout:"Daily lockout is active",
+    data_now:"data received just now", data_ago:"updated",
     sharpe:"Sharpe", sortino:"Sortino", calmar:"Calmar", vol:"Volatility",
     cards:{chart:"Equity curve", price:"Price chart", events:"Event log", trend:"Trend engine",
       carry:"Carry engine", breakdown:"Breakdown & records", conformity:"Is this normal?",
@@ -589,6 +653,8 @@ function applyI18n() {
   });
   $("f-refresh").textContent = PREFS.refresh
     ? t("auto_refresh") + " " + (PREFS.refresh/1000) + " s" : (PREFS.lang==="en"?"Manual refresh":"Rafraîchissement manuel");
+  if (lastSummary) renderCockpitStatus(lastSummary);
+  updateDataFreshness();
 }
 
 // ── formatage devise / pourcentage ─────────────────────────
@@ -605,13 +671,50 @@ const fmtPct = (v, dp=2) => v == null || isNaN(v) ? "—" :
 const fmtNum = (v, dp=2) => v == null || isNaN(v) ? "—" : v.toFixed(dp).replace(".", PREFS.lang==="en"?".":",");
 const cls = (el, v) => { el.classList.toggle("up", v > 0); el.classList.toggle("down", v < 0); };
 let range = PREFS.range, unit = "pct", chartData = null, showBH = false, lastSummary = null, lastTradeRows = [];
+let lastSummaryUpdatedAt = null;
 
 // ── couleur d'accent ───────────────────────────────────────
 function applyAccent() { document.documentElement.style.setProperty("--s1", PREFS.accent); }
 
+const VIEW_CARDS = {
+  monitor: new Set(["chart", "price", "events", "trend", "carry", "exposure", "protocol"]),
+  performance: new Set(["chart", "breakdown", "conformity", "trades", "metrics"]),
+  risk: new Set(["chart", "price", "events", "trend", "carry", "conformity", "exposure"]),
+};
+
+function applyDashboardView() {
+  const view = VIEW_CARDS[PREFS.view] ? PREFS.view : "monitor";
+  PREFS.view = view;
+  if (view === "risk") unit = "dd";
+  if (view === "performance") unit = "pct";
+  document.querySelectorAll("[data-card]").forEach(card => {
+    card.dataset.viewHidden = VIEW_CARDS[view].has(card.dataset.card) ? "0" : "1";
+  });
+  document.querySelectorAll("#dashboard-view [data-view]").forEach(button => {
+    const active = button.dataset.view === view;
+    button.classList.toggle("on", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  document.querySelectorAll("#unit .chip").forEach(button => button.classList.toggle("on", button.dataset.u === unit));
+}
+
+function setChartUnit(next) {
+  unit = next;
+  document.querySelectorAll("#unit .chip").forEach(button => button.classList.toggle("on", button.dataset.u === unit));
+  drawChart();
+}
+
+document.querySelectorAll("#dashboard-view [data-view]").forEach(button => button.onclick = () => {
+  PREFS.view = button.dataset.view;
+  savePrefs();
+  applyDashboardView();
+  if (PREFS.view === "risk") setChartUnit("dd");
+  if (PREFS.view === "performance") setChartUnit("pct");
+});
+
 async function refreshSummary() {
   const s = await (await fetch("/api/summary")).json();
-  btcPrice = s.btc.price; if (s.fx) fx = s.fx; lastSummary = s;
+  btcPrice = s.btc.price; if (s.fx) fx = s.fx; lastSummary = s; lastSummaryUpdatedAt = Date.now();
   $("h-price").textContent = s.btc.price ? s.btc.price.toLocaleString(LOCALE(), {maximumFractionDigits:0}) + " $" : "—";
   $("h-change").textContent = fmtPct(s.btc.change24h); cls($("h-change"), s.btc.change24h);
   $("h-funding").textContent = fmtPct(s.funding.annualized, 1); cls($("h-funding"), s.funding.annualized);
@@ -668,14 +771,22 @@ async function refreshSummary() {
     const pnl = sl.upnl == null ? "—" : (sl.upnl >= 0 ? "+" : "") + sl.upnl.toFixed(1) + " $";
     const pnlCls = sl.upnl > 0 ? "up" : sl.upnl < 0 ? "down" : "";
     const f = v => v ? v.toLocaleString("fr-FR", {maximumFractionDigits:0}) : "—";
+    const stopGap = s.btc.price && sl.stop && sl.state !== "FLAT"
+      ? (sl.state === "LONG" ? (s.btc.price - sl.stop) : (sl.stop - s.btc.price)) / s.btc.price : null;
+    const closeToStop = stopGap != null && stopGap < 0.01;
+    const gap = stopGap == null ? "" : `<div class="stop-gap ${closeToStop ? "urgent" : ""}">
+      <i style="width:${Math.max(3, Math.min(100, Math.max(0, stopGap) / .08 * 100)).toFixed(0)}%"></i>
+      <span>${stopGap < 0 ? "stop dépassé" : `${(stopGap * 100).toFixed(1).replace(".", ",")} % au stop`}</span></div>`;
     return `<tr class="slotclick" data-name="${sl.name}" title="Voir le détail"><td style="font-weight:600">${sl.name.replace("trend_ls_", "Donchian ")}</td>
       <td><span class="badge ${badge}">${arrow}${sl.state}</span></td>
-      <td class="num">${f(sl.entry)}</td><td class="num">${f(sl.stop)}</td>
+      <td class="num">${f(sl.entry)}</td><td class="num"><div>${f(sl.stop)}</div>${gap}</td>
       <td class="num ${pnlCls}" style="font-weight:600">${pnl}</td></tr>`;
   }).join("");
   document.querySelectorAll("#slots .slotclick").forEach(tr => tr.onclick = () => openDrill(tr.dataset.name));
   renderExposureHealth(s);
+  renderCockpitStatus(s);
   checkAlerts(s);
+  updateDataFreshness();
   $("f-updated").textContent = (PREFS.lang==="en"?"updated ":"mis à jour ") + new Date().toLocaleTimeString(LOCALE());
 }
 
@@ -711,7 +822,7 @@ function updateCountdowns() {
   if ($("cd-bar")) $("cd-bar").textContent = cdText(nextBarTs);
   if ($("cd-funding")) $("cd-funding").textContent = cdText(nextFundingTs);
 }
-setInterval(updateCountdowns, 1000);
+setInterval(() => { updateCountdowns(); updateDataFreshness(); }, 1000);
 function setState(el, alive) {
   el.className = "estate " + (alive ? "on" : "off");
   el.innerHTML = '<span class="dot"></span>' + (alive ? t("online") : t("offline"));
@@ -723,6 +834,34 @@ function beat(age) {
   return `· dernière activité il y a ${(age/3600).toFixed(1)} h`;
 }
 
+function renderCockpitStatus(s) {
+  const critical = [], warnings = [];
+  if (!s.trend.alive) critical.push(t("status_trend_down"));
+  if (!s.carry.alive) critical.push(t("status_carry_down"));
+  if (s.trend.halted) critical.push(t("status_kill"));
+  if (s.trend.daily_lockout) warnings.push(t("status_lockout"));
+  const status = critical.length ? "crit" : warnings.length ? "warn" : "good";
+  $("cockpit-status").dataset.status = status;
+  $("status-title").textContent = t(status === "crit" ? "status_crit" : status === "warn" ? "status_warn" : "status_good");
+  $("status-detail").textContent = [...critical, ...warnings].join(" · ") || t("status_nominal_detail");
+}
+
+function updateDataFreshness() {
+  if (!lastSummaryUpdatedAt) return;
+  const age = Math.max(0, Math.floor((Date.now() - lastSummaryUpdatedAt) / 1000));
+  const stamp = $("data-age"), freshness = $("data-freshness");
+  let elapsed;
+  if (age < 2) elapsed = t("data_now");
+  else if (age < 60) elapsed = PREFS.lang === "en" ? `${t("data_ago")} ${age}s ago` : `${t("data_ago")} ${age} s`;
+  else {
+    const mins = Math.floor(age / 60), secs = age % 60;
+    elapsed = PREFS.lang === "en" ? `${t("data_ago")} ${mins}m ${secs}s ago` : `${t("data_ago")} ${mins} min ${secs} s`;
+  }
+  stamp.textContent = elapsed;
+  const staleAfter = PREFS.refresh ? Math.max(45, PREFS.refresh / 1000 + 15) : 90;
+  freshness.classList.toggle("stale", age > staleAfter);
+}
+
 async function refreshTrades() {
   const p = new URLSearchParams();
   const f = $("tr-from") && $("tr-from").value, to = $("tr-to") && $("tr-to").value;
@@ -730,6 +869,7 @@ async function refreshTrades() {
   const tr = await (await fetch("/api/trades?" + p.toString())).json();
   const st = $("tr-stats");
   lastTradeRows = tr.rows || [];
+  drawChart();
   if (!tr.stats.n) { st.textContent = "0 trade"; $("trades").innerHTML = `<div class="empty">${t("no_trades")}</div>`; return; }
   const wr = Math.round(tr.stats.wins / tr.stats.n * 100);
   st.textContent = `${tr.stats.n} trades · ${wr} % ✓ · ${(tr.stats.pnl >= 0 ? "+" : "") + fmt$(tr.stats.pnl, 0)}`;
@@ -762,6 +902,7 @@ function renderEvents() {
 async function refreshEvents() {
   lastEvents = await (await fetch("/api/events")).json();
   renderEvents();
+  drawChart();
 }
 document.querySelectorAll("#evfilter .chip").forEach(b => b.onclick = () => {
   document.querySelectorAll("#evfilter .chip").forEach(x => x.classList.remove("on"));
@@ -932,8 +1073,7 @@ document.querySelectorAll("#range .chip").forEach(b => b.onclick = () => {
   b.classList.add("on"); range = +b.dataset.r; drawChart();
 });
 document.querySelectorAll("#unit .chip").forEach(b => b.onclick = () => {
-  document.querySelectorAll("#unit .chip").forEach(x => x.classList.remove("on"));
-  b.classList.add("on"); unit = b.dataset.u; drawChart();
+  setChartUnit(b.dataset.u);
 });
 
 const col = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -955,6 +1095,34 @@ function drawSpark() {
       <stop offset="0%" stop-color="${c}" stop-opacity=".28"/><stop offset="100%" stop-color="${c}" stop-opacity="0"/></linearGradient></defs>
     <path d="${d} L${X(pts[pts.length-1][0])} ${H} L${X(pts[0][0])} ${H} Z" fill="url(#sg)"/>
     <path d="${d}" fill="none" stroke="${c}" stroke-width="1.8" stroke-linejoin="round"/>`;
+}
+
+const escapeSvg = value => String(value || "").replace(/[&<>"']/g, char => ({
+  "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&apos;"
+}[char]));
+
+function nearestPoint(points, ts) {
+  let lo = 0, hi = points.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (points[mid][0] < ts) lo = mid; else hi = mid;
+  }
+  return Math.abs(points[lo][0] - ts) < Math.abs(points[hi][0] - ts) ? points[lo] : points[hi];
+}
+
+function chartEventKind(event) {
+  const text = String(event.msg || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  if (text.includes("funding")) return "funding";
+  if (text.includes("entree")) return "entry";
+  if (text.includes("sortie") || text.includes("stop")) return "exit";
+  if (text.includes("kill") || event.level === "ERROR" || event.level === "WARNING") return "alert";
+  return null;
+}
+
+function eventTimestamp(event) {
+  return Number.isFinite(event.ts_ms)
+    ? event.ts_ms
+    : Date.parse(String(event.ts || "").replace(" ", "T") + "Z");
 }
 
 function drawChart() {
@@ -1042,6 +1210,28 @@ function drawChart() {
       while (hi - lo > 1) { const m = (lo+hi)>>1; (cp[m][0] < tms) ? lo=m : hi=m; }
       const yv = cp[lo][1], mc = r.pnl >= 0 ? col("--good") : col("--crit");
       g += `<circle cx="${X(tms).toFixed(1)}" cy="${Y(yv).toFixed(1)}" r="3" fill="${mc}" stroke="${col("--surface-solid")}" stroke-width="1.2" opacity=".85"/>`;
+    }
+  }
+  // événements des runners : entrées, sorties/stops, funding et alertes.
+  // Ils se recalculent à chaque rafraîchissement et suivent toujours la série affichée.
+  if (lastEvents.length && series[0] && series[0].pts.length) {
+    const cp = series[0].pts;
+    const events = lastEvents.map(event => ({event, ts:eventTimestamp(event), kind:chartEventKind(event)}))
+      .filter(row => row.kind && !isNaN(row.ts) && row.ts >= x0 && row.ts <= x1 && row.ts >= cutoff)
+      .sort((a, b) => a.ts - b.ts).slice(-18);
+    for (const row of events) {
+      const point = nearestPoint(cp, row.ts), px = X(row.ts), py = Y(point[1]);
+      const title = escapeSvg(`${row.event.source.toUpperCase()} · ${row.event.ts} · ${row.event.msg}`);
+      const common = `<title>${title}</title>`;
+      if (row.kind === "entry") {
+        g += `<g transform="translate(${px.toFixed(1)} ${py.toFixed(1)})" fill="${col("--s2")}" stroke="${col("--surface-solid")}" stroke-width="1.2">${common}<path d="M0 -6 L5 4 L-5 4 Z"/></g>`;
+      } else if (row.kind === "funding") {
+        g += `<g transform="translate(${px.toFixed(1)} ${py.toFixed(1)})" fill="${col("--s3")}" stroke="${col("--surface-solid")}" stroke-width="1.2">${common}<rect x="-4" y="-4" width="8" height="8" rx="1" transform="rotate(45)"/></g>`;
+      } else if (row.kind === "exit") {
+        g += `<g transform="translate(${px.toFixed(1)} ${py.toFixed(1)})" fill="${col("--crit")}" stroke="${col("--surface-solid")}" stroke-width="1.2">${common}<path d="M0 6 L5 -4 L-5 -4 Z"/></g>`;
+      } else {
+        g += `<g transform="translate(${px.toFixed(1)} ${py.toFixed(1)})" fill="${col("--crit")}" stroke="${col("--surface-solid")}" stroke-width="1.2">${common}<circle r="4.5"/><path d="M0 -2.3 V.7 M0 2.4 V2.5" stroke="${col("--surface-solid")}" stroke-width="1.4" stroke-linecap="round"/></g>`;
+      }
     }
   }
   // étiquettes de valeur à droite (façon terminal), anti-chevauchement
@@ -1241,7 +1431,7 @@ async function tick() {
 
 // ── init ───────────────────────────────────────────────────
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
-applyAccent(); applyI18n(); applyCardVisibility();
+applyAccent(); applyI18n(); applyCardVisibility(); applyDashboardView();
 document.querySelectorAll("#range .chip").forEach(x => x.classList.toggle("on", +x.dataset.r === range));
 tick();
 restartTimer();
