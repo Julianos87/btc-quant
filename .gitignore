@@ -1,0 +1,10 @@
+# données et état d'exécution (volumineux / spécifiques à la machine)
+data/
+state/
+backups/
+reports/
+__pycache__/
+*.pyc
+venv/
+.env
+*.egg-info/

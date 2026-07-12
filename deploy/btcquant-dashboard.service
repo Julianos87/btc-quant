@@ -1,0 +1,17 @@
+[Unit]
+Description=btcquant - dashboard web
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=btcquant
+WorkingDirectory=/opt/btcquant
+Environment=PYTHONIOENCODING=utf-8
+EnvironmentFile=/opt/btcquant/.env
+ExecStart=/opt/btcquant/venv/bin/python dashboard/app.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

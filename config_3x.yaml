@@ -1,0 +1,72 @@
+# ═══ PROFIL AGRESSIF 3x — ensemble trend long-short sur futures ═══
+#
+# Historique 2019-2026 (frais + slippage + funding inclus) :
+#   +1 493 % total (~+45 %/an) | Sharpe 1.31 | MAX DRAWDOWN -39 % | pire mois -12 %
+#
+# À SAVOIR AVANT DE LANCER :
+# - le levier ne crée pas d'edge (Sharpe identique au 1x) : il multiplie
+#   gains ET pertes par ~3. Un -39 % de creux S'EST produit dans le passé
+#   et se reproduira. Le futur fait toujours pire au moins une fois.
+# - le risque par trade reste borné (~4.5 % de l'équity par stop) : le levier
+#   sert à ouvrir des positions plus grandes quand la volatilité est basse,
+#   pas à supprimer les stops.
+# - lancer ce profil UNIQUEMENT après avoir vécu le profil 1x en réel.
+#
+# Usage : python scripts/run_backtest.py --config config_3x.yaml
+#         python scripts/run_live.py --config config_3x.yaml
+
+exchange: binance
+symbol: BTC/USDT
+quote_currency: USDT
+
+data:
+  dir: data
+  base_timeframe: 1h
+  since: "2019-01-01"
+
+costs:
+  fee_rate: 0.001
+  perp_fee_rate: 0.0005
+  funding_rate_8h: 0.0001
+  slippage_bps: 5.0
+
+risk:
+  initial_capital: 10000
+  risk_per_trade: 0.045   # 3 × 1.5 % — perte typique par trade stoppé ~4.5 %
+  max_position_pct: 0.95
+  vol_target_annual: 1.20 # 3 × 0.40
+  max_leverage: 3.0       # transmis à Binance Futures ; liquidation à ~33 %,
+                          # les stops (~8-10 %) travaillent bien avant
+  max_drawdown_halt: 0.50 # le DD historique du profil est -39 % : un halt à
+                          # 30 % couperait la stratégie en fonctionnement
+                          # normal. 50 % = protection catastrophe uniquement.
+  daily_loss_limit: 0.10  # 3 × ~3 % : bloque les nouvelles entrées du jour
+
+strategies:
+  trend_ls_20:
+    enabled: true
+    type: trend_ls
+    market: perp
+    timeframe: 4h
+    capital_fraction: 0.3333
+    params: { donchian: 20, adx_min: 20, funding_long_max: 0.0008, funding_short_min: -0.0008 }
+  trend_ls_55:
+    enabled: true
+    type: trend_ls
+    market: perp
+    timeframe: 4h
+    capital_fraction: 0.3333
+    params: { donchian: 55, adx_min: 20, funding_long_max: 0.0008, funding_short_min: -0.0008 }
+  trend_ls_100:
+    enabled: true
+    type: trend_ls
+    market: perp
+    timeframe: 4h
+    capital_fraction: 0.3334
+    params: { donchian: 100, adx_min: 20, funding_long_max: 0.0008, funding_short_min: -0.0008 }
+
+execution:
+  mode: paper             # paper | live — NE PASSER EN live QU'APRÈS VALIDATION
+  testnet: true
+  state_file: state/live_state_3x.json   # état séparé du profil 1x
+  poll_buffer_seconds: 20

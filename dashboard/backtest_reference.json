@@ -1,0 +1,25 @@
+{
+  "profile": "trend 4x (ensemble Donchian 20/55/100 + filtres), 2019-2026",
+  "n_trades": 488,
+  "trades_per_year": 65.7,
+  "win_rate": 0.373,
+  "avg_win_pct": 0.0959,
+  "avg_loss_pct": -0.031,
+  "worst_loss_streak": 21,
+  "max_drawdown": -0.5309,
+  "dd_time_fraction": {
+    "5": 0.8964,
+    "10": 0.5947,
+    "15": 0.3274,
+    "20": 0.2061,
+    "25": 0.1431,
+    "30": 0.1335,
+    "35": 0.0742,
+    "40": 0.0461,
+    "45": 0.0192,
+    "50": 0.0076
+  },
+  "monthly_return_p10": -0.0959,
+  "monthly_return_p90": 0.2875,
+  "worst_month": -0.1727
+}

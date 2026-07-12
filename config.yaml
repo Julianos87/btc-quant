@@ -1,0 +1,88 @@
+# ── Configuration générale ────────────────────────────────────────────────
+exchange: binance
+symbol: BTC/USDT          # plus tard : ETH/USDT, SOL/USDT
+quote_currency: USDT
+
+data:
+  dir: data
+  base_timeframe: 1h      # tout est téléchargé en 1h puis rééchantillonné
+  since: "2019-01-01"
+
+costs:
+  fee_rate: 0.001         # 0.10 % taker Binance spot (VIP0)
+  perp_fee_rate: 0.0005   # 0.05 % taker Binance futures USDT-M
+  funding_rate_8h: 0.0001 # 0.01 %/8h : moyenne historique du funding BTC perp
+  slippage_bps: 5.0       # 5 bps par côté, conservateur pour BTC liquide
+
+risk:
+  initial_capital: 10000
+  risk_per_trade: 0.0075  # 0.75 % de l'équity risqué par trade (distance au stop)
+  max_position_pct: 0.95  # spot, pas de levier
+  vol_target_annual: 0.40 # plafonne le notionnel quand la vol annualisée dépasse la cible
+  max_drawdown_halt: 0.30 # kill-switch : liquidation + arrêt si DD > 30 %
+  daily_loss_limit: 0.03  # stop de la journée (UTC) si perte > 3 % (intraday/live)
+  max_leverage: 1.0       # futures : levier max. ATTENTION — multiplie gains,
+                          # pertes ET drawdowns à l'identique. Pour qu'il agisse,
+                          # augmenter aussi risk_per_trade / vol_target_annual.
+
+strategies:
+  # ── Ensemble trend long-short (perpétuels) ────────────────────────────
+  # Trois horizons Donchian standards de la littérature (20/55/100, style
+  # turtle) : paramètres NON optimisés sur nos données, diversification du
+  # risque de paramètre à la manière des CTA.
+  trend_ls_20:
+    enabled: true
+    type: trend_ls
+    market: perp
+    timeframe: 4h
+    capital_fraction: 0.3333
+    params: { donchian: 20, adx_min: 20, funding_long_max: 0.0008, funding_short_min: -0.0008 }
+  trend_ls_55:
+    enabled: true
+    type: trend_ls
+    market: perp
+    timeframe: 4h
+    capital_fraction: 0.3333
+    params: { donchian: 55, adx_min: 20, funding_long_max: 0.0008, funding_short_min: -0.0008 }
+  trend_ls_100:
+    enabled: true
+    type: trend_ls
+    market: perp
+    timeframe: 4h
+    capital_fraction: 0.3334
+    params: { donchian: 100, adx_min: 20, funding_long_max: 0.0008, funding_short_min: -0.0008 }
+
+  # ── Version spot long/flat historique (désactivée, remplacée par
+  #    l'ensemble long-short ci-dessus) ──────────────────────────────────
+  trend_swing:            # swing trend-following sur 4h
+    enabled: false
+    timeframe: 4h
+    capital_fraction: 1.0
+    params:
+      ema_fast: 50
+      ema_slow: 200
+      donchian: 55
+      atr_period: 14
+      atr_mult: 3.0
+  # Désactivé : perdant out-of-sample en walk-forward (Sharpe OOS -0.27,
+  # efficacité -0.60) — les frais mangent l'edge intraday. Base de travail
+  # pour itérer (filtres saisonnalité, frais maker), pas pour trader tel quel.
+  intraday_breakout:      # breakout momentum sur 1h
+    enabled: false
+    timeframe: 1h
+    capital_fraction: 0.4
+    params:
+      lookback_high: 24
+      ema_trend: 200
+      atr_period: 24
+      atr_mult: 2.0
+      volume_mult: 1.3
+      max_bars_held: 48
+
+execution:
+  mode: paper             # paper | live  — NE PASSER EN live QU'APRÈS VALIDATION
+  testnet: true           # sandbox Binance quand mode=live
+  state_file: state/live_state.json
+  poll_buffer_seconds: 20 # marge après la clôture de bougie avant de lire les données
+  # Clés API : variables d'environnement BINANCE_API_KEY / BINANCE_API_SECRET.
+  # Jamais dans ce fichier.

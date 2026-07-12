@@ -1,0 +1,17 @@
+[Unit]
+Description=btcquant - moteur trend 4x (paper trading)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=btcquant
+WorkingDirectory=/opt/btcquant
+Environment=PYTHONIOENCODING=utf-8
+EnvironmentFile=-/opt/btcquant/.env
+ExecStart=/opt/btcquant/venv/bin/python scripts/run_live.py --config config_4x.yaml
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

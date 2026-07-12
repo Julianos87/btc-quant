@@ -1,0 +1,8 @@
+[Unit]
+Description=btcquant - sauvegarde quotidienne de state/
+
+[Service]
+Type=oneshot
+User=btcquant
+WorkingDirectory=/opt/btcquant
+ExecStart=/usr/bin/env bash scripts/backup_state.sh
