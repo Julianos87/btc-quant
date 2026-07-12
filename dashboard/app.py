@@ -605,11 +605,12 @@ def events():
                 continue
             msg = m.group(4)
             msg = re.sub(r"^\S*(btcquant\S*)\s+", "", msg)  # retire le nom du logger
-            # Un timestamp numérique permet d'aligner les événements sur l'equity UTC.
-            ts = pd.Timestamp(m.group(1), tz="UTC")
+            # Les logs Python utilisent le fuseau local du VPS : mktime le
+            # convertit correctement en epoch UTC, y compris avec l'heure d'été.
+            ts_ms = int(time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")) * 1000)
             out.append({
                 "ts": m.group(1),
-                "ts_ms": int(ts.timestamp() * 1000),
+                "ts_ms": ts_ms,
                 "level": m.group(3),
                 "source": source,
                 "msg": msg.strip(),
