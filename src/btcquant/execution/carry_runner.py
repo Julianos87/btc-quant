@@ -45,6 +45,7 @@ class CarryRunner:
         fee_rate: float = 0.0005,
         slippage_bps: float = 5.0,
         state_file: str | Path = "state/carry_state.json",
+        live_broker=None,
     ) -> None:
         self.symbol = symbol_perp
         self.leverage = leverage
@@ -54,10 +55,14 @@ class CarryRunner:
         self.switch_cost = 2 * (fee_rate + slippage_bps / 10_000.0) * leverage
         self.state_path = Path(state_file)
         self.exchange = ccxt.binanceusdm({"enableRateLimit": True, "timeout": 30_000})
+        self.live_broker = live_broker  # CarryBroker en mode réel, None en paper
         self.equity = initial_capital
         self.in_position = False
+        self.qty = 0.0  # BTC détenu (live)
         self.last_funding_ts: pd.Timestamp | None = None
         self._load_state()
+        if self.live_broker is not None:
+            self.live_broker.reconcile()
 
     def _load_state(self) -> None:
         if not self.state_path.exists():
@@ -65,6 +70,7 @@ class CarryRunner:
         raw = json.loads(self.state_path.read_text())
         self.equity = raw["equity"]
         self.in_position = raw["in_position"]
+        self.qty = raw.get("qty", 0.0)
         self.last_funding_ts = (
             pd.Timestamp(raw["last_funding_ts"]) if raw.get("last_funding_ts") else None
         )
@@ -77,6 +83,7 @@ class CarryRunner:
                 {
                     "equity": self.equity,
                     "in_position": self.in_position,
+                    "qty": self.qty,
                     "last_funding_ts": str(self.last_funding_ts) if self.last_funding_ts is not None else None,
                 }
             )
@@ -108,6 +115,11 @@ class CarryRunner:
         # 2. signal sur funding lissé
         smooth_ann = funding.tail(self.smooth_days * 3).mean() * PAYMENTS_PER_YEAR
         if not self.in_position and smooth_ann > self.enter_ann:
+            if self.live_broker is not None:  # jambes réelles avant de basculer l'état
+                res = self.live_broker.open_position(self.equity * self.leverage)
+                if res is None:
+                    return  # ouverture échouée, on reste flat (déjà notifié)
+                self.qty = res["qty"]
             self.equity *= 1.0 - self.switch_cost
             self.in_position = True
             log.info("[CARRY] ENTRÉE (funding lissé %.1f%%/an) — coût %.2f%%, équity %.2f",
@@ -115,6 +127,9 @@ class CarryRunner:
             notify(f"🔵 Carry — position OUVERTE (funding lissé {smooth_ann:.1%}/an), "
                    f"équity {self.equity:,.2f} $")
         elif self.in_position and smooth_ann < self.exit_ann:
+            if self.live_broker is not None:
+                self.live_broker.close_position(self.qty)
+                self.qty = 0.0
             self.equity *= 1.0 - self.switch_cost
             self.in_position = False
             log.info("[CARRY] SORTIE (funding lissé %.1f%%/an) — équity %.2f",
@@ -135,8 +150,9 @@ class CarryRunner:
             fh.write(f"{pd.Timestamp.now(tz='UTC').isoformat()},{self.equity:.2f}\n")
 
     def run_forever(self) -> None:
-        log.info("Carry runner (PAPER) démarré : %s, levier %.1fx, entrée >%.0f%%/an, sortie <%.0f%%/an",
-                 self.symbol, self.leverage, self.enter_ann * 100, self.exit_ann * 100)
+        mode = "LIVE" if self.live_broker is not None else "PAPER"
+        log.info("Carry runner (%s) démarré : %s, levier %.1fx, entrée >%.0f%%/an, sortie <%.0f%%/an",
+                 mode, self.symbol, self.leverage, self.enter_ann * 100, self.exit_ann * 100)
         while True:
             try:
                 self._tick()

@@ -136,6 +136,32 @@ Passage en réel — dans cet ordre, sans sauter d'étape :
   côté exchange protègent la position si le bot tombe, mais le stop suiveur
   ne remonte plus tant qu'il n'est pas relancé.
 
+## Multi-actifs ETH/SOL — validé, chiffré, en attente
+
+L'ensemble trend long-short a été validé à l'identique sur ETH et SOL
+(mêmes règles, filtres, coûts) :
+
+| Actif | Sharpe | Max DD | Verdict |
+|---|---|---|---|
+| BTC | **1.41** | -15.6 % | cœur du système |
+| ETH | 0.93 | -12.3 % | **à ajouter** (bon edge) |
+| SOL | 0.49 | -19.2 % | écarté (edge trop faible) |
+
+Corrélation des *stratégies* : 0.47 BTC-ETH, ~0.30 avec SOL. Le multi-actifs
+**réduit le drawdown** (BTC seul -15.6 % → BTC+ETH -10.6 %) mais **n'améliore
+pas le Sharpe** (ETH est de moindre qualité que BTC) : c'est un amortisseur de
+risque, pas un booster de rendement. Décision : ajouter ETH *après* validation
+live du 60/40 BTC ; ne pas multiplier l'exposition non testée maintenant.
+
+## Carry en réel (exécuteur double-jambe)
+
+[carry_broker.py](src/btcquant/execution/carry_broker.py) : ouverture/fermeture
+simultanée spot long + perp short, gestion de l'échec d'une jambe (défait la
+jambe orpheline), réconciliation spot↔short, notifications. Branché dans le
+runner (`python scripts/run_carry.py --live --testnet`). **Codé, non encore
+exercé** — à valider via `scripts/test_testnet.py` (qui couvre désormais le
+cycle carry complet) avant tout usage réel.
+
 ## Extensions prévues
 
 - ETH/SOL : changer `symbol`, re-valider par walk-forward (paramètres propres).

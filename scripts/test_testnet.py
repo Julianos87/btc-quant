@@ -67,8 +67,23 @@ def main() -> None:
     step("position refermée (vente market)", fill2.qty > 0,
          f"{fill2.qty} BTC @ {fill2.price:,.2f}")
 
-    print(f"\n✅ {len(STEPS)}/{len(STEPS)} étapes passées — l'exécution futures "
-          "est validée sur testnet.")
+    # ── volet carry : double-jambe spot + perp ──────────────────────────────
+    print("\n--- Cash-and-carry (spot + perp) ---")
+    try:
+        from btcquant.execution.carry_broker import CarryBroker
+        cb = CarryBroker(symbol="BTC/USDT", testnet=True, leverage=3)
+        step("CarryBroker connecté (spot + perp)", True)
+        res = cb.open_position(150.0)
+        step("ouverture double-jambe", res is not None and res["qty"] > 0,
+             f"{res['qty']} BTC neutre" if res else "échec")
+        step("réconciliation des jambes", cb.reconcile())
+        closed = cb.close_position(res["qty"])
+        step("fermeture double-jambe", closed)
+    except Exception as e:
+        step(f"carry testnet ({e})", False)
+
+    print(f"\n✅ {len(STEPS)}/{len(STEPS)} étapes passées — exécution futures ET "
+          "carry double-jambe validées sur testnet.")
 
 
 if __name__ == "__main__":
