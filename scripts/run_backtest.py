@@ -19,10 +19,28 @@ import pandas as pd
 
 from btcquant.backtest import BacktestEngine
 from btcquant.backtest.metrics import compute_metrics, format_metrics
+from btcquant.carry import load_funding
 from btcquant.config import build_strategies, load_config, risk_from_config
 from btcquant.data import TIMEFRAME_TO_PANDAS, load_ohlcv, resample
 from btcquant.indicators import bars_per_year
 from btcquant.risk import RiskConfig
+
+log = logging.getLogger(__name__)
+
+
+def with_real_funding(df, symbol_perp: str, timeframe: str, refresh: bool):
+    """Ajoute une colonne `funding_rate` par barre à partir du funding réel 8h
+    (somme des paiements par barre ; positif = les longs paient). Sur échec de
+    chargement, retourne df inchangé → le moteur retombe sur la constante plate."""
+    try:
+        fund = load_funding(symbol_perp, data_dir=ROOT / "data", refresh=refresh)
+    except Exception as e:  # cache absent / réseau : on ne bloque pas le backtest
+        log.warning("Funding réel indisponible (%s), constante plate utilisée", e)
+        return df
+    per_bar = fund.resample(TIMEFRAME_TO_PANDAS[timeframe], label="left", closed="left").sum()
+    out = df.copy()
+    out["funding_rate"] = per_bar.reindex(out.index).fillna(0.0)
+    return out
 
 
 def main() -> None:
@@ -52,6 +70,9 @@ def main() -> None:
         )
         slot_risk = RiskConfig(**{**risk.__dict__, "initial_capital": risk.initial_capital * fraction})
         is_perp = market == "perp"
+        if is_perp:
+            symbol_perp = f"{cfg['symbol']}:{cfg['quote_currency']}"
+            df = with_real_funding(df, symbol_perp, strategy.timeframe, refresh=not args.no_refresh)
         engine = BacktestEngine(
             fee_rate=cfg["costs"]["perp_fee_rate"] if is_perp else cfg["costs"]["fee_rate"],
             slippage_bps=cfg["costs"]["slippage_bps"],
