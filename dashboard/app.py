@@ -330,6 +330,83 @@ def trades():
     return jsonify({"stats": stats, "rows": rows})
 
 
+@app.route("/api/trades.csv")
+def trades_csv():
+    """Export brut des trades clôturés (téléchargement)."""
+    path = STATE / "trades.csv"
+    if not path.exists():
+        return Response("aucun trade\n", mimetype="text/csv")
+    return Response(
+        path.read_text(encoding="utf-8"),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=btcquant_trades.csv"},
+    )
+
+
+@app.route("/api/analytics")
+def analytics():
+    """Répartition du PnL (sous-système, direction), records, funding cumulé."""
+    out = {"by_strategy": [], "by_direction": [], "records": {}, "funding_cum": []}
+
+    tpath = STATE / "trades.csv"
+    if tpath.exists():
+        df = pd.read_csv(tpath)
+        if len(df):
+            for key, field in (("by_strategy", "strategy"), ("by_direction", "direction")):
+                grp = df.groupby(field)
+                out[key] = [
+                    {
+                        "name": str(k).replace("trend_ls_", "D"),
+                        "n": int(len(g)),
+                        "wins": int((g["pnl"] > 0).sum()),
+                        "pnl": float(g["pnl"].sum()),
+                    }
+                    for k, g in grp
+                ]
+            best = df.loc[df["pnl"].idxmax()]
+            worst = df.loc[df["pnl"].idxmin()]
+            # plus longue série gagnante / perdante (ordre chronologique)
+            chrono = df.sort_values("exit_ts")["pnl"]
+            def longest(win: bool) -> int:
+                best_run = run = 0
+                for v in chrono:
+                    hit = (v > 0) if win else (v <= 0)
+                    run = run + 1 if hit else 0
+                    best_run = max(best_run, run)
+                return best_run
+            out["records"] = {
+                "biggest_win": float(best["pnl"]),
+                "biggest_win_strat": str(best["strategy"]).replace("trend_ls_", "D"),
+                "biggest_loss": float(worst["pnl"]),
+                "biggest_loss_strat": str(worst["strategy"]).replace("trend_ls_", "D"),
+                "longest_win_streak": longest(True),
+                "longest_loss_streak": longest(False),
+            }
+
+    # funding cumulé du carry = équity − capital initial (4000)
+    carry = _read_equity("equity_carry.csv")
+    if len(carry) > 1:
+        base = 4000.0
+        cum = (carry - base)
+        if len(cum) > 400:
+            cum = cum.resample("1h").last().dropna()
+        out["funding_cum"] = [[int(ts.timestamp() * 1000), round(float(v), 2)] for ts, v in cum.items()]
+        out["records"]["funding_total"] = float(carry.iloc[-1] - base)
+
+    # meilleur / pire jour sur l'équity combinée
+    trend = _read_equity("equity_trend.csv")
+    if len(trend) > 2 and len(carry) > 2:
+        t = trend.resample("1min").last().ffill()
+        c = carry.resample("1min").last().ffill()
+        idx = t.index.intersection(c.index)
+        comb = (t[idx] + c[idx]).dropna()
+        daily = comb.resample("1D").last().pct_change().dropna()
+        if len(daily):
+            out["records"]["best_day"] = float(daily.max())
+            out["records"]["worst_day"] = float(daily.min())
+    return jsonify(out)
+
+
 LOG_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})[,.](\d+)\s+(\w+)\s+(.*)$")
 KEEP = re.compile(r"Entrée|Sortie|ENTRÉE|SORTIE|Funding|stop|STOP|KILL|ERROR|WARNING|démarré|kill", re.I)
 

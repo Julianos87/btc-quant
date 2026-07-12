@@ -25,8 +25,10 @@
     --crit:#d03b3b; --crit-bg:rgba(208,59,59,.09);
     --blur:saturate(1.4) blur(14px);
   }
+  /* thème sombre : appliqué si le système est sombre (sauf forçage clair),
+     ou si l'utilisateur force le sombre via data-theme */
   @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not([data-theme="light"]) {
       --page:#0a0b0d; --wash1:rgba(57,135,229,.10); --wash2:rgba(144,133,233,.06);
       --surface:rgba(24,25,28,.72); --surface-solid:#17181b; --surface-2:#1f2024;
       --ink:#f4f4f2; --ink-2:#b9b8b0; --muted:#83827c;
@@ -38,6 +40,18 @@
       --warn:#fab219; --warn-bg:rgba(250,178,25,.12);
       --crit:#ef5e5e; --crit-bg:rgba(239,94,94,.11);
     }
+  }
+  :root[data-theme="dark"] {
+    --page:#0a0b0d; --wash1:rgba(57,135,229,.10); --wash2:rgba(144,133,233,.06);
+    --surface:rgba(24,25,28,.72); --surface-solid:#17181b; --surface-2:#1f2024;
+    --ink:#f4f4f2; --ink-2:#b9b8b0; --muted:#83827c;
+    --grid:#232428; --axis:#37383d; --ring:rgba(255,255,255,.075);
+    --shadow:0 1px 2px rgba(0,0,0,.5), 0 16px 40px -20px rgba(0,0,0,.7);
+    --shadow-hover:0 2px 6px rgba(0,0,0,.5), 0 22px 52px -20px rgba(0,0,0,.8);
+    --s1:#4a92ec; --s2:#22c08b; --s3:#e3a63a;
+    --good:#0ca30c; --good-text:#3ecc5f; --good-bg:rgba(34,192,139,.13);
+    --warn:#fab219; --warn-bg:rgba(250,178,25,.12);
+    --crit:#ef5e5e; --crit-bg:rgba(239,94,94,.11);
   }
   * { box-sizing:border-box; margin:0; }
   html { scroll-behavior:smooth; }
@@ -192,6 +206,27 @@
   .empty { color:var(--muted); font-size:12.5px; padding:30px 0; text-align:center; }
   footer { margin-top:22px; color:var(--muted); font-size:11.5px; display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
   footer::before { content:""; width:22px; height:1px; background:var(--axis); }
+
+  /* ── boutons utilitaires (thème, export) ────────────────── */
+  .iconbtn {
+    display:inline-flex; align-items:center; gap:6px; border:1px solid var(--ring);
+    background:var(--surface-2); color:var(--ink-2); font:inherit; font-size:12px; font-weight:600;
+    padding:7px 11px; border-radius:10px; cursor:pointer; transition:all .18s ease;
+  }
+  .iconbtn:hover { color:var(--ink); border-color:var(--axis); }
+  /* ── répartition (barres PnL) ───────────────────────────── */
+  .brk { padding:8px 0; border-bottom:1px solid var(--grid); }
+  .brk:last-child { border-bottom:none; }
+  .brk-top { display:flex; justify-content:space-between; font-size:12.5px; margin-bottom:5px; }
+  .brk-top .n { color:var(--muted); font-size:11px; }
+  .brk-bar { height:6px; border-radius:99px; background:color-mix(in srgb,var(--muted) 14%,transparent); overflow:hidden; }
+  .brk-bar i { display:block; height:100%; border-radius:99px; }
+  /* ── cartes records ─────────────────────────────────────── */
+  .records { display:grid; grid-template-columns:1fr 1fr; gap:9px; margin-top:6px; }
+  .rec { background:var(--surface-2); border:1px solid var(--ring); border-radius:11px; padding:11px 13px; }
+  .rec .rl { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.7px; }
+  .rec .rv { font-size:16px; font-weight:700; margin-top:3px; }
+  .rec .rs { font-size:10.5px; color:var(--muted); margin-top:1px; }
 </style>
 </head>
 <body>
@@ -205,6 +240,7 @@
     </div>
   </div>
   <span class="mode"><span class="blink"></span>PAPER TRADING</span>
+  <button class="iconbtn" id="theme-btn" title="Basculer le thème">🌗 Thème</button>
   <span class="spacer"></span>
   <div class="hm"><div class="lab">BTC / USDT</div><div class="val num display" id="h-price">—</div></div>
   <div class="hm"><div class="lab">24 heures</div><div class="val num" id="h-change">—</div></div>
@@ -273,7 +309,13 @@
     </div>
 
     <div class="card">
-      <h2>Journal des événements</h2>
+      <h2>Journal des événements
+        <span class="chips" id="evfilter" style="margin-left:auto">
+          <button class="chip on" data-f="all">Tout</button>
+          <button class="chip" data-f="trend">Trend</button>
+          <button class="chip" data-f="carry">Carry</button>
+        </span>
+      </h2>
       <div id="events"><div class="empty">Chargement…</div></div>
     </div>
   </div>
@@ -296,8 +338,18 @@
       <div class="esub">cash-and-carry · encaisse le funding toutes les 8 h
         <span class="beat num" id="carry-beat"></span></div>
       <div class="kv"><span class="k">Position</span><span id="carry-pos">—</span></div>
-      <div class="kv"><span class="k">Dernier funding encaissé</span><span class="num" id="carry-last">—</span></div>
+      <div class="kv"><span class="k">Funding encaissé (cumul)</span><span class="num" id="carry-funding">—</span></div>
+      <svg id="fundchart" style="width:100%;height:52px;display:block;margin-top:8px" aria-label="Funding cumulé"></svg>
       <div class="kv"><span class="k">Règle de sortie</span><span>funding lissé 14 j &lt; 0</span></div>
+    </div>
+
+    <div class="card">
+      <h2>Répartition &amp; records</h2>
+      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.9px;margin:6px 0 4px;font-weight:700">Par sous-système</div>
+      <div id="brk-strat"><div class="empty" style="padding:10px 0">en attente de trades</div></div>
+      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.9px;margin:12px 0 4px;font-weight:700">Par direction</div>
+      <div id="brk-dir"><div class="empty" style="padding:10px 0">en attente de trades</div></div>
+      <div class="records" id="records"></div>
     </div>
 
     <div class="card">
@@ -306,7 +358,9 @@
     </div>
 
     <div class="card">
-      <h2>Trades clôturés <span class="estate" id="tr-stats" style="background:color-mix(in srgb,var(--muted) 10%,transparent);color:var(--ink-2)">—</span></h2>
+      <h2>Trades clôturés <span class="estate" id="tr-stats" style="background:color-mix(in srgb,var(--muted) 10%,transparent);color:var(--ink-2)">—</span>
+        <a class="iconbtn" href="/api/trades.csv" download style="margin-left:auto;text-decoration:none">⬇ CSV</a>
+      </h2>
       <div id="trades" style="margin-top:10px"><div class="empty">Aucun trade clôturé pour l’instant — le journal se remplit à la première sortie de position.</div></div>
     </div>
 
@@ -429,8 +483,9 @@ async function refreshTrades() {
     }).join("") + "</tbody></table>";
 }
 
-async function refreshEvents() {
-  const evs = await (await fetch("/api/events")).json();
+let evFilter = "all", lastEvents = [];
+function renderEvents() {
+  const evs = lastEvents.filter(e => evFilter === "all" || e.source === evFilter);
   $("events").innerHTML = evs.length ? evs.map(e => {
     const lvl = e.level === "ERROR" ? "err" : e.level === "WARNING" ? "warn" : "info";
     return `<div class="ev ${lvl}"><span class="lvl"></span>
@@ -439,6 +494,81 @@ async function refreshEvents() {
       <span class="msg">${e.msg.replace(/</g, "&lt;")}</span></div>`;
   }).join("") : '<div class="empty">Aucun événement — les moteurs sont en veille, c’est normal.</div>';
 }
+async function refreshEvents() {
+  lastEvents = await (await fetch("/api/events")).json();
+  renderEvents();
+}
+document.querySelectorAll("#evfilter .chip").forEach(b => b.onclick = () => {
+  document.querySelectorAll("#evfilter .chip").forEach(x => x.classList.remove("on"));
+  b.classList.add("on"); evFilter = b.dataset.f; renderEvents();
+});
+
+async function refreshAnalytics() {
+  const a = await (await fetch("/api/analytics")).json();
+  const money = v => (v >= 0 ? "+" : "") + v.toLocaleString("fr-FR", {maximumFractionDigits:0}) + " $";
+  // barres de répartition : largeur ∝ |PnL| relatif, couleur = signe
+  function bars(rows) {
+    if (!rows || !rows.length) return '<div class="empty" style="padding:10px 0">en attente de trades</div>';
+    const max = Math.max(...rows.map(r => Math.abs(r.pnl)), 1);
+    return rows.map(r => {
+      const c = r.pnl >= 0 ? "var(--s2)" : "var(--crit)";
+      const wr = r.n ? Math.round(r.wins / r.n * 100) : 0;
+      return `<div class="brk">
+        <div class="brk-top"><span><b>${r.name}</b> <span class="n">${r.n} trades · ${wr}% ✓</span></span>
+          <span class="num" style="color:${c};font-weight:650">${money(r.pnl)}</span></div>
+        <div class="brk-bar"><i style="width:${Math.abs(r.pnl)/max*100}%;background:${c}"></i></div></div>`;
+    }).join("");
+  }
+  $("brk-strat").innerHTML = bars(a.by_strategy);
+  $("brk-dir").innerHTML = bars((a.by_direction || []).map(r => ({...r, name: r.name === "LONG" ? "Longs" : "Shorts"})));
+
+  const rec = a.records || {};
+  const cards = [];
+  const push = (label, val, sub, cls_) => cards.push(
+    `<div class="rec"><div class="rl">${label}</div><div class="rv ${cls_||''}">${val}</div><div class="rs">${sub||""}</div></div>`);
+  if (rec.biggest_win != null) push("Meilleur trade", money(rec.biggest_win), rec.biggest_win_strat, "up");
+  if (rec.biggest_loss != null) push("Pire trade", money(rec.biggest_loss), rec.biggest_loss_strat, "down");
+  if (rec.best_day != null) push("Meilleur jour", fmtPct(rec.best_day, 1), "", "up");
+  if (rec.worst_day != null) push("Pire jour", fmtPct(rec.worst_day, 1), "", "down");
+  if (rec.longest_win_streak != null) push("Série gagnante", rec.longest_win_streak, "d'affilée");
+  if (rec.longest_loss_streak != null) push("Série perdante", rec.longest_loss_streak, "d'affilée");
+  $("records").innerHTML = cards.join("");
+
+  // funding cumulé (carry)
+  $("carry-funding").textContent = rec.funding_total != null ? money(rec.funding_total) : "—";
+  drawFunding(a.funding_cum || []);
+}
+
+function drawFunding(pts) {
+  const svg = $("fundchart"), W = svg.clientWidth || 300, H = svg.clientHeight || 52;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  if (pts.length < 2) { svg.innerHTML = ""; return; }
+  const ys = pts.map(p => p[1]), xs = pts.map(p => p[0]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  let y0 = Math.min(...ys, 0), y1 = Math.max(...ys, 0.01);
+  const X = t => (t - x0) / Math.max(1, x1 - x0) * (W - 4) + 2;
+  const Y = v => H - 3 - (v - y0) / (y1 - y0) * (H - 6);
+  const c = col("--s3");
+  const d = pts.map((p, i) => (i ? "L" : "M") + X(p[0]).toFixed(1) + " " + Y(p[1]).toFixed(1)).join("");
+  svg.innerHTML = `<defs><linearGradient id="fg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="${c}" stop-opacity=".3"/><stop offset="100%" stop-color="${c}" stop-opacity="0"/></linearGradient></defs>
+    <path d="${d} L${X(pts[pts.length-1][0])} ${H} L${X(pts[0][0])} ${H} Z" fill="url(#fg)"/>
+    <path d="${d}" fill="none" stroke="${c}" stroke-width="1.6" stroke-linejoin="round"/>`;
+}
+
+// ── thème manuel (persistant) ──
+(function initTheme() {
+  const saved = localStorage.getItem("btcq-theme");
+  if (saved) document.documentElement.setAttribute("data-theme", saved);
+  $("theme-btn").onclick = () => {
+    const cur = document.documentElement.getAttribute("data-theme")
+      || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    const next = cur === "dark" ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme", next);
+    localStorage.setItem("btcq-theme", next);
+    drawChart(); drawSpark(); refreshPrice(); refreshAnalytics();
+  };
+})();
 
 async function refreshEquity() {
   chartData = await (await fetch("/api/equity")).json();
@@ -675,7 +805,7 @@ function drawChart() {
 window.addEventListener("resize", () => { drawChart(); drawSpark(); });
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawChart(); drawSpark(); });
 async function tick() {
-  try { await Promise.all([refreshSummary(), refreshEvents(), refreshEquity(), refreshTrades(), refreshConformity(), refreshPrice()]); }
+  try { await Promise.all([refreshSummary(), refreshEvents(), refreshEquity(), refreshTrades(), refreshConformity(), refreshPrice(), refreshAnalytics()]); }
   catch (e) { console.error(e); }
 }
 tick();
