@@ -155,6 +155,7 @@
   .eyebrow { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:1.4px; font-weight:700; margin-bottom:10px; }
 
   .tiles { display:grid; grid-template-columns:1.6fr 1fr 1fr 1fr; gap:16px; margin-bottom:16px; }
+  .tiles.view-empty { display:none; }
   @media (max-width:1120px){ .tiles { grid-template-columns:1fr 1fr; } }
   .tile .val { font-size:27px; font-weight:700; letter-spacing:-.4px; }
   .tile.hero { position:relative; overflow:hidden; }
@@ -272,6 +273,32 @@
   .metric .mv { font-size:20px; font-weight:700; margin-top:3px; letter-spacing:-.3px; }
   .metric .ms { font-size:10px; color:var(--muted); margin-top:1px; }
 
+  /* ── cartes dédiées aux vues ─────────────────────────────── */
+  .focus-card { overflow:hidden; position:relative; }
+  .focus-card::after { content:""; position:absolute; width:260px; height:260px; right:-130px; top:-170px; border-radius:99px; pointer-events:none; opacity:.8; }
+  .focus-card.performance::after { background:radial-gradient(circle,var(--wash1),transparent 68%); }
+  .focus-card.risk::after { background:radial-gradient(circle,var(--crit-bg),transparent 68%); }
+  .focus-card.monitor::after { background:radial-gradient(circle,var(--good-bg),transparent 68%); }
+  .focus-intro { color:var(--muted); font-size:12px; margin:5px 0 14px; max-width:520px; }
+  .focus-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; position:relative; z-index:1; }
+  .focus-metric { min-width:0; padding:13px 14px; border:1px solid var(--ring); border-radius:13px; background:color-mix(in srgb,var(--surface-2) 76%,transparent); }
+  .focus-metric .fl { color:var(--muted); font-size:10px; font-weight:700; letter-spacing:.75px; text-transform:uppercase; }
+  .focus-metric .fv { font-family:"Space Grotesk"; font-size:21px; font-weight:700; letter-spacing:-.45px; margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .focus-metric .fs { min-height:15px; margin-top:3px; color:var(--muted); font-size:10.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .focus-metric.warn { border-color:color-mix(in srgb,var(--warn) 38%,var(--ring)); }
+  .focus-metric.crit { border-color:color-mix(in srgb,var(--crit) 44%,var(--ring)); background:color-mix(in srgb,var(--crit-bg) 56%,var(--surface-2)); }
+  .ops-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:9px; position:relative; z-index:1; }
+  .ops-item { display:flex; align-items:center; gap:10px; padding:12px 13px; border:1px solid var(--ring); border-radius:12px; background:color-mix(in srgb,var(--surface-2) 76%,transparent); min-width:0; }
+  .ops-dot { width:8px; height:8px; border-radius:99px; background:var(--good); box-shadow:0 0 9px var(--good); flex:none; }
+  .ops-item.warn .ops-dot { background:var(--warn); box-shadow:0 0 9px var(--warn); }
+  .ops-item.crit .ops-dot { background:var(--crit); box-shadow:0 0 9px var(--crit); }
+  .ops-copy { min-width:0; }
+  .ops-label { color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.75px; font-weight:700; }
+  .ops-value { margin-top:1px; font-size:13px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ops-note { margin-top:1px; color:var(--muted); font-size:10.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  @media (max-width:760px) { .focus-grid { grid-template-columns:1fr 1fr; } }
+  @media (max-width:520px) { .ops-grid { grid-template-columns:1fr; } .focus-metric .fv { font-size:19px; } }
+
   /* ── jauge d'exposition ─────────────────────────────────── */
   .gauge-track { height:11px; border-radius:99px; background:var(--surface-2);
     border:1px solid var(--ring); overflow:hidden; margin:12px 0 6px; position:relative; }
@@ -362,24 +389,24 @@
 
 <div id="alert"><span class="ic">⚠</span><span id="alert-msg"></span></div>
 
-<section class="tiles">
-  <div class="card tile hero">
+<section class="tiles" id="top-tiles">
+  <div class="card tile hero" data-view-tile="equity">
     <div class="eyebrow" data-i18n="equity_total">Équity totale</div>
     <div><span class="val num" id="t-equity">—</span><span class="delta num" id="t-delta" style="display:none"></span></div>
     <div class="sub num" id="t-sub">—</div>
     <svg id="spark"></svg>
   </div>
-  <div class="card tile">
+  <div class="card tile" data-view-tile="day">
     <div class="eyebrow" data-i18n="pnl_day">PnL du jour · UTC</div>
     <div class="val num" id="t-day">—</div>
     <div class="sub" data-i18n="since_midnight">depuis 00:00 UTC</div>
   </div>
-  <div class="card tile">
+  <div class="card tile" data-view-tile="funding">
     <div class="eyebrow" data-i18n="next_funding">Prochain funding</div>
     <div class="val num" id="t-next">—</div>
     <div class="sub num" id="t-nextsub">paiement toutes les 8 h</div>
   </div>
-  <div class="card tile">
+  <div class="card tile" data-view-tile="allocation">
     <div class="eyebrow" data-i18n="alloc_real">Allocation réelle</div>
     <div class="val num" id="t-alloc">—</div>
     <div class="allocbar"><i id="ab-t" style="background:var(--s2)"></i><i id="ab-c" style="background:var(--s3)"></i></div>
@@ -389,6 +416,24 @@
 
 <div class="grid">
   <div style="display:grid;gap:16px;align-content:start">
+    <div class="card focus-card performance" data-card="performance_brief">
+      <h2 data-i18n="performance_snapshot">Synthèse de performance</h2>
+      <div class="focus-intro" data-i18n="performance_snapshot_note">Le bilan réalisé, sans bruit opérationnel.</div>
+      <div class="focus-grid" id="performance-brief"><div class="empty" style="grid-column:1/-1">Chargement…</div></div>
+    </div>
+
+    <div class="card focus-card risk" data-card="risk_radar">
+      <h2 data-i18n="risk_radar">Radar de risque</h2>
+      <div class="focus-intro" data-i18n="risk_radar_note">Ce qui peut réellement dégrader le portefeuille maintenant.</div>
+      <div class="focus-grid" id="risk-radar"><div class="empty" style="grid-column:1/-1">Chargement…</div></div>
+    </div>
+
+    <div class="card focus-card monitor" data-card="monitor_pulse">
+      <h2 data-i18n="monitor_pulse">Pulse opérationnel</h2>
+      <div class="focus-intro" data-i18n="monitor_pulse_note">Les quatre signaux qui comptent pendant la surveillance.</div>
+      <div class="ops-grid" id="monitor-pulse"><div class="empty" style="grid-column:1/-1">Chargement…</div></div>
+    </div>
+
     <div class="card" data-card="chart">
       <h2 data-i18n="cards.chart">Courbe d’équity</h2>
       <div class="controls">
@@ -607,8 +652,17 @@ const I18N = {
     status_trend_down:"Trend ne répond plus", status_carry_down:"Carry ne répond plus",
     status_kill:"Kill-switch actif", status_lockout:"Lockout journalier actif",
     data_now:"données à l’instant", data_ago:"mis à jour il y a",
+    performance_snapshot:"Synthèse de performance", performance_snapshot_note:"Le bilan réalisé, sans bruit opérationnel.",
+    performance_total:"Depuis le départ", performance_day:"Aujourd’hui", performance_dd:"Drawdown actuel", performance_sharpe:"Sharpe réalisé",
+    risk_radar:"Radar de risque", risk_radar_note:"Ce qui peut réellement dégrader le portefeuille maintenant.",
+    risk_stop:"Risque jusqu’aux stops", risk_margin:"Marge au stop la plus proche", risk_leverage:"Levier effectif", risk_policy:"Protection active",
+    risk_no_stop:"aucun stop trend ouvert", risk_no_position:"aucune position trend", risk_armed:"limites armées", risk_lockout:"lockout journalier", risk_halted:"kill-switch déclenché", risk_engine_down:"moteur hors ligne",
+    monitor_pulse:"Pulse opérationnel", monitor_pulse_note:"Les quatre signaux qui comptent pendant la surveillance.",
+    monitor_trend:"Moteur Trend", monitor_carry:"Moteur Carry", monitor_next_bar:"Prochaine décision", monitor_binance:"Flux Binance",
+    monitor_ready:"opérationnel", monitor_silent:"ne répond plus", monitor_latency:"latence API", monitor_funding:"prochain funding",
     sharpe:"Sharpe", sortino:"Sortino", calmar:"Calmar", vol:"Volatilité",
-    cards:{chart:"Courbe d’équity", price:"Graphe prix", events:"Journal", trend:"Moteur Trend",
+    cards:{performance_brief:"Synthèse de performance", risk_radar:"Radar de risque", monitor_pulse:"Pulse opérationnel",
+      chart:"Courbe d’équity", price:"Graphe prix", events:"Journal", trend:"Moteur Trend",
       carry:"Moteur Carry", breakdown:"Répartition & records", conformity:"Est-ce normal ?",
       trades:"Trades clôturés", metrics:"Performance en direct", exposure:"Exposition & santé", protocol:"Protocole"},
   },
@@ -638,8 +692,17 @@ const I18N = {
     status_trend_down:"Trend is not responding", status_carry_down:"Carry is not responding",
     status_kill:"Kill switch is active", status_lockout:"Daily lockout is active",
     data_now:"data received just now", data_ago:"updated",
+    performance_snapshot:"Performance snapshot", performance_snapshot_note:"Realized results, without operational noise.",
+    performance_total:"Since inception", performance_day:"Today", performance_dd:"Current drawdown", performance_sharpe:"Realized Sharpe",
+    risk_radar:"Risk radar", risk_radar_note:"What can actually degrade the portfolio right now.",
+    risk_stop:"Risk to trend stops", risk_margin:"Nearest stop distance", risk_leverage:"Effective leverage", risk_policy:"Active safeguard",
+    risk_no_stop:"no open trend stop", risk_no_position:"no trend position", risk_armed:"limits armed", risk_lockout:"daily lockout", risk_halted:"kill switch triggered", risk_engine_down:"engine offline",
+    monitor_pulse:"Operations pulse", monitor_pulse_note:"The four signals that matter while monitoring.",
+    monitor_trend:"Trend engine", monitor_carry:"Carry engine", monitor_next_bar:"Next decision", monitor_binance:"Binance flow",
+    monitor_ready:"operational", monitor_silent:"not responding", monitor_latency:"API latency", monitor_funding:"next funding",
     sharpe:"Sharpe", sortino:"Sortino", calmar:"Calmar", vol:"Volatility",
-    cards:{chart:"Equity curve", price:"Price chart", events:"Event log", trend:"Trend engine",
+    cards:{performance_brief:"Performance snapshot", risk_radar:"Risk radar", monitor_pulse:"Operations pulse",
+      chart:"Equity curve", price:"Price chart", events:"Event log", trend:"Trend engine",
       carry:"Carry engine", breakdown:"Breakdown & records", conformity:"Is this normal?",
       trades:"Closed trades", metrics:"Live performance", exposure:"Exposure & health", protocol:"Protocol"},
   },
@@ -653,7 +716,7 @@ function applyI18n() {
   });
   $("f-refresh").textContent = PREFS.refresh
     ? t("auto_refresh") + " " + (PREFS.refresh/1000) + " s" : (PREFS.lang==="en"?"Manual refresh":"Rafraîchissement manuel");
-  if (lastSummary) renderCockpitStatus(lastSummary);
+  if (lastSummary) { renderCockpitStatus(lastSummary); renderViewFocus(lastSummary); }
   updateDataFreshness();
 }
 
@@ -668,18 +731,26 @@ function fmt$(v, dp=0) {
 }
 const fmtPct = (v, dp=2) => v == null || isNaN(v) ? "—" :
   (v >= 0 ? "+" : "") + (v*100).toFixed(dp).replace(".", PREFS.lang==="en"?".":",") + " %";
+const fmtDrawdown = (v, dp=1) => v == null || isNaN(v) ? "—" :
+  (v*100).toFixed(dp).replace(".", PREFS.lang==="en"?".":",") + " %";
 const fmtNum = (v, dp=2) => v == null || isNaN(v) ? "—" : v.toFixed(dp).replace(".", PREFS.lang==="en"?".":",");
 const cls = (el, v) => { el.classList.toggle("up", v > 0); el.classList.toggle("down", v < 0); };
 let range = PREFS.range, unit = "pct", chartData = null, showBH = false, lastSummary = null, lastTradeRows = [];
+let lastMetrics = null;
 let lastSummaryUpdatedAt = null;
 
 // ── couleur d'accent ───────────────────────────────────────
 function applyAccent() { document.documentElement.style.setProperty("--s1", PREFS.accent); }
 
 const VIEW_CARDS = {
-  monitor: new Set(["chart", "price", "events", "trend", "carry", "exposure", "protocol"]),
-  performance: new Set(["chart", "breakdown", "conformity", "trades", "metrics"]),
-  risk: new Set(["chart", "price", "events", "trend", "carry", "conformity", "exposure"]),
+  monitor: new Set(["monitor_pulse", "price", "events", "trend", "carry", "exposure"]),
+  performance: new Set(["performance_brief", "chart", "breakdown", "conformity", "trades", "metrics"]),
+  risk: new Set(["risk_radar", "chart", "price", "events", "trend", "carry", "exposure"]),
+};
+const VIEW_TILES = {
+  monitor: new Set(["equity", "day", "funding", "allocation"]),
+  performance: new Set(),
+  risk: new Set(),
 };
 
 function applyDashboardView() {
@@ -690,6 +761,10 @@ function applyDashboardView() {
   document.querySelectorAll("[data-card]").forEach(card => {
     card.dataset.viewHidden = VIEW_CARDS[view].has(card.dataset.card) ? "0" : "1";
   });
+  document.querySelectorAll("[data-view-tile]").forEach(tile => {
+    tile.dataset.viewHidden = VIEW_TILES[view].has(tile.dataset.viewTile) ? "0" : "1";
+  });
+  $("top-tiles").classList.toggle("view-empty", VIEW_TILES[view].size === 0);
   document.querySelectorAll("#dashboard-view [data-view]").forEach(button => {
     const active = button.dataset.view === view;
     button.classList.toggle("on", active);
@@ -784,6 +859,7 @@ async function refreshSummary() {
   }).join("");
   document.querySelectorAll("#slots .slotclick").forEach(tr => tr.onclick = () => openDrill(tr.dataset.name));
   renderExposureHealth(s);
+  renderViewFocus(s);
   renderCockpitStatus(s);
   checkAlerts(s);
   updateDataFreshness();
@@ -821,6 +897,8 @@ function cdText(ts) {
 function updateCountdowns() {
   if ($("cd-bar")) $("cd-bar").textContent = cdText(nextBarTs);
   if ($("cd-funding")) $("cd-funding").textContent = cdText(nextFundingTs);
+  if ($("pulse-next-bar")) $("pulse-next-bar").textContent = cdText(nextBarTs);
+  if ($("pulse-next-funding")) $("pulse-next-funding").textContent = cdText(nextFundingTs);
 }
 setInterval(() => { updateCountdowns(); updateDataFreshness(); }, 1000);
 function setState(el, alive) {
@@ -860,6 +938,64 @@ function updateDataFreshness() {
   stamp.textContent = elapsed;
   const staleAfter = PREFS.refresh ? Math.max(45, PREFS.refresh / 1000 + 15) : 90;
   freshness.classList.toggle("stale", age > staleAfter);
+}
+
+function focusMetric(label, value, note = "", tone = "") {
+  return `<div class="focus-metric ${tone}"><div class="fl">${label}</div><div class="fv num">${value}</div><div class="fs">${note}</div></div>`;
+}
+
+function trendStopProfile(s) {
+  const price = Number(s.btc.price || 0);
+  const positions = s.trend.slots.filter(slot => slot.state !== "FLAT" && slot.qty && slot.stop);
+  let risk = 0, nearest = null;
+  for (const slot of positions) {
+    const gap = price ? (slot.state === "LONG" ? price - slot.stop : slot.stop - price) / price : null;
+    const loss = price ? Math.max(0, Number(slot.qty) * (slot.state === "LONG" ? price - slot.stop : slot.stop - price)) : 0;
+    risk += loss;
+    if (gap != null) nearest = nearest == null ? gap : Math.min(nearest, gap);
+  }
+  return {positions, risk, nearest};
+}
+
+function renderPerformanceBrief(s) {
+  const m = lastMetrics || {};
+  const days = m.days ? `${m.days} j` : t("collecting");
+  $("performance-brief").innerHTML =
+    focusMetric(t("performance_total"), fmtPct(s.totals.pnl_pct), `${(s.totals.pnl >= 0 ? "+" : "") + fmt$(s.totals.pnl, 0)}`, s.totals.pnl < 0 ? "warn" : "") +
+    focusMetric(t("performance_day"), fmtPct(s.totals.day_pnl_pct), t("since_midnight"), s.totals.day_pnl_pct < 0 ? "warn" : "") +
+    focusMetric(t("performance_dd"), fmtDrawdown(m.cur_dd, 1), m.max_dd == null ? "—" : `max ${fmtDrawdown(m.max_dd, 1)}`, m.cur_dd < -0.08 ? "crit" : m.cur_dd < -0.04 ? "warn" : "") +
+    focusMetric(t("performance_sharpe"), fmtNum(m.sharpe, 2), days, m.sharpe < 0 ? "warn" : "");
+}
+
+function renderRiskRadar(s) {
+  const profile = trendStopProfile(s), m = lastMetrics || {};
+  const lev = s.totals.leverage || 0;
+  const engineDown = !s.trend.alive || !s.carry.alive;
+  const protection = engineDown ? t("risk_engine_down") : s.trend.halted ? t("risk_halted") : s.trend.daily_lockout ? t("risk_lockout") : t("risk_armed");
+  const protectionTone = engineDown || s.trend.halted ? "crit" : s.trend.daily_lockout ? "warn" : "";
+  const margin = profile.nearest == null ? "—" : fmtPct(profile.nearest, 1);
+  const marginTone = profile.nearest != null && profile.nearest < .01 ? "crit" : profile.nearest != null && profile.nearest < .03 ? "warn" : "";
+  $("risk-radar").innerHTML =
+    focusMetric(t("performance_dd"), fmtDrawdown(m.cur_dd, 1), m.max_dd == null ? "—" : `max ${fmtDrawdown(m.max_dd, 1)}`, m.cur_dd < -0.08 ? "crit" : m.cur_dd < -0.04 ? "warn" : "") +
+    focusMetric(t("risk_stop"), fmt$(profile.risk, 0), profile.positions.length ? `${profile.positions.length} position${profile.positions.length > 1 ? "s" : ""} trend` : t("risk_no_stop"), profile.risk > s.totals.equity * .03 ? "warn" : "") +
+    focusMetric(t("risk_margin"), margin, profile.nearest == null ? t("risk_no_position") : `${profile.positions.length} stop${profile.positions.length > 1 ? "s" : ""} actif${profile.positions.length > 1 ? "s" : ""}`, marginTone) +
+    focusMetric(t("risk_policy"), protection, `${t("risk_leverage")} · ${fmtNum(lev, 2)}×`, protectionTone || (lev > 1.5 ? "crit" : lev > 1.05 ? "warn" : ""));
+}
+
+function renderMonitorPulse(s) {
+  const h = s.health || {};
+  const engine = (label, alive, age) => `<div class="ops-item ${alive ? "" : "crit"}"><span class="ops-dot"></span><div class="ops-copy"><div class="ops-label">${label}</div><div class="ops-value">${alive ? t("monitor_ready") : t("monitor_silent")}</div><div class="ops-note">${beat(age).replace(/^·\s*/, "") || "—"}</div></div></div>`;
+  $("monitor-pulse").innerHTML =
+    engine(t("monitor_trend"), s.trend.alive, s.trend.age_s) +
+    engine(t("monitor_carry"), s.carry.alive, s.carry.age_s) +
+    `<div class="ops-item"><span class="ops-dot"></span><div class="ops-copy"><div class="ops-label">${t("monitor_next_bar")}</div><div class="ops-value num" id="pulse-next-bar">${cdText(h.next_bar_ts)}</div><div class="ops-note">${t("next_bar")}</div></div></div>` +
+    `<div class="ops-item ${h.api_latency_ms > 1000 ? "warn" : ""}"><span class="ops-dot"></span><div class="ops-copy"><div class="ops-label">${t("monitor_binance")}</div><div class="ops-value num">${h.api_latency_ms != null ? Math.round(h.api_latency_ms) + " ms" : "—"}</div><div class="ops-note">${t("monitor_funding")} · <span id="pulse-next-funding">${cdText(s.funding.next_ts)}</span></div></div></div>`;
+}
+
+function renderViewFocus(s) {
+  renderPerformanceBrief(s);
+  renderRiskRadar(s);
+  renderMonitorPulse(s);
 }
 
 async function refreshTrades() {
@@ -1249,7 +1385,7 @@ function drawChart() {
       <rect x="0" y="-11" width="${M.r - 16}" height="22" rx="7" fill="${t.s.color}" opacity=".14"/>
       <rect x="0" y="-11" width="3" height="22" rx="1.5" fill="${t.s.color}"/>
       <text x="9" y="-1" fill="${t.s.color}" font-size="9.5" font-weight="700" letter-spacing=".5">${t.s.label.toUpperCase()}</text>
-      <text x="9" y="9" fill="${col("--ink")}" font-size="10.5" font-weight="600" style="font-variant-numeric:tabular-nums">${fmtY(t.v)}${unit === "pct" ? "" : " $"}</text>
+      <text x="9" y="9" fill="${col("--ink")}" font-size="10.5" font-weight="600" style="font-variant-numeric:tabular-nums">${fmtY(t.v)}${unit === "usd" ? " $" : ""}</text>
     </g>`;
   }
   g += `<line id="xhair" y1="${M.t}" y2="${H - M.b}" stroke="${col("--axis")}" stroke-dasharray="3 3" visibility="hidden"/>`;
@@ -1268,7 +1404,7 @@ function drawChart() {
       while (hi - lo > 1) { const m = (lo + hi) >> 1; (s.pts[m][0] < t) ? lo = m : hi = m; }
       const p = (Math.abs(s.pts[lo][0] - t) < Math.abs(s.pts[hi][0] - t)) ? s.pts[lo] : s.pts[hi];
       rows += `<div class="row"><span><span class="swatch" style="background:${s.color};width:8px;height:8px;display:inline-block;margin-right:7px;border-radius:3px"></span>${s.label}</span>
-        <span class="num" style="font-weight:650">${fmtY(p[1])}${unit === "pct" ? "" : " $"}</span></div>`;
+        <span class="num" style="font-weight:650">${fmtY(p[1])}${unit === "usd" ? " $" : ""}</span></div>`;
     }
     tip.innerHTML = `<div class="t">${new Date(t).toLocaleString("fr-FR")}</div>` + rows;
     tip.style.display = "block";
@@ -1282,7 +1418,9 @@ function drawChart() {
 let lastCurDD = 0;
 async function refreshMetrics() {
   const m = await (await fetch("/api/metrics")).json();
+  lastMetrics = m;
   lastCurDD = m.cur_dd || 0;
+  if (lastSummary) renderViewFocus(lastSummary);
   if (m.sharpe == null && m.days < 1) {
     $("metrics").innerHTML = `<div class="empty" style="grid-column:1/-1">${t("collecting")}</div>`;
     return;
@@ -1381,7 +1519,7 @@ function buildDrawer() {
   $("pref-notif-pos").checked = PREFS.notifPos;
   $("pref-dd").value = PREFS.ddAlert;
   // cartes visibles
-  const CARDS = ["chart","price","events","trend","carry","breakdown","conformity","trades","metrics","exposure","protocol"];
+  const CARDS = ["performance_brief","risk_radar","monitor_pulse","chart","price","events","trend","carry","breakdown","conformity","trades","metrics","exposure","protocol"];
   $("pref-cards").innerHTML = CARDS.map(k =>
     `<div class="setrow"><span class="sk">${(t("cards")||{})[k]||k}</span>
      <label class="toggle"><input type="checkbox" data-card-k="${k}" ${PREFS.hidden[k]?"":"checked"}><span class="sl"></span></label></div>`).join("");
