@@ -68,12 +68,16 @@ class BacktestEngine:
         risk: RiskConfig | None = None,
         funding_rate_8h: float = 0.0,
         allow_short: bool = False,
+        short_size_mult: float = 1.0,
     ) -> None:
         self.fee_rate = fee_rate
         self.slippage = slippage_bps / 10_000.0
         self.risk = risk or RiskConfig()
         self.funding_rate_8h = funding_rate_8h
         self.allow_short = allow_short
+        #: multiplicateur de taille des shorts (1.0 = symétrique, <1 = tilt
+        #: net-long, 0 = long-only). N'affecte pas le signal, seulement le sizing.
+        self.short_size_mult = short_size_mult
 
     def run(
         self,
@@ -85,6 +89,13 @@ class BacktestEngine:
         funding_per_bar = self.funding_rate_8h * (8_760.0 / bpy) / 8.0
         data = strategy.prepare(df)
         data["_rvol"] = realized_vol(data["close"], VOL_LOOKBACK, bpy)
+        # funding par barre : colonne `funding_rate` (taux réel appliqué à la
+        # clôture de la barre, convention « les longs paient un taux positif »)
+        # si fournie, sinon la constante `funding_rate_8h` étalée sur les barres.
+        if "funding_rate" in data.columns:
+            funding_arr = data["funding_rate"].fillna(0.0).to_numpy()
+        else:
+            funding_arr = None
 
         start = strategy.warmup_bars()
         if len(data) <= start + 2:
@@ -152,6 +163,8 @@ class BacktestEngine:
                     float(rvol) if pd.notna(rvol) else None, self.risk,
                     direction=direction,
                 )
+                if direction == -1:
+                    qty *= self.short_size_mult
                 if qty > 0:
                     entry_fee_pending = qty * exec_price * self.fee_rate
                     cash -= entry_fee_pending
@@ -174,8 +187,9 @@ class BacktestEngine:
 
             # ── clôture : funding, gestion de la position, signaux pour t+1 ─
             if position is not None:
-                if funding_per_bar:
-                    cash -= position.direction * position.qty * closes[i] * funding_per_bar
+                fr = funding_arr[i] if funding_arr is not None else funding_per_bar
+                if fr:
+                    cash -= position.direction * position.qty * closes[i] * fr
                 position.bars_held += 1
                 if position.direction == 1:
                     position.best_close = max(position.best_close, closes[i])
