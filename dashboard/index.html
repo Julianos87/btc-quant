@@ -227,6 +227,66 @@
   .rec .rl { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.7px; }
   .rec .rv { font-size:16px; font-weight:700; margin-top:3px; }
   .rec .rs { font-size:10.5px; color:var(--muted); margin-top:1px; }
+
+  /* ── métriques live (mini-tuiles) ────────────────────────── */
+  .metrics-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:9px; margin-top:4px; }
+  @media (max-width:520px){ .metrics-grid { grid-template-columns:1fr 1fr; } }
+  .metric { background:var(--surface-2); border:1px solid var(--ring); border-radius:11px; padding:11px 12px; }
+  .metric .ml { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.7px; }
+  .metric .mv { font-size:20px; font-weight:700; margin-top:3px; letter-spacing:-.3px; }
+  .metric .ms { font-size:10px; color:var(--muted); margin-top:1px; }
+
+  /* ── jauge d'exposition ─────────────────────────────────── */
+  .gauge-track { height:11px; border-radius:99px; background:var(--surface-2);
+    border:1px solid var(--ring); overflow:hidden; margin:12px 0 6px; position:relative; }
+  .gauge-fill { height:100%; border-radius:99px; transition:width .6s cubic-bezier(.2,.8,.2,1); }
+  .gauge-mark { position:absolute; top:-3px; bottom:-3px; width:2px; background:var(--ink-2); opacity:.5; }
+
+  /* ── boutons de préférences / drawer ─────────────────────── */
+  .drawer-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.42); backdrop-filter:blur(3px);
+    z-index:60; opacity:0; pointer-events:none; transition:opacity .25s; }
+  .drawer-backdrop.open { opacity:1; pointer-events:auto; }
+  .drawer { position:fixed; top:0; right:0; height:100%; width:min(420px,92vw); z-index:61;
+    background:var(--surface-solid); border-left:1px solid var(--ring); box-shadow:-20px 0 60px -20px rgba(0,0,0,.5);
+    transform:translateX(100%); transition:transform .3s cubic-bezier(.2,.8,.2,1); overflow-y:auto; padding:24px; }
+  .drawer.open { transform:translateX(0); }
+  .drawer h3 { font-family:"Space Grotesk"; font-size:16px; margin-bottom:2px; }
+  .drawer .dh { display:flex; align-items:center; margin-bottom:18px; }
+  .setgrp { margin:18px 0; }
+  .setgrp .gl { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:1px; font-weight:700; margin-bottom:10px; }
+  .setrow { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:9px 0; border-bottom:1px solid var(--grid); font-size:13px; }
+  .setrow:last-child { border-bottom:none; }
+  .setrow .sk { color:var(--ink-2); }
+  .setrow select, .setrow input[type=text], .setrow input[type=date], .setrow input[type=number] {
+    background:var(--surface-2); border:1px solid var(--ring); color:var(--ink); border-radius:8px;
+    padding:6px 9px; font:inherit; font-size:12.5px; }
+  .swatches { display:flex; gap:7px; }
+  .sw-dot { width:20px; height:20px; border-radius:99px; cursor:pointer; border:2px solid transparent; }
+  .sw-dot.on { border-color:var(--ink); }
+  /* interrupteur */
+  .toggle { position:relative; width:38px; height:22px; flex:none; }
+  .toggle input { opacity:0; width:0; height:0; }
+  .toggle .sl { position:absolute; inset:0; background:var(--surface-2); border:1px solid var(--ring);
+    border-radius:99px; cursor:pointer; transition:.2s; }
+  .toggle .sl::before { content:""; position:absolute; width:16px; height:16px; left:2px; top:2px;
+    background:var(--muted); border-radius:99px; transition:.2s; }
+  .toggle input:checked + .sl { background:color-mix(in srgb,var(--s1) 30%,transparent); border-color:var(--s1); }
+  .toggle input:checked + .sl::before { transform:translateX(16px); background:var(--s1); }
+
+  /* ── modal drill-down ────────────────────────────────────── */
+  .modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.5); backdrop-filter:blur(4px);
+    z-index:70; display:none; align-items:center; justify-content:center; padding:20px; }
+  .modal-backdrop.open { display:flex; }
+  .modal { background:var(--surface-solid); border:1px solid var(--ring); border-radius:18px;
+    width:min(680px,96vw); max-height:88vh; overflow-y:auto; padding:24px; box-shadow:0 30px 80px -20px rgba(0,0,0,.6); }
+  .modal .mh { display:flex; align-items:center; gap:12px; margin-bottom:16px; }
+  .modal .mstat { display:grid; grid-template-columns:repeat(3,1fr); gap:9px; margin-bottom:16px; }
+  .slotclick { cursor:pointer; }
+  .slotclick:hover td:first-child { text-decoration:underline; }
+
+  /* ── countdown ───────────────────────────────────────────── */
+  .cd { font-variant-numeric:tabular-nums; }
+  [data-hidden="1"] { display:none !important; }
 </style>
 </head>
 <body>
@@ -239,35 +299,36 @@
       <div class="sub">Portefeuille systématique · 60 % trend 4x · 40 % carry 3x</div>
     </div>
   </div>
-  <span class="mode"><span class="blink"></span>PAPER TRADING</span>
-  <button class="iconbtn" id="theme-btn" title="Basculer le thème">🌗 Thème</button>
+  <span class="mode"><span class="blink"></span><span data-i18n="paper">PAPER TRADING</span></span>
+  <button class="iconbtn" id="theme-btn" title="Basculer le thème">🌗 <span data-i18n="theme">Thème</span></button>
+  <button class="iconbtn" id="settings-btn" title="Préférences">⚙️ <span data-i18n="settings">Réglages</span></button>
   <span class="spacer"></span>
-  <div class="hm"><div class="lab">BTC / USDT</div><div class="val num display" id="h-price">—</div></div>
-  <div class="hm"><div class="lab">24 heures</div><div class="val num" id="h-change">—</div></div>
-  <div class="hm"><div class="lab">Funding annualisé</div><div class="val num" id="h-funding">—</div></div>
+  <div class="hm"><div class="lab" data-i18n="btcusdt">BTC / USDT</div><div class="val num display" id="h-price">—</div></div>
+  <div class="hm"><div class="lab" data-i18n="h24">24 heures</div><div class="val num" id="h-change">—</div></div>
+  <div class="hm"><div class="lab" data-i18n="funding_ann">Funding annualisé</div><div class="val num" id="h-funding">—</div></div>
 </header>
 
 <div id="alert"><span class="ic">⚠</span><span id="alert-msg"></span></div>
 
 <section class="tiles">
   <div class="card tile hero">
-    <div class="eyebrow">Équity totale</div>
+    <div class="eyebrow" data-i18n="equity_total">Équity totale</div>
     <div><span class="val num" id="t-equity">—</span><span class="delta num" id="t-delta" style="display:none"></span></div>
     <div class="sub num" id="t-sub">—</div>
     <svg id="spark"></svg>
   </div>
   <div class="card tile">
-    <div class="eyebrow">PnL du jour · UTC</div>
+    <div class="eyebrow" data-i18n="pnl_day">PnL du jour · UTC</div>
     <div class="val num" id="t-day">—</div>
-    <div class="sub">depuis 00:00 UTC</div>
+    <div class="sub" data-i18n="since_midnight">depuis 00:00 UTC</div>
   </div>
   <div class="card tile">
-    <div class="eyebrow">Prochain funding</div>
+    <div class="eyebrow" data-i18n="next_funding">Prochain funding</div>
     <div class="val num" id="t-next">—</div>
     <div class="sub num" id="t-nextsub">paiement toutes les 8 h</div>
   </div>
   <div class="card tile">
-    <div class="eyebrow">Allocation réelle</div>
+    <div class="eyebrow" data-i18n="alloc_real">Allocation réelle</div>
     <div class="val num" id="t-alloc">—</div>
     <div class="allocbar"><i id="ab-t" style="background:var(--s2)"></i><i id="ab-c" style="background:var(--s3)"></i></div>
     <div class="alloclab"><span><b>Trend</b> <span class="num" id="al-t"></span></span><span><span class="num" id="al-c"></span> <b>Carry</b></span></div>
@@ -276,8 +337,8 @@
 
 <div class="grid">
   <div style="display:grid;gap:16px;align-content:start">
-    <div class="card">
-      <h2>Courbe d’équity</h2>
+    <div class="card" data-card="chart">
+      <h2 data-i18n="cards.chart">Courbe d’équity</h2>
       <div class="controls">
         <div class="chips" id="range">
           <button class="chip" data-r="24">24 h</button>
@@ -285,12 +346,13 @@
           <button class="chip on" data-r="0">Tout</button>
         </div>
         <div class="chips" id="unit">
-          <button class="chip on" data-u="pct">Base 100</button>
-          <button class="chip" data-u="usd">Dollars</button>
-          <button class="chip" data-u="dd">Drawdown</button>
+          <button class="chip on" data-u="pct" data-i18n="base100">Base 100</button>
+          <button class="chip" data-u="usd" data-i18n="dollars">Dollars</button>
+          <button class="chip" data-u="dd" data-i18n="drawdown">Drawdown</button>
         </div>
+        <button class="chip" id="bh-toggle" style="border:1px solid var(--ring);border-radius:8px" data-i18n="vs_bh">vs Buy&amp;Hold</button>
         <span class="legend">
-          <span><span class="swatch" style="background:var(--s1)"></span>Portefeuille</span>
+          <span><span class="swatch" style="background:var(--s1)"></span><span data-i18n="portfolio">Portefeuille</span></span>
           <span><span class="swatch" style="background:var(--s2)"></span>Trend 4x</span>
           <span><span class="swatch" style="background:var(--s3)"></span>Carry 3x</span>
         </span>
@@ -301,14 +363,14 @@
       </div>
     </div>
 
-    <div class="card">
+    <div class="card" data-card="price">
       <h2>BTC/USDT · 1 h <span style="color:var(--muted);font-weight:500;font-size:11.5px" id="pos-note">— aucune position ouverte</span></h2>
       <div style="position:relative;margin-top:8px">
         <svg id="pchart" style="width:100%;height:260px;display:block" role="img" aria-label="Prix BTC et positions"></svg>
       </div>
     </div>
 
-    <div class="card">
+    <div class="card" data-card="events">
       <h2>Journal des événements
         <span class="chips" id="evfilter" style="margin-left:auto">
           <button class="chip on" data-f="all">Tout</button>
@@ -321,7 +383,7 @@
   </div>
 
   <div class="engines">
-    <div class="card">
+    <div class="card" data-card="trend">
       <h2>Moteur Trend <span style="color:var(--muted);font-weight:600">4x</span> <span class="estate" id="trend-state"><span class="dot"></span>—</span></h2>
       <div class="eequity num" id="trend-eq">—</div>
       <div class="esub">ensemble Donchian 20 / 55 / 100 · futures · <span id="trend-guard">—</span>
@@ -332,7 +394,7 @@
       </table>
     </div>
 
-    <div class="card">
+    <div class="card" data-card="carry">
       <h2>Moteur Carry <span style="color:var(--muted);font-weight:600">3x</span> <span class="estate" id="carry-state"><span class="dot"></span>—</span></h2>
       <div class="eequity num" id="carry-eq">—</div>
       <div class="esub">cash-and-carry · encaisse le funding toutes les 8 h
@@ -343,7 +405,7 @@
       <div class="kv"><span class="k">Règle de sortie</span><span>funding lissé 14 j &lt; 0</span></div>
     </div>
 
-    <div class="card">
+    <div class="card" data-card="breakdown">
       <h2>Répartition &amp; records</h2>
       <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.9px;margin:6px 0 4px;font-weight:700">Par sous-système</div>
       <div id="brk-strat"><div class="empty" style="padding:10px 0">en attente de trades</div></div>
@@ -352,43 +414,205 @@
       <div class="records" id="records"></div>
     </div>
 
-    <div class="card">
+    <div class="card" data-card="conformity">
       <h2>Est-ce normal ? <span style="color:var(--muted);font-weight:500;font-size:11px">réalisé vs backtest</span></h2>
       <div id="conformity" style="margin-top:6px"><div class="empty">Chargement…</div></div>
     </div>
 
-    <div class="card">
-      <h2>Trades clôturés <span class="estate" id="tr-stats" style="background:color-mix(in srgb,var(--muted) 10%,transparent);color:var(--ink-2)">—</span>
+    <div class="card" data-card="trades">
+      <h2><span data-i18n="closed_trades">Trades clôturés</span> <span class="estate" id="tr-stats" style="background:color-mix(in srgb,var(--muted) 10%,transparent);color:var(--ink-2)">—</span>
         <a class="iconbtn" href="/api/trades.csv" download style="margin-left:auto;text-decoration:none">⬇ CSV</a>
       </h2>
-      <div id="trades" style="margin-top:10px"><div class="empty">Aucun trade clôturé pour l’instant — le journal se remplit à la première sortie de position.</div></div>
+      <div class="controls" style="margin:8px 0 2px">
+        <span class="sk" style="font-size:11.5px;color:var(--muted)" data-i18n="from">Du</span>
+        <input type="date" id="tr-from" style="background:var(--surface-2);border:1px solid var(--ring);color:var(--ink);border-radius:8px;padding:4px 8px;font:inherit;font-size:12px">
+        <span class="sk" style="font-size:11.5px;color:var(--muted)" data-i18n="to">au</span>
+        <input type="date" id="tr-to" style="background:var(--surface-2);border:1px solid var(--ring);color:var(--ink);border-radius:8px;padding:4px 8px;font:inherit;font-size:12px">
+        <button class="iconbtn" id="tr-clear" data-i18n="reset">Réinitialiser</button>
+      </div>
+      <div id="trades" style="margin-top:10px"><div class="empty" data-i18n="no_trades">Aucun trade clôturé pour l’instant — le journal se remplit à la première sortie de position.</div></div>
     </div>
 
-    <div class="card">
-      <h2>Protocole</h2>
-      <div class="kv"><span class="k">Phase actuelle</span><span><b>1 · Paper trading</b></span></div>
-      <div class="kv"><span class="k">Étape suivante</span><span>Testnet Binance Futures</span></div>
-      <div class="kv"><span class="k">Rééquilibrage 60/40</span><span>mensuel</span></div>
-      <div class="kv"><span class="k">Règle d’or</span><span>ne rien modifier en route</span></div>
+    <div class="card" data-card="metrics">
+      <h2 data-i18n="live_perf">Performance en direct <span style="color:var(--muted);font-weight:500;font-size:11px" data-i18n="realized">réalisé</span></h2>
+      <div class="metrics-grid" id="metrics"><div class="empty" style="grid-column:1/-1" data-i18n="collecting">Collecte en cours…</div></div>
+    </div>
+
+    <div class="card" data-card="exposure">
+      <h2 data-i18n="exposure_health">Exposition &amp; santé</h2>
+      <div class="setrow" style="border:none;padding:6px 0 0"><span class="sk" data-i18n="gross_exposure">Exposition brute</span>
+        <span class="num" id="exp-val" style="font-weight:700">—</span></div>
+      <div class="gauge-track"><div class="gauge-fill" id="exp-gauge" style="width:0"></div>
+        <div class="gauge-mark" style="left:100%"></div></div>
+      <div style="font-size:10.5px;color:var(--muted)" data-i18n="leverage_note">levier effectif · repère = 1× (notionnel = équity)</div>
+      <div class="kv" style="margin-top:6px"><span class="k" data-i18n="next_bar">Prochaine bougie 4 h</span><span class="num cd" id="cd-bar">—</span></div>
+      <div class="kv"><span class="k" data-i18n="next_funding">Prochain funding</span><span class="num cd" id="cd-funding">—</span></div>
+      <div class="kv"><span class="k" data-i18n="api_latency">Latence API Binance</span><span class="num" id="h-latency">—</span></div>
+      <div class="kv"><span class="k" data-i18n="uptime">Uptime dashboard</span><span class="num" id="h-uptime">—</span></div>
+    </div>
+
+    <div class="card" data-card="protocol">
+      <h2 data-i18n="protocol">Protocole</h2>
+      <div class="kv"><span class="k" data-i18n="phase">Phase actuelle</span><span><b>1 · Paper trading</b></span></div>
+      <div class="kv"><span class="k" data-i18n="next_step">Étape suivante</span><span>Testnet Binance Futures</span></div>
+      <div class="kv"><span class="k" data-i18n="rebalance">Rééquilibrage 60/40</span><span data-i18n="monthly">mensuel</span></div>
+      <div class="kv"><span class="k" data-i18n="golden_rule">Règle d’or</span><span data-i18n="no_change">ne rien modifier en route</span></div>
     </div>
   </div>
 </div>
 
+<!-- ── panneau de préférences ─────────────────────────────── -->
+<div class="drawer-backdrop" id="drawer-bd"></div>
+<aside class="drawer" id="drawer">
+  <div class="dh"><h3 data-i18n="settings">Réglages</h3><span class="spacer" style="flex:1"></span>
+    <button class="iconbtn" id="drawer-close">✕</button></div>
+
+  <div class="setgrp">
+    <div class="gl" data-i18n="grp_display">Affichage</div>
+    <div class="setrow"><span class="sk" data-i18n="pref_lang">Langue</span>
+      <select id="pref-lang"><option value="fr">Français</option><option value="en">English</option></select></div>
+    <div class="setrow"><span class="sk" data-i18n="pref_currency">Devise d’affichage</span>
+      <select id="pref-currency"><option value="usd">$ USD</option><option value="eur">€ EUR</option><option value="btc">₿ BTC</option><option value="pct">%</option></select></div>
+    <div class="setrow"><span class="sk" data-i18n="pref_accent">Couleur d’accent</span>
+      <span class="swatches" id="pref-accent"></span></div>
+    <div class="setrow"><span class="sk" data-i18n="pref_range">Plage par défaut</span>
+      <select id="pref-range"><option value="24">24 h</option><option value="168">7 j</option><option value="0" data-i18n="all">Tout</option></select></div>
+  </div>
+
+  <div class="setgrp">
+    <div class="gl" data-i18n="grp_refresh">Rafraîchissement</div>
+    <div class="setrow"><span class="sk" data-i18n="pref_refresh">Fréquence</span>
+      <select id="pref-refresh"><option value="10000">10 s</option><option value="30000">30 s</option><option value="60000">1 min</option><option value="0" data-i18n="manual">Manuel</option></select></div>
+  </div>
+
+  <div class="setgrp">
+    <div class="gl" data-i18n="grp_alerts">Alertes &amp; notifications</div>
+    <div class="setrow"><span class="sk" data-i18n="pref_notif">Notifications navigateur</span>
+      <label class="toggle"><input type="checkbox" id="pref-notif"><span class="sl"></span></label></div>
+    <div class="setrow"><span class="sk" data-i18n="pref_notif_pos">Prévenir à l’ouverture d’une position</span>
+      <label class="toggle"><input type="checkbox" id="pref-notif-pos"><span class="sl"></span></label></div>
+    <div class="setrow"><span class="sk" data-i18n="pref_notif_dd">Alerte si drawdown dépasse</span>
+      <span><input type="number" id="pref-dd" min="1" max="30" step="1" style="width:56px"> %</span></div>
+  </div>
+
+  <div class="setgrp">
+    <div class="gl" data-i18n="grp_cards">Cartes visibles</div>
+    <div id="pref-cards"></div>
+  </div>
+</aside>
+
+<!-- ── modal drill-down par stratégie ─────────────────────── -->
+<div class="modal-backdrop" id="modal-bd">
+  <div class="modal" id="modal">
+    <div class="mh"><h3 id="modal-title">—</h3><span style="flex:1"></span><button class="iconbtn" id="modal-close">✕</button></div>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
 <footer>
-  <span>Actualisation automatique 30 s</span>·<span>données réelles Binance, exécution simulée</span>·<span id="f-updated"></span>
+  <span id="f-refresh" data-i18n="auto_refresh">Actualisation automatique 30 s</span>·<span data-i18n="real_data">données réelles Binance, exécution simulée</span>·<span id="f-updated"></span>
 </footer>
 
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
-const fmt$ = (v, dp=0) => v == null ? "—" : v.toLocaleString("fr-FR", {minimumFractionDigits:dp, maximumFractionDigits:dp}) + " $";
-const fmtPct = (v, dp=2) => v == null ? "—" : (v >= 0 ? "+" : "") + (v*100).toFixed(dp).replace(".", ",") + " %";
+
+// ── préférences persistées ─────────────────────────────────
+const PREFS_DEFAULT = {
+  lang: "fr", currency: "usd", accent: "#2a78d6", range: 0, refresh: 30000,
+  notif: false, notifPos: true, ddAlert: 12,
+  hidden: {}, // { cardKey: true }
+};
+let PREFS = Object.assign({}, PREFS_DEFAULT, JSON.parse(localStorage.getItem("btcq-prefs") || "{}"));
+const savePrefs = () => localStorage.setItem("btcq-prefs", JSON.stringify(PREFS));
+const LOCALE = () => PREFS.lang === "en" ? "en-US" : "fr-FR";
+
+// ── i18n ───────────────────────────────────────────────────
+const I18N = {
+  fr: {
+    paper:"PAPER TRADING", theme:"Thème", settings:"Réglages", btcusdt:"BTC / USDT",
+    h24:"24 heures", funding_ann:"Funding annualisé", live_perf:"Performance en direct",
+    realized:"réalisé", exposure_health:"Exposition & santé", gross_exposure:"Exposition brute",
+    leverage_note:"levier effectif · repère = 1× (notionnel = équity)", next_bar:"Prochaine bougie 4 h",
+    next_funding:"Prochain funding", api_latency:"Latence API Binance", uptime:"Uptime dashboard",
+    protocol:"Protocole", phase:"Phase actuelle", next_step:"Étape suivante",
+    rebalance:"Rééquilibrage 60/40", monthly:"mensuel", golden_rule:"Règle d’or",
+    no_change:"ne rien modifier en route", collecting:"Collecte en cours…",
+    grp_display:"Affichage", pref_lang:"Langue", pref_currency:"Devise d’affichage",
+    pref_accent:"Couleur d’accent", pref_range:"Plage par défaut", grp_refresh:"Rafraîchissement",
+    pref_refresh:"Fréquence", manual:"Manuel", grp_alerts:"Alertes & notifications",
+    pref_notif:"Notifications navigateur", pref_notif_pos:"Prévenir à l’ouverture d’une position",
+    pref_notif_dd:"Alerte si drawdown dépasse", grp_cards:"Cartes visibles",
+    base100:"Base 100", dollars:"Dollars", drawdown:"Drawdown", vs_bh:"vs Buy&Hold",
+    portfolio:"Portefeuille", all:"Tout", closed_trades:"Trades clôturés", from:"Du", to:"au",
+    reset:"Réinitialiser", no_trades:"Aucun trade clôturé pour l’instant — le journal se remplit à la première sortie de position.",
+    auto_refresh:"Actualisation automatique", real_data:"données réelles Binance, exécution simulée",
+    equity_total:"Équity totale", pnl_day:"PnL du jour · UTC", since_midnight:"depuis 00:00 UTC",
+    alloc_real:"Allocation réelle", online:"EN LIGNE", offline:"ARRÊTÉ",
+    sharpe:"Sharpe", sortino:"Sortino", calmar:"Calmar", vol:"Volatilité",
+    cards:{chart:"Courbe d’équity", price:"Graphe prix", events:"Journal", trend:"Moteur Trend",
+      carry:"Moteur Carry", breakdown:"Répartition & records", conformity:"Est-ce normal ?",
+      trades:"Trades clôturés", metrics:"Performance en direct", exposure:"Exposition & santé", protocol:"Protocole"},
+  },
+  en: {
+    paper:"PAPER TRADING", theme:"Theme", settings:"Settings", btcusdt:"BTC / USDT",
+    h24:"24 hours", funding_ann:"Annualized funding", live_perf:"Live performance",
+    realized:"realized", exposure_health:"Exposure & health", gross_exposure:"Gross exposure",
+    leverage_note:"effective leverage · marker = 1× (notional = equity)", next_bar:"Next 4h candle",
+    next_funding:"Next funding", api_latency:"Binance API latency", uptime:"Dashboard uptime",
+    protocol:"Protocol", phase:"Current phase", next_step:"Next step",
+    rebalance:"Rebalancing 60/40", monthly:"monthly", golden_rule:"Golden rule",
+    no_change:"never change mid-course", collecting:"Collecting…",
+    grp_display:"Display", pref_lang:"Language", pref_currency:"Display currency",
+    pref_accent:"Accent color", pref_range:"Default range", grp_refresh:"Refresh",
+    pref_refresh:"Frequency", manual:"Manual", grp_alerts:"Alerts & notifications",
+    pref_notif:"Browser notifications", pref_notif_pos:"Notify when a position opens",
+    pref_notif_dd:"Alert if drawdown exceeds", grp_cards:"Visible cards",
+    base100:"Base 100", dollars:"Dollars", drawdown:"Drawdown", vs_bh:"vs Buy&Hold",
+    portfolio:"Portfolio", all:"All", closed_trades:"Closed trades", from:"From", to:"to",
+    reset:"Reset", no_trades:"No closed trades yet — the log fills on the first position exit.",
+    auto_refresh:"Auto refresh", real_data:"real Binance data, simulated execution",
+    equity_total:"Total equity", pnl_day:"Daily PnL · UTC", since_midnight:"since 00:00 UTC",
+    alloc_real:"Real allocation", online:"ONLINE", offline:"STOPPED",
+    sharpe:"Sharpe", sortino:"Sortino", calmar:"Calmar", vol:"Volatility",
+    cards:{chart:"Equity curve", price:"Price chart", events:"Event log", trend:"Trend engine",
+      carry:"Carry engine", breakdown:"Breakdown & records", conformity:"Is this normal?",
+      trades:"Closed trades", metrics:"Live performance", exposure:"Exposure & health", protocol:"Protocol"},
+  },
+};
+const t = k => (I18N[PREFS.lang] || I18N.fr)[k] || k;
+function applyI18n() {
+  document.documentElement.lang = PREFS.lang;
+  document.querySelectorAll("[data-i18n]").forEach(el => {
+    const v = el.dataset.i18n.split(".").reduce((o, kk) => (o && o[kk] != null) ? o[kk] : null, I18N[PREFS.lang] || I18N.fr);
+    if (typeof v === "string") el.textContent = v;
+  });
+  $("f-refresh").textContent = PREFS.refresh
+    ? t("auto_refresh") + " " + (PREFS.refresh/1000) + " s" : (PREFS.lang==="en"?"Manual refresh":"Rafraîchissement manuel");
+}
+
+// ── formatage devise / pourcentage ─────────────────────────
+let fx = {eur_usd:null}, btcPrice = null;
+function fmt$(v, dp=0) {
+  if (v == null || isNaN(v)) return "—";
+  const c = PREFS.currency;
+  if (c === "eur" && fx.eur_usd) return (v/fx.eur_usd).toLocaleString(LOCALE(), {minimumFractionDigits:dp, maximumFractionDigits:dp}) + " €";
+  if (c === "btc" && btcPrice) return (v/btcPrice).toLocaleString(LOCALE(), {minimumFractionDigits:4, maximumFractionDigits:6}) + " ₿";
+  return v.toLocaleString(LOCALE(), {minimumFractionDigits:dp, maximumFractionDigits:dp}) + " $";
+}
+const fmtPct = (v, dp=2) => v == null || isNaN(v) ? "—" :
+  (v >= 0 ? "+" : "") + (v*100).toFixed(dp).replace(".", PREFS.lang==="en"?".":",") + " %";
+const fmtNum = (v, dp=2) => v == null || isNaN(v) ? "—" : v.toFixed(dp).replace(".", PREFS.lang==="en"?".":",");
 const cls = (el, v) => { el.classList.toggle("up", v > 0); el.classList.toggle("down", v < 0); };
-let range = 0, unit = "pct", chartData = null;
+let range = PREFS.range, unit = "pct", chartData = null, showBH = false, lastSummary = null, lastTradeRows = [];
+
+// ── couleur d'accent ───────────────────────────────────────
+function applyAccent() { document.documentElement.style.setProperty("--s1", PREFS.accent); }
 
 async function refreshSummary() {
   const s = await (await fetch("/api/summary")).json();
-  $("h-price").textContent = s.btc.price ? s.btc.price.toLocaleString("fr-FR", {maximumFractionDigits:0}) + " $" : "—";
+  btcPrice = s.btc.price; if (s.fx) fx = s.fx; lastSummary = s;
+  $("h-price").textContent = s.btc.price ? s.btc.price.toLocaleString(LOCALE(), {maximumFractionDigits:0}) + " $" : "—";
   $("h-change").textContent = fmtPct(s.btc.change24h); cls($("h-change"), s.btc.change24h);
   $("h-funding").textContent = fmtPct(s.funding.annualized, 1); cls($("h-funding"), s.funding.annualized);
 
@@ -435,8 +659,8 @@ async function refreshSummary() {
   $("carry-eq").textContent = fmt$(s.carry.equity, 2);
   $("carry-pos").innerHTML = s.carry.in_position
     ? '<span class="badge long">● ACTIVE</span>' : '<span class="badge flat">EN ATTENTE</span>';
-  $("carry-last").textContent = s.carry.last_funding_ts
-    ? new Date(s.carry.last_funding_ts).toLocaleString("fr-FR", {day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit"}) : "—";
+  if ($("carry-last")) $("carry-last").textContent = s.carry.last_funding_ts
+    ? new Date(s.carry.last_funding_ts).toLocaleString(LOCALE(), {day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit"}) : "—";
 
   $("slots").innerHTML = s.trend.slots.map(sl => {
     const badge = sl.state === "LONG" ? "long" : sl.state === "SHORT" ? "short" : "flat";
@@ -444,16 +668,53 @@ async function refreshSummary() {
     const pnl = sl.upnl == null ? "—" : (sl.upnl >= 0 ? "+" : "") + sl.upnl.toFixed(1) + " $";
     const pnlCls = sl.upnl > 0 ? "up" : sl.upnl < 0 ? "down" : "";
     const f = v => v ? v.toLocaleString("fr-FR", {maximumFractionDigits:0}) : "—";
-    return `<tr><td style="font-weight:600">${sl.name.replace("trend_ls_", "Donchian ")}</td>
+    return `<tr class="slotclick" data-name="${sl.name}" title="Voir le détail"><td style="font-weight:600">${sl.name.replace("trend_ls_", "Donchian ")}</td>
       <td><span class="badge ${badge}">${arrow}${sl.state}</span></td>
       <td class="num">${f(sl.entry)}</td><td class="num">${f(sl.stop)}</td>
       <td class="num ${pnlCls}" style="font-weight:600">${pnl}</td></tr>`;
   }).join("");
-  $("f-updated").textContent = "mis à jour " + new Date().toLocaleTimeString("fr-FR");
+  document.querySelectorAll("#slots .slotclick").forEach(tr => tr.onclick = () => openDrill(tr.dataset.name));
+  renderExposureHealth(s);
+  checkAlerts(s);
+  $("f-updated").textContent = (PREFS.lang==="en"?"updated ":"mis à jour ") + new Date().toLocaleTimeString(LOCALE());
 }
+
+// ── exposition + santé + countdowns ────────────────────────
+let nextBarTs = null, nextFundingTs = null;
+function renderExposureHealth(s) {
+  const lev = s.totals.leverage || 0;
+  $("exp-val").textContent = fmt$(s.totals.gross_notional) + "  ·  " + fmtNum(lev, 2) + "×";
+  const g = $("exp-gauge");
+  g.style.width = Math.min(100, lev / 2 * 100) + "%";  // pleine largeur = 2×
+  g.style.background = lev > 1.5 ? "var(--crit)" : lev > 1.05 ? "var(--warn)" : "var(--s2)";
+  const h = s.health || {};
+  nextBarTs = h.next_bar_ts; nextFundingTs = s.funding && s.funding.next_ts;
+  $("h-latency").textContent = h.api_latency_ms != null ? Math.round(h.api_latency_ms) + " ms" : "—";
+  $("h-uptime").textContent = h.server_uptime_s != null ? fmtDur(h.server_uptime_s) : "—";
+  updateCountdowns();
+}
+function fmtDur(sec) {
+  sec = Math.floor(sec);
+  const d = Math.floor(sec/86400), hh = Math.floor(sec%86400/3600), m = Math.floor(sec%3600/60);
+  if (d) return `${d} j ${hh} h`;
+  if (hh) return `${hh} h ${m} min`;
+  return `${m} min`;
+}
+function cdText(ts) {
+  if (!ts) return "—";
+  let ms = ts - Date.now();
+  if (ms < 0) ms = 0;
+  const h = Math.floor(ms/3600000), m = Math.floor(ms%3600000/60000), sec = Math.floor(ms%60000/1000);
+  return (h ? h+" h " : "") + String(m).padStart(2,"0") + " min " + String(sec).padStart(2,"0") + " s";
+}
+function updateCountdowns() {
+  if ($("cd-bar")) $("cd-bar").textContent = cdText(nextBarTs);
+  if ($("cd-funding")) $("cd-funding").textContent = cdText(nextFundingTs);
+}
+setInterval(updateCountdowns, 1000);
 function setState(el, alive) {
   el.className = "estate " + (alive ? "on" : "off");
-  el.innerHTML = '<span class="dot"></span>' + (alive ? "EN LIGNE" : "ARRÊTÉ");
+  el.innerHTML = '<span class="dot"></span>' + (alive ? t("online") : t("offline"));
 }
 function beat(age) {
   if (age == null) return "";
@@ -463,22 +724,26 @@ function beat(age) {
 }
 
 async function refreshTrades() {
-  const t = await (await fetch("/api/trades")).json();
+  const p = new URLSearchParams();
+  const f = $("tr-from") && $("tr-from").value, to = $("tr-to") && $("tr-to").value;
+  if (f) p.set("from", f); if (to) p.set("to", to);
+  const tr = await (await fetch("/api/trades?" + p.toString())).json();
   const st = $("tr-stats");
-  if (!t.stats.n) { st.textContent = "0 trade"; return; }
-  const wr = Math.round(t.stats.wins / t.stats.n * 100);
-  st.textContent = `${t.stats.n} trades · ${wr} % gagnants · ${(t.stats.pnl >= 0 ? "+" : "")}${t.stats.pnl.toFixed(0)} $`;
+  lastTradeRows = tr.rows || [];
+  if (!tr.stats.n) { st.textContent = "0 trade"; $("trades").innerHTML = `<div class="empty">${t("no_trades")}</div>`; return; }
+  const wr = Math.round(tr.stats.wins / tr.stats.n * 100);
+  st.textContent = `${tr.stats.n} trades · ${wr} % ✓ · ${(tr.stats.pnl >= 0 ? "+" : "") + fmt$(tr.stats.pnl, 0)}`;
   $("trades").innerHTML = `<table>
     <thead><tr><th>Sortie</th><th>Système</th><th>Sens</th><th>PnL</th><th>Motif</th></tr></thead>
-    <tbody>` + t.rows.map(r => {
+    <tbody>` + tr.rows.map(r => {
       const pnlCls = r.pnl > 0 ? "up" : r.pnl < 0 ? "down" : "";
       const badge = r.direction === "LONG" ? "long" : "short";
       const arrow = r.direction === "LONG" ? "▲" : "▼";
       return `<tr>
-        <td class="num">${r.exit_ts.slice(5, 16).replace("T", " ")}</td>
+        <td class="num">${String(r.exit_ts).slice(5, 16).replace("T", " ")}</td>
         <td>${String(r.strategy).replace("trend_ls_", "D")}</td>
         <td><span class="badge ${badge}">${arrow} ${r.direction}</span></td>
-        <td class="num ${pnlCls}" style="font-weight:650">${(r.pnl >= 0 ? "+" : "") + r.pnl.toFixed(1)} $</td>
+        <td class="num ${pnlCls}" style="font-weight:650">${(r.pnl >= 0 ? "+" : "") + fmt$(r.pnl, 1)}</td>
         <td style="color:var(--muted);font-size:11.5px">${r.reason}</td></tr>`;
     }).join("") + "</tbody></table>";
 }
@@ -715,6 +980,15 @@ function drawChart() {
       if (unit === "pct" && pts.length) { const b = pts[0][1]; pts = pts.map(p => [p[0], p[1]/b*100]); }
       return {...s, pts};
     });
+    // overlay buy & hold (BTC) pour comparaison
+    if (showBH && chartData && chartData.buyhold && chartData.buyhold.length) {
+      let bh = chartData.buyhold.filter(p => p[0] >= cutoff);
+      if (unit === "pct" && bh.length) { const b = bh[0][1]; bh = bh.map(p => [p[0], p[1]/b*100]); }
+      else if (unit === "usd" && bh.length && series[0].pts.length) {
+        const scale = series[0].pts[0][1] / bh[0][1]; bh = bh.map(p => [p[0], p[1]*scale]);
+      }
+      series.push({key:"buyhold", label:"Buy&Hold", color:col("--muted"), w:1.5, dash:true, pts:bh});
+    }
   }
 
   const all = series.flatMap(s => s.pts);
@@ -756,7 +1030,19 @@ function drawChart() {
     if (s.pts.length < 2) continue;
     const d = s.pts.map((p, i) => (i ? "L" : "M") + X(p[0]).toFixed(1) + " " + Y(p[1]).toFixed(1)).join("");
     if (s.area) g += `<path d="${d} L${X(s.pts[s.pts.length-1][0]).toFixed(1)} ${H-M.b} L${X(s.pts[0][0]).toFixed(1)} ${H-M.b} Z" fill="url(#fade)"/>`;
-    g += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.w}" stroke-linejoin="round" stroke-linecap="round"/>`;
+    g += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.w}" ${s.dash?'stroke-dasharray="6 4"':''} stroke-linejoin="round" stroke-linecap="round"/>`;
+  }
+  // marqueurs de trades clôturés sur la courbe (portefeuille)
+  if (unit !== "dd" && lastTradeRows.length && series[0] && series[0].pts.length) {
+    const cp = series[0].pts;
+    for (const r of lastTradeRows) {
+      const tms = Date.parse(r.exit_ts);
+      if (isNaN(tms) || tms < (cutoff || cp[0][0]) || tms > cp[cp.length-1][0]) continue;
+      let lo = 0, hi = cp.length - 1;
+      while (hi - lo > 1) { const m = (lo+hi)>>1; (cp[m][0] < tms) ? lo=m : hi=m; }
+      const yv = cp[lo][1], mc = r.pnl >= 0 ? col("--good") : col("--crit");
+      g += `<circle cx="${X(tms).toFixed(1)}" cy="${Y(yv).toFixed(1)}" r="3" fill="${mc}" stroke="${col("--surface-solid")}" stroke-width="1.2" opacity=".85"/>`;
+    }
   }
   // étiquettes de valeur à droite (façon terminal), anti-chevauchement
   const tags = series.filter(s => s.pts.length).map(s => {
@@ -802,14 +1088,163 @@ function drawChart() {
   svg.onmouseleave = () => { tip.style.display = "none"; xhair.setAttribute("visibility", "hidden"); };
 }
 
+// ── métriques live (Sharpe/Sortino/Calmar) ─────────────────
+let lastCurDD = 0;
+async function refreshMetrics() {
+  const m = await (await fetch("/api/metrics")).json();
+  lastCurDD = m.cur_dd || 0;
+  if (m.sharpe == null && m.days < 1) {
+    $("metrics").innerHTML = `<div class="empty" style="grid-column:1/-1">${t("collecting")}</div>`;
+    return;
+  }
+  const tile = (label, val, sub, cl) =>
+    `<div class="metric"><div class="ml">${label}</div><div class="mv ${cl||''}">${val}</div><div class="ms">${sub||""}</div></div>`;
+  $("metrics").innerHTML =
+    tile(t("sharpe"), fmtNum(m.sharpe, 2), m.days + " j", m.sharpe >= 1 ? "up" : m.sharpe < 0 ? "down" : "") +
+    tile(t("sortino"), fmtNum(m.sortino, 2), "", m.sortino >= 1 ? "up" : "") +
+    tile(t("calmar"), fmtNum(m.calmar, 2), "", m.calmar >= 1 ? "up" : "") +
+    tile(t("vol"), fmtPct(m.vol_annual, 0), PREFS.lang==="en"?"annualized":"annualisée", "");
+}
+
+// ── drill-down par stratégie ───────────────────────────────
+async function openDrill(name) {
+  const d = await (await fetch("/api/strategy/" + encodeURIComponent(name))).json();
+  $("modal-title").textContent = name.replace("trend_ls_", "Donchian ");
+  const st = d.stats || {};
+  const money = v => v == null ? "—" : (v >= 0 ? "+" : "") + fmt$(v, 1);
+  let body = "";
+  if (st.n) {
+    body += `<div class="mstat">
+      ${["n","win_rate","pnl","avg_pnl","best","worst"].map(k => {
+        const map = {n:["Trades",st.n],win_rate:[t("realized")+" ✓",Math.round(st.win_rate*100)+" %"],
+          pnl:["PnL",money(st.pnl)],avg_pnl:["PnL moyen",money(st.avg_pnl)],best:["Meilleur",money(st.best)],worst:["Pire",money(st.worst)]};
+        return `<div class="rec"><div class="rl">${map[k][0]}</div><div class="rv">${map[k][1]}</div></div>`;
+      }).join("")}</div>`;
+  }
+  if (d.position) {
+    const p = d.position;
+    body += `<div class="kv"><span class="k">Position courante</span><span class="badge ${p.direction===1?"long":"short"}">${p.direction===1?"▲ LONG":"▼ SHORT"}</span></div>
+      <div class="kv"><span class="k">Entrée / Stop</span><span class="num">${Math.round(p.entry_price).toLocaleString(LOCALE())} / ${Math.round(p.stop_price).toLocaleString(LOCALE())}</span></div>`;
+  } else {
+    body += `<div class="kv"><span class="k">Position courante</span><span class="badge flat">EN ATTENTE</span></div>`;
+  }
+  if (d.trades && d.trades.length) {
+    body += `<h2 style="margin:16px 0 8px;font-size:12px">Derniers trades</h2><table>
+      <thead><tr><th>Sortie</th><th>Sens</th><th>PnL</th><th>Motif</th></tr></thead><tbody>` +
+      d.trades.map(r => `<tr><td class="num">${String(r.exit_ts).slice(5,16).replace("T"," ")}</td>
+        <td><span class="badge ${r.direction==="LONG"?"long":"short"}">${r.direction}</span></td>
+        <td class="num ${r.pnl>0?"up":"down"}" style="font-weight:650">${money(r.pnl)}</td>
+        <td style="color:var(--muted);font-size:11.5px">${r.reason||""}</td></tr>`).join("") + "</tbody></table>";
+  } else {
+    body += `<div class="empty">Aucun trade clôturé pour ce sous-système.</div>`;
+  }
+  $("modal-body").innerHTML = body;
+  $("modal-bd").classList.add("open");
+}
+$("modal-close").onclick = () => $("modal-bd").classList.remove("open");
+$("modal-bd").onclick = e => { if (e.target === $("modal-bd")) $("modal-bd").classList.remove("open"); };
+
+// ── notifications ──────────────────────────────────────────
+function notify(title, body, tag) {
+  if (!PREFS.notif || !("Notification" in window) || Notification.permission !== "granted") return;
+  if (navigator.serviceWorker && navigator.serviceWorker.controller)
+    navigator.serviceWorker.controller.postMessage({type:"notify", title, body, tag});
+  else try { new Notification(title, {body, icon:"/icon.svg", tag}); } catch (e) {}
+}
+let alertState = {trendAlive:true, carryAlive:true, halted:false, ddNotified:false, posKeys:new Set()};
+function checkAlerts(s) {
+  if (alertState.trendAlive && !s.trend.alive) notify("⚠ Moteur Trend arrêté", "Le runner Trend ne répond plus.", "trend-down");
+  if (alertState.carryAlive && !s.carry.alive) notify("⚠ Moteur Carry arrêté", "Le runner Carry ne répond plus.", "carry-down");
+  alertState.trendAlive = s.trend.alive; alertState.carryAlive = s.carry.alive;
+  if (!alertState.halted && s.trend.halted) notify("⛔ KILL-SWITCH", "Drawdown maximal atteint, positions liquidées.", "kill");
+  alertState.halted = s.trend.halted;
+  if (PREFS.notifPos) {
+    const cur = new Set();
+    for (const sl of s.trend.slots) if (sl.state !== "FLAT") {
+      const k = sl.name + ":" + sl.state; cur.add(k);
+      if (!alertState.posKeys.has(k))
+        notify("● Position ouverte", `${sl.name.replace("trend_ls_","Donchian ")} ${sl.state} @ ${Math.round(sl.entry).toLocaleString(LOCALE())}`, k);
+    }
+    alertState.posKeys = cur;
+  }
+  // seuil de drawdown
+  const thr = -Math.abs(PREFS.ddAlert) / 100;
+  if (lastCurDD <= thr && !alertState.ddNotified) {
+    notify("▼ Drawdown", `Le portefeuille est à ${fmtPct(lastCurDD,1)} (seuil ${PREFS.ddAlert}%).`, "dd");
+    alertState.ddNotified = true;
+  } else if (lastCurDD > thr * 0.7) alertState.ddNotified = false;
+}
+
+// ── panneau de préférences ─────────────────────────────────
+const ACCENTS = ["#2a78d6","#149467","#c88800","#6b4de0","#d03b3b","#0ca3a3"];
+function buildDrawer() {
+  const acc = $("pref-accent");
+  acc.innerHTML = ACCENTS.map(c => `<span class="sw-dot ${c===PREFS.accent?"on":""}" data-c="${c}" style="background:${c}"></span>`).join("");
+  acc.querySelectorAll(".sw-dot").forEach(d => d.onclick = () => {
+    PREFS.accent = d.dataset.c; savePrefs(); applyAccent(); buildDrawer(); redrawAll();
+  });
+  $("pref-lang").value = PREFS.lang;
+  $("pref-currency").value = PREFS.currency;
+  $("pref-range").value = String(PREFS.range);
+  $("pref-refresh").value = String(PREFS.refresh);
+  $("pref-notif").checked = PREFS.notif;
+  $("pref-notif-pos").checked = PREFS.notifPos;
+  $("pref-dd").value = PREFS.ddAlert;
+  // cartes visibles
+  const CARDS = ["chart","price","events","trend","carry","breakdown","conformity","trades","metrics","exposure","protocol"];
+  $("pref-cards").innerHTML = CARDS.map(k =>
+    `<div class="setrow"><span class="sk">${(t("cards")||{})[k]||k}</span>
+     <label class="toggle"><input type="checkbox" data-card-k="${k}" ${PREFS.hidden[k]?"":"checked"}><span class="sl"></span></label></div>`).join("");
+  $("pref-cards").querySelectorAll("[data-card-k]").forEach(inp => inp.onchange = () => {
+    PREFS.hidden[inp.dataset.cardK] = !inp.checked; savePrefs(); applyCardVisibility();
+  });
+}
+function applyCardVisibility() {
+  document.querySelectorAll("[data-card]").forEach(c => {
+    c.setAttribute("data-hidden", PREFS.hidden[c.dataset.card] ? "1" : "0");
+  });
+}
+function redrawAll() { drawChart(); drawSpark(); refreshPrice(); if (lastSummary) renderExposureHealth(lastSummary); }
+
+$("settings-btn").onclick = () => { buildDrawer(); $("drawer").classList.add("open"); $("drawer-bd").classList.add("open"); };
+$("drawer-close").onclick = () => { $("drawer").classList.remove("open"); $("drawer-bd").classList.remove("open"); };
+$("drawer-bd").onclick = () => { $("drawer").classList.remove("open"); $("drawer-bd").classList.remove("open"); };
+$("pref-lang").onchange = e => { PREFS.lang = e.target.value; savePrefs(); applyI18n(); buildDrawer(); refreshMetrics(); redrawAll(); };
+$("pref-currency").onchange = e => { PREFS.currency = e.target.value; savePrefs(); if (lastSummary) refreshSummary(); refreshTrades(); refreshAnalytics(); };
+$("pref-range").onchange = e => { PREFS.range = +e.target.value; range = PREFS.range;
+  document.querySelectorAll("#range .chip").forEach(x => x.classList.toggle("on", +x.dataset.r === range)); savePrefs(); drawChart(); };
+$("pref-refresh").onchange = e => { PREFS.refresh = +e.target.value; savePrefs(); applyI18n(); restartTimer(); };
+$("pref-notif").onchange = async e => {
+  if (e.target.checked && "Notification" in window) {
+    const p = await Notification.requestPermission();
+    if (p !== "granted") { e.target.checked = false; return; }
+  }
+  PREFS.notif = e.target.checked; savePrefs();
+};
+$("pref-notif-pos").onchange = e => { PREFS.notifPos = e.target.checked; savePrefs(); };
+$("pref-dd").onchange = e => { PREFS.ddAlert = Math.max(1, Math.min(30, +e.target.value || 12)); savePrefs(); };
+
+// buy&hold + filtre de dates
+$("bh-toggle").onclick = () => { showBH = !showBH; $("bh-toggle").classList.toggle("on", showBH); drawChart(); };
+$("tr-from").onchange = refreshTrades; $("tr-to").onchange = refreshTrades;
+$("tr-clear").onclick = () => { $("tr-from").value = ""; $("tr-to").value = ""; refreshTrades(); };
+
+// ── boucle de rafraîchissement (fréquence configurable) ────
+let timer = null;
+function restartTimer() { if (timer) clearInterval(timer); if (PREFS.refresh) timer = setInterval(tick, PREFS.refresh); }
 window.addEventListener("resize", () => { drawChart(); drawSpark(); });
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawChart(); drawSpark(); });
 async function tick() {
-  try { await Promise.all([refreshSummary(), refreshEvents(), refreshEquity(), refreshTrades(), refreshConformity(), refreshPrice(), refreshAnalytics()]); }
+  try { await Promise.all([refreshSummary(), refreshEvents(), refreshEquity(), refreshTrades(), refreshConformity(), refreshPrice(), refreshAnalytics(), refreshMetrics()]); }
   catch (e) { console.error(e); }
 }
+
+// ── init ───────────────────────────────────────────────────
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+applyAccent(); applyI18n(); applyCardVisibility();
+document.querySelectorAll("#range .chip").forEach(x => x.classList.toggle("on", +x.dataset.r === range));
 tick();
-setInterval(tick, 30_000);
+restartTimer();
 </script>
 </body>
 </html>
