@@ -95,12 +95,29 @@ def _age_seconds(path: Path) -> float | None:
 
 
 def _read_equity(name: str) -> pd.Series:
+    """Lecture tolérante : le runner peut être en train d'appendre — une
+    dernière ligne tronquée ne doit pas faire un 500 sur tout l'endpoint."""
     path = STATE / name
     if not path.exists():
         return pd.Series(dtype=float)
-    df = pd.read_csv(path)
-    ts = pd.to_datetime(df["ts"], utc=True, format="ISO8601")
-    return pd.Series(df["equity"].values, index=ts).sort_index()
+    try:
+        df = pd.read_csv(path, on_bad_lines="skip")
+        ts = pd.to_datetime(df["ts"], utc=True, format="ISO8601", errors="coerce")
+        s = pd.Series(df["equity"].values, index=ts)
+        return s[s.index.notna()].sort_index()
+    except Exception:
+        return pd.Series(dtype=float)
+
+
+def _read_trades() -> pd.DataFrame:
+    """Même tolérance pour trades.csv (append concurrent par le runner)."""
+    path = STATE / "trades.csv"
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path, on_bad_lines="skip")
+    except Exception:
+        return pd.DataFrame()
 
 
 def _timed(label: str, fn):
@@ -358,14 +375,18 @@ def equity():
 
     combined = _combined_equity()
 
-    # buy & hold : prix BTC sur la même fenêtre (le front normalise en base 100)
+    # buy & hold : prix BTC sur la même fenêtre (le front normalise en base
+    # 100). Timeframe adaptatif pour que TOUT l'historique tienne dans les
+    # 1000 bougies d'un seul appel (1h ≈ 41 j, 4h ≈ 166 j, 1d au-delà).
     buyhold = []
     if len(combined):
         start_ms = int(combined.index[0].timestamp() * 1000)
+        span_h = (time.time() * 1000 - start_ms) / 3_600_000
+        bh_tf = "1h" if span_h <= 950 else "4h" if span_h <= 3_800 else "1d"
         def fetch_bh():
-            raw = _spot().fetch_ohlcv("BTC/USDT", "1h", since=start_ms, limit=1000)
+            raw = _spot().fetch_ohlcv("BTC/USDT", bh_tf, since=start_ms, limit=1000)
             return [[r[0], round(r[4], 2)] for r in raw]
-        buyhold = _cached("buyhold", 600, fetch_bh) or []
+        buyhold = _cached(f"buyhold_{bh_tf}", 600, fetch_bh) or []
 
     return jsonify({
         "trend": pack(trend), "carry": pack(carry),
@@ -405,26 +426,24 @@ def conformity():
     ref = json.loads(ref_path.read_text(encoding="utf-8")) if ref_path.exists() else None
 
     out = {"reference": ref, "realized": None, "drawdown": None}
-    tpath = STATE / "trades.csv"
-    if tpath.exists():
-        df = pd.read_csv(tpath)
-        if len(df):
-            n = len(df)
-            wins = int((df["pnl"] > 0).sum())
-            # intervalle de Wilson à 95 % sur le win rate
-            p, z = wins / n, 1.96
-            denom = 1 + z*z/n
-            center = (p + z*z/(2*n)) / denom
-            half = z * ((p*(1-p)/n + z*z/(4*n*n)) ** 0.5) / denom
-            out["realized"] = {
-                "n": n, "wins": wins, "win_rate": p,
-                "win_rate_ci": [max(0.0, center-half), min(1.0, center+half)],
-                "avg_win": float(df.loc[df["pnl"] > 0, "pnl"].mean()) if wins else None,
-                "avg_loss": float(df.loc[df["pnl"] <= 0, "pnl"].mean()) if wins < n else None,
-                "current_loss_streak": int(
-                    (df["pnl"].iloc[::-1] <= 0).cummin().sum() if len(df) else 0
-                ),
-            }
+    df = _read_trades()
+    if len(df):
+        n = len(df)
+        wins = int((df["pnl"] > 0).sum())
+        # intervalle de Wilson à 95 % sur le win rate
+        p, z = wins / n, 1.96
+        denom = 1 + z*z/n
+        center = (p + z*z/(2*n)) / denom
+        half = z * ((p*(1-p)/n + z*z/(4*n*n)) ** 0.5) / denom
+        out["realized"] = {
+            "n": n, "wins": wins, "win_rate": p,
+            "win_rate_ci": [max(0.0, center-half), min(1.0, center+half)],
+            "avg_win": float(df.loc[df["pnl"] > 0, "pnl"].mean()) if wins else None,
+            "avg_loss": float(df.loc[df["pnl"] <= 0, "pnl"].mean()) if wins < n else None,
+            "current_loss_streak": int(
+                (df["pnl"].iloc[::-1] <= 0).cummin().sum() if len(df) else 0
+            ),
+        }
     trend_eq = _read_equity("equity_trend.csv")
     carry_eq = _read_equity("equity_carry.csv")
     if len(trend_eq) > 2 and len(carry_eq) > 2:
@@ -457,10 +476,9 @@ def metrics():
 def trades():
     """Trades clôturés, filtrables par date (from/to = ISO ou YYYY-MM-DD),
     par stratégie (strategy=trend_ls_20…) et paginables (limit, défaut 12)."""
-    path = STATE / "trades.csv"
-    if not path.exists():
+    df = _read_trades()
+    if not len(df):
         return jsonify({"stats": {"n": 0, "wins": 0, "pnl": 0.0}, "rows": []})
-    df = pd.read_csv(path)
     if "exit_ts" in df.columns:
         et = pd.to_datetime(df["exit_ts"], utc=True, errors="coerce")
         frm, to = request.args.get("from"), request.args.get("to")
@@ -491,9 +509,8 @@ def strategy_detail(name: str):
     slot = trend_state.get("slots", {}).get(name, {})
     out = {"name": name, "position": slot.get("position"), "cash": slot.get("cash"),
            "last_bar": slot.get("last_bar_ts"), "trades": [], "stats": {}}
-    tpath = STATE / "trades.csv"
-    if tpath.exists():
-        df = pd.read_csv(tpath)
+    df = _read_trades()
+    if len(df):
         if "strategy" in df.columns:
             df = df[df["strategy"].astype(str) == name]
         if len(df):
@@ -528,40 +545,38 @@ def analytics():
     """Répartition du PnL (sous-système, direction), records, funding cumulé."""
     out = {"by_strategy": [], "by_direction": [], "records": {}, "funding_cum": []}
 
-    tpath = STATE / "trades.csv"
-    if tpath.exists():
-        df = pd.read_csv(tpath)
-        if len(df):
-            for key, field in (("by_strategy", "strategy"), ("by_direction", "direction")):
-                grp = df.groupby(field)
-                out[key] = [
-                    {
-                        "name": str(k).replace("trend_ls_", "D"),
-                        "n": int(len(g)),
-                        "wins": int((g["pnl"] > 0).sum()),
-                        "pnl": float(g["pnl"].sum()),
-                    }
-                    for k, g in grp
-                ]
-            best = df.loc[df["pnl"].idxmax()]
-            worst = df.loc[df["pnl"].idxmin()]
-            # plus longue série gagnante / perdante (ordre chronologique)
-            chrono = df.sort_values("exit_ts")["pnl"]
-            def longest(win: bool) -> int:
-                best_run = run = 0
-                for v in chrono:
-                    hit = (v > 0) if win else (v <= 0)
-                    run = run + 1 if hit else 0
-                    best_run = max(best_run, run)
-                return best_run
-            out["records"] = {
-                "biggest_win": float(best["pnl"]),
-                "biggest_win_strat": str(best["strategy"]).replace("trend_ls_", "D"),
-                "biggest_loss": float(worst["pnl"]),
-                "biggest_loss_strat": str(worst["strategy"]).replace("trend_ls_", "D"),
-                "longest_win_streak": longest(True),
-                "longest_loss_streak": longest(False),
-            }
+    df = _read_trades()
+    if len(df):
+        for key, field in (("by_strategy", "strategy"), ("by_direction", "direction")):
+            grp = df.groupby(field)
+            out[key] = [
+                {
+                    "name": str(k).replace("trend_ls_", "D"),
+                    "n": int(len(g)),
+                    "wins": int((g["pnl"] > 0).sum()),
+                    "pnl": float(g["pnl"].sum()),
+                }
+                for k, g in grp
+            ]
+        best = df.loc[df["pnl"].idxmax()]
+        worst = df.loc[df["pnl"].idxmin()]
+        # plus longue série gagnante / perdante (ordre chronologique)
+        chrono = df.sort_values("exit_ts")["pnl"]
+        def longest(win: bool) -> int:
+            best_run = run = 0
+            for v in chrono:
+                hit = (v > 0) if win else (v <= 0)
+                run = run + 1 if hit else 0
+                best_run = max(best_run, run)
+            return best_run
+        out["records"] = {
+            "biggest_win": float(best["pnl"]),
+            "biggest_win_strat": str(best["strategy"]).replace("trend_ls_", "D"),
+            "biggest_loss": float(worst["pnl"]),
+            "biggest_loss_strat": str(worst["strategy"]).replace("trend_ls_", "D"),
+            "longest_win_streak": longest(True),
+            "longest_loss_streak": longest(False),
+        }
 
     # funding cumulé du carry = équity − capital initial (4000)
     carry = _read_equity("equity_carry.csv")

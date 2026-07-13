@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -46,6 +47,9 @@ class StrategySlot:
         self.position: Position | None = None
         self.stop_order_id: str | None = None
         self.last_bar_ts: pd.Timestamp | None = None
+        #: frais d'entrée de la position ouverte — inclus dans le PnL du trade
+        #: à la sortie (même convention que le backtest)
+        self.entry_fee: float = 0.0
 
     def equity(self, price: float) -> float:
         """Comptabilité sur marge : équity = cash + PnL latent (valide spot 1x
@@ -63,6 +67,7 @@ class LiveRunner:
         symbol: str,
         state_file: str | Path,
         poll_buffer_seconds: int = 20,
+        funding_rate_8h: float = 0.0,
     ) -> None:
         self.slots = slots
         self.broker = broker
@@ -70,6 +75,11 @@ class LiveRunner:
         self.symbol = symbol
         self.state_path = Path(state_file)
         self.poll_buffer = poll_buffer_seconds
+        #: taux de repli quand le funding live est indisponible ; 0.0 = pas de
+        #: funding simulé (spot). En perp, le funding est débité/crédité à
+        #: chaque barre comme dans le backtest (les longs paient un taux > 0).
+        self.funding_rate_8h = funding_rate_8h
+        self._halt_notified = False
         self.data_exchange = _make_exchange(exchange_id)  # accès public, sans clés
         # taux de funding courant (public, futures USDT-M) pour les filtres
         self.funding_exchange = ccxt.binanceusdm({"enableRateLimit": True, "timeout": 30_000})
@@ -91,6 +101,7 @@ class LiveRunner:
                 continue
             slot.cash = s["cash"]
             slot.stop_order_id = s.get("stop_order_id")
+            slot.entry_fee = s.get("entry_fee", 0.0)
             slot.last_bar_ts = pd.Timestamp(s["last_bar_ts"]) if s.get("last_bar_ts") else None
             if s.get("position"):
                 p = s["position"]
@@ -135,14 +146,23 @@ class LiveRunner:
                 "cash": slot.cash,
                 "position": pos,
                 "stop_order_id": slot.stop_order_id,
+                "entry_fee": slot.entry_fee,
                 "last_bar_ts": str(slot.last_bar_ts) if slot.last_bar_ts is not None else None,
             }
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        self.state_path.write_text(json.dumps(raw, indent=2))
+        # écriture atomique : un crash pendant l'écriture ne peut pas corrompre
+        # l'état (le JSON tronqué ferait crash-looper le service au redémarrage)
+        tmp = self.state_path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(raw, indent=2))
+        os.replace(tmp, self.state_path)
 
     # ── données ──────────────────────────────────────────────────────────────
     def _fetch_frame(self, strategy: Strategy) -> pd.DataFrame:
-        limit = min(1000, strategy.warmup_bars() + 60)
+        # 1000 barres (max d'un appel) et non warmup+60 : une EMA200 n'est pas
+        # convergée à 280 barres (~45 % du poids initial subsiste) — mesuré :
+        # 3,1 % des barres avaient un régime EMA différent du backtest à 280
+        # barres, 0 % à 1000. Le surcoût réseau est négligeable.
+        limit = 1000
         raw = self.data_exchange.fetch_ohlcv(self.symbol, strategy.timeframe, limit=limit)
         df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
@@ -164,15 +184,33 @@ class LiveRunner:
             fill = self.broker.market_sell(pos.qty, ref_price)
         else:
             fill = self.broker.market_buy(pos.qty, ref_price)
+        if fill.qty <= 0:
+            # ordre non exécuté : on GARDE la position (nouvel essai au tick
+            # suivant via soft stop / condition de sortie toujours vraie)
+            log.error("[%s] Sortie non exécutée (fill nul) — position conservée", slot.strategy.name)
+            notify(f"⚠ {slot.strategy.name} : ordre de sortie non exécuté, on retentera")
+            return
         pnl = pos.direction * fill.qty * (fill.price - pos.entry_price) - fill.fee
         slot.cash += pnl
+        partial = fill.qty < pos.qty - 1e-9
+        # frais d'entrée inclus dans le PnL du trade (convention backtest) ;
+        # au prorata si sortie partielle
+        entry_fee_share = slot.entry_fee * (fill.qty / pos.qty)
+        trade_pnl = pnl - entry_fee_share
+        slot.entry_fee -= entry_fee_share
         log.info("[%s] Sortie %s (%s) : %.6f @ %.2f", slot.strategy.name,
                  "LONG" if pos.direction == 1 else "SHORT", reason, fill.qty, fill.price)
-        self._record_trade(slot, pos, fill.price, pnl, reason)
-        notify(f"{'🟩' if pnl >= 0 else '🟥'} {slot.strategy.name} — sortie "
+        self._record_trade(slot, pos, fill.price, trade_pnl, reason)
+        notify(f"{'🟩' if trade_pnl >= 0 else '🟥'} {slot.strategy.name} — sortie "
                f"{'LONG' if pos.direction == 1 else 'SHORT'} ({reason}) @ {fill.price:,.0f} $ : "
-               f"{pnl:+,.2f} $")
-        slot.position = None
+               f"{trade_pnl:+,.2f} $")
+        if partial:
+            pos.qty -= fill.qty
+            log.warning("[%s] Sortie PARTIELLE : %.6f restant en position", slot.strategy.name, pos.qty)
+            notify(f"⚠ {slot.strategy.name} : sortie partielle, {pos.qty:.6f} BTC restants")
+        else:
+            slot.position = None
+            slot.entry_fee = 0.0
 
     def _enter_position(self, slot: StrategySlot, row: pd.Series, ref_price: float, direction: int) -> None:
         stop = slot.strategy.initial_stop(row, ref_price, direction)
@@ -195,6 +233,7 @@ class LiveRunner:
             log.error("[%s] Entrée non exécutée", slot.strategy.name)
             return
         slot.cash -= fill.fee
+        slot.entry_fee = fill.fee
         slot.position = Position(
             entry_time=pd.Timestamp.now(tz="UTC"),
             entry_price=fill.price,
@@ -229,7 +268,6 @@ class LiveRunner:
         except Exception as e:  # le filtre funding devient neutre, on ne bloque pas le bot
             log.warning("Funding indisponible (%s) : filtre funding neutre sur cette barre", e)
         row = data.iloc[-1]
-        slot.last_bar_ts = last_ts
 
         if slot.position is not None:
             # le stop exchange a-t-il été exécuté pendant qu'on ne regardait pas ?
@@ -238,31 +276,49 @@ class LiveRunner:
                 status = self.broker.stop_status(slot.stop_order_id)
                 if status.get("status") == "closed":
                     fill_price = float(status.get("average") or pos.stop_price)
-                    pnl = pos.direction * pos.qty * (fill_price - pos.entry_price)
+                    fee = 0.0  # frais du fill du stop (souvent absents de fetch_order)
+                    for f in status.get("fees") or []:
+                        fee += f.get("cost") or 0.0
+                    if not fee and status.get("fee"):
+                        fee = status["fee"].get("cost") or 0.0
+                    pnl = pos.direction * pos.qty * (fill_price - pos.entry_price) - fee
                     slot.cash += pnl
                     log.info("[%s] Stop exchange exécuté @ %.2f", slot.strategy.name, fill_price)
-                    self._record_trade(slot, pos, fill_price, pnl, "stop_exchange")
+                    self._record_trade(slot, pos, fill_price, pnl - slot.entry_fee, "stop_exchange")
                     slot.position = None
                     slot.stop_order_id = None
-                    return
-            pos.bars_held += 1
-            if pos.direction == 1:
-                pos.best_close = max(pos.best_close, row["close"])
-            else:
-                pos.best_close = min(pos.best_close, row["close"])
+                    slot.entry_fee = 0.0
+                    return  # barre non marquée : le signal d'entrée éventuel sera évalué au tick suivant
+            # 1. calculs purs (peuvent échouer sans effet de bord → retry sûr)
+            best = max(pos.best_close, row["close"]) if pos.direction == 1 else min(pos.best_close, row["close"])
+            funding_cost = 0.0
+            if self.funding_rate_8h or pd.notna(row.get("funding")):
+                # taux live si dispo, sinon constante de repli ; débité par
+                # barre au prorata d'une période 8 h, comme dans le backtest
+                rate_8h = row["funding"] if pd.notna(row.get("funding")) else self.funding_rate_8h
+                tf_s = TIMEFRAME_SECONDS[slot.strategy.timeframe]
+                funding_cost = pos.direction * pos.qty * float(row["close"]) * float(rate_8h) * tf_s / 28_800.0
+            pos.best_close = best
             new_stop = slot.strategy.trailing_stop(row, pos)
             tightened = new_stop is not None and (
                 (pos.direction == 1 and new_stop > pos.stop_price)
                 or (pos.direction == -1 and new_stop < pos.stop_price)
             )
+            # 2. barre marquée traitée + mutations locales (jamais rejouées)
+            slot.last_bar_ts = last_ts
+            slot.cash -= funding_cost
+            pos.bars_held += 1
             if tightened:
                 pos.stop_price = new_stop
-                if slot.stop_order_id and self.broker.supports_stop_orders:
-                    self.broker.cancel_stop(slot.stop_order_id)
-                    slot.stop_order_id = self.broker.place_stop(pos.qty, new_stop, pos.direction)
+            # 3. appels externes, at-most-once (un échec ici ne rejoue pas la
+            # barre ; l'ancien stop exchange continue de protéger en attendant)
+            if tightened and slot.stop_order_id and self.broker.supports_stop_orders:
+                self.broker.cancel_stop(slot.stop_order_id)
+                slot.stop_order_id = self.broker.place_stop(pos.qty, new_stop, pos.direction)
             if self.halted or slot.strategy.exit_signal(row, pos):
                 self._exit_position(slot, row["close"], "kill_switch" if self.halted else "signal")
         else:
+            slot.last_bar_ts = last_ts
             can_enter = not self.halted and not self.daily_lockout
             if can_enter:
                 direction = int(slot.strategy.entry_signal(row))
@@ -356,9 +412,17 @@ class LiveRunner:
                             self._process_bar(slot)
                 self._update_kill_switches(price)
                 if self.halted and all(s.position is None for s in self.slots):
+                    # on reste vivant en veille (state maintenu frais pour le
+                    # watchdog) au lieu de sortir : avec Restart=always, un
+                    # return provoquerait une boucle de redémarrage infinie
+                    if not self._halt_notified:
+                        log.error("Kill switch actif et positions liquidées : moteur en veille "
+                                  "(intervention manuelle requise pour reprendre).")
+                        self._halt_notified = True
                     self._save_state()
-                    log.error("Kill switch actif et positions liquidées : arrêt du runner.")
-                    return
+                    self._append_equity(price)
+                    time.sleep(TICK_SECONDS)
+                    continue
                 self._save_state()
                 self._append_equity(price)
             except Exception:

@@ -70,6 +70,9 @@ def main() -> None:
         symbol=cfg["symbol"],
         state_file=ROOT / exec_cfg["state_file"],
         poll_buffer_seconds=exec_cfg.get("poll_buffer_seconds", 20),
+        # perp : funding simulé par barre comme dans le backtest (taux live,
+        # repli sur la constante de config si l'API funding est muette)
+        funding_rate_8h=cfg["costs"].get("funding_rate_8h", 0.0) if market == "perp" else 0.0,
     )
     runner.run_forever()
 
