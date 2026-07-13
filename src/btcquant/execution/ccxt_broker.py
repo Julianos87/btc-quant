@@ -96,10 +96,15 @@ class CcxtBroker(Broker):
 
     def _fill_from_order(self, order: dict, fallback_price: float) -> Fill:
         price = order.get("average") or order.get("price") or fallback_price
-        qty = order.get("filled") or order.get("amount") or 0.0
+        # qty = quantité RÉELLEMENT exécutée, jamais la quantité demandée :
+        # retomber sur `amount` fabriquerait une position fantôme si l'ordre
+        # n'a pas (encore) été rempli. filled=0 → Fill.qty=0, l'appelant gère.
+        qty = order.get("filled") or 0.0
         fee = 0.0
         for f in order.get("fees") or []:
             fee += f.get("cost") or 0.0
+        if not fee and order.get("fee"):
+            fee = order["fee"].get("cost") or 0.0
         return Fill(price=float(price), qty=float(qty), fee=float(fee))
 
     def _market_order(self, side: str, qty: float, ref_price: float) -> Fill:

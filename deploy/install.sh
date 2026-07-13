@@ -37,7 +37,7 @@ chown -R btcquant:btcquant /opt/btcquant
 echo "── Services & timers systemd ──"
 cp /opt/btcquant/deploy/btcquant-*.service /etc/systemd/system/
 cp /opt/btcquant/deploy/btcquant-*.timer /etc/systemd/system/
-chmod +x /opt/btcquant/scripts/backup_state.sh
+chmod +x /opt/btcquant/scripts/backup_state.sh /opt/btcquant/scripts/rebalance_safe.sh
 systemctl daemon-reload
 # services longue durée
 systemctl enable --now btcquant-trend btcquant-carry btcquant-dashboard

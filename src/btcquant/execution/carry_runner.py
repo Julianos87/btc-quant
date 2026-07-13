@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -78,7 +79,9 @@ class CarryRunner:
 
     def _save_state(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        self.state_path.write_text(
+        # écriture atomique : pas de JSON tronqué si crash pendant l'écriture
+        tmp = self.state_path.with_suffix(".json.tmp")
+        tmp.write_text(
             json.dumps(
                 {
                     "equity": self.equity,
@@ -88,6 +91,7 @@ class CarryRunner:
                 }
             )
         )
+        os.replace(tmp, self.state_path)
 
     def _recent_funding(self) -> pd.Series:
         limit = self.smooth_days * 3 + 10
