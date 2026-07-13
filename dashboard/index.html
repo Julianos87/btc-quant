@@ -516,6 +516,17 @@
       <div id="conformity" style="margin-top:6px"><div class="empty">Chargement…</div></div>
     </div>
 
+    <div class="card" data-card="yearly">
+      <h2><span data-i18n="yearly_title">Années précédentes</span> <span style="color:var(--muted);font-weight:500;font-size:11px" data-i18n="yearly_sub">backtest · mêmes réglages que le live</span>
+        <span class="legend">
+          <span><span class="swatch" style="background:var(--s1)"></span><span data-i18n="portfolio">Portefeuille</span></span>
+          <span><span class="swatch" style="background:var(--muted)"></span>BTC</span>
+        </span>
+      </h2>
+      <svg id="ychart" style="width:100%;height:235px;display:block;margin-top:10px" role="img" aria-label="Rendements annuels du backtest, portefeuille et BTC"></svg>
+      <div id="ynote" style="font-size:10.5px;color:var(--muted);margin-top:6px"></div>
+    </div>
+
     <div class="card" data-card="trades">
       <h2><span data-i18n="closed_trades">Trades clôturés</span> <span class="estate" id="tr-stats" style="background:color-mix(in srgb,var(--muted) 10%,transparent);color:var(--ink-2)">—</span>
         <a class="iconbtn" href="/api/trades.csv" download style="margin-left:auto;text-decoration:none">⬇ CSV</a>
@@ -661,9 +672,12 @@ const I18N = {
     monitor_trend:"Moteur Trend", monitor_carry:"Moteur Carry", monitor_next_bar:"Prochaine décision", monitor_binance:"Flux Binance",
     monitor_ready:"opérationnel", monitor_silent:"ne répond plus", monitor_latency:"latence API", monitor_funding:"prochain funding",
     sharpe:"Sharpe", sortino:"Sortino", calmar:"Calmar", vol:"Volatilité",
+    yearly_title:"Années précédentes", yearly_sub:"backtest · mêmes réglages que le live",
+    yearly_note:"Simulation avec frais, slippage et funding réels — pas des résultats réalisés. Rendements par année civile ; pire creux de l’année au survol.",
+    yearly_partial:"année incomplète", yearly_missing:"Référence annuelle absente — lancer scripts/make_yearly_reference.py",
     cards:{performance_brief:"Synthèse de performance", risk_radar:"Radar de risque", monitor_pulse:"Pulse opérationnel",
       chart:"Courbe d’équity", price:"Graphe prix", events:"Journal", trend:"Moteur Trend",
-      carry:"Moteur Carry", breakdown:"Répartition & records", conformity:"Est-ce normal ?",
+      carry:"Moteur Carry", breakdown:"Répartition & records", conformity:"Est-ce normal ?", yearly:"Années précédentes",
       trades:"Trades clôturés", metrics:"Performance en direct", exposure:"Exposition & santé", protocol:"Protocole"},
   },
   en: {
@@ -687,6 +701,9 @@ const I18N = {
     equity_total:"Total equity", pnl_day:"Daily PnL · UTC", since_midnight:"since 00:00 UTC",
     alloc_real:"Real allocation", online:"ONLINE", offline:"STOPPED",
     workspace:"View", view_monitor:"Monitor", view_performance:"Performance", view_risk:"Risk",
+    yearly_title:"Previous years", yearly_sub:"backtest · same settings as live",
+    yearly_note:"Simulation with real fees, slippage and funding — not realized results. Calendar-year returns; each year's worst drawdown on hover.",
+    yearly_partial:"partial year", yearly_missing:"Yearly reference missing — run scripts/make_yearly_reference.py",
     status_good:"All systems nominal", status_warn:"Monitoring required", status_crit:"Action required",
     status_nominal_detail:"Trend and Carry are responding · safeguards armed",
     status_trend_down:"Trend is not responding", status_carry_down:"Carry is not responding",
@@ -703,7 +720,7 @@ const I18N = {
     sharpe:"Sharpe", sortino:"Sortino", calmar:"Calmar", vol:"Volatility",
     cards:{performance_brief:"Performance snapshot", risk_radar:"Risk radar", monitor_pulse:"Operations pulse",
       chart:"Equity curve", price:"Price chart", events:"Event log", trend:"Trend engine",
-      carry:"Carry engine", breakdown:"Breakdown & records", conformity:"Is this normal?",
+      carry:"Carry engine", breakdown:"Breakdown & records", conformity:"Is this normal?", yearly:"Previous years",
       trades:"Closed trades", metrics:"Live performance", exposure:"Exposure & health", protocol:"Protocol"},
   },
 };
@@ -744,7 +761,7 @@ function applyAccent() { document.documentElement.style.setProperty("--s1", PREF
 
 const VIEW_CARDS = {
   monitor: new Set(["monitor_pulse", "price", "events", "trend", "carry", "exposure"]),
-  performance: new Set(["performance_brief", "chart", "breakdown", "conformity", "trades", "metrics"]),
+  performance: new Set(["performance_brief", "chart", "breakdown", "conformity", "yearly", "trades", "metrics"]),
   risk: new Set(["risk_radar", "chart", "price", "events", "trend", "carry", "exposure"]),
 };
 const VIEW_TILES = {
@@ -771,6 +788,7 @@ function applyDashboardView() {
     button.setAttribute("aria-selected", String(active));
   });
   document.querySelectorAll("#unit .chip").forEach(button => button.classList.toggle("on", button.dataset.u === unit));
+  if (typeof drawYearly === "function") drawYearly(); // la carte devient visible en vue performance
 }
 
 function setChartUnit(next) {
@@ -1108,7 +1126,7 @@ function drawFunding(pts) {
     const next = cur === "dark" ? "light" : "dark";
     document.documentElement.setAttribute("data-theme", next);
     localStorage.setItem("btcq-theme", next);
-    drawChart(); drawSpark(); refreshPrice(); refreshAnalytics();
+    drawChart(); drawSpark(); refreshPrice(); refreshAnalytics(); drawYearly();
   };
 })();
 
@@ -1158,6 +1176,67 @@ function kvRow(k, v, note, status) {
     <span class="num">${v}</span>
     ${note ? `<div style="flex-basis:100%;font-size:11.5px;color:var(--muted);padding:2px 0 0 15px">${note}</div>` : ""}
   </div>`;
+}
+
+// ── années précédentes (backtest) : barres annuelles portefeuille vs BTC ──
+let yearlyData = null;
+async function refreshYearly() {
+  try { yearlyData = await (await fetch("/api/yearly")).json(); } catch (e) { yearlyData = null; }
+  drawYearly();
+}
+function drawYearly() {
+  const svg = $("ychart");
+  if (!svg) return;
+  const W = svg.clientWidth, H = svg.clientHeight;
+  if (!W) return; // carte masquée : redessinée au prochain changement de vue
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const years = (yearlyData && yearlyData.years) || [];
+  if (!years.length) {
+    svg.innerHTML = `<text x="${W/2}" y="${H/2}" text-anchor="middle" fill="${col("--muted")}" font-size="12">${t("yearly_missing")}</text>`;
+    $("ynote").textContent = "";
+    return;
+  }
+  const M = {t: 22, r: 6, b: 24, l: 6};
+  const vals = years.flatMap(y => [y.portfolio, y.btc]).filter(v => v != null);
+  let vmax = Math.max(0, ...vals), vmin = Math.min(0, ...vals);
+  const pad = (vmax - vmin) * 0.12;
+  vmax += pad; if (vmin < 0) vmin -= pad;
+  const Y = v => M.t + (vmax - v) / (vmax - vmin) * (H - M.t - M.b);
+  const cell = (W - M.l - M.r) / years.length;
+  const bw = Math.min(26, Math.max(7, (cell * 0.6 - 2) / 2));
+  let g = "";
+  for (let i = 0; i <= 4; i++) {
+    const v = vmin + (vmax - vmin) * i / 4, y = Y(v);
+    g += `<line x1="${M.l}" x2="${W - M.r}" y1="${y}" y2="${y}" stroke="${col("--grid")}"/>`;
+    g += `<text x="${M.l + 2}" y="${y - 4}" fill="${col("--muted")}" font-size="10" style="font-variant-numeric:tabular-nums">${fmtPct(v, 0)}</text>`;
+  }
+  const y0 = Y(0);
+  g += `<line x1="${M.l}" x2="${W - M.r}" y1="${y0}" y2="${y0}" stroke="${col("--axis")}" stroke-width="1.2"/>`;
+  years.forEach((yr, i) => {
+    const cx = M.l + cell * (i + 0.5);
+    const title = escapeSvg(`${yr.year}${yr.partial ? " (" + t("yearly_partial") + ")" : ""} · ${t("portfolio")} ${fmtPct(yr.portfolio, 1)}`
+      + ` · Trend ${fmtPct(yr.trend, 1)} · Carry ${fmtPct(yr.carry, 1)}`
+      + (yr.btc != null ? ` · BTC ${fmtPct(yr.btc, 1)}` : "") + ` · max DD ${fmtDrawdown(yr.max_dd)}`);
+    g += `<g><title>${title}</title>`;
+    [[yr.portfolio, col("--s1")], [yr.btc, col("--muted")]].forEach(([v, c], j) => {
+      if (v == null) return;
+      const x = cx - bw - 1 + j * (bw + 2);
+      g += `<rect x="${x.toFixed(1)}" y="${Math.min(Y(v), y0).toFixed(1)}" width="${bw.toFixed(1)}"
+        height="${Math.max(1.5, Math.abs(Y(v) - y0)).toFixed(1)}" fill="${c}" rx="2"/>`;
+    });
+    // étiquette de valeur du portefeuille, au-dessus (ou dessous) des deux barres du groupe
+    const lp = yr.portfolio;
+    const both = yr.btc != null && (yr.btc >= 0) === (lp >= 0);
+    const ref = both ? (lp >= 0 ? Math.min(Y(lp), Y(yr.btc)) : Math.max(Y(lp), Y(yr.btc))) : Y(lp);
+    g += `<text x="${cx.toFixed(1)}" y="${(lp >= 0 ? ref - 6 : ref + 12).toFixed(1)}" text-anchor="middle"
+      fill="${col("--ink-2")}" font-size="9.5" font-weight="700" style="font-variant-numeric:tabular-nums">${fmtPct(lp, 0)}</text>`;
+    g += `<text x="${cx.toFixed(1)}" y="${H - 7}" text-anchor="middle" fill="${col("--muted")}" font-size="10.5">${yr.year}${yr.partial ? "*" : ""}</text>`;
+    g += `</g>`;
+  });
+  svg.innerHTML = g;
+  $("ynote").textContent = t("yearly_note")
+    + (yearlyData.span ? ` · ${yearlyData.span[0]} → ${yearlyData.span[1]}` : "")
+    + (years.some(y => y.partial) ? ` · * ${t("yearly_partial")}` : "");
 }
 
 async function refreshPrice() {
@@ -1519,7 +1598,7 @@ function buildDrawer() {
   $("pref-notif-pos").checked = PREFS.notifPos;
   $("pref-dd").value = PREFS.ddAlert;
   // cartes visibles
-  const CARDS = ["performance_brief","risk_radar","monitor_pulse","chart","price","events","trend","carry","breakdown","conformity","trades","metrics","exposure","protocol"];
+  const CARDS = ["performance_brief","risk_radar","monitor_pulse","chart","price","events","trend","carry","breakdown","conformity","yearly","trades","metrics","exposure","protocol"];
   $("pref-cards").innerHTML = CARDS.map(k =>
     `<div class="setrow"><span class="sk">${(t("cards")||{})[k]||k}</span>
      <label class="toggle"><input type="checkbox" data-card-k="${k}" ${PREFS.hidden[k]?"":"checked"}><span class="sl"></span></label></div>`).join("");
@@ -1532,7 +1611,7 @@ function applyCardVisibility() {
     c.setAttribute("data-hidden", PREFS.hidden[c.dataset.card] ? "1" : "0");
   });
 }
-function redrawAll() { drawChart(); drawSpark(); refreshPrice(); if (lastSummary) renderExposureHealth(lastSummary); }
+function redrawAll() { drawChart(); drawSpark(); refreshPrice(); drawYearly(); if (lastSummary) renderExposureHealth(lastSummary); }
 
 $("settings-btn").onclick = () => { buildDrawer(); $("drawer").classList.add("open"); $("drawer-bd").classList.add("open"); };
 $("drawer-close").onclick = () => { $("drawer").classList.remove("open"); $("drawer-bd").classList.remove("open"); };
@@ -1560,8 +1639,8 @@ $("tr-clear").onclick = () => { $("tr-from").value = ""; $("tr-to").value = ""; 
 // ── boucle de rafraîchissement (fréquence configurable) ────
 let timer = null;
 function restartTimer() { if (timer) clearInterval(timer); if (PREFS.refresh) timer = setInterval(tick, PREFS.refresh); }
-window.addEventListener("resize", () => { drawChart(); drawSpark(); });
-window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawChart(); drawSpark(); });
+window.addEventListener("resize", () => { drawChart(); drawSpark(); drawYearly(); });
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawChart(); drawSpark(); drawYearly(); });
 async function tick() {
   try { await Promise.all([refreshSummary(), refreshEvents(), refreshEquity(), refreshTrades(), refreshConformity(), refreshPrice(), refreshAnalytics(), refreshMetrics()]); }
   catch (e) { console.error(e); }
@@ -1572,6 +1651,7 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").cat
 applyAccent(); applyI18n(); applyCardVisibility(); applyDashboardView();
 document.querySelectorAll("#range .chip").forEach(x => x.classList.toggle("on", +x.dataset.r === range));
 tick();
+refreshYearly(); // référence statique : un seul chargement, redessinée aux changements de vue/thème
 restartTimer();
 </script>
 </body>

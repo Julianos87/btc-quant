@@ -8,3 +8,6 @@ __pycache__/
 venv/
 .env
 *.egg-info/
+
+# préférences locales Claude Code (spécifiques à la machine)
+.claude/settings.local.json

@@ -466,6 +466,14 @@ def conformity():
     return jsonify(out)
 
 
+@app.route("/api/yearly")
+def yearly():
+    """Performances annuelles du backtest (générées par scripts/make_yearly_reference.py)."""
+    path = Path(__file__).parent / "yearly_reference.json"
+    data = _read_json(path)
+    return jsonify(data if data else {"years": []})
+
+
 @app.route("/api/metrics")
 def metrics():
     """Métriques live (Sharpe/Sortino/Calmar glissants) sur l'équity réalisée."""
