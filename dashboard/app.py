@@ -193,8 +193,8 @@ def icon():
 def manifest():
     return jsonify(
         {
-            "name": "BTC-QUANT",
-            "short_name": "BTC-QUANT",
+            "name": "Tandem",
+            "short_name": "Tandem",
             "description": "Portefeuille systématique 60/40 — suivi paper trading",
             "start_url": "/",
             "display": "standalone",
@@ -631,7 +631,7 @@ def trades_csv():
     return Response(
         path.read_text(encoding="utf-8"),
         mimetype="text/csv",
-        headers={"Content-Disposition": "attachment; filename=btcquant_trades.csv"},
+        headers={"Content-Disposition": "attachment; filename=tandem_trades.csv"},
     )
 
 

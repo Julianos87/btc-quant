@@ -1,4 +1,9 @@
-# btc-quant — système de trading systématique BTC (swing + intraday)
+# TANDEM — portefeuille systématique BTC (60 % trend · 40 % carry)
+
+> Deux moteurs qui avancent ensemble : le **trend** prend les tendances
+> (ensemble Donchian long/short), le **carry** encaisse le funding
+> (cash-and-carry delta-neutre). Quand l'un cale, l'autre porte.
+> (nom technique du dépôt et du package : `btc-quant` / `btcquant`)
 
 Système complet : données → indicateurs → stratégies → backtest sans look-ahead →
 validation walk-forward → gestion du risque → exécution paper/live (ccxt).

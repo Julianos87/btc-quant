@@ -91,7 +91,7 @@ def main() -> None:
 
     label = "semaine" if args.weekly else "24 h"
     lines = [
-        f"{'🗓 Bilan hebdomadaire' if args.weekly else '📊'} btc-quant — "
+        f"{'🗓 Bilan hebdomadaire' if args.weekly else '📊'} Tandem — "
         f"{datetime.now(timezone.utc):%d/%m/%Y %H:%M} UTC",
         f"Équity totale : {total:,.0f} $ (départ 10 000 $, {total/10000-1:+.1%})",
         f"PnL {label} : {day_pnl:+.2%}" if day_pnl is not None else f"PnL {label} : n/d",
