@@ -466,6 +466,93 @@ def conformity():
     return jsonify(out)
 
 
+# ── critères go/no-go de la phase paper (fixés à froid, le 14/07/2026) ──────
+# Le passage au testnet ne se décide PAS au feeling : chaque critère est
+# mesurable et évalué automatiquement. Modifier ces seuils = décision de
+# protocole, à documenter dans le journal du projet.
+READINESS = {
+    "min_days": 90,        # durée minimale de paper trading
+    "min_trades": 30,      # échantillon minimal de trades clôturés
+    "min_uptime": 0.95,    # part des jours avec données d'équity
+    "max_dd_floor": -0.45, # DD paper toléré (backtest : -53 % ; au-delà de -45 %, discussion)
+}
+
+
+@app.route("/api/readiness")
+def readiness():
+    """Évaluation automatique des critères de passage paper → testnet."""
+    ref_path = Path(__file__).parent / "backtest_reference.json"
+    ref = _read_json(ref_path) or {}
+    checks = []
+
+    def add(key, label, status, value, target, note=""):
+        checks.append({"key": key, "label": label, "status": status,
+                       "value": value, "target": target, "note": note})
+
+    trend_eq = _read_equity("equity_trend.csv")
+    days = 0.0
+    if len(trend_eq) > 1:
+        days = (trend_eq.index[-1] - trend_eq.index[0]).total_seconds() / 86400
+    add("days", "Durée du paper trading",
+        "ok" if days >= READINESS["min_days"] else "pending",
+        f"{days:.0f} j", f"≥ {READINESS['min_days']} j")
+
+    if len(trend_eq) > 1:
+        days_with_data = trend_eq.resample("1D").count()
+        uptime = float((days_with_data > 0).mean())
+        add("uptime", "Présence des moteurs",
+            "ok" if uptime >= READINESS["min_uptime"] else "warn",
+            f"{uptime:.0%}", f"≥ {READINESS['min_uptime']:.0%}",
+            "" if uptime >= READINESS["min_uptime"] else "trous dans l'historique d'équity")
+    else:
+        add("uptime", "Présence des moteurs", "pending", "—", f"≥ {READINESS['min_uptime']:.0%}")
+
+    df = _read_trades()
+    n = int(len(df))
+    add("trades", "Trades clôturés",
+        "ok" if n >= READINESS["min_trades"] else "pending",
+        str(n), f"≥ {READINESS['min_trades']}")
+
+    # win rate compatible avec le backtest (IC de Wilson à 95 %)
+    if n >= 20 and ref.get("win_rate") is not None:
+        wins = int((df["pnl"] > 0).sum())
+        p, z = wins / n, 1.96
+        denom = 1 + z * z / n
+        center = (p + z * z / (2 * n)) / denom
+        half = z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5) / denom
+        lo, hi = center - half, center + half
+        compatible = lo <= ref["win_rate"] <= hi
+        add("winrate", "Win rate vs backtest",
+            "ok" if compatible else "warn",
+            f"{p:.0%} [{max(0, lo):.0%}–{min(1, hi):.0%}]", f"∋ {ref['win_rate']:.0%}",
+            "" if compatible else "écart significatif — comprendre avant d'avancer")
+    else:
+        add("winrate", "Win rate vs backtest", "pending", f"{n} trades",
+            "≥ 20 trades requis")
+
+    # drawdown paper dans l'enveloppe tolérée
+    comb = _combined_equity()
+    if len(comb) > 2:
+        max_dd = float((comb / comb.cummax() - 1.0).min())
+        add("drawdown", "Drawdown maximal paper",
+            "ok" if max_dd >= READINESS["max_dd_floor"] else "warn",
+            f"{max_dd:.1%}", f"≥ {READINESS['max_dd_floor']:.0%}",
+            "" if max_dd >= READINESS["max_dd_floor"] else "plus profond que l'enveloppe tolérée")
+    else:
+        add("drawdown", "Drawdown maximal paper", "pending", "—",
+            f"≥ {READINESS['max_dd_floor']:.0%}")
+
+    trend_state = _read_json(STATE / "live_state_4x.json") or {}
+    halted = bool(trend_state.get("halted", False))
+    add("killswitch", "Kill-switch jamais déclenché",
+        "warn" if halted else "ok", "déclenché" if halted else "non", "non")
+
+    n_ok = sum(1 for c in checks if c["status"] == "ok")
+    ready = all(c["status"] == "ok" for c in checks)
+    return jsonify({"ready": ready, "n_ok": n_ok, "n_total": len(checks),
+                    "checks": checks, "thresholds": READINESS})
+
+
 @app.route("/api/yearly")
 def yearly():
     """Performances annuelles du backtest (générées par scripts/make_yearly_reference.py)."""

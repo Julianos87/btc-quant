@@ -360,6 +360,8 @@ class LiveRunner:
             and not self.daily_lockout
         ):
             log.warning("Limite de perte journalière atteinte : plus d'entrées aujourd'hui")
+            notify(f"🔒 Lockout journalier : perte du jour > {self.risk.daily_loss_limit:.0%} "
+                   f"(équity {equity:,.0f} $). Plus d'entrées trend avant demain 00:00 UTC.")
             self.daily_lockout = True
 
     def _record_trade(self, slot: StrategySlot, pos: Position, exit_price: float,

@@ -14,4 +14,6 @@ trap 'systemctl start btcquant-trend btcquant-carry' EXIT
 systemctl stop btcquant-trend btcquant-carry
 # petit délai : laisser les runners finir leur dernier _save_state
 sleep 3
-runuser -u btcquant -- "${ROOT}/venv/bin/python" "${ROOT}/scripts/rebalance.py" --apply
+# apport mensuel optionnel : MONTHLY_DEPOSIT=100 dans ${ROOT}/.env
+DEPOSIT="$(grep -s '^MONTHLY_DEPOSIT=' "${ROOT}/.env" | cut -d= -f2)"
+runuser -u btcquant -- "${ROOT}/venv/bin/python" "${ROOT}/scripts/rebalance.py" --apply --deposit "${DEPOSIT:-0}"

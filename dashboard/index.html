@@ -566,6 +566,14 @@
       <div class="kv"><span class="k" data-i18n="rebalance">Rééquilibrage 60/40</span><span data-i18n="monthly">mensuel</span></div>
       <div class="kv"><span class="k" data-i18n="golden_rule">Règle d’or</span><span data-i18n="no_change">ne rien modifier en route</span></div>
     </div>
+
+    <div class="card" data-card="readiness">
+      <h2><span data-i18n="readiness_title">Prêt pour le testnet ?</span>
+        <span class="estate" id="rdy-badge" style="background:color-mix(in srgb,var(--muted) 10%,transparent);color:var(--ink-2)">—</span>
+      </h2>
+      <div style="font-size:11px;color:var(--muted);margin:4px 0 6px" data-i18n="readiness_note">Critères fixés à froid — le passage ne se décide pas au feeling.</div>
+      <div id="readiness"><div class="empty">Chargement…</div></div>
+    </div>
   </div>
 </div>
 
@@ -675,10 +683,12 @@ const I18N = {
     yearly_title:"Années précédentes", yearly_sub:"backtest · mêmes réglages que le live",
     yearly_note:"Simulation avec frais, slippage et funding réels — pas des résultats réalisés. Rendements par année civile ; pire creux de l’année au survol.",
     yearly_partial:"année incomplète", yearly_missing:"Référence annuelle absente — lancer scripts/make_yearly_reference.py",
+    readiness_title:"Prêt pour le testnet ?", readiness_note:"Critères fixés à froid — le passage ne se décide pas au feeling.",
     cards:{performance_brief:"Synthèse de performance", risk_radar:"Radar de risque", monitor_pulse:"Pulse opérationnel",
       chart:"Courbe d’équity", price:"Graphe prix", events:"Journal", trend:"Moteur Trend",
       carry:"Moteur Carry", breakdown:"Répartition & records", conformity:"Est-ce normal ?", yearly:"Années précédentes",
-      trades:"Trades clôturés", metrics:"Performance en direct", exposure:"Exposition & santé", protocol:"Protocole"},
+      trades:"Trades clôturés", metrics:"Performance en direct", exposure:"Exposition & santé", protocol:"Protocole",
+      readiness:"Prêt pour le testnet ?"},
   },
   en: {
     paper:"PAPER TRADING", theme:"Theme", settings:"Settings", btcusdt:"BTC / USDT",
@@ -704,6 +714,7 @@ const I18N = {
     yearly_title:"Previous years", yearly_sub:"backtest · same settings as live",
     yearly_note:"Simulation with real fees, slippage and funding — not realized results. Calendar-year returns; each year's worst drawdown on hover.",
     yearly_partial:"partial year", yearly_missing:"Yearly reference missing — run scripts/make_yearly_reference.py",
+    readiness_title:"Ready for testnet?", readiness_note:"Criteria set in advance — the transition is not a gut call.",
     status_good:"All systems nominal", status_warn:"Monitoring required", status_crit:"Action required",
     status_nominal_detail:"Trend and Carry are responding · safeguards armed",
     status_trend_down:"Trend is not responding", status_carry_down:"Carry is not responding",
@@ -721,7 +732,8 @@ const I18N = {
     cards:{performance_brief:"Performance snapshot", risk_radar:"Risk radar", monitor_pulse:"Operations pulse",
       chart:"Equity curve", price:"Price chart", events:"Event log", trend:"Trend engine",
       carry:"Carry engine", breakdown:"Breakdown & records", conformity:"Is this normal?", yearly:"Previous years",
-      trades:"Closed trades", metrics:"Live performance", exposure:"Exposure & health", protocol:"Protocol"},
+      trades:"Closed trades", metrics:"Live performance", exposure:"Exposure & health", protocol:"Protocol",
+      readiness:"Ready for testnet?"},
   },
 };
 const t = k => (I18N[PREFS.lang] || I18N.fr)[k] || k;
@@ -760,8 +772,8 @@ let lastSummaryUpdatedAt = null;
 function applyAccent() { document.documentElement.style.setProperty("--s1", PREFS.accent); }
 
 const VIEW_CARDS = {
-  monitor: new Set(["monitor_pulse", "price", "events", "trend", "carry", "exposure"]),
-  performance: new Set(["performance_brief", "chart", "breakdown", "conformity", "yearly", "trades", "metrics"]),
+  monitor: new Set(["monitor_pulse", "price", "events", "trend", "carry", "exposure", "readiness"]),
+  performance: new Set(["performance_brief", "chart", "breakdown", "conformity", "yearly", "trades", "metrics", "readiness"]),
   risk: new Set(["risk_radar", "chart", "price", "events", "trend", "carry", "exposure"]),
 };
 const VIEW_TILES = {
@@ -1176,6 +1188,21 @@ function kvRow(k, v, note, status) {
     <span class="num">${v}</span>
     ${note ? `<div style="flex-basis:100%;font-size:11.5px;color:var(--muted);padding:2px 0 0 15px">${note}</div>` : ""}
   </div>`;
+}
+
+// ── critères go/no-go paper → testnet (évalués côté serveur) ──
+async function refreshReadiness() {
+  const r = await (await fetch("/api/readiness")).json();
+  const badge = $("rdy-badge");
+  badge.textContent = `${r.n_ok}/${r.n_total}`;
+  badge.style.color = r.ready ? "var(--good-text)" : "var(--ink-2)";
+  const dot = s => s === "ok" ? "var(--good)" : s === "warn" ? "var(--warn)" : "var(--muted)";
+  $("readiness").innerHTML = r.checks.map(c => `<div class="kv" style="flex-wrap:wrap">
+    <span class="k"><span style="display:inline-block;width:7px;height:7px;border-radius:99px;background:${dot(c.status)};margin-right:8px"></span>${c.label}</span>
+    <span class="num">${c.value} <span style="color:var(--muted);font-weight:500">(${c.target})</span></span>
+    ${c.note ? `<div style="flex-basis:100%;font-size:11.5px;color:var(--muted);padding:2px 0 0 15px">${c.note}</div>` : ""}
+  </div>`).join("")
+  + (r.ready ? `<div style="margin-top:8px;font-size:12px;color:var(--good-text);font-weight:700">✓ Tous les critères sont au vert — décision testnet à prendre.</div>` : "");
 }
 
 // ── années précédentes (backtest) : barres annuelles portefeuille vs BTC ──
@@ -1598,7 +1625,7 @@ function buildDrawer() {
   $("pref-notif-pos").checked = PREFS.notifPos;
   $("pref-dd").value = PREFS.ddAlert;
   // cartes visibles
-  const CARDS = ["performance_brief","risk_radar","monitor_pulse","chart","price","events","trend","carry","breakdown","conformity","yearly","trades","metrics","exposure","protocol"];
+  const CARDS = ["performance_brief","risk_radar","monitor_pulse","chart","price","events","trend","carry","breakdown","conformity","yearly","trades","metrics","exposure","protocol","readiness"];
   $("pref-cards").innerHTML = CARDS.map(k =>
     `<div class="setrow"><span class="sk">${(t("cards")||{})[k]||k}</span>
      <label class="toggle"><input type="checkbox" data-card-k="${k}" ${PREFS.hidden[k]?"":"checked"}><span class="sl"></span></label></div>`).join("");
@@ -1642,7 +1669,7 @@ function restartTimer() { if (timer) clearInterval(timer); if (PREFS.refresh) ti
 window.addEventListener("resize", () => { drawChart(); drawSpark(); drawYearly(); });
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawChart(); drawSpark(); drawYearly(); });
 async function tick() {
-  try { await Promise.all([refreshSummary(), refreshEvents(), refreshEquity(), refreshTrades(), refreshConformity(), refreshPrice(), refreshAnalytics(), refreshMetrics()]); }
+  try { await Promise.all([refreshSummary(), refreshEvents(), refreshEquity(), refreshTrades(), refreshConformity(), refreshPrice(), refreshAnalytics(), refreshMetrics(), refreshReadiness()]); }
   catch (e) { console.error(e); }
 }
 
