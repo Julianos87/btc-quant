@@ -25,30 +25,46 @@ START_TIME = time.time()  # démarrage du serveur dashboard (uptime)
 
 app = Flask(__name__)
 
-# ── authentification HTTP Basic (obligatoire dès que le dashboard est exposé
-# au-delà de localhost). Définir DASHBOARD_USER / DASHBOARD_PASSWORD dans
-# l'environnement ; sans mot de passe défini, seul localhost est servi. ──────
-AUTH_USER = os.environ.get("DASHBOARD_USER", "admin")
-AUTH_PASS = os.environ.get("DASHBOARD_PASSWORD")
+# ── accès par lien secret (« capability URL ») ───────────────────────────────
+# Le dashboard est exposé sur Internet : sans garde, équity, positions, stops
+# et logs seraient publics. Plutôt qu'un mot de passe à retaper, on utilise un
+# jeton long et aléatoire (DASHBOARD_TOKEN) : la première visite avec ?k=<jeton>
+# pose un cookie d'un an, et plus rien n'est jamais demandé ensuite.
+#
+# Toutes les routes sont en lecture seule (aucune ne passe d'ordre ni ne modifie
+# l'état) : le jeton protège la confidentialité, pas l'intégrité.
+#
+# Sans DASHBOARD_TOKEN défini, seul localhost est servi (usage en dev).
+# Révocation : changer DASHBOARD_TOKEN dans .env et redémarrer le service.
+AUTH_TOKEN = os.environ.get("DASHBOARD_TOKEN")
+COOKIE_NAME = "tandem_key"
+COOKIE_MAX_AGE = 365 * 24 * 3600
 
 
 @app.before_request
 def _guard():
-    if AUTH_PASS:
-        auth = request.authorization
-        ok = (
-            auth is not None
-            and auth.username is not None and auth.password is not None
-            and hmac.compare_digest(auth.username, AUTH_USER)
-            and hmac.compare_digest(auth.password, AUTH_PASS)
+    if not AUTH_TOKEN:
+        if request.remote_addr not in ("127.0.0.1", "::1"):
+            return Response("Accès refusé : définir DASHBOARD_TOKEN pour l'accès distant.", 403)
+        return None
+    # jeton fourni dans l'URL (première visite / lien en favori) ou déjà en cookie
+    supplied = request.args.get("k") or request.cookies.get(COOKIE_NAME) or ""
+    if not hmac.compare_digest(supplied, AUTH_TOKEN):
+        # 404 plutôt que 401 : ne révèle pas qu'il y a quelque chose à trouver ici
+        return Response("Not Found", 404)
+    return None
+
+
+@app.after_request
+def _persist_token(resp: Response) -> Response:
+    """Après une visite avec ?k=<jeton> valide, on mémorise le jeton en cookie :
+    l'utilisateur n'a plus jamais à le fournir (y compris en PWA installée)."""
+    if AUTH_TOKEN and request.args.get("k") and request.cookies.get(COOKIE_NAME) != AUTH_TOKEN:
+        resp.set_cookie(
+            COOKIE_NAME, AUTH_TOKEN, max_age=COOKIE_MAX_AGE,
+            httponly=True, samesite="Lax",
         )
-        if not ok:
-            return Response(
-                "Authentification requise", 401,
-                {"WWW-Authenticate": 'Basic realm="btcquant"'},
-            )
-    elif request.remote_addr not in ("127.0.0.1", "::1"):
-        return Response("Accès refusé : définir DASHBOARD_PASSWORD pour l'accès distant.", 403)
+    return resp
 
 _cache: dict = {}
 # les objets ccxt ne sont pas thread-safe ; le serveur Flask sert les requêtes
@@ -196,7 +212,9 @@ def manifest():
             "name": "Tandem",
             "short_name": "Tandem",
             "description": "Portefeuille systématique 60/40 — suivi paper trading",
-            "start_url": "/",
+            # le jeton reste dans l'URL de lancement : si le cookie de la PWA
+            # expire ou est purgé, l'app se ré-authentifie seule au démarrage
+            "start_url": f"/?k={AUTH_TOKEN}" if AUTH_TOKEN else "/",
             "display": "standalone",
             "background_color": "#0a0b0d",
             "theme_color": "#0a0b0d",
