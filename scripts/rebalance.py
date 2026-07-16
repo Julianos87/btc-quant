@@ -6,9 +6,12 @@ disponible, prudent). Appelé par un timer systemd mensuel, ou à la main.
 
 --deposit N : apport de N $ réparti 60/40 (trend/carry). L'apport s'applique
 TOUJOURS, même avec des positions ouvertes ou sous le seuil de dérive — seul
-le rééquilibrage entre poches est soumis à ces conditions. En paper, le
-capital de départ affiché par le dashboard reste 10 000 $ + apports non
-suivis : l'important est l'équity, la performance en % se lit sur le backtest.
+le rééquilibrage entre poches est soumis à ces conditions.
+
+Chaque mouvement appliqué (apport ou transfert entre poches) est journalisé
+dans state/flows.csv : le dashboard s'en sert pour calculer des métriques
+hors apports (Sharpe, drawdown, PnL, funding cumulé) — sans ce journal, un
+apport ressemblerait à un gain de trading.
 
 En paper, "déplacer du cash" = réécrire les fichiers d'état. En live réel,
 ce mouvement supposerait un transfert entre le compte futures (trend) et le
@@ -23,6 +26,7 @@ import json
 import os
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,6 +49,21 @@ def _write_atomic(path: Path, payload: dict) -> None:
         if os.path.exists(tmp):
             os.unlink(tmp)
         raise
+
+
+def _log_flow(kind: str, trend_flow: float, carry_flow: float) -> None:
+    """Journal append-only des flux externes (mêmes conventions que trades.csv).
+
+    kind = "deposit" (apport, somme > 0) ou "rebalance" (transfert entre
+    poches, somme nulle). Lu par dashboard/app.py et scripts/daily_digest.py.
+    """
+    path = STATE / "flows.csv"
+    is_new = not path.exists()
+    with open(path, "a", encoding="utf-8") as fh:
+        if is_new:
+            fh.write("ts,kind,trend_flow,carry_flow\n")
+        fh.write(f"{datetime.now(timezone.utc).isoformat()},{kind},"
+                 f"{trend_flow:.2f},{carry_flow:.2f}\n")
 
 
 def main() -> None:
@@ -114,6 +133,12 @@ def main() -> None:
     if args.apply and (args.deposit > 0 or do_rebalance):
         _write_atomic(trend_path, trend)
         _write_atomic(carry_path, carry)
+        if args.deposit > 0:
+            dep_trend = args.deposit * TARGET_TREND
+            _log_flow("deposit", dep_trend, args.deposit - dep_trend)
+        if do_rebalance:
+            transfer = target_trend_cash - trend_cash  # >0 : cash carry → trend
+            _log_flow("rebalance", transfer, -transfer)
         parts.append("✅ Appliqué.")
     elif not args.apply:
         parts.append("(simulation — relancer avec --apply pour appliquer)")

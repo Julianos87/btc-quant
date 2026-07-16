@@ -136,6 +136,40 @@ def _read_trades() -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _read_flows() -> pd.DataFrame:
+    """Journal des flux externes (apports, transferts entre poches) écrit par
+    scripts/rebalance.py. Colonnes : ts, kind, trend_flow, carry_flow."""
+    path = STATE / "flows.csv"
+    empty = pd.DataFrame(columns=["ts", "kind", "trend_flow", "carry_flow"])
+    if not path.exists():
+        return empty
+    try:
+        df = pd.read_csv(path, on_bad_lines="skip")
+        df["ts"] = pd.to_datetime(df["ts"], utc=True, format="ISO8601", errors="coerce")
+        return df[df["ts"].notna()].sort_values("ts")
+    except Exception:
+        return empty
+
+
+def _deposits_total(flows: pd.DataFrame) -> float:
+    """Somme des apports (les transferts entre poches s'annulent)."""
+    if not len(flows):
+        return 0.0
+    return float((flows["trend_flow"] + flows["carry_flow"]).sum())
+
+
+def _net_of_flows(s: pd.Series, flows: pd.DataFrame, col: str) -> pd.Series:
+    """Soustrait d'une série d'équity le cumul des flux externes de sa poche
+    (col = "trend_flow" ou "carry_flow"). À appliquer sur les échantillons
+    NATIFS, avant tout resampling : les moteurs sont arrêtés pendant un
+    rebalance, donc le premier échantillon qui suit un flux l'inclut déjà —
+    la série nette reste continue, sans faux creux ni faux gain."""
+    if not len(s) or not len(flows):
+        return s
+    cum = flows.set_index("ts")[col].cumsum()
+    return s - cum.reindex(s.index, method="ffill").fillna(0.0)
+
+
 def _timed(label: str, fn):
     """Exécute fn en mesurant sa latence (ms), stockée dans le cache."""
     t0 = time.time()
@@ -145,12 +179,20 @@ def _timed(label: str, fn):
         _cache[f"{label}_ms"] = round((time.time() - t0) * 1000, 1)
 
 
-def _combined_equity() -> pd.Series:
-    """Équity combinée trend + carry, alignée à la minute."""
+def _combined_equity(net_of_flows: bool = False) -> pd.Series:
+    """Équity combinée trend + carry, alignée à la minute.
+
+    net_of_flows=True : apports et transferts déduits (série « trading
+    seul ») — c'est sur elle que se mesurent Sharpe, drawdowns et records,
+    sans quoi chaque apport mensuel ressemblerait à un gain."""
     trend = _read_equity("equity_trend.csv")
     carry = _read_equity("equity_carry.csv")
     if not len(trend) or not len(carry):
         return pd.Series(dtype=float)
+    if net_of_flows:
+        flows = _read_flows()
+        trend = _net_of_flows(trend, flows, "trend_flow")
+        carry = _net_of_flows(carry, flows, "carry_flow")
     t = trend.resample("1min").last().ffill()
     c = carry.resample("1min").last().ffill()
     idx = t.index.intersection(c.index)
@@ -159,8 +201,9 @@ def _combined_equity() -> pd.Series:
 
 def _live_metrics() -> dict:
     """Sharpe / Sortino / Calmar glissants + drawdown sur l'équity combinée
-    (rendements journaliers). Renvoie None quand l'historique est trop court."""
-    comb = _combined_equity()
+    (rendements journaliers), apports neutralisés. Renvoie None quand
+    l'historique est trop court."""
+    comb = _combined_equity(net_of_flows=True)
     out = {"sharpe": None, "sortino": None, "calmar": None, "cagr": None,
            "max_dd": None, "cur_dd": None, "vol_annual": None, "days": 0}
     if len(comb) < 3:
@@ -177,7 +220,9 @@ def _live_metrics() -> dict:
         if max_dd < 0:
             out["calmar"] = float(cagr / abs(max_dd))
     rets = daily.pct_change().dropna()
-    if len(rets) >= 2 and rets.std() > 0:
+    # moins de 14 rendements journaliers : un Sharpe annualisé n'a aucun sens
+    # (le premier jour affichait 37) — on rend None, le front affiche « — »
+    if len(rets) >= 14 and rets.std() > 0:
         sq = math.sqrt(365)
         out["sharpe"] = float(rets.mean() / rets.std() * sq)
         out["vol_annual"] = float(rets.std() * sq)
@@ -286,8 +331,12 @@ def summary():
     carry_equity = float(carry_state.get("equity", 0.0))
     total = trend_equity + carry_equity
     initial_total = 10_000.0
+    flows = _read_flows()
+    deposits = _deposits_total(flows)
+    invested = initial_total + deposits  # capital réellement engagé
 
-    # PnL du jour (UTC) sur l'équity combinée
+    # PnL du jour (UTC) sur l'équity combinée, net des apports du jour
+    # (sans quoi l'apport du 1er du mois s'afficherait comme un gain)
     day_pnl_pct = None
     if len(trend_eq) and len(carry_eq):
         today = pd.Timestamp.now(tz="UTC").normalize()
@@ -295,8 +344,11 @@ def summary():
         c0 = carry_eq[carry_eq.index >= today]
         if len(t0) and len(c0):
             start_day = float(t0.iloc[0]) + float(c0.iloc[0])
+            start_ts = min(t0.index[0], c0.index[0])
+            since_start = flows[flows["ts"] > start_ts]
+            day_total = total - _deposits_total(since_start)
             if start_day > 0:
-                day_pnl_pct = total / start_day - 1.0
+                day_pnl_pct = day_total / start_day - 1.0
 
     price = float(ticker["last"]) if ticker else None
     slots = []
@@ -364,8 +416,9 @@ def summary():
             "totals": {
                 "equity": total,
                 "initial": initial_total,
-                "pnl": total - initial_total,
-                "pnl_pct": total / initial_total - 1.0,
+                "deposits": deposits,
+                "pnl": total - invested,
+                "pnl_pct": total / invested - 1.0,
                 "day_pnl_pct": day_pnl_pct,
                 "allocation_trend": trend_equity / total if total else None,
                 "gross_notional": gross_notional,
@@ -462,25 +515,19 @@ def conformity():
                 (df["pnl"].iloc[::-1] <= 0).cummin().sum() if len(df) else 0
             ),
         }
-    trend_eq = _read_equity("equity_trend.csv")
-    carry_eq = _read_equity("equity_carry.csv")
-    if len(trend_eq) > 2 and len(carry_eq) > 2:
-        t = trend_eq.resample("1min").last().ffill()
-        c = carry_eq.resample("1min").last().ffill()
-        idx = t.index.intersection(c.index)
-        combined = (t[idx] + c[idx]).dropna()
-        if len(combined) > 2:
-            dd_now = float(combined.iloc[-1] / combined.cummax().iloc[-1] - 1.0)
-            time_deeper = None
-            if ref:
-                fracs = ref["dd_time_fraction"]
-                # fraction du temps que le backtest a passée à un drawdown au moins aussi profond
-                keys = sorted(int(k) for k in fracs)
-                time_deeper = 1.0
-                for k in keys:
-                    if dd_now < -k / 100:
-                        time_deeper = fracs[str(k)]
-            out["drawdown"] = {"current": dd_now, "backtest_time_at_least_as_deep": time_deeper}
+    combined = _combined_equity(net_of_flows=True)  # drawdown hors apports
+    if len(combined) > 2:
+        dd_now = float(combined.iloc[-1] / combined.cummax().iloc[-1] - 1.0)
+        time_deeper = None
+        if ref:
+            fracs = ref["dd_time_fraction"]
+            # fraction du temps que le backtest a passée à un drawdown au moins aussi profond
+            keys = sorted(int(k) for k in fracs)
+            time_deeper = 1.0
+            for k in keys:
+                if dd_now < -k / 100:
+                    time_deeper = fracs[str(k)]
+        out["drawdown"] = {"current": dd_now, "backtest_time_at_least_as_deep": time_deeper}
     return jsonify(out)
 
 
@@ -548,8 +595,8 @@ def readiness():
         add("winrate", "Win rate vs backtest", "pending", f"{n} trades",
             "≥ 20 trades requis")
 
-    # drawdown paper dans l'enveloppe tolérée
-    comb = _combined_equity()
+    # drawdown paper dans l'enveloppe tolérée (apports neutralisés)
+    comb = _combined_equity(net_of_flows=True)
     if len(comb) > 2:
         max_dd = float((comb / comb.cummax() - 1.0).min())
         add("drawdown", "Drawdown maximal paper",
@@ -691,23 +738,25 @@ def analytics():
             "longest_loss_streak": longest(False),
         }
 
-    # funding cumulé du carry = équity − capital initial (4000)
+    # PnL cumulé du carry = équity − capital initial (4000) − flux reçus par
+    # la poche carry (apports 40 % et transferts de rééquilibrage : sans cette
+    # soustraction, chaque apport apparaîtrait comme du funding gagné)
     carry = _read_equity("equity_carry.csv")
+    flows = _read_flows()
     if len(carry) > 1:
         base = 4000.0
-        cum = (carry - base)
+        cum = carry - base
+        if len(flows):
+            carry_flows = flows.set_index("ts")["carry_flow"].cumsum()
+            cum = cum - carry_flows.reindex(cum.index, method="ffill").fillna(0.0)
+        out["records"]["funding_total"] = float(cum.iloc[-1])
         if len(cum) > 400:
             cum = cum.resample("1h").last().dropna()
         out["funding_cum"] = [[int(ts.timestamp() * 1000), round(float(v), 2)] for ts, v in cum.items()]
-        out["records"]["funding_total"] = float(carry.iloc[-1] - base)
 
-    # meilleur / pire jour sur l'équity combinée
-    trend = _read_equity("equity_trend.csv")
-    if len(trend) > 2 and len(carry) > 2:
-        t = trend.resample("1min").last().ffill()
-        c = carry.resample("1min").last().ffill()
-        idx = t.index.intersection(c.index)
-        comb = (t[idx] + c[idx]).dropna()
+    # meilleur / pire jour sur l'équity combinée (apports neutralisés)
+    comb = _combined_equity(net_of_flows=True)
+    if len(comb) > 2:
         daily = comb.resample("1D").last().pct_change().dropna()
         if len(daily):
             out["records"]["best_day"] = float(daily.max())

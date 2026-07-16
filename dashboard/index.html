@@ -497,7 +497,7 @@
       <div class="esub">cash-and-carry · encaisse le funding toutes les 8 h
         <span class="beat num" id="carry-beat"></span></div>
       <div class="kv"><span class="k">Position</span><span id="carry-pos">—</span></div>
-      <div class="kv"><span class="k">Funding encaissé (cumul)</span><span class="num" id="carry-funding">—</span></div>
+      <div class="kv"><span class="k">PnL carry (funding − coûts)</span><span class="num" id="carry-funding">—</span></div>
       <svg id="fundchart" style="width:100%;height:52px;display:block;margin-top:8px" aria-label="Funding cumulé"></svg>
       <div class="kv"><span class="k">Règle de sortie</span><span>funding lissé 14 j &lt; 0</span></div>
     </div>
@@ -829,7 +829,7 @@ async function refreshSummary() {
   d.style.display = "inline-flex";
   d.textContent = (s.totals.pnl >= 0 ? "▲ " : "▼ ") + fmtPct(s.totals.pnl_pct);
   d.className = "delta num " + (s.totals.pnl >= 0 ? "pos" : "neg");
-  $("t-sub").textContent = `départ ${fmt$(s.totals.initial)} · PnL ${(s.totals.pnl >= 0 ? "+" : "") + fmt$(s.totals.pnl, 2)}`;
+  $("t-sub").textContent = `départ ${fmt$(s.totals.initial)}${s.totals.deposits > 0 ? " + apports " + fmt$(s.totals.deposits) : ""} · PnL ${(s.totals.pnl >= 0 ? "+" : "") + fmt$(s.totals.pnl, 2)}`;
   $("t-day").textContent = fmtPct(s.totals.day_pnl_pct); cls($("t-day"), s.totals.day_pnl_pct);
 
   if (s.funding.next_ts) {

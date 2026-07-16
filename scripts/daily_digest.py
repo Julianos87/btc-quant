@@ -37,6 +37,16 @@ def _equity(name: str) -> pd.Series:
     return pd.Series(df["equity"].values, index=idx).sort_index()
 
 
+def _flows() -> pd.DataFrame:
+    """Journal des apports/transferts écrit par scripts/rebalance.py."""
+    p = STATE / "flows.csv"
+    if not p.exists():
+        return pd.DataFrame(columns=["ts", "kind", "trend_flow", "carry_flow"])
+    df = pd.read_csv(p)
+    df["ts"] = pd.to_datetime(df["ts"], utc=True, format="ISO8601")
+    return df
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--weekly", action="store_true", help="bilan sur 7 jours")
@@ -54,7 +64,11 @@ def main() -> None:
     carry_val = float(carry_state.get("equity", 0.0))
     total = trend_val + carry_val
 
-    # PnL sur la période
+    flows = _flows()
+    deposits = float((flows["trend_flow"] + flows["carry_flow"]).sum()) if len(flows) else 0.0
+    invested = 10_000.0 + deposits
+
+    # PnL sur la période, net des apports de la période
     since = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)
     day_pnl = None
     if len(trend_eq) and len(carry_eq):
@@ -62,8 +76,10 @@ def main() -> None:
         c0 = carry_eq[carry_eq.index >= since]
         if len(t0) and len(c0):
             start = float(t0.iloc[0]) + float(c0.iloc[0])
+            f0 = flows[flows["ts"] > min(t0.index[0], c0.index[0])]
+            dep_period = float((f0["trend_flow"] + f0["carry_flow"]).sum()) if len(f0) else 0.0
             if start > 0:
-                day_pnl = total / start - 1.0
+                day_pnl = (total - dep_period) / start - 1.0
 
     # trades de la période
     trades_today = 0
@@ -93,7 +109,9 @@ def main() -> None:
     lines = [
         f"{'🗓 Bilan hebdomadaire' if args.weekly else '📊'} Tandem — "
         f"{datetime.now(timezone.utc):%d/%m/%Y %H:%M} UTC",
-        f"Équity totale : {total:,.0f} $ (départ 10 000 $, {total/10000-1:+.1%})",
+        f"Équity totale : {total:,.0f} $ (départ 10 000 $"
+        + (f" + apports {deposits:,.0f} $" if deposits else "")
+        + f", {total/invested-1:+.1%})",
         f"PnL {label} : {day_pnl:+.2%}" if day_pnl is not None else f"PnL {label} : n/d",
         f"  Trend 4x : {trend_val:,.0f} $   Carry 3x : {carry_val:,.0f} $",
         f"Positions : {', '.join(positions) if positions else 'aucune (en attente de signal)'}",
@@ -107,6 +125,16 @@ def main() -> None:
         c = carry_eq.resample("1min").last().ffill()
         idx = t.index.intersection(c.index)
         comb = (t[idx] + c[idx]).dropna()
+        # apports neutralisés : la suite de la série est ramenée à l'échelle
+        # d'avant chaque apport (même logique que le dashboard)
+        for _, f in flows.iterrows():
+            amount = float(f["trend_flow"]) + float(f["carry_flow"])
+            prior = comb[comb.index < f["ts"]]
+            if abs(amount) < 1e-9 or not len(prior):
+                continue
+            pre = float(prior.iloc[-1])
+            if pre > 0 and pre + amount > 0:
+                comb[comb.index >= f["ts"]] *= pre / (pre + amount)
         if len(comb) > 2:
             dd_now = comb.iloc[-1] / comb.cummax().iloc[-1] - 1.0
             lines.append(f"Drawdown depuis le pic : {dd_now:+.1%}")

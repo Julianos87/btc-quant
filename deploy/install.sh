@@ -21,13 +21,14 @@ python3 -m venv /opt/btcquant/venv
 /opt/btcquant/venv/bin/pip install --quiet -r /opt/btcquant/requirements.txt
 
 echo "── Configuration dashboard (.env) ──"
+# accès par lien secret : dashboard/app.py lit DASHBOARD_TOKEN (voir le
+# commentaire « capability URL » en tête de fichier). Pas de mot de passe.
 if [ ! -f /opt/btcquant/.env ]; then
-  PASS=$(openssl rand -base64 15)
+  TOKEN=$(openssl rand -hex 24)
   cat > /opt/btcquant/.env <<EOF
 DASHBOARD_HOST=0.0.0.0
 DASHBOARD_PORT=8666
-DASHBOARD_USER=admin
-DASHBOARD_PASSWORD=${PASS}
+DASHBOARD_TOKEN=${TOKEN}
 EOF
   chmod 600 /opt/btcquant/.env
 fi
@@ -48,9 +49,9 @@ systemctl enable --now btcquant-digest.timer btcquant-watchdog.timer \
 echo
 echo "════════════════════════════════════════════════════════════"
 echo " Installation terminée."
-echo " Dashboard : http://$(hostname -I | awk '{print $1}'):8666"
-grep DASHBOARD_USER /opt/btcquant/.env | sed 's/^/ Identifiant : /;s/DASHBOARD_USER=//'
-grep DASHBOARD_PASSWORD /opt/btcquant/.env | sed 's/^/ Mot de passe : /;s/DASHBOARD_PASSWORD=//'
+TOKEN=$(grep '^DASHBOARD_TOKEN=' /opt/btcquant/.env | cut -d= -f2)
+echo " Dashboard — lien secret (à mettre en favori, il pose un cookie 1 an) :"
+echo "   http://$(hostname -I | awk '{print $1}'):8666/?k=${TOKEN}"
 echo
 echo " ⚠ Ouvrir le port si pare-feu actif :  ufw allow 8666/tcp"
 echo " Statut   : systemctl status btcquant-trend btcquant-carry btcquant-dashboard"
