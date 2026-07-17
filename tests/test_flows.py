@@ -134,6 +134,38 @@ def test_summary_pnl_net_of_deposits(dash_state, monkeypatch):
     assert s["totals"]["pnl_pct"] == pytest.approx(0.0)
 
 
+def test_flows_same_timestamp_no_crash(dash_state):
+    """Apport + rééquilibrage journalisés au même instant (même run de
+    rebalance.py) : le reindex de la série nette ne doit pas lever sur des
+    labels dupliqués — les flux d'un même timestamp sont agrégés."""
+    ts = pd.Timestamp("2026-06-20T04:00:00", tz="UTC").isoformat()
+    (dash_state / "flows.csv").write_text(
+        "ts,kind,trend_flow,carry_flow\n"
+        f"{ts},deposit,0.00,40.00\n"
+        f"{ts},rebalance,24.00,-24.00\n"
+    )
+    m = dash.app.test_client().get("/api/metrics")
+    assert m.status_code == 200
+    a = dash.app.test_client().get("/api/analytics")
+    assert a.status_code == 200
+
+
+def test_digest_tolerates_torn_last_line(tmp_path, monkeypatch):
+    """Le digest lit les CSV pendant que les runners écrivent : une dernière
+    ligne tronquée ne doit pas le faire planter (même garde que le dashboard)."""
+    spec = importlib.util.spec_from_file_location("daily_digest", ROOT / "scripts" / "daily_digest.py")
+    digest = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(digest)
+    monkeypatch.setattr(digest, "STATE", tmp_path)
+    (tmp_path / "equity_trend.csv").write_text(
+        "ts,equity\n2026-06-01T00:00:00+00:00,6000.00\n2026-06-0")  # ligne coupée
+    (tmp_path / "flows.csv").write_text(
+        "ts,kind,trend_flow,carry_flow\n2026-06-01T04:00")  # ligne coupée
+    s = digest._equity("equity_trend.csv")
+    assert len(s) == 1 and float(s.iloc[0]) == 6000.0
+    assert len(digest._flows()) == 0
+
+
 def test_combined_equity_raw_keeps_deposit(dash_state):
     """La courbe d'équity affichée (brute) garde l'apport ; la série nette non."""
     raw = dash._combined_equity()

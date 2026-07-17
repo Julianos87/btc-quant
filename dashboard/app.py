@@ -146,7 +146,10 @@ def _read_flows() -> pd.DataFrame:
     try:
         df = pd.read_csv(path, on_bad_lines="skip")
         df["ts"] = pd.to_datetime(df["ts"], utc=True, format="ISO8601", errors="coerce")
-        return df[df["ts"].notna()].sort_values("ts")
+        # une ligne tronquée peut garder un timestamp lisible mais des montants
+        # absents (NaN) : on n'accepte que les lignes complètes
+        ok = df["ts"].notna() & df["trend_flow"].notna() & df["carry_flow"].notna()
+        return df[ok].sort_values("ts")
     except Exception:
         return empty
 
@@ -166,7 +169,9 @@ def _net_of_flows(s: pd.Series, flows: pd.DataFrame, col: str) -> pd.Series:
     la série nette reste continue, sans faux creux ni faux gain."""
     if not len(s) or not len(flows):
         return s
-    cum = flows.set_index("ts")[col].cumsum()
+    # agrégation par timestamp : deux flux au même instant (apport + transfert
+    # dans le même run de rebalance) feraient échouer le reindex (labels dupliqués)
+    cum = flows.groupby("ts")[col].sum().cumsum()
     return s - cum.reindex(s.index, method="ffill").fillna(0.0)
 
 
@@ -747,7 +752,7 @@ def analytics():
         base = 4000.0
         cum = carry - base
         if len(flows):
-            carry_flows = flows.set_index("ts")["carry_flow"].cumsum()
+            carry_flows = flows.groupby("ts")["carry_flow"].sum().cumsum()
             cum = cum - carry_flows.reindex(cum.index, method="ffill").fillna(0.0)
         out["records"]["funding_total"] = float(cum.iloc[-1])
         if len(cum) > 400:

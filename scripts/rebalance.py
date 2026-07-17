@@ -81,6 +81,8 @@ def main() -> None:
     carry = json.loads(carry_path.read_text())
 
     slots = trend.get("slots", {})
+    if not slots:
+        sys.exit(f"État trend sans slot ({trend_path}) : rien à répartir — abandon.")
     open_positions = any(s.get("position") for s in slots.values())
     parts = []
 

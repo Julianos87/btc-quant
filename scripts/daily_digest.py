@@ -29,22 +29,30 @@ def _read_json(p: Path) -> dict:
 
 
 def _equity(name: str) -> pd.Series:
+    """Lecture tolérante : les runners appendent en continu — une dernière
+    ligne tronquée ne doit pas faire échouer le digest (même garde que le
+    dashboard)."""
     p = STATE / name
     if not p.exists():
         return pd.Series(dtype=float)
-    df = pd.read_csv(p)
-    idx = pd.to_datetime(df["ts"], utc=True, format="ISO8601")
-    return pd.Series(df["equity"].values, index=idx).sort_index()
+    df = pd.read_csv(p, on_bad_lines="skip")
+    idx = pd.to_datetime(df["ts"], utc=True, format="ISO8601", errors="coerce")
+    s = pd.Series(df["equity"].values, index=idx)
+    return s[s.index.notna()].sort_index()
 
 
 def _flows() -> pd.DataFrame:
     """Journal des apports/transferts écrit par scripts/rebalance.py."""
     p = STATE / "flows.csv"
+    empty = pd.DataFrame(columns=["ts", "kind", "trend_flow", "carry_flow"])
     if not p.exists():
-        return pd.DataFrame(columns=["ts", "kind", "trend_flow", "carry_flow"])
-    df = pd.read_csv(p)
-    df["ts"] = pd.to_datetime(df["ts"], utc=True, format="ISO8601")
-    return df
+        return empty
+    df = pd.read_csv(p, on_bad_lines="skip")
+    df["ts"] = pd.to_datetime(df["ts"], utc=True, format="ISO8601", errors="coerce")
+    # une ligne tronquée peut garder un timestamp lisible mais des montants
+    # absents : on n'accepte que les lignes complètes
+    ok = df["ts"].notna() & df["trend_flow"].notna() & df["carry_flow"].notna()
+    return df[ok]
 
 
 def main() -> None:
@@ -86,10 +94,10 @@ def main() -> None:
     period_trades = None
     tpath = STATE / "trades.csv"
     if tpath.exists():
-        tf = pd.read_csv(tpath)
+        tf = pd.read_csv(tpath, on_bad_lines="skip")
         if len(tf):
-            ex = pd.to_datetime(tf["exit_ts"], utc=True, format="ISO8601")
-            mask = ex >= since
+            ex = pd.to_datetime(tf["exit_ts"], utc=True, format="ISO8601", errors="coerce")
+            mask = (ex >= since) & ex.notna()
             trades_today = int(mask.sum())
             if args.weekly and trades_today:
                 sub = tf[mask.values]

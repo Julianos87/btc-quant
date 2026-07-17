@@ -19,12 +19,16 @@ KEEP_FULL_DAYS = 7
 def compact(path: Path) -> None:
     if not path.exists():
         return
-    df = pd.read_csv(path)
+    # lecture tolérante : le runner appende en continu — une ligne tronquée
+    # ou corrompue ne doit pas bloquer la compaction (sinon elle échouerait
+    # silencieusement à chaque sauvegarde, le fichier grossissant sans fin)
+    df = pd.read_csv(path, on_bad_lines="skip")
     if len(df) < 5000:  # rien à gagner en dessous
         print(f"{path.name} : {len(df)} lignes, pas de compaction nécessaire")
         return
-    ts = pd.to_datetime(df["ts"], utc=True, format="ISO8601")
-    s = pd.Series(df["equity"].values, index=ts).sort_index()
+    ts = pd.to_datetime(df["ts"], utc=True, format="ISO8601", errors="coerce")
+    s = pd.Series(df["equity"].values, index=ts)
+    s = s[s.index.notna()].sort_index()
     cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=KEEP_FULL_DAYS)
     old = s[s.index < cutoff].resample("1h").last().dropna()
     recent = s[s.index >= cutoff]

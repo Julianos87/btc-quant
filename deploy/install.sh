@@ -42,9 +42,10 @@ chmod +x /opt/btcquant/scripts/backup_state.sh /opt/btcquant/scripts/rebalance_s
 systemctl daemon-reload
 # services longue durée
 systemctl enable --now btcquant-trend btcquant-carry btcquant-dashboard
-# timers (digest quotidien, watchdog, sauvegarde, rééquilibrage mensuel)
-systemctl enable --now btcquant-digest.timer btcquant-watchdog.timer \
-                       btcquant-backup.timer btcquant-rebalance.timer
+# timers (digest quotidien, bilan hebdo, watchdog, sauvegarde, rééquilibrage mensuel)
+systemctl enable --now btcquant-digest.timer btcquant-weekly.timer \
+                       btcquant-watchdog.timer btcquant-backup.timer \
+                       btcquant-rebalance.timer
 
 echo
 echo "════════════════════════════════════════════════════════════"
