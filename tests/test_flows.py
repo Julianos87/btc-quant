@@ -166,6 +166,18 @@ def test_digest_tolerates_torn_last_line(tmp_path, monkeypatch):
     assert len(digest._flows()) == 0
 
 
+def test_equity_endpoint_returns_combined(dash_state, monkeypatch):
+    """/api/equity doit servir les trois séries sans réseau (le buy & hold
+    vient du cache, vide en test) — régression : un refactor avait supprimé
+    la variable `combined` et l'endpoint faisait 500."""
+    monkeypatch.setattr(dash, "_cached", lambda key, ttl, fn: None)  # pas de réseau
+    r = dash.app.test_client().get("/api/equity")
+    assert r.status_code == 200
+    data = r.get_json()
+    assert len(data["combined"]) > 0
+    assert data["buyhold"] == []
+
+
 def test_combined_equity_raw_keeps_deposit(dash_state):
     """La courbe d'équity affichée (brute) garde l'apport ; la série nette non."""
     raw = dash._combined_equity()

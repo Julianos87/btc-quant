@@ -583,6 +583,7 @@ def equity():
             s = s.resample("5min").last().dropna()
         return [[int(ts.timestamp() * 1000), round(float(v), 2)] for ts, v in s.items()]
 
+    combined = _combined_equity()
     buyhold = _cached("buyhold", 600, _get_buyhold) or []
 
     return jsonify({
