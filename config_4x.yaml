@@ -68,3 +68,9 @@ execution:
   testnet: true
   state_file: state/live_state_4x.json
   poll_buffer_seconds: 20
+  # Venue LIVE depuis le 17/07/2026 : Hyperliquid (funding horaire, converti en
+  # équivalent 8 h par venue.py). La référence backtest reste Binance 2019-2026
+  # (exchange: ci-dessus) — écart documenté au protocole : la comparaison
+  # paper-vs-backtest du funding est indicative, pas exacte.
+  live_exchange: hyperliquid
+  live_symbol: "BTC/USDC:USDC"

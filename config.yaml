@@ -84,5 +84,7 @@ execution:
   testnet: true           # sandbox Binance quand mode=live
   state_file: state/live_state.json
   poll_buffer_seconds: 20 # marge après la clôture de bougie avant de lire les données
+  live_exchange: hyperliquid          # venue des runners (backtest : exchange: ci-dessus)
+  live_symbol: "BTC/USDC:USDC"
   # Clés API : variables d'environnement BINANCE_API_KEY / BINANCE_API_SECRET.
   # Jamais dans ce fichier.

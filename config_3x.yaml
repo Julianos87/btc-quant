@@ -70,3 +70,5 @@ execution:
   testnet: true
   state_file: state/live_state_3x.json   # état séparé du profil 1x
   poll_buffer_seconds: 20
+  live_exchange: hyperliquid          # venue des runners (backtest : exchange: ci-dessus)
+  live_symbol: "BTC/USDC:USDC"

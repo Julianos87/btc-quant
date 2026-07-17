@@ -66,8 +66,11 @@ def main() -> None:
         slots=slots,
         broker=broker,
         risk=risk,
-        exchange_id=cfg["exchange"],
-        symbol=cfg["symbol"],
+        # venue live séparée de la venue backtest : les runners consomment
+        # Hyperliquid (execution.live_exchange), le backtest reste sur les
+        # données Binance téléchargées (exchange:)
+        exchange_id=exec_cfg.get("live_exchange", cfg["exchange"]),
+        symbol=exec_cfg.get("live_symbol", cfg["symbol"]),
         state_file=ROOT / exec_cfg["state_file"],
         poll_buffer_seconds=exec_cfg.get("poll_buffer_seconds", 20),
         # perp : funding simulé par barre comme dans le backtest (taux live,

@@ -494,7 +494,7 @@
     <div class="card" data-card="carry">
       <h2>Moteur Carry <span style="color:var(--muted);font-weight:600">3x</span> <span class="estate" id="carry-state"><span class="dot"></span>—</span></h2>
       <div class="eequity num" id="carry-eq">—</div>
-      <div class="esub">cash-and-carry · encaisse le funding toutes les 8 h
+      <div class="esub">cash-and-carry · encaisse le funding toutes les heures
         <span class="beat num" id="carry-beat"></span></div>
       <div class="kv"><span class="k">Position</span><span id="carry-pos">—</span></div>
       <div class="kv"><span class="k">PnL carry (funding − coûts)</span><span class="num" id="carry-funding">—</span></div>
@@ -555,14 +555,14 @@
       <div style="font-size:10.5px;color:var(--muted)" data-i18n="leverage_note">levier effectif · repère = 1× (notionnel = équity)</div>
       <div class="kv" style="margin-top:6px"><span class="k" data-i18n="next_bar">Prochaine bougie 4 h</span><span class="num cd" id="cd-bar">—</span></div>
       <div class="kv"><span class="k" data-i18n="next_funding">Prochain funding</span><span class="num cd" id="cd-funding">—</span></div>
-      <div class="kv"><span class="k" data-i18n="api_latency">Latence API Binance</span><span class="num" id="h-latency">—</span></div>
+      <div class="kv"><span class="k" data-i18n="api_latency">Latence API Hyperliquid</span><span class="num" id="h-latency">—</span></div>
       <div class="kv"><span class="k" data-i18n="uptime">Uptime dashboard</span><span class="num" id="h-uptime">—</span></div>
     </div>
 
     <div class="card" data-card="protocol">
       <h2 data-i18n="protocol">Protocole</h2>
       <div class="kv"><span class="k" data-i18n="phase">Phase actuelle</span><span><b>1 · Paper trading</b></span></div>
-      <div class="kv"><span class="k" data-i18n="next_step">Étape suivante</span><span>Testnet Binance Futures</span></div>
+      <div class="kv"><span class="k" data-i18n="next_step">Étape suivante</span><span>Testnet Hyperliquid</span></div>
       <div class="kv"><span class="k" data-i18n="rebalance">Rééquilibrage 60/40</span><span data-i18n="monthly">mensuel</span></div>
       <div class="kv"><span class="k" data-i18n="golden_rule">Règle d’or</span><span data-i18n="no_change">ne rien modifier en route</span></div>
     </div>
@@ -626,7 +626,7 @@
 </div>
 
 <footer>
-  <span id="f-refresh" data-i18n="auto_refresh">Actualisation automatique 30 s</span>·<span data-i18n="real_data">données réelles Binance, exécution simulée</span>·<span id="f-updated"></span>
+  <span id="f-refresh" data-i18n="auto_refresh">Actualisation automatique 30 s</span>·<span data-i18n="real_data">données réelles Hyperliquid, exécution simulée</span>·<span id="f-updated"></span>
 </footer>
 
 <script>
@@ -650,7 +650,7 @@ const I18N = {
     h24:"24 heures", funding_ann:"Funding annualisé", live_perf:"Performance en direct",
     realized:"réalisé", exposure_health:"Exposition & santé", gross_exposure:"Exposition brute",
     leverage_note:"levier effectif · repère = 1× (notionnel = équity)", next_bar:"Prochaine bougie 4 h",
-    next_funding:"Prochain funding", api_latency:"Latence API Binance", uptime:"Uptime dashboard",
+    next_funding:"Prochain funding", api_latency:"Latence API Hyperliquid", uptime:"Uptime dashboard",
     protocol:"Protocole", phase:"Phase actuelle", next_step:"Étape suivante",
     rebalance:"Rééquilibrage 60/40", monthly:"mensuel", golden_rule:"Règle d’or",
     no_change:"ne rien modifier en route", collecting:"Collecte en cours…",
@@ -662,7 +662,7 @@ const I18N = {
     base100:"Base 100", dollars:"Dollars", drawdown:"Drawdown", vs_bh:"vs Buy&Hold",
     portfolio:"Portefeuille", all:"Tout", closed_trades:"Trades clôturés", from:"Du", to:"au",
     reset:"Réinitialiser", no_trades:"Aucun trade clôturé pour l’instant — le journal se remplit à la première sortie de position.",
-    auto_refresh:"Actualisation automatique", real_data:"données réelles Binance, exécution simulée",
+    auto_refresh:"Actualisation automatique", real_data:"données réelles Hyperliquid, exécution simulée",
     equity_total:"Équity totale", pnl_day:"PnL du jour · UTC", since_midnight:"depuis 00:00 UTC",
     alloc_real:"Allocation réelle", online:"EN LIGNE", offline:"ARRÊTÉ",
     workspace:"Vue", view_monitor:"Surveillance", view_performance:"Performance", view_risk:"Risque",
@@ -677,7 +677,7 @@ const I18N = {
     risk_stop:"Risque jusqu’aux stops", risk_margin:"Marge au stop la plus proche", risk_leverage:"Levier effectif", risk_policy:"Protection active",
     risk_no_stop:"aucun stop trend ouvert", risk_no_position:"aucune position trend", risk_armed:"limites armées", risk_lockout:"lockout journalier", risk_halted:"kill-switch déclenché", risk_engine_down:"moteur hors ligne",
     monitor_pulse:"Pulse opérationnel", monitor_pulse_note:"Les quatre signaux qui comptent pendant la surveillance.",
-    monitor_trend:"Moteur Trend", monitor_carry:"Moteur Carry", monitor_next_bar:"Prochaine décision", monitor_binance:"Flux Binance",
+    monitor_trend:"Moteur Trend", monitor_carry:"Moteur Carry", monitor_next_bar:"Prochaine décision", monitor_binance:"Flux Hyperliquid",
     monitor_ready:"opérationnel", monitor_silent:"ne répond plus", monitor_latency:"latence API", monitor_funding:"prochain funding",
     sharpe:"Sharpe", sortino:"Sortino", calmar:"Calmar", vol:"Volatilité",
     yearly_title:"Années précédentes", yearly_sub:"backtest · mêmes réglages que le live",
@@ -695,7 +695,7 @@ const I18N = {
     h24:"24 hours", funding_ann:"Annualized funding", live_perf:"Live performance",
     realized:"realized", exposure_health:"Exposure & health", gross_exposure:"Gross exposure",
     leverage_note:"effective leverage · marker = 1× (notional = equity)", next_bar:"Next 4h candle",
-    next_funding:"Next funding", api_latency:"Binance API latency", uptime:"Dashboard uptime",
+    next_funding:"Next funding", api_latency:"Hyperliquid API latency", uptime:"Dashboard uptime",
     protocol:"Protocol", phase:"Current phase", next_step:"Next step",
     rebalance:"Rebalancing 60/40", monthly:"monthly", golden_rule:"Golden rule",
     no_change:"never change mid-course", collecting:"Collecting…",
@@ -707,7 +707,7 @@ const I18N = {
     base100:"Base 100", dollars:"Dollars", drawdown:"Drawdown", vs_bh:"vs Buy&Hold",
     portfolio:"Portfolio", all:"All", closed_trades:"Closed trades", from:"From", to:"to",
     reset:"Reset", no_trades:"No closed trades yet — the log fills on the first position exit.",
-    auto_refresh:"Auto refresh", real_data:"real Binance data, simulated execution",
+    auto_refresh:"Auto refresh", real_data:"real Hyperliquid data, simulated execution",
     equity_total:"Total equity", pnl_day:"Daily PnL · UTC", since_midnight:"since 00:00 UTC",
     alloc_real:"Real allocation", online:"ONLINE", offline:"STOPPED",
     workspace:"View", view_monitor:"Monitor", view_performance:"Performance", view_risk:"Risk",
@@ -726,7 +726,7 @@ const I18N = {
     risk_stop:"Risk to trend stops", risk_margin:"Nearest stop distance", risk_leverage:"Effective leverage", risk_policy:"Active safeguard",
     risk_no_stop:"no open trend stop", risk_no_position:"no trend position", risk_armed:"limits armed", risk_lockout:"daily lockout", risk_halted:"kill switch triggered", risk_engine_down:"engine offline",
     monitor_pulse:"Operations pulse", monitor_pulse_note:"The four signals that matter while monitoring.",
-    monitor_trend:"Trend engine", monitor_carry:"Carry engine", monitor_next_bar:"Next decision", monitor_binance:"Binance flow",
+    monitor_trend:"Trend engine", monitor_carry:"Carry engine", monitor_next_bar:"Next decision", monitor_binance:"Hyperliquid flow",
     monitor_ready:"operational", monitor_silent:"not responding", monitor_latency:"API latency", monitor_funding:"next funding",
     sharpe:"Sharpe", sortino:"Sortino", calmar:"Calmar", vol:"Volatility",
     cards:{performance_brief:"Performance snapshot", risk_radar:"Risk radar", monitor_pulse:"Operations pulse",
@@ -1668,6 +1668,10 @@ let timer = null;
 function restartTimer() { if (timer) clearInterval(timer); if (PREFS.refresh) timer = setInterval(tick, PREFS.refresh); }
 window.addEventListener("resize", () => { drawChart(); drawSpark(); drawYearly(); });
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawChart(); drawSpark(); drawYearly(); });
+// PWA/onglet remis au premier plan : rafraîchir tout de suite plutôt que
+// d'afficher des données figées jusqu'au prochain tick (et remettre le timer
+// à zéro pour ne pas cumuler un tick immédiat + un tick programmé)
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { tick(); restartTimer(); } });
 async function tick() {
   try { await Promise.all([refreshSummary(), refreshEvents(), refreshEquity(), refreshTrades(), refreshConformity(), refreshPrice(), refreshAnalytics(), refreshMetrics(), refreshReadiness()]); }
   catch (e) { console.error(e); }

@@ -22,15 +22,14 @@ import os
 import time
 from pathlib import Path
 
-import ccxt
 import pandas as pd
 
-from ..data import _make_exchange
 from ..indicators import bars_per_year, realized_vol
 from ..notify import notify
 from ..risk import RiskConfig, position_size
 from ..strategies.base import Position, Strategy
 from .broker import Broker
+from .venue import Venue
 
 log = logging.getLogger(__name__)
 
@@ -80,9 +79,9 @@ class LiveRunner:
         #: chaque barre comme dans le backtest (les longs paient un taux > 0).
         self.funding_rate_8h = funding_rate_8h
         self._halt_notified = False
-        self.data_exchange = _make_exchange(exchange_id)  # accès public, sans clés
-        # taux de funding courant (public, futures USDT-M) pour les filtres
-        self.funding_exchange = ccxt.binanceusdm({"enableRateLimit": True, "timeout": 30_000})
+        # venue de données live (prix, bougies, funding) — accès public, sans
+        # clés ; normalise les conventions (funding 8 h vs horaire), voir venue.py
+        self.venue = Venue(exchange_id, symbol)
         self.peak_equity = sum(s.cash for s in slots)
         self.halted = False
         self.day: str | None = None
@@ -163,14 +162,14 @@ class LiveRunner:
         # 3,1 % des barres avaient un régime EMA différent du backtest à 280
         # barres, 0 % à 1000. Le surcoût réseau est négligeable.
         limit = 1000
-        raw = self.data_exchange.fetch_ohlcv(self.symbol, strategy.timeframe, limit=limit)
+        raw = self.venue.fetch_ohlcv(strategy.timeframe, limit=limit)
         df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
         df = df.set_index("timestamp").astype(float)
         return df.iloc[:-1]  # écarte la bougie en cours
 
     def _last_price(self) -> float:
-        return float(self.data_exchange.fetch_ticker(self.symbol)["last"])
+        return self.venue.last_price()
 
     # ── exécution ────────────────────────────────────────────────────────────
     def _exit_position(self, slot: StrategySlot, ref_price: float, reason: str) -> None:
@@ -263,8 +262,9 @@ class LiveRunner:
         )
         data["funding"] = float("nan")
         try:
-            fr = self.funding_exchange.fetch_funding_rate(self.symbol)
-            data.loc[data.index[-1], "funding"] = float(fr["fundingRate"])
+            # toujours en équivalent 8 h (convention des filtres et du backtest),
+            # quelle que soit la périodicité native de la venue
+            data.loc[data.index[-1], "funding"] = self.venue.funding_rate_8h()
         except Exception as e:  # le filtre funding devient neutre, on ne bloque pas le bot
             log.warning("Funding indisponible (%s) : filtre funding neutre sur cette barre", e)
         row = data.iloc[-1]

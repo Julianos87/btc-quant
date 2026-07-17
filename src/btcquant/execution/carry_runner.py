@@ -2,10 +2,12 @@
 
 Boucle :
 - toutes les 5 minutes, récupère l'historique récent des funding réels
-  (binanceusdm, public) et calcule le signal : funding lissé `smooth_days`
-  jours annualisé > enter_ann → position ON ; < exit_ann → position OFF ;
-- en position, chaque paiement de funding réellement versé (toutes les 8 h)
-  est crédité : équity × taux × levier ;
+  (venue publique, Hyperliquid depuis le 17/07/2026) et calcule le signal :
+  funding lissé `smooth_days` jours annualisé > enter_ann → position ON ;
+  < exit_ann → position OFF ;
+- en position, chaque paiement de funding réellement versé (toutes les
+  HEURES sur Hyperliquid, toutes les 8 h sur Binance) est crédité :
+  équity × taux × levier — l'annualisation s'adapte à la périodicité ;
 - chaque bascule ON/OFF coûte 2 jambes × (frais + slippage) × levier ;
 - état persisté en JSON (reprise après redémarrage).
 
@@ -23,21 +25,21 @@ import os
 import time
 from pathlib import Path
 
-import ccxt
 import pandas as pd
 
 from ..notify import notify
+from .venue import Venue
 
 log = logging.getLogger(__name__)
 
-PAYMENTS_PER_YEAR = 3 * 365
 TICK_SECONDS = 300
 
 
 class CarryRunner:
     def __init__(
         self,
-        symbol_perp: str = "BTC/USDT:USDT",
+        exchange_id: str = "hyperliquid",
+        symbol_perp: str = "BTC/USDC:USDC",
         initial_capital: float = 4000.0,
         leverage: float = 3.0,
         enter_ann: float = 0.03,
@@ -55,7 +57,7 @@ class CarryRunner:
         self.smooth_days = smooth_days
         self.switch_cost = 2 * (fee_rate + slippage_bps / 10_000.0) * leverage
         self.state_path = Path(state_file)
-        self.exchange = ccxt.binanceusdm({"enableRateLimit": True, "timeout": 30_000})
+        self.venue = Venue(exchange_id, symbol_perp)
         self.live_broker = live_broker  # CarryBroker en mode réel, None en paper
         self.equity = initial_capital
         self.in_position = False
@@ -94,12 +96,9 @@ class CarryRunner:
         os.replace(tmp, self.state_path)
 
     def _recent_funding(self) -> pd.Series:
-        limit = self.smooth_days * 3 + 10
-        rows = self.exchange.fetch_funding_rate_history(self.symbol, limit=limit)
-        return pd.Series(
-            [float(r["fundingRate"]) for r in rows],
-            index=pd.DatetimeIndex([pd.Timestamp(r["timestamp"], unit="ms", tz="UTC") for r in rows]),
-        ).sort_index()
+        # +1 jour de marge : le lissage a besoin de smooth_days complets même
+        # si le premier paiement de la fenêtre tombe juste avant la borne
+        return self.venue.funding_history(self.smooth_days + 1)
 
     def _tick(self) -> None:
         funding = self._recent_funding()
@@ -116,8 +115,10 @@ class CarryRunner:
                          ts, rate * 100, gain, self.equity)
         self.last_funding_ts = funding.index[-1]
 
-        # 2. signal sur funding lissé
-        smooth_ann = funding.tail(self.smooth_days * 3).mean() * PAYMENTS_PER_YEAR
+        # 2. signal sur funding lissé (annualisation selon la périodicité
+        # native de la venue : 24 paiements/jour sur Hyperliquid, 3 sur Binance)
+        window = self.smooth_days * self.venue.payments_per_day
+        smooth_ann = funding.tail(window).mean() * self.venue.payments_per_year
         if not self.in_position and smooth_ann > self.enter_ann:
             if self.live_broker is not None:  # jambes réelles avant de basculer l'état
                 res = self.live_broker.open_position(self.equity * self.leverage)

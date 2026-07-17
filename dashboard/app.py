@@ -6,6 +6,7 @@ Usage : python dashboard/app.py  (puis http://localhost:8666)
 
 from __future__ import annotations
 
+import gzip
 import hmac
 import json
 import math
@@ -56,6 +57,26 @@ def _guard():
 
 
 @app.after_request
+def _gzip_response(resp: Response) -> Response:
+    """Compression des réponses JSON/CSV : l'équity et les bougies pèsent des
+    dizaines de Ko — gzip divise par ~5-10 le transfert (net sur mobile)."""
+    if (
+        resp.status_code == 200
+        and not resp.direct_passthrough
+        and resp.mimetype in ("application/json", "text/csv", "application/javascript",
+                              "image/svg+xml", "text/html")
+        and (resp.content_length or 0) > 512
+        and "gzip" in request.headers.get("Accept-Encoding", "")
+    ):
+        data = gzip.compress(resp.get_data(), compresslevel=6)
+        if len(data) < (resp.content_length or 0):
+            resp.set_data(data)
+            resp.headers["Content-Encoding"] = "gzip"
+            resp.headers["Vary"] = "Accept-Encoding"
+    return resp
+
+
+@app.after_request
 def _persist_token(resp: Response) -> Response:
     """Après une visite avec ?k=<jeton> valide, on mémorise le jeton en cookie :
     l'utilisateur n'a plus jamais à le fournir (y compris en PWA installée)."""
@@ -68,9 +89,31 @@ def _persist_token(resp: Response) -> Response:
 
 _cache: dict = {}
 # les objets ccxt ne sont pas thread-safe ; le serveur Flask sert les requêtes
-# en parallèle (7 fetchs simultanés au chargement de la page) → on sérialise
+# en parallèle (9 fetchs simultanés au chargement de la page) → on sérialise
 # tous les appels exchange derrière un verrou pour éviter les races.
 _ex_lock = threading.Lock()
+
+# ── venue : Hyperliquid depuis le 17/07/2026 ─────────────────────────────────
+# fetch_ticker y recharge le contexte de TOUS les marchés (~12 s mesurés) :
+# on ne l'appelle JAMAIS — prix via la dernière bougie 1m (~0,5 s), variation
+# 24 h via les bougies 1h, funding via l'historique des paiements (horaires).
+SYMBOL = "BTC/USDC:USDC"
+
+
+def _hl():
+    if "hl_ex" not in _cache:
+        # timeout 30 s : le premier appel paie un load_markets implicite
+        # (~13 s mesurés) — 15 s le ferait échouer par intermittence
+        _cache["hl_ex"] = ccxt.hyperliquid({"enableRateLimit": True, "timeout": 30_000})
+    return _cache["hl_ex"]
+
+
+def _fx_ex():
+    # Binance spot UNIQUEMENT pour le taux EUR/USDT de l'affichage en euros
+    # (Hyperliquid ne cote aucune paire EUR)
+    if "fx_binance" not in _cache:
+        _cache["fx_binance"] = ccxt.binance({"enableRateLimit": True, "timeout": 15_000})
+    return _cache["fx_binance"]
 
 
 def _cached(key: str, ttl: float, fn):
@@ -87,16 +130,52 @@ def _cached(key: str, ttl: float, fn):
         return hit[1] if hit else None
 
 
-def _spot():
-    if "spot_ex" not in _cache:
-        _cache["spot_ex"] = ccxt.binance({"enableRateLimit": True, "timeout": 15_000})
-    return _cache["spot_ex"]
+# ── fetchers réseau (appelés via _cached ; préchauffés par _warm_loop) ──────
+def _get_price() -> float | None:
+    c = _hl().fetch_ohlcv(SYMBOL, "1m", limit=1)
+    return float(c[-1][4]) if c else None
 
 
-def _perp():
-    if "perp_ex" not in _cache:
-        _cache["perp_ex"] = ccxt.binanceusdm({"enableRateLimit": True, "timeout": 15_000})
-    return _cache["perp_ex"]
+def _get_candles_1h() -> list[list]:
+    raw = _hl().fetch_ohlcv(SYMBOL, "1h", limit=200)
+    return [[r[0], r[1], r[2], r[3], r[4]] for r in raw]
+
+
+def _get_funding() -> dict | None:
+    """Dernier paiement de funding (HORAIRE sur Hyperliquid) + annualisation."""
+    since = int((time.time() - 3 * 3600) * 1000)
+    hist = _hl().fetch_funding_rate_history(SYMBOL, since=since)
+    if not hist:
+        return None
+    rate = float(hist[-1]["fundingRate"])
+    return {"rate": rate, "annualized": rate * 24 * 365}
+
+
+def _get_fx_eur() -> float | None:
+    t = _fx_ex().fetch_ticker("EUR/USDT")
+    return float(t["last"]) if t and t.get("last") else None
+
+
+#     (clé cache, TTL endpoint, TTL préchauffage, fetch)
+_WARM_JOBS = [
+    ("price",   30,   20, lambda: _timed("api", _get_price)),
+    ("ohlcv1h", 300,  240, _get_candles_1h),
+    ("funding", 300,  240, _get_funding),
+    ("fx_eur",  3600, 3000, _get_fx_eur),
+]
+
+
+def _warm_loop() -> None:
+    """Préchauffage du cache réseau : chaque donnée exchange est rafraîchie en
+    arrière-plan JUSTE AVANT l'expiration de son TTL, si bien que les requêtes
+    du navigateur ne paient jamais la latence Hyperliquid — elles lisent un
+    cache toujours chaud. Démarré uniquement en exécution directe (pas à
+    l'import : les tests appellent les endpoints sans réseau)."""
+    while True:
+        for key, _ttl, warm_ttl, fn in _WARM_JOBS:
+            _cached(key, warm_ttl, fn)  # _cached avale les erreurs réseau
+        _cached("buyhold", 480, _get_buyhold)
+        time.sleep(10)
 
 
 def _read_json(path: Path) -> dict | None:
@@ -110,10 +189,34 @@ def _age_seconds(path: Path) -> float | None:
     return time.time() - path.stat().st_mtime if path.exists() else None
 
 
-def _read_equity(name: str) -> pd.Series:
+# ── cache de parsing des CSV d'état ──────────────────────────────────────────
+# Un chargement de page = 9 endpoints, dont la plupart relisent les mêmes CSV
+# (l'équity trend fait des centaines de Ko) : on ne reparse un fichier que
+# lorsque (mtime, taille) a changé — le runner n'écrit qu'une fois par minute.
+_parse_cache: dict = {}
+
+
+def _file_key(path: Path) -> tuple | None:
+    try:
+        st = path.stat()
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+def _parsed(path: Path, parser):
+    key = _file_key(path)
+    hit = _parse_cache.get(str(path))
+    if hit is not None and hit[0] == key:
+        return hit[1]
+    value = parser(path)
+    _parse_cache[str(path)] = (key, value)
+    return value
+
+
+def _parse_equity(path: Path) -> pd.Series:
     """Lecture tolérante : le runner peut être en train d'appendre — une
     dernière ligne tronquée ne doit pas faire un 500 sur tout l'endpoint."""
-    path = STATE / name
     if not path.exists():
         return pd.Series(dtype=float)
     try:
@@ -125,9 +228,12 @@ def _read_equity(name: str) -> pd.Series:
         return pd.Series(dtype=float)
 
 
-def _read_trades() -> pd.DataFrame:
+def _read_equity(name: str) -> pd.Series:
+    return _parsed(STATE / name, _parse_equity)
+
+
+def _parse_trades(path: Path) -> pd.DataFrame:
     """Même tolérance pour trades.csv (append concurrent par le runner)."""
-    path = STATE / "trades.csv"
     if not path.exists():
         return pd.DataFrame()
     try:
@@ -136,10 +242,13 @@ def _read_trades() -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def _read_flows() -> pd.DataFrame:
+def _read_trades() -> pd.DataFrame:
+    return _parsed(STATE / "trades.csv", _parse_trades)
+
+
+def _parse_flows(path: Path) -> pd.DataFrame:
     """Journal des flux externes (apports, transferts entre poches) écrit par
     scripts/rebalance.py. Colonnes : ts, kind, trend_flow, carry_flow."""
-    path = STATE / "flows.csv"
     empty = pd.DataFrame(columns=["ts", "kind", "trend_flow", "carry_flow"])
     if not path.exists():
         return empty
@@ -152,6 +261,10 @@ def _read_flows() -> pd.DataFrame:
         return df[ok].sort_values("ts")
     except Exception:
         return empty
+
+
+def _read_flows() -> pd.DataFrame:
+    return _parsed(STATE / "flows.csv", _parse_flows)
 
 
 def _deposits_total(flows: pd.DataFrame) -> float:
@@ -189,19 +302,33 @@ def _combined_equity(net_of_flows: bool = False) -> pd.Series:
 
     net_of_flows=True : apports et transferts déduits (série « trading
     seul ») — c'est sur elle que se mesurent Sharpe, drawdowns et records,
-    sans quoi chaque apport mensuel ressemblerait à un gain."""
+    sans quoi chaque apport mensuel ressemblerait à un gain.
+
+    Mise en cache sur les (mtime, taille) des trois CSV : cinq endpoints la
+    recalculent à chaque chargement de page, le resampling minute est le
+    poste de calcul le plus cher du dashboard."""
+    key = (net_of_flows,
+           _file_key(STATE / "equity_trend.csv"),
+           _file_key(STATE / "equity_carry.csv"),
+           _file_key(STATE / "flows.csv"))
+    hit = _parse_cache.get(f"combined_{net_of_flows}")
+    if hit is not None and hit[0] == key:
+        return hit[1]
     trend = _read_equity("equity_trend.csv")
     carry = _read_equity("equity_carry.csv")
     if not len(trend) or not len(carry):
-        return pd.Series(dtype=float)
-    if net_of_flows:
-        flows = _read_flows()
-        trend = _net_of_flows(trend, flows, "trend_flow")
-        carry = _net_of_flows(carry, flows, "carry_flow")
-    t = trend.resample("1min").last().ffill()
-    c = carry.resample("1min").last().ffill()
-    idx = t.index.intersection(c.index)
-    return (t[idx] + c[idx]).dropna()
+        combined = pd.Series(dtype=float)
+    else:
+        if net_of_flows:
+            flows = _read_flows()
+            trend = _net_of_flows(trend, flows, "trend_flow")
+            carry = _net_of_flows(carry, flows, "carry_flow")
+        t = trend.resample("1min").last().ffill()
+        c = carry.resample("1min").last().ffill()
+        idx = t.index.intersection(c.index)
+        combined = (t[idx] + c[idx]).dropna()
+    _parse_cache[f"combined_{net_of_flows}"] = (key, combined)
+    return combined
 
 
 def _live_metrics() -> dict:
@@ -316,11 +443,18 @@ def service_worker():
 
 @app.route("/api/summary")
 def summary():
-    ticker = _cached("ticker", 30, lambda: _timed("api", lambda: _spot().fetch_ticker("BTC/USDT")))
-    funding = _cached("funding", 300, lambda: _perp().fetch_funding_rate("BTC/USDT:USDT"))
+    price = _cached("price", 30, lambda: _timed("api", _get_price))
+    candles = _cached("ohlcv1h", 300, _get_candles_1h) or []
+    funding = _cached("funding", 300, _get_funding)
     # taux EUR/USDT pour l'affichage optionnel en euros (1 EUR = X USDT)
-    fx = _cached("fx_eur", 3600, lambda: _spot().fetch_ticker("EUR/USDT"))
-    eur_usd = float(fx["last"]) if fx and fx.get("last") else None
+    eur_usd = _cached("fx_eur", 3600, _get_fx_eur)
+
+    # variation 24 h : clôture d'il y a 24 bougies 1h vs prix courant
+    change_24h = None
+    if price and len(candles) >= 25:
+        ref = float(candles[-25][4])
+        if ref > 0:
+            change_24h = price / ref - 1.0
 
     trend_state = _read_json(STATE / "live_state_4x.json") or {}
     carry_state = _read_json(STATE / "carry_state.json") or {}
@@ -355,7 +489,6 @@ def summary():
             if start_day > 0:
                 day_pnl_pct = day_total / start_day - 1.0
 
-    price = float(ticker["last"]) if ticker else None
     slots = []
     for name, s in trend_state.get("slots", {}).items():
         pos = s.get("position")
@@ -372,7 +505,8 @@ def summary():
             )
         slots.append(row)
 
-    next_funding = funding.get("fundingTimestamp") if funding else None
+    # funding horaire sur Hyperliquid : prochain paiement à l'heure pile
+    next_funding = (int(time.time() // 3600) + 1) * 3600 * 1000
 
     # exposition brute / levier effectif (somme des notionnels / équity totale)
     trend_notional = 0.0
@@ -393,11 +527,11 @@ def summary():
             "mode": "PAPER",
             "btc": {
                 "price": price,
-                "change24h": float(ticker.get("percentage") or 0) / 100 if ticker else None,
+                "change24h": change_24h,
             },
             "funding": {
-                "rate": float(funding["fundingRate"]) if funding and funding.get("fundingRate") is not None else None,
-                "annualized": float(funding["fundingRate"]) * 3 * 365 if funding and funding.get("fundingRate") is not None else None,
+                "rate": funding["rate"] if funding else None,
+                "annualized": funding["annualized"] if funding else None,
                 "next_ts": next_funding,
             },
             "trend": {
@@ -449,20 +583,7 @@ def equity():
             s = s.resample("5min").last().dropna()
         return [[int(ts.timestamp() * 1000), round(float(v), 2)] for ts, v in s.items()]
 
-    combined = _combined_equity()
-
-    # buy & hold : prix BTC sur la même fenêtre (le front normalise en base
-    # 100). Timeframe adaptatif pour que TOUT l'historique tienne dans les
-    # 1000 bougies d'un seul appel (1h ≈ 41 j, 4h ≈ 166 j, 1d au-delà).
-    buyhold = []
-    if len(combined):
-        start_ms = int(combined.index[0].timestamp() * 1000)
-        span_h = (time.time() * 1000 - start_ms) / 3_600_000
-        bh_tf = "1h" if span_h <= 950 else "4h" if span_h <= 3_800 else "1d"
-        def fetch_bh():
-            raw = _spot().fetch_ohlcv("BTC/USDT", bh_tf, since=start_ms, limit=1000)
-            return [[r[0], round(r[4], 2)] for r in raw]
-        buyhold = _cached(f"buyhold_{bh_tf}", 600, fetch_bh) or []
+    buyhold = _cached("buyhold", 600, _get_buyhold) or []
 
     return jsonify({
         "trend": pack(trend), "carry": pack(carry),
@@ -470,14 +591,25 @@ def equity():
     })
 
 
+def _get_buyhold() -> list[list]:
+    """Buy & hold : prix BTC sur la fenêtre de l'équity combinée (le front
+    normalise en base 100). Timeframe adaptatif pour que TOUT l'historique
+    tienne dans les 1000 bougies d'un seul appel (1h ≈ 41 j, 4h ≈ 166 j,
+    1d au-delà)."""
+    combined = _combined_equity()
+    if not len(combined):
+        return []
+    start_ms = int(combined.index[0].timestamp() * 1000)
+    span_h = (time.time() * 1000 - start_ms) / 3_600_000
+    bh_tf = "1h" if span_h <= 950 else "4h" if span_h <= 3_800 else "1d"
+    raw = _hl().fetch_ohlcv(SYMBOL, bh_tf, since=start_ms, limit=1000)
+    return [[r[0], round(r[4], 2)] for r in raw]
+
+
 @app.route("/api/price")
 def price_chart():
     """Dernières ~200 bougies 1h + positions ouvertes (entrée/stop) du trend."""
-    def fetch():
-        raw = _spot().fetch_ohlcv("BTC/USDT", "1h", limit=200)
-        return [[r[0], r[1], r[2], r[3], r[4]] for r in raw]  # ts, o, h, l, c
-
-    candles = _cached("ohlcv1h", 300, fetch) or []
+    candles = _cached("ohlcv1h", 300, _get_candles_1h) or []
     trend_state = _read_json(STATE / "live_state_4x.json") or {}
     positions = []
     for name, s in trend_state.get("slots", {}).items():
@@ -802,5 +934,9 @@ def events():
 
 
 if __name__ == "__main__":
+    # préchauffage réseau en arrière-plan : les requêtes ne paient jamais la
+    # latence exchange (démarré ici et pas à l'import — les tests s'en passent)
+    threading.Thread(target=_warm_loop, daemon=True).start()
     host = os.environ.get("DASHBOARD_HOST", "127.0.0.1")
-    app.run(host=host, port=int(os.environ.get("DASHBOARD_PORT", "8666")), debug=False)
+    app.run(host=host, port=int(os.environ.get("DASHBOARD_PORT", "8666")),
+            debug=False, threaded=True)
