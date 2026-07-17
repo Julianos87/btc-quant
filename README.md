@@ -1,98 +1,127 @@
 # TANDEM — portefeuille systématique BTC trend + carry
 
-> Deux moteurs complémentaires : le **trend** cherche à capter les tendances du marché ; le **carry** vise à exploiter le funding avec une exposition delta-neutre.
+> Deux moteurs complémentaires : le **trend** cherche à capter les tendances du marché ; le **carry** étudie une exposition delta-neutre au funding.
 
 [![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-![Mode](https://img.shields.io/badge/mode-paper%20par%20d%C3%A9faut-orange)
+![Mode](https://img.shields.io/badge/mode-paper%20trading-orange)
 ![Status](https://img.shields.io/badge/statut-exp%C3%A9rimental-blue)
 
 ## Présentation
 
-TANDEM est un environnement de recherche et de simulation consacré aux stratégies systématiques sur Bitcoin.
+TANDEM est un portefeuille systématique expérimental sur Bitcoin composé de deux poches :
 
-Le projet comprend :
+| Poche | Allocation initiale | Profil paper |
+|---|---:|---|
+| Trend following | 60 % | Ensemble Donchian long/short à x4 |
+| Cash-and-carry | 40 % | Modèle de funding à x3 |
 
-- le téléchargement et la mise en cache de données OHLCV et de funding ;
-- des indicateurs et stratégies conçus sans look-ahead ;
-- un moteur de backtest barre par barre ;
-- une validation walk-forward ;
-- des outils de gestion du risque ;
-- des runners de paper trading ;
-- un tableau de bord local.
+Le VPS exécute actuellement les deux moteurs en **paper trading**. Aucun ordre réel n’est envoyé par les services actifs.
 
-Le portefeuille étudié associe deux approches complémentaires :
+## Profil réellement exécuté
 
-- **60 % trend following** : ensemble long/short sur plusieurs horizons ;
-- **40 % cash-and-carry** : position spot longue et position perpétuelle courte.
+### Trend — 60 %
 
-Le mode d’exécution défini par défaut est `paper`.
+Le service `btcquant-trend` lance :
 
-## Architecture de la stratégie
+```bash
+python scripts/run_live.py --config config_4x.yaml
+```
 
-### Trend following
+Le capital initial de la poche est de 6 000 USDT. Il est réparti entre trois horizons :
 
-Le moteur trend actif répartit son allocation entre trois canaux de Donchian :
-
-| Sous-stratégie | Horizon | Allocation interne |
+| Sous-stratégie | Canal de Donchian | Allocation de la poche |
 |---|---:|---:|
 | `trend_ls_20` | 20 périodes | 33,33 % |
 | `trend_ls_55` | 55 périodes | 33,33 % |
 | `trend_ls_100` | 100 périodes | 33,34 % |
 
-Cette diversification vise à réduire la dépendance à un horizon unique.
+Chaque stratégie utilise également un régime EMA 50/200, un filtre ADX, un stop ATR et un dimensionnement par risque et volatilité.
 
-### Cash-and-carry
+Le profil `config.yaml` à x1 reste disponible comme profil de recherche prudent, mais ce n’est pas celui lancé par le service VPS principal.
 
-Le moteur carry associe une position spot longue à une position perpétuelle courte de taille équivalente. Les décisions reposent sur le niveau lissé du funding et sont appliquées avec un décalage afin d’éviter tout biais d’anticipation.
+### Carry — 40 %
 
-## Résultats historiques
+Le service `btcquant-carry` lance :
 
-### Ensemble trend long/short
+```bash
+python scripts/run_carry.py --capital 4000 --leverage 3
+```
 
-Backtests 2019–juillet 2026 avec frais, slippage et funding inclus :
+Le modèle paper simule une position spot longue et une position perpétuelle courte. Il entre lorsque le funding annualisé lissé dépasse 3 % et sort lorsqu’il devient négatif.
 
-| Indicateur | Ensemble trend LS | Trend swing spot | Intraday breakout | Buy & hold |
+Le levier x3 du carry est actuellement un **modèle synthétique de recherche**. Avec seulement 4 000 USDT de capital, l’achat comptant d’un notionnel de 12 000 USDT exige un financement ou une architecture de marge qui n’est pas reproduite par le paper runner. Les résultats du carry à x3 ne doivent donc pas être présentés comme directement exécutables en l’état.
+
+## Résultats historiques de référence
+
+Le fichier `dashboard/yearly_reference.json`, généré le 13 juillet 2026, rejoue le profil paper 60/40 sur la période du 10 septembre 2019 au 10 juillet 2026 avec funding historique :
+
+| Année | Portefeuille 60/40 | Trend | Carry | BTC |
 |---|---:|---:|---:|---:|
-| Sharpe | **1,28** | 1,25 | -0,11 | 0,96 |
-| Drawdown maximal | **-7,3 %** | -5,7 % | -30,1 % | -77 % |
-| Rendement total | **+73,6 %** | +56,4 % | -12,8 % | +1 795 % |
+| 2019, partielle | +28,0 % | +34,3 % | +4,8 % | -28,7 % |
+| 2020 | +160,9 % | +180,6 % | +68,4 % | +302,0 % |
+| 2021 | +17,0 % | +0,3 % | +147,5 % | +59,8 % |
+| 2022 | +2,3 % | +0,2 % | +8,9 % | -64,2 % |
+| 2023 | +179,9 % | +232,6 % | +26,6 % | +155,6 % |
+| 2024 | +55,0 % | +56,8 % | +41,0 % | +121,3 % |
+| 2025 | -17,7 % | -21,3 % | +12,9 % | -6,3 % |
+| 2026, partielle | -7,8 % | -9,5 % | +1,7 % | -26,5 % |
 
-La stratégie intraday breakout s’est révélée négative hors échantillon et reste désactivée par défaut.
+La référence du moteur trend à x4 indique également :
 
-### Portefeuille trend + carry
+| Indicateur trend | Valeur |
+|---|---:|
+| Trades | 488 |
+| Trades par an | 65,7 |
+| Win rate | 37,3 % |
+| Perte moyenne | -3,10 % |
+| Gain moyen | +9,59 % |
+| Drawdown maximal historique | -53,09 % |
+| Plus longue série de pertes | 21 trades |
 
-Simulation sur 6,8 ans :
+Ces chiffres sont des résultats de simulation. Ils ne constituent pas une garantie de performance future.
 
-| Portefeuille | CAGR | Sharpe | Drawdown maximal |
-|---|---:|---:|---:|
-| 100 % trend, levier 4× | +51,8 % | 1,15 | -53,1 % |
-| **60 % trend 4× + 40 % carry 3×** | **+51,6 %** | **1,65** | **-33,4 %** |
+## Parité backtest / paper
 
-Dans cette simulation, la combinaison des deux moteurs améliore le rendement ajusté du risque. Ces résultats dépendent des hypothèses de coûts, de levier et d’exécution.
+Le moteur de backtest et le runner partagent :
+
+- les mêmes classes de stratégie ;
+- le même dimensionnement par risque et volatilité ;
+- les mêmes frais et hypothèses de slippage ;
+- le même principe de décision à la clôture d’une bougie ;
+- une comptabilité du funding sur les positions perpétuelles ;
+- des coupe-circuits de drawdown et de perte journalière.
+
+### Écart connu à corriger
+
+Le backtest stocke les paiements historiques dans la colonne `funding_rate`, utilisée pour le P&L. La stratégie `TrendLS` lit cependant une colonne distincte, `funding`, pour filtrer les entrées extrêmes. Le runner paper renseigne cette seconde colonne avec le funding courant, contrairement au backtest principal.
+
+La parité du **filtre d’entrée funding** n’est donc pas démontrée dans l’état actuel du code. Les résultats historiques ne doivent pas être décrits comme utilisant exactement ce filtre tant que les deux chemins n’ont pas été harmonisés et retestés.
 
 ## État du projet
 
 | Composant | État |
 |---|---|
 | Backtest trend | Implémenté |
-| Validation walk-forward | Implémentée |
-| Paper trading trend | Implémenté |
-| Paper trading carry | Implémenté |
-| Dashboard | Implémenté |
-| Exécution réelle | Non validée |
+| Paper trading trend x4 | Actif |
+| Backtest carry synthétique | Implémenté |
+| Paper trading carry x3 | Actif |
+| Rééquilibrage 60/40 | Implémenté |
+| Dashboard et suivi des apports | Implémentés |
+| Exécution trend testnet/live | Codée, non validée pour le profil actif |
+| Exécution carry double-jambe | Expérimentale, non validée |
+| Utilisation en argent réel | Non validée |
 
 ## Installation
 
-Prérequis : **Python 3.10 ou version ultérieure**.
+Prérequis : Python 3.10 ou version ultérieure.
 
 ```bash
 git clone https://github.com/Julianos87/btc-quant.git
 cd btc-quant
-
 python -m venv .venv
 ```
 
-Activation de l’environnement :
+Activation :
 
 ```bash
 # Windows
@@ -102,7 +131,7 @@ Activation de l’environnement :
 source .venv/bin/activate
 ```
 
-Installation des dépendances :
+Dépendances :
 
 ```bash
 pip install -r requirements.txt
@@ -110,81 +139,69 @@ pip install -r requirements.txt
 
 ## Utilisation
 
-### Données historiques
+Télécharger ou actualiser les données :
 
 ```bash
 python scripts/download_data.py
 ```
 
-### Backtests
+Rejouer le profil trend actif :
 
 ```bash
-python scripts/run_backtest.py
+python scripts/run_backtest.py --config config_4x.yaml
 ```
 
-Les résultats sont écrits dans `reports/`.
-
-### Validation walk-forward
+Lancer le paper runner trend actif :
 
 ```bash
-python scripts/run_walkforward.py trend_swing
+python scripts/run_live.py --config config_4x.yaml
 ```
 
-### Paper trading trend
+Lancer le paper runner carry :
 
 ```bash
-python scripts/run_live.py
+python scripts/run_carry.py --capital 4000 --leverage 3
 ```
 
-### Paper trading carry
+Générer la référence annuelle du portefeuille :
 
 ```bash
-python scripts/run_carry.py
+python scripts/make_yearly_reference.py
 ```
 
-### Dashboard
+Lancer le dashboard :
 
 ```bash
 python dashboard/app.py
 ```
 
-## Configuration
-
-Les principaux paramètres se trouvent dans [config.yaml](config.yaml) :
-
-- marché et symbole ;
-- coûts et slippage ;
-- capital et risque par trade ;
-- stratégies activées ;
-- mode d’exécution.
-
-Toute modification importante des paramètres nécessite une nouvelle validation historique et prospective.
-
 ## Structure du dépôt
 
 ```text
-config.yaml
+config.yaml                  profil de recherche à x1
+config_4x.yaml               profil trend actif en paper
 src/btcquant/
-  data.py                   données OHLCV et cache
-  indicators.py             indicateurs techniques
-  risk.py                   dimensionnement et coupe-circuits
-  carry.py                  logique cash-and-carry
-  strategies/               stratégies systématiques
-  backtest/                 moteur et walk-forward
-  execution/                brokers et runners
-scripts/                    commandes principales
-dashboard/                  interface locale
-tests/                      tests automatisés
+  data.py                    données et cache
+  indicators.py              indicateurs techniques
+  risk.py                    dimensionnement et coupe-circuits
+  carry.py                   modèle et backtest du carry
+  strategies/                stratégies trend
+  backtest/                  moteur et walk-forward
+  execution/                 brokers et runners
+scripts/                     commandes et maintenance
+dashboard/                   suivi du portefeuille
+deploy/                      services et timers VPS
+tests/                       tests automatisés
 ```
 
 ## Limites
 
-- Les performances historiques ne garantissent aucune performance future.
-- Les résultats dépendent des frais, du slippage, du funding et des hypothèses de remplissage.
-- La simulation du carry ne reproduit pas intégralement les risques de base et de marge.
-- Les composants d’exécution réelle n’ont pas été validés en conditions de production.
-- L’effet de levier multiplie les gains comme les pertes.
+- Le profil trend x4 a connu un drawdown simulé supérieur à 50 %.
+- La poche carry x3 suppose un financement que le modèle ne chiffre pas.
+- Le filtre d’entrée lié au funding n’est pas encore identique entre backtest et paper.
+- Les coûts réels, les fills partiels et les risques de marge peuvent différer fortement de la simulation.
+- Les composants live ne sont pas validés pour une utilisation en production.
 
 ## Avertissement
 
-Ce projet est expérimental et destiné à la recherche. Il ne constitue pas un conseil financier. Le trading de cryptoactifs et de produits dérivés peut entraîner une perte importante ou totale du capital.
+Ce projet est expérimental et destiné à la recherche. Il ne constitue pas un conseil financier. Le trading de cryptoactifs, de produits dérivés et de stratégies à effet de levier peut entraîner une perte importante ou totale du capital.
