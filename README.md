@@ -1,188 +1,262 @@
-# TANDEM — portefeuille systématique BTC (60 % trend · 40 % carry)
+# TANDEM — portefeuille systématique BTC trend + carry
 
-> Deux moteurs qui avancent ensemble : le **trend** prend les tendances
-> (ensemble Donchian long/short), le **carry** encaisse le funding
-> (cash-and-carry delta-neutre). Quand l'un cale, l'autre porte.
-> (nom technique du dépôt et du package : `btc-quant` / `btcquant`)
+> Deux moteurs complémentaires : le **trend** cherche à capter les tendances haussières et baissières ; le **carry** vise à encaisser le funding avec une position delta-neutre.
 
-Système complet : données → indicateurs → stratégies → backtest sans look-ahead →
-validation walk-forward → gestion du risque → exécution paper/live (ccxt).
-Conçu pour BTC/USDT, extensible à ETH/SOL en changeant `symbol` dans `config.yaml`.
+[![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Mode](https://img.shields.io/badge/mode-paper%20par%20d%C3%A9faut-orange)](#état-opérationnel)
+![Status](https://img.shields.io/badge/statut-exp%C3%A9rimental-blue)
 
-## Fondements de recherche
+## Vue d’ensemble
 
-Le design découle d'une revue des preuves empiriques (voir sources en bas) :
+TANDEM est un environnement de recherche et d’exécution systématique pour BTC comprenant :
 
-- **Le trend following bat le buy-and-hold sur BTC en risque ajusté** — croisements
-  de moyennes ~10–30 jours, breakouts de canal ; Sharpe ~1.6–1.7 dans plusieurs
-  études 2012–2025.
-- **Le momentum intraday existe** (les sessions à fort volume prédisent la suite
-  de la journée ; effet « Monday Asia Open ») mais est fragile après frais.
-- **La mean reversion pure (« acheter le creux ») est perdante sur BTC** — les
-  tendances crypto sont trop persistantes. Le système n'en contient donc pas.
-- **Le sizing par volatilité (ATR + vol targeting) améliore le Sharpe** et écrase
-  les drawdowns.
-- **Un backtest ne vaut rien sans** : exécution à l'open de la barre suivante,
-  frais + slippage réalistes, et validation walk-forward (ratio OOS/IS).
+- téléchargement et mise en cache de données OHLCV et de funding ;
+- indicateurs et stratégies sans look-ahead ;
+- moteur de backtest barre par barre avec frais et slippage ;
+- validation walk-forward ;
+- allocation et gestion du risque ;
+- paper trading et connecteurs d’exécution Binance via CCXT ;
+- dashboard local de suivi.
 
-## Résultats (backtests 2019 → juillet 2026, frais + slippage + funding inclus)
+Le portefeuille cible associe **60 % de trend following** et **40 % de cash-and-carry**. Le dépôt technique s’appelle `btc-quant` et le package Python `btcquant`.
 
-Stratégie active : **ensemble trend long-short** sur perpétuels, trois horizons
-Donchian 20/55/100 (paramètres standards de la littérature, non optimisés sur
-nos données) à ⅓ du capital chacun.
+> Le mode défini par défaut dans `config.yaml` est `paper`. Les composants live sont expérimentaux et doivent être validés sur testnet avant toute utilisation réelle.
 
-| | Ensemble LS (perp 4h) | trend_swing (spot 4h) | intraday_breakout (1h) | Buy & hold |
-|---|---|---|---|---|
-| Sharpe | **1.28** | 1.25 | -0.11 | 0.96 |
-| Max drawdown | **-7.3 %** | -5.7 % | -30.1 % | -77 % |
-| Rendement total | **+73.6 %** | +56.4 % | -12.8 % | +1795 % |
-| Profit factor | 1.7–2.0 selon l'horizon | 2.31 | 0.96 | — |
+## Architecture de la stratégie
 
-Enseignements clés (2021–2026, entrées jamais autorisées avant 2021) :
-- les trois horizons sont **tous positifs sans optimisation** (Sharpe 1.05 à
-  1.38) → l'edge ne dépend pas d'un paramètre chanceux ;
-- les **longs font l'essentiel du PnL** (+2 962 USDT sur 227 trades) ; les
-  shorts sont ~neutres net (-361 USDT sur 212 trades, win rate 28 %) mais
-  jouent leur rôle d'assurance : en 2026 (marché baissier) ils gagnent +332
-  et compensent presque exactement les -344 des longs, là où la version
-  long-only perdait -396 ;
-- le CAGR reste bas car le risque est volontairement minime
-  (0.75 %/trade) — le monter scale rendement ET drawdown proportionnellement.
+### 1. Trend following — 60 %
 
-- Walk-forward `trend_swing` : Sharpe out-of-sample **1.08**, max DD -4.4 % sur
-  5.5 ans OOS, positif sur 7 plis sur 10. Efficacité OOS/IS 0.33 → l'edge est
-  réel mais plus faible que ce que l'in-sample suggère. C'est normal et c'est
-  exactement ce que le walk-forward sert à mesurer.
-- Walk-forward `intraday_breakout` : Sharpe out-of-sample **-0.27**, efficacité
-  -0.60 → **perdant après frais, désactivé par défaut** dans `config.yaml`.
-  Gardé dans le code comme base d'itération (filtre de saisonnalité, ordres
-  maker pour réduire les frais), pas pour trader tel quel.
-- Le CAGR est bas parce que le risque est volontairement minuscule
-  (0.75 %/trade, vol cible 40 %). Monter `risk_per_trade` augmente rendement
-  ET drawdown proportionnellement — le Sharpe, lui, ne bouge pas.
+Le moteur trend actif est un ensemble long/short sur perpétuels, réparti entre trois canaux de Donchian :
 
-## Portefeuille 60/40 (trend + carry)
+| Sous-stratégie | Horizon | Allocation interne |
+|---|---:|---:|
+| `trend_ls_20` | 20 périodes | 33,33 % |
+| `trend_ls_55` | 55 périodes | 33,33 % |
+| `trend_ls_100` | 100 périodes | 33,34 % |
 
-Second moteur validé : **cash-and-carry** (long spot + short perp, encaisse le
-funding — [carry.py](src/btcquant/carry.py)). Corrélation mesurée avec le
-trend : **+0.01** (décorrélation totale). Sur 6.8 ans :
+Les trois horizons utilisent les mêmes principes : filtre ADX, contrôle du funding, dimensionnement par risque et exécution sur la bougie suivante.
 
-| Portefeuille | CAGR | Sharpe | Max DD |
-|---|---|---|---|
-| 100 % trend 4x | +51.8 % | 1.15 | -53.1 % |
-| **60 % trend 4x + 40 % carry 3x** | **+51.6 %** | **1.65** | **-33.4 %** |
+### 2. Cash-and-carry — 40 %
 
-Même rendement, un tiers de drawdown en moins. Robustesse carry : les 18
-paramétrages testés sont tous rentables (+23 à +40 %/an à 3x).
-Paper : `python scripts/run_carry.py` (funding réels, exécution simulée).
-Live carry : exécution double-jambe non implémentée — jalon suivant.
+Le moteur carry associe :
 
-## Architecture
+- une position spot longue ;
+- une position perpétuelle courte de même taille ;
+- une entrée lorsque le funding lissé dépasse le seuil défini ;
+- une sortie lorsque le régime de funding devient défavorable.
 
-```
-config.yaml                 paramètres (stratégies, risque, coûts, exécution)
-src/btcquant/
-  data.py                   OHLCV ccxt paginé + cache CSV incrémental
-  indicators.py             EMA, ATR Wilder, RSI, Donchian (décalé anti look-ahead)…
-  risk.py                   sizing (risque fixe/trade + vol target) + kill-switches
-  strategies/               TrendSwing (4h), IntradayBreakout (1h) — contrat commun
-  backtest/engine.py        moteur barre par barre : décision à la clôture,
-                            exécution à l'open suivant, stops intrabar, frais/slippage
-  backtest/walkforward.py   optimisation glissante + test out-of-sample
-  execution/broker.py       PaperBroker (simulation)
-  execution/ccxt_broker.py  Binance réel : testnet, retries, idempotence,
-                            stops STOP_LOSS_LIMIT côté exchange
-  execution/runner.py       boucle live : état persisté JSON, stops suiveurs,
-                            kill-switch drawdown + limite de perte journalière
-scripts/                    download_data, run_backtest, run_walkforward, run_live
-```
+La décision prise au paiement `t` est appliquée au paiement `t+1`, afin d’éviter tout look-ahead. La modélisation intègre quatre exécutions par cycle complet, mais ne simule pas entièrement le risque de marge intraposition.
 
-## Dashboard
+## Résultats historiques
 
-Suivi en direct du portefeuille 60/40 (paper) :
+### Ensemble trend long/short
+
+Backtests 2019–juillet 2026, avec frais, slippage et funding inclus :
+
+| Indicateur | Ensemble LS perp 4 h | Trend swing spot 4 h | Intraday breakout 1 h | Buy & hold |
+|---|---:|---:|---:|---:|
+| Sharpe | **1,28** | 1,25 | -0,11 | 0,96 |
+| Drawdown maximal | **-7,3 %** | -5,7 % | -30,1 % | -77 % |
+| Rendement total | **+73,6 %** | +56,4 % | -12,8 % | +1 795 % |
+| Profit factor | 1,7–2,0 selon l’horizon | 2,31 | 0,96 | — |
+
+Sur 2021–2026, les trois horizons trend sont positifs sans optimisation propre au jeu de données. Les longs produisent l’essentiel du P&L ; les shorts sont proches de l’équilibre sur l’ensemble de la période, mais jouent un rôle défensif dans les régimes baissiers.
+
+### Validation walk-forward
+
+| Stratégie | Sharpe OOS | Efficacité OOS/IS | Décision |
+|---|---:|---:|---|
+| `trend_swing` | 1,08 | 0,33 | Edge conservé mais affaibli hors échantillon |
+| `intraday_breakout` | -0,27 | -0,60 | Désactivée par défaut |
+
+Le breakout intraday reste présent comme base de recherche, mais n’est pas destiné à être tradé dans son état actuel.
+
+### Portefeuille trend + carry
+
+Simulation sur 6,8 ans :
+
+| Portefeuille | CAGR | Sharpe | Drawdown maximal |
+|---|---:|---:|---:|
+| 100 % trend, levier 4× | +51,8 % | 1,15 | -53,1 % |
+| **60 % trend 4× + 40 % carry 3×** | **+51,6 %** | **1,65** | **-33,4 %** |
+
+La corrélation historique mesurée entre les deux moteurs est de **+0,01**. Dans cette simulation, l’ajout du carry maintient un rendement voisin tout en réduisant le drawdown. Ces résultats dépendent fortement des hypothèses de coûts, de levier et d’exécution.
+
+### Validation multi-actifs
+
+Les mêmes règles trend long/short ont également été testées sur ETH et SOL :
+
+| Actif | Sharpe | Drawdown maximal | Décision de recherche |
+|---|---:|---:|---|
+| BTC | **1,41** | -15,6 % | Cœur du système |
+| ETH | 0,93 | -12,3 % | Candidat ultérieur |
+| SOL | 0,49 | -19,2 % | Écarté |
+
+BTC + ETH réduit historiquement le drawdown de -15,6 % à -10,6 %, sans améliorer le Sharpe. L’ajout d’ETH reste donc différé jusqu’à la validation opérationnelle du portefeuille BTC.
+
+## État opérationnel
+
+| Composant | État |
+|---|---|
+| Backtest trend | Implémenté |
+| Walk-forward | Implémenté |
+| Paper trading trend | Implémenté |
+| Paper trading carry | Implémenté |
+| Dashboard | Implémenté |
+| Exécution trend testnet/live | Codée, à valider sur testnet |
+| Exécution carry double-jambe | Codée, non encore éprouvée |
+| Utilisation en argent réel | Non validée |
+
+## Installation
+
+Prérequis : **Python 3.10 ou version ultérieure**.
 
 ```bash
-python dashboard/app.py        # puis http://localhost:8666
+git clone https://github.com/Julianos87/btc-quant.git
+cd btc-quant
+
+python -m venv .venv
+# Windows
+.venv\Scripts\activate
+# Linux/macOS
+# source .venv/bin/activate
+
+pip install -r requirements.txt
 ```
 
-Équity en temps réel (courbes portefeuille/trend/carry), positions et stops de
-chaque sous-système, statut des coupe-circuits, funding en direct, compte à
-rebours du prochain paiement, journal des événements. Thème clair/sombre,
-actualisation 30 s. Ne lit que les états réels des runners — aucune donnée
-simulée côté interface.
+Les fichiers de données, rapports et états runtime sont produits localement par les scripts.
 
 ## Utilisation
 
+### Télécharger ou actualiser les données
+
 ```bash
-pip install -r requirements.txt
-python scripts/download_data.py           # télécharge/actualise l'historique
-python scripts/run_backtest.py            # backtest + rapports dans reports/
-python scripts/run_walkforward.py trend_swing
-python scripts/run_live.py                # PAPER TRADING (défaut)
+python scripts/download_data.py
 ```
 
-Passage en réel — dans cet ordre, sans sauter d'étape :
-1. Paper trading plusieurs semaines (`mode: paper`) et comparer aux attentes.
-2. `mode: live` + `testnet: true` (sandbox Binance) — vérifie l'exécution réelle.
-3. `testnet: false` avec un capital minime. Clés API dans les variables
-   d'environnement `BINANCE_API_KEY` / `BINANCE_API_SECRET`, retrait désactivé
-   sur la clé, IP whitelistée.
+### Lancer les backtests
 
-## Limites connues et avertissements
+```bash
+python scripts/run_backtest.py
+```
 
-- **Rien ne garantit la performance future.** Le walk-forward réduit le risque
-  d'illusion, il ne l'élimine pas. Ne jamais engager d'argent qu'on ne peut pas
-  perdre.
-- L'exécution futures (shorts, stops STOP_MARKET reduceOnly, levier 1x) est
-  codée mais n'a pas encore tourné contre le testnet Binance : valider en
-  sandbox avant tout capital réel.
-- Slippage modélisé constant (5 bps) ; en conditions extrêmes il est pire.
-- Le runner live doit tourner en continu (machine allumée ou VPS) ; les stops
-  côté exchange protègent la position si le bot tombe, mais le stop suiveur
-  ne remonte plus tant qu'il n'est pas relancé.
+Les rapports et listes de trades sont écrits dans `reports/`.
 
-## Multi-actifs ETH/SOL — validé, chiffré, en attente
+### Lancer le walk-forward
 
-L'ensemble trend long-short a été validé à l'identique sur ETH et SOL
-(mêmes règles, filtres, coûts) :
+```bash
+python scripts/run_walkforward.py trend_swing
+```
 
-| Actif | Sharpe | Max DD | Verdict |
-|---|---|---|---|
-| BTC | **1.41** | -15.6 % | cœur du système |
-| ETH | 0.93 | -12.3 % | **à ajouter** (bon edge) |
-| SOL | 0.49 | -19.2 % | écarté (edge trop faible) |
+### Démarrer le paper trading trend
 
-Corrélation des *stratégies* : 0.47 BTC-ETH, ~0.30 avec SOL. Le multi-actifs
-**réduit le drawdown** (BTC seul -15.6 % → BTC+ETH -10.6 %) mais **n'améliore
-pas le Sharpe** (ETH est de moindre qualité que BTC) : c'est un amortisseur de
-risque, pas un booster de rendement. Décision : ajouter ETH *après* validation
-live du 60/40 BTC ; ne pas multiplier l'exposition non testée maintenant.
+```bash
+python scripts/run_live.py
+```
 
-## Carry en réel (exécuteur double-jambe)
+Avec `execution.mode: paper`, aucun ordre réel n’est envoyé.
 
-[carry_broker.py](src/btcquant/execution/carry_broker.py) : ouverture/fermeture
-simultanée spot long + perp short, gestion de l'échec d'une jambe (défait la
-jambe orpheline), réconciliation spot↔short, notifications. Branché dans le
-runner (`python scripts/run_carry.py --live --testnet`). **Codé, non encore
-exercé** — à valider via `scripts/test_testnet.py` (qui couvre désormais le
-cycle carry complet) avant tout usage réel.
+### Démarrer le paper trading carry
 
-## Extensions prévues
+```bash
+python scripts/run_carry.py
+```
 
-- ETH/SOL : changer `symbol`, re-valider par walk-forward (paramètres propres).
-- Momentum cross-sectionnel BTC/ETH/SOL (rotation vers le plus fort).
-- Perpétuels : shorts en régime baissier, prise en compte du funding.
-- Filtre de saisonnalité intraday (Monday Asia Open, chop du dimanche matin US).
+Options disponibles :
 
-## Sources principales
+```bash
+python scripts/run_carry.py --capital 4000 --leverage 3
+```
 
-- [A Decade of Evidence of Trend Following in Cryptocurrencies (arXiv)](https://arxiv.org/pdf/2009.12155)
-- [Grayscale — Managing Bitcoin's Volatility with Momentum Signals](https://research.grayscale.com/reports/the-trend-is-your-friend-managing-bitcoins-volatility-with-momentum-signals)
-- [Concretum — Seasonality in Bitcoin Intraday Trend Trading](https://concretumgroup.com/seasonality-in-bitcoin-intraday-trend-trading/)
-- [Shen et al. — Bitcoin Intraday Time Series Momentum (Financial Review)](https://onlinelibrary.wiley.com/doi/10.1111/fire.12290)
-- [Wen et al. — Intraday Return Predictability in Crypto: Momentum, Reversal, or Both](https://www.sciencedirect.com/science/article/abs/pii/S1062940822000833)
-- [QuantifiedStrategies — Trend Following and Momentum on Bitcoin](https://www.quantifiedstrategies.com/trend-following-and-momentum-strategies-on-bitcoin/)
-- [QuantPedia — The Seasonality of Bitcoin](https://quantpedia.com/the-seasonality-of-bitcoin/)
-- [Quant Signals — RSI mean reversion fails on BTC (2 397 trades)](https://quant-signals.com/rsi-trading-strategy/)
-- [Logical Invest — Walk-forward testing to avoid curve-fitting](https://logical-invest.com/walk-forward-testing-avoid-curve-fitting-backtesting/)
-- [Gainium — Common Backtesting Mistakes](https://gainium.io/blog/common-backtesting-problems)
+### Lancer le dashboard
+
+```bash
+python dashboard/app.py
+```
+
+Interface locale : [http://localhost:8666](http://localhost:8666)
+
+Le dashboard suit l’equity du portefeuille, les positions, les stops, les coupe-circuits, le funding et les événements des runners.
+
+## Configuration
+
+Les paramètres principaux se trouvent dans [config.yaml](config.yaml) :
+
+```yaml
+risk:
+  initial_capital: 10000
+  risk_per_trade: 0.0075
+  max_drawdown_halt: 0.30
+  daily_loss_limit: 0.03
+  max_leverage: 1.0
+
+execution:
+  mode: paper
+  testnet: true
+```
+
+Les clés API ne doivent jamais être inscrites dans le dépôt. Elles sont lues depuis les variables d’environnement :
+
+```bash
+BINANCE_API_KEY
+BINANCE_API_SECRET
+```
+
+Toute modification du symbole, de l’unité de temps, du risque ou du levier nécessite un nouveau cycle de validation.
+
+## Structure du dépôt
+
+```text
+config.yaml
+src/btcquant/
+  data.py                   données OHLCV CCXT et cache incrémental
+  indicators.py             EMA, ATR, RSI, Donchian et utilitaires
+  risk.py                   sizing, vol targeting et coupe-circuits
+  carry.py                  logique et backtest cash-and-carry
+  strategies/               stratégies partageant un contrat commun
+  backtest/
+    engine.py               moteur barre par barre
+    walkforward.py          validation glissante hors échantillon
+  execution/
+    broker.py               courtier simulé
+    ccxt_broker.py          exécution Binance spot/perp
+    carry_broker.py         exécution carry double-jambe
+    runner.py               boucle continue et état persistant
+scripts/                    données, backtests, walk-forward et runners
+dashboard/                  interface locale
+tests/                      tests automatisés
+```
+
+## Passage éventuel vers le live
+
+La séquence minimale prévue est :
+
+1. exécuter le système en paper trading pendant une durée suffisante ;
+2. comparer les décisions et résultats observés aux attentes du backtest ;
+3. valider l’exécution sur Binance testnet ;
+4. auditer les protections : tailles, stops, idempotence, reprise après panne et réconciliation ;
+5. seulement après décision explicite, envisager un capital réel très limité.
+
+Les clés API doivent interdire les retraits et être protégées par une liste blanche d’adresses IP.
+
+## Limites
+
+- Les performances historiques ne garantissent aucune performance future.
+- Les résultats sont sensibles aux frais, au slippage, au funding et aux hypothèses de remplissage.
+- Le slippage est modélisé de manière constante ; il peut être nettement supérieur lors de fortes turbulences.
+- La simulation du carry ne reproduit pas complètement le risque de base et de marge.
+- Les composants live n’ont pas encore été validés dans toutes les conditions de marché et de panne.
+- Le runner doit rester disponible ; les protections dynamiques ne sont plus actualisées lorsqu’il est arrêté.
+- L’effet de levier multiplie les gains comme les pertes et peut entraîner une perte rapide du capital.
+
+## Sources de recherche
+
+- [A Decade of Evidence of Trend Following in Cryptocurrencies](https://arxiv.org/pdf/2009.12155)
+- [Grayscale — Managing Bitcoin’s Volatility with Momentum Signals](https://research.grayscale.com/reports/the-trend-is-your-friend-managing-bitcoins-volatility-with-momentum-signals)
+- [Shen et al. — Bitcoin Intraday Time Series Momentum](https://onlinelibrary.wiley.com/doi/10.1111/fire.12290)
+- [Wen et al. — Intraday Return Predictability in Cryptocurrency Markets](https://www.sciencedirect.com/science/article/abs/pii/S1062940822000833)
+- [Logical Invest — Walk-forward testing](https://logical-invest.com/walk-forward-testing-avoid-curve-fitting-backtesting/)
+
+## Avertissement
+
+Ce projet est expérimental et destiné à la recherche. Il ne constitue pas un conseil financier. Le trading de cryptoactifs, de produits dérivés et de stratégies à effet de levier peut entraîner une perte importante ou totale du capital.
