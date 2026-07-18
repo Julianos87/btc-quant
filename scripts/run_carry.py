@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from btcquant.carry import DEFAULT_BORROW_RATE_ANN
 from btcquant.execution.carry_runner import CarryRunner
 
 
@@ -18,6 +19,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--capital", type=float, default=4000.0, help="40 %% d'un compte de 10 000")
     parser.add_argument("--leverage", type=float, default=3.0)
+    parser.add_argument(
+        "--borrow-rate", type=float, default=DEFAULT_BORROW_RATE_ANN,
+        help="coût annuel des fonds empruntés pour financer la jambe spot "
+             f"(défaut {DEFAULT_BORROW_RATE_ANN:.0%}). Sans effet à --leverage 1.",
+    )
     parser.add_argument("--live", action="store_true", help="exécution réelle double-jambe (sinon paper)")
     parser.add_argument("--testnet", action="store_true", help="sandbox Binance (avec --live)")
     args = parser.parse_args()
@@ -45,6 +51,7 @@ def main() -> None:
     CarryRunner(
         initial_capital=args.capital,
         leverage=args.leverage,
+        borrow_rate_ann=args.borrow_rate,
         state_file=ROOT / "state" / "carry_state.json",
         live_broker=live_broker,
     ).run_forever()

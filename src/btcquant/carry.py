@@ -109,6 +109,14 @@ def add_funding_columns(
     return out
 
 
+#: Coût annuel par défaut des fonds empruntés pour financer la jambe spot.
+#: Ordre de grandeur du taux USDT en margin isolé/croisé sur les grandes
+#: plateformes : très variable (il grimpe justement quand le funding est élevé,
+#: puisque les deux traduisent la même demande de levier). À surcharger avec le
+#: taux réellement consenti par la plateforme utilisée.
+DEFAULT_BORROW_RATE_ANN = 0.10
+
+
 def backtest_carry(
     funding: pd.Series,
     leverage: float = 3.0,
@@ -118,8 +126,26 @@ def backtest_carry(
     exit_ann: float = 0.0,
     smooth_days: int = 7,
     initial_capital: float = 10_000.0,
+    borrow_rate_ann: float = DEFAULT_BORROW_RATE_ANN,
 ) -> dict:
-    """Backtest du cash-and-carry avec règles d'entrée/sortie sur funding lissé."""
+    """Backtest du cash-and-carry avec règles d'entrée/sortie sur funding lissé.
+
+    Le levier a un coût. Un carry à levier L immobilise L×capital de spot alors
+    que l'on ne dispose que du capital : les (L−1)×capital manquants sont
+    empruntés et se paient, en continu, tant que la position est ouverte.
+    Ignorer ce poste — ce que faisait le modèle jusqu'au 18/07/2026 — surestime
+    massivement le rendement et produit un Sharpe irréaliste, le funding
+    apparaissant alors comme un revenu sans contrepartie.
+
+    Rendement par période, position ouverte :
+        L × funding − (L−1) × borrow_rate_ann / PAYMENTS_PER_YEAR
+
+    À ``leverage=1.0`` le terme d'emprunt s'annule : la position est intégralement
+    financée par le capital, ce qui est le seul cas réalisable sans marge.
+    """
+    if leverage < 1.0:
+        raise ValueError("leverage < 1 non modélisé (sous-emploi du capital)")
+    borrow_per_period = (leverage - 1.0) * borrow_rate_ann / PAYMENTS_PER_YEAR
     smooth = funding.rolling(smooth_days * PAYMENTS_PER_DAY, min_periods=PAYMENTS_PER_DAY).mean()
     smooth_ann = smooth * PAYMENTS_PER_YEAR
 
@@ -137,7 +163,13 @@ def backtest_carry(
 
     cost_per_switch = 2 * (fee_rate + slippage_bps / 10_000.0) * leverage  # 2 jambes
     switches = applied != applied.shift(1, fill_value=False)
-    pnl = applied * funding * leverage - switches * cost_per_switch
+    # le coût d'emprunt court uniquement quand la position est ouverte : hors
+    # position, rien n'est emprunté puisque rien n'est immobilisé en spot.
+    pnl = (
+        applied * funding * leverage
+        - applied * borrow_per_period
+        - switches * cost_per_switch
+    )
     equity = initial_capital * (1.0 + pnl).cumprod()
 
     years = len(funding) / PAYMENTS_PER_YEAR
@@ -154,4 +186,8 @@ def backtest_carry(
         "exposure": applied.mean(),
         "cycles": n_cycles,
         "years": years,
+        "leverage": leverage,
+        "borrow_rate_ann": borrow_rate_ann,
+        #: coût de financement annualisé effectivement supporté (0 si levier 1)
+        "borrow_cost_ann": (leverage - 1.0) * borrow_rate_ann * float(applied.mean()),
     }

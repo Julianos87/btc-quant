@@ -49,7 +49,48 @@ python scripts/run_carry.py --capital 4000 --leverage 3
 
 Le modèle paper simule une position spot longue et une position perpétuelle courte. Il entre lorsque le funding annualisé lissé dépasse 3 % et sort lorsqu’il devient négatif.
 
-Le levier x3 du carry est actuellement un **modèle synthétique de recherche**. Avec seulement 4 000 USDT de capital, l’achat comptant d’un notionnel de 12 000 USDT exige un financement ou une architecture de marge qui n’est pas reproduite par le paper runner. Les résultats du carry à x3 ne doivent donc pas être présentés comme directement exécutables en l’état.
+### Coût de financement du levier — chiffré depuis le 18 juillet 2026
+
+Un carry à levier L immobilise L×capital de spot alors qu’on ne dispose que du
+capital : les (L−1)×capital manquants doivent être **empruntés**, et cet emprunt
+se paie tant que la position est ouverte. Jusqu’au 18 juillet 2026 le modèle
+créditait `capital × funding × levier` sans jamais débiter ce portage, ce qui
+surestimait le rendement d’environ un facteur deux et produisait un Sharpe de 12.
+
+`backtest_carry()` et `CarryRunner` appliquent désormais la même formule :
+
+```
+rendement par période = L × funding − (L−1) × borrow_rate_ann / paiements_par_an
+```
+
+Le taux est réglable (`--borrow-rate`, `DEFAULT_BORROW_RATE_ANN = 10 %/an`). Il
+n’est pas observable a posteriori et **varie fortement — il monte précisément
+quand le funding monte**, les deux traduisant la même demande de levier. Les
+chiffres du carry sont donc conditionnels à cette hypothèse :
+
+| Taux d’emprunt | CAGR x3 | Sharpe | Max DD |
+|---:|---:|---:|---:|
+| 0 % (ancien modèle) | +36,1 % | 12,00 | -3,8 % |
+| 5 % | +25,6 % | 8,99 | -5,9 % |
+| **10 % (défaut)** | **+16,0 %** | **5,89** | **-11,6 %** |
+| 15 % | +7,1 % | 2,74 | -29,9 % |
+| 20 % | -1,1 % | -0,45 | -51,1 % |
+
+À levier 1, la position est intégralement financée par le capital : aucun
+emprunt, donc aucune dépendance à ce taux. C’est le seul profil réalisable sans
+compte sur marge, et il présente le meilleur couple rendement/risque :
+
+| Levier | CAGR | Sharpe | Max DD |
+|---:|---:|---:|---:|
+| **x1** | +10,8 % | **12,00** | **-1,3 %** |
+| x2 | +13,4 % | 7,45 | -5,8 % |
+| x3 (profil actif) | +16,0 % | 5,89 | -11,6 % |
+| x4 | +18,6 % | 5,11 | -18,8 % |
+
+Passer de x1 à x3 gagne 5 points de CAGR mais multiplie le drawdown par 9 et
+divise le Sharpe par deux, tout en introduisant une dépendance à un taux
+d’emprunt volatil. Le profil paper reste à x3 pour l’instant ; **ce choix mérite
+d’être rediscuté avant tout passage en réel**.
 
 ## Résultats historiques de référence
 
@@ -57,14 +98,20 @@ Le fichier `dashboard/yearly_reference.json`, régénéré le 18 juillet 2026, r
 
 | Année | Portefeuille 60/40 | Trend | Carry | BTC |
 |---|---:|---:|---:|---:|
-| 2019, partielle | +28,0 % | +34,3 % | +4,8 % | -28,7 % |
-| 2020 | +160,9 % | +180,6 % | +68,4 % | +302,0 % |
-| 2021 | +26,8 % | +11,4 % | +147,5 % | +59,8 % |
-| 2022 | +2,2 % | +0,3 % | +8,9 % | -64,2 % |
-| 2023 | +184,9 % | +233,7 % | +26,6 % | +155,6 % |
-| 2024 | +55,3 % | +56,9 % | +41,0 % | +121,3 % |
-| 2025 | -18,0 % | -21,3 % | +12,9 % | -6,3 % |
-| 2026, partielle | -8,0 % | -9,6 % | +2,2 % | -26,8 % |
+| 2019, partielle | +26,7 % | +34,3 % | -1,1 % | -28,7 % |
+| 2020 | +157,3 % | +180,6 % | +41,3 % | +302,0 % |
+| 2021 | +20,2 % | +11,4 % | +107,2 % | +59,8 % |
+| 2022 | -1,0 % | +0,3 % | -8,3 % | -64,2 % |
+| 2023 | +199,9 % | +233,7 % | +3,7 % | +155,6 % |
+| 2024 | +55,0 % | +56,9 % | +17,8 % | +121,3 % |
+| 2025 | -20,7 % | -21,3 % | -6,4 % | -6,3 % |
+| 2026, partielle | -9,3 % | -9,6 % | -3,2 % | -26,6 % |
+
+La colonne carry intègre le coût de financement du levier x3 (voir plus bas).
+Une fois ce coût chiffré, **le carry devient négatif 4 années sur 8** — dont
+2025 et 2026, où les deux poches perdent simultanément. La corrélation annuelle
+trend/carry reste faible (+0,06), mais la diversification protège moins que ce
+que suggéraient les chiffres non financés.
 
 La référence du moteur trend à x4 indique également :
 
@@ -262,7 +309,8 @@ requirements.txt             export figé de uv.lock (généré)
 ## Limites
 
 - Le profil trend x4 a connu un drawdown simulé supérieur à 50 %.
-- La poche carry x3 suppose un financement que le modèle ne chiffre pas.
+- Les résultats du carry dépendent d'une hypothèse de taux d'emprunt (10 %/an par défaut) qui n'est ni observée ni garantie, et qui se dégrade justement quand le funding est élevé.
+- Le carry x3 exige un compte sur marge : il n'est pas réalisable avec le seul capital de la poche.
 - Les coûts réels, les fills partiels et les risques de marge peuvent différer fortement de la simulation.
 - Les composants live ne sont pas validés pour une utilisation en production.
 

@@ -27,6 +27,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from ..carry import DEFAULT_BORROW_RATE_ANN
 from ..notify import notify
 from .venue import Venue
 
@@ -49,12 +50,17 @@ class CarryRunner:
         slippage_bps: float = 5.0,
         state_file: str | Path = "state/carry_state.json",
         live_broker=None,
+        borrow_rate_ann: float = DEFAULT_BORROW_RATE_ANN,
     ) -> None:
         self.symbol = symbol_perp
         self.leverage = leverage
         self.enter_ann = enter_ann
         self.exit_ann = exit_ann
         self.smooth_days = smooth_days
+        #: coût annuel des (levier−1)×capital empruntés pour financer la jambe
+        #: spot. Débité à chaque paiement de funding, au prorata, tant que la
+        #: position est ouverte — même convention que `carry.backtest_carry`.
+        self.borrow_rate_ann = borrow_rate_ann
         self.switch_cost = 2 * (fee_rate + slippage_bps / 10_000.0) * leverage
         self.state_path = Path(state_file)
         self.venue = Venue(exchange_id, symbol_perp)
@@ -108,11 +114,17 @@ class CarryRunner:
         # 1. créditer les paiements réels survenus depuis le dernier passage
         if self.in_position:
             new = funding if self.last_funding_ts is None else funding[funding.index > self.last_funding_ts]
+            # coût des fonds empruntés, au prorata d'une période de funding de
+            # la venue. Nul à levier 1 (position financée par le seul capital).
+            borrow = (self.leverage - 1.0) * self.borrow_rate_ann / self.venue.payments_per_year
             for ts, rate in new.items():
-                gain = self.equity * rate * self.leverage
+                gain = self.equity * (rate * self.leverage - borrow)
                 self.equity += gain
-                log.info("[CARRY] Funding %s : %+.4f%% -> %+.2f USDT (équity %.2f)",
-                         ts, rate * 100, gain, self.equity)
+                log.info(
+                    "[CARRY] Funding %s : %+.4f%% -> %+.2f USDT "
+                    "(dont portage %-.2f USDT, équity %.2f)",
+                    ts, rate * 100, gain, self.equity * borrow, self.equity,
+                )
         self.last_funding_ts = funding.index[-1]
 
         # 2. signal sur funding lissé (annualisation selon la périodicité
