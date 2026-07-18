@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from btcquant.backtest.engine import BacktestEngine
 from btcquant.backtest.metrics import compute_metrics
-from btcquant.carry import load_funding
+from btcquant.carry import add_funding_columns, load_funding
 from btcquant.data import TIMEFRAME_TO_PANDAS, load_ohlcv, resample
 from btcquant.indicators import bars_per_year
 from btcquant.risk import RiskConfig
@@ -45,14 +45,10 @@ def _engine(sleeve_capital: float, short_mult: float = 1.0) -> BacktestEngine:
 
 
 def add_real_funding(df: pd.DataFrame, symbol_perp: str) -> pd.DataFrame:
-    """Ajoute une colonne `funding_rate` par barre 4h à partir du funding réel
-    8h (somme des paiements tombant dans chaque barre). Convention : positif =
-    les longs paient."""
+    """Ajoute `funding_rate` (P&L) et `funding` (filtre d'entrée) à partir du
+    funding réel 8 h. Convention : positif = les longs paient."""
     fund = load_funding(symbol_perp, data_dir=ROOT / "data", refresh=False)
-    per_bar = fund.resample(TIMEFRAME_TO_PANDAS[TIMEFRAME], label="left", closed="left").sum()
-    out = df.copy()
-    out["funding_rate"] = per_bar.reindex(out.index).fillna(0.0)
-    return out
+    return add_funding_columns(df, fund, TIMEFRAME_TO_PANDAS[TIMEFRAME])
 
 
 def symbol_ensemble(df: pd.DataFrame, sleeve: float, stop_cfg: dict | None = None,

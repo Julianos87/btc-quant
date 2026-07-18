@@ -53,30 +53,35 @@ Le levier x3 du carry est actuellement un **modèle synthétique de recherche**.
 
 ## Résultats historiques de référence
 
-Le fichier `dashboard/yearly_reference.json`, généré le 13 juillet 2026, rejoue le profil paper 60/40 sur la période du 10 septembre 2019 au 10 juillet 2026 avec funding historique :
+Le fichier `dashboard/yearly_reference.json`, régénéré le 18 juillet 2026, rejoue le profil paper 60/40 sur la période du 10 septembre 2019 au 18 juillet 2026 avec funding historique :
 
 | Année | Portefeuille 60/40 | Trend | Carry | BTC |
 |---|---:|---:|---:|---:|
 | 2019, partielle | +28,0 % | +34,3 % | +4,8 % | -28,7 % |
 | 2020 | +160,9 % | +180,6 % | +68,4 % | +302,0 % |
-| 2021 | +17,0 % | +0,3 % | +147,5 % | +59,8 % |
-| 2022 | +2,3 % | +0,2 % | +8,9 % | -64,2 % |
-| 2023 | +179,9 % | +232,6 % | +26,6 % | +155,6 % |
-| 2024 | +55,0 % | +56,8 % | +41,0 % | +121,3 % |
-| 2025 | -17,7 % | -21,3 % | +12,9 % | -6,3 % |
-| 2026, partielle | -7,8 % | -9,5 % | +1,7 % | -26,5 % |
+| 2021 | +26,8 % | +11,4 % | +147,5 % | +59,8 % |
+| 2022 | +2,2 % | +0,3 % | +8,9 % | -64,2 % |
+| 2023 | +184,9 % | +233,7 % | +26,6 % | +155,6 % |
+| 2024 | +55,3 % | +56,9 % | +41,0 % | +121,3 % |
+| 2025 | -18,0 % | -21,3 % | +12,9 % | -6,3 % |
+| 2026, partielle | -8,0 % | -9,6 % | +2,2 % | -26,8 % |
 
 La référence du moteur trend à x4 indique également :
 
 | Indicateur trend | Valeur |
 |---|---:|
-| Trades | 488 |
-| Trades par an | 65,7 |
-| Win rate | 37,3 % |
-| Perte moyenne | -3,10 % |
+| Trades | 479 |
+| Trades par an | 64,6 |
+| Win rate | 38,0 % |
+| Perte moyenne | -3,08 % |
 | Gain moyen | +9,59 % |
-| Drawdown maximal historique | -53,09 % |
+| Drawdown maximal historique | -52,9 % |
 | Plus longue série de pertes | 21 trades |
+
+Ces chiffres intègrent le filtre d'entrée funding, resté inactif en backtest
+jusqu'au 18 juillet 2026 (voir ci-dessous). Le gain de 2021 sur la poche trend
+(+0,3 % → +11,4 %) vient de là : c'est l'année où le funding a été le plus
+durablement extrême, donc celle où le filtre écarte le plus d'entrées.
 
 Ces chiffres sont des résultats de simulation. Ils ne constituent pas une garantie de performance future.
 
@@ -91,11 +96,30 @@ Le moteur de backtest et le runner partagent :
 - une comptabilité du funding sur les positions perpétuelles ;
 - des coupe-circuits de drawdown et de perte journalière.
 
-### Écart connu à corriger
+### Écart funding — corrigé le 18 juillet 2026
 
-Le backtest stocke les paiements historiques dans la colonne `funding_rate`, utilisée pour le P&L. La stratégie `TrendLS` lit cependant une colonne distincte, `funding`, pour filtrer les entrées extrêmes. Le runner paper renseigne cette seconde colonne avec le funding courant, contrairement au backtest principal.
+Le backtest ne créait que la colonne `funding_rate` (somme des paiements par
+barre, utilisée pour le P&L). `TrendLS` lisant une colonne distincte, `funding`,
+pour filtrer les entrées extrêmes, ce filtre était **silencieusement inactif en
+backtest** alors qu’il l’était en paper — les trois configs le déclarant pourtant
+actif (`funding_long_max: 0.0008`).
 
-La parité du **filtre d’entrée funding** n’est donc pas démontrée dans l’état actuel du code. Les résultats historiques ne doivent pas être décrits comme utilisant exactement ce filtre tant que les deux chemins n’ont pas été harmonisés et retestés.
+`carry.add_funding_columns()` produit désormais les deux colonnes, qui n’ont ni
+la même unité ni le même usage :
+
+| Colonne | Contenu | Usage |
+|---|---|---|
+| `funding_rate` | somme des paiements tombant dans la barre | P&L |
+| `funding` | dernier taux 8 h connu à la clôture | filtre d’entrée |
+
+La distinction n’est pas cosmétique : les paiements tombent à 00/08/16 UTC, donc
+**une barre 4 h sur deux reçoit un paiement nul**. Alimenter le filtre avec
+`funding_rate` l’aurait rendu actif une barre sur deux et aurait sous-estimé le
+taux d’un facteur deux sur les autres. La colonne `funding` est l’équivalent
+backtest de `Venue.funding_rate_8h()` côté live.
+
+Effet mesuré sur le profil x4 : 488 → 479 trades, Sharpe combiné 1,34 → 1,41,
+drawdown maximal inchangé. `tests/test_funding_parity.py` fige la correction.
 
 ## État du projet
 
@@ -239,7 +263,6 @@ requirements.txt             export figé de uv.lock (généré)
 
 - Le profil trend x4 a connu un drawdown simulé supérieur à 50 %.
 - La poche carry x3 suppose un financement que le modèle ne chiffre pas.
-- Le filtre d’entrée lié au funding n’est pas encore identique entre backtest et paper.
 - Les coûts réels, les fills partiels et les risques de marge peuvent différer fortement de la simulation.
 - Les composants live ne sont pas validés pour une utilisation en production.
 

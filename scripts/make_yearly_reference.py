@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT / "src"))
 import pandas as pd
 
 from btcquant.backtest import BacktestEngine
-from btcquant.carry import backtest_carry, load_funding
+from btcquant.carry import add_funding_columns, backtest_carry, load_funding
 from btcquant.config import build_strategies, load_config, risk_from_config
 from btcquant.data import TIMEFRAME_TO_PANDAS, load_ohlcv, resample
 from btcquant.risk import RiskConfig
@@ -51,10 +51,9 @@ def trend_equity(cfg: dict, base: pd.DataFrame, refresh: bool) -> pd.Series:
             try:
                 fund = load_funding(f"{cfg['symbol']}:{cfg['quote_currency']}",
                                     data_dir=ROOT / "data", refresh=refresh)
-                per_bar = fund.resample(TIMEFRAME_TO_PANDAS[strategy.timeframe],
-                                        label="left", closed="left").sum()
-                df = df.copy()
-                df["funding_rate"] = per_bar.reindex(df.index).fillna(0.0)
+                df = add_funding_columns(
+                    df, fund, TIMEFRAME_TO_PANDAS[strategy.timeframe]
+                )
             except Exception as e:
                 log.warning("Funding réel indisponible (%s), constante plate utilisée", e)
         engine = BacktestEngine(

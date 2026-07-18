@@ -82,6 +82,33 @@ def load_funding(
     return cached
 
 
+def add_funding_columns(
+    df: pd.DataFrame, funding_8h: pd.Series, pandas_freq: str
+) -> pd.DataFrame:
+    """Ajoute les DEUX colonnes de funding attendues par le moteur, qui n'ont
+    ni la même unité ni le même usage — les confondre était la cause de l'écart
+    backtest/paper documenté jusqu'en juillet 2026 :
+
+    - ``funding_rate`` : **somme des paiements tombant dans la barre**, servant
+      au P&L. Sur des barres 4 h et un funding 8 h, une barre sur deux vaut
+      exactement 0 (les paiements tombent à 00/08/16 UTC).
+    - ``funding`` : **dernier taux 8 h connu** à la clôture de la barre, servant
+      au filtre d'entrée de `TrendLS`. C'est l'équivalent backtest de
+      `Venue.funding_rate_8h()` côté live.
+
+    Alimenter le filtre avec ``funding_rate`` le rendrait actif une barre sur
+    deux seulement, et sous-estimerait le taux d'un facteur deux sur les autres.
+
+    Pas de look-ahead : le taux payé à t est connu à t, et la barre étiquetée t
+    ne clôture qu'en t+1 barre.
+    """
+    out = df.copy()
+    per_bar = funding_8h.resample(pandas_freq, label="left", closed="left").sum()
+    out["funding_rate"] = per_bar.reindex(out.index).fillna(0.0)
+    out["funding"] = funding_8h.reindex(out.index, method="ffill")
+    return out
+
+
 def backtest_carry(
     funding: pd.Series,
     leverage: float = 3.0,
