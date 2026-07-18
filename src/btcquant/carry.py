@@ -22,7 +22,6 @@ intra-position n'est pas simulé — d'où le plafond de levier recommandé (3x)
 from __future__ import annotations
 
 import logging
-import time
 from pathlib import Path
 
 import ccxt
@@ -114,7 +113,6 @@ def backtest_carry(
     pnl = applied * funding * leverage - switches * cost_per_switch
     equity = initial_capital * (1.0 + pnl).cumprod()
 
-    ret = pnl[applied | switches]
     years = len(funding) / PAYMENTS_PER_YEAR
     dd = (equity / equity.cummax() - 1.0).min()
     ann_all = pnl.mean() * PAYMENTS_PER_YEAR

@@ -18,7 +18,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 import ccxt
-import pandas as pd
 
 from btcquant.config import load_config, risk_from_config
 from btcquant.data import load_ohlcv, resample

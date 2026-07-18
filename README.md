@@ -115,27 +115,53 @@ La parité du **filtre d’entrée funding** n’est donc pas démontrée dans l
 
 Prérequis : Python 3.10 ou version ultérieure.
 
+### Avec uv (recommandé)
+
+`uv.lock` fige les versions exactes de toutes les dépendances, y compris
+transitives : l'environnement obtenu est identique sur le poste local, en CI et
+sur le VPS.
+
 ```bash
 git clone https://github.com/Julianos87/btc-quant.git
 cd btc-quant
+uv sync            # crée .venv et installe les versions figées
+uv run pytest -q   # vérification
+```
+
+### Avec pip
+
+`requirements.txt` est **généré** depuis `uv.lock` et contient des versions
+épinglées. C'est la voie utilisée par `deploy/install.sh` sur le VPS.
+
+```bash
 python -m venv .venv
-```
-
-Activation :
-
-```bash
-# Windows
-.venv\Scripts\activate
-
-# Linux/macOS
-source .venv/bin/activate
-```
-
-Dépendances :
-
-```bash
+.venv\Scripts\activate        # Windows
+source .venv/bin/activate     # Linux/macOS
 pip install -r requirements.txt
 ```
+
+### Modifier une dépendance
+
+Ne jamais éditer `requirements.txt` à la main : il serait écrasé et ferait
+installer des versions non testées. Passer par `pyproject.toml` :
+
+```bash
+uv add <paquet>          # ou éditer [project.dependencies] puis : uv lock
+uv export --no-dev --no-hashes --no-emit-project -o requirements.txt
+```
+
+## Qualité
+
+Les tests et le lint tournent automatiquement à chaque push et pull request
+(voir `.github/workflows/tests.yml`), sur Python 3.10, 3.11 et 3.12.
+
+```bash
+uv run pytest -q      # tests
+uv run ruff check .   # lint
+```
+
+Sous Windows, si pytest échoue avec `PermissionError` sur le dossier temporaire
+système, lui en donner un accessible : `uv run pytest -q --basetemp=.pytest-tmp`.
 
 ## Utilisation
 
@@ -192,6 +218,10 @@ scripts/                     commandes et maintenance
 dashboard/                   suivi du portefeuille
 deploy/                      services et timers VPS
 tests/                       tests automatisés
+.github/workflows/           CI (tests + lint)
+pyproject.toml               dépendances et outillage (source de vérité)
+uv.lock                      versions figées
+requirements.txt             export figé de uv.lock (généré)
 ```
 
 ## Limites

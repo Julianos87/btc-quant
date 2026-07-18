@@ -33,7 +33,10 @@ class WalkForwardResult:
 
 def _param_combos(grid: dict[str, list]) -> list[dict]:
     keys = list(grid)
-    return [dict(zip(keys, values)) for values in itertools.product(*(grid[k] for k in keys))]
+    return [
+        dict(zip(keys, values, strict=True))
+        for values in itertools.product(*(grid[k] for k in keys))
+    ]
 
 
 def walk_forward(

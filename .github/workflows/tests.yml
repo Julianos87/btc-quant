@@ -1,0 +1,52 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # La branche `backups` reçoit le track record poussé chaque nuit par le VPS :
+  # aucun code n'y change, inutile d'y déclencher la CI.
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 = plancher déclaré ; 3.11 = poste de dev ; 3.12 = ce qu'installe
+        # `apt-get install python3` sur une Ubuntu 24.04 récente. Ces versions ne
+        # résolvent PAS la même majeure de pandas (2.3 sous 3.10, 3.0 au-dessus) :
+        # tant que le plancher reste 3.10, il faut voir les trois tourner.
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Synchroniser l'environnement depuis uv.lock
+        # --locked : échoue si uv.lock ne correspond plus à pyproject.toml,
+        # au lieu de le régénérer silencieusement.
+        run: uv sync --locked --dev --python ${{ matrix.python-version }}
+
+      - name: Tests
+        run: uv run --python ${{ matrix.python-version }} pytest -q
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Synchroniser l'environnement depuis uv.lock
+        run: uv sync --locked --dev
+
+      - name: Ruff
+        run: uv run ruff check .

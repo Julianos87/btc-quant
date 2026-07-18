@@ -171,8 +171,10 @@ def test_runner_state_atomic_roundtrip():
     assert not state_file.with_suffix(".json.tmp").exists(), "fichier temporaire non nettoyé"
 
     slot2 = StrategySlot(MockStrategy(), 1.0, 0.0)
-    runner2 = LiveRunner([slot2], PaperBroker(), risk_simple(),
-                         "binance", "BTC/USDT", state_file)
+    # Construire le runner restaure l'état sauvegardé dans slot2 : c'est cet
+    # effet de bord qu'on teste, le runner lui-même n'est pas réutilisé.
+    LiveRunner([slot2], PaperBroker(), risk_simple(),
+               "binance", "BTC/USDT", state_file)
     assert abs(slot2.cash - 5_000.0) < 1e-9
     assert abs(slot2.entry_fee - 1.23) < 1e-9
     assert slot2.position is not None and slot2.position.qty == 2.0

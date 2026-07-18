@@ -3,12 +3,22 @@ name = "btcquant"
 version = "0.1.0"
 description = "Système de trading systématique BTC : backtest, walk-forward, paper/live"
 requires-python = ">=3.10"
+# Source de vérité unique des dépendances. requirements.txt est GÉNÉRÉ à partir
+# d'ici (voir la cible « deps » ci-dessous et le commentaire en tête du fichier) :
+# ne pas l'éditer à la main, il resservirait à installer des versions non testées.
 dependencies = [
     "ccxt>=4.3",
     "pandas>=2.1",
     "numpy>=1.26",
     "PyYAML>=6.0",
     "matplotlib>=3.8",
+    "flask>=3.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
 ]
 
 [build-system]
@@ -17,3 +27,33 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+extend-exclude = ["data", "state", "backups", "reports"]
+
+[tool.ruff.lint]
+# Volontairement resserré : on veut les vrais défauts (imports morts, variables
+# non définies, comparaisons douteuses), pas un reformatage massif du dépôt.
+select = ["E4", "E7", "E9", "F", "B", "UP"]
+ignore = [
+    "E741",  # noms de variables courts (l, I) : usuels en finance quantitative
+    "E702",  # « a = 1; b = 2 » : style, pas un défaut
+    "E731",  # lambda assignée : idiome utilisé pour les petites fonctions de coût
+    # place_stop/cancel_stop sont des no-op PAR DÉFAUT assumés : les brokers sans
+    # stops exchange (PaperBroker) les héritent, et le runner ne les appelle que
+    # derrière `supports_stop_orders`. Les rendre abstraites casserait ce design.
+    "B027",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Ces fichiers doivent amorcer sys.path avant d'importer btcquant (exécution
+# directe hors package installé) : l'import après instruction y est structurel.
+"scripts/*.py" = ["E402"]
+"tests/*.py" = ["E402"]
+"dashboard/*.py" = ["E402"]

@@ -5,7 +5,6 @@ l'heure. Écriture atomique (fichier temporaire puis remplacement) : au pire,
 un tick en cours d'écriture par le runner est perdu — sans conséquence.
 """
 
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]

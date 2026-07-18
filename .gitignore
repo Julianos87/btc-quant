@@ -6,8 +6,14 @@ reports/
 __pycache__/
 *.pyc
 venv/
+.venv/
 .env
 *.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# uv.lock est VOLONTAIREMENT versionné (versions figées = installs
+# reproductibles VPS / CI / poste local). Ne pas l'ajouter ici.
 
 # préférences locales Claude Code (spécifiques à la machine)
 .claude/settings.local.json
