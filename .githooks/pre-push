@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Filet de sécurité local : lance le lint et les tests avant chaque push.
+# Un push est refusé si l'un des deux échoue.
+#
+# Activation (déjà faite, à rejouer après un nouveau clone) :
+#   git config core.hooksPath .githooks
+#
+# Contournement ponctuel, à n'utiliser qu'en connaissance de cause :
+#   git push --no-verify
+#
+# Ce hook double la CI GitHub Actions (.github/workflows/tests.yml), qui teste
+# en plus Python 3.11 ET 3.12 ; ici on ne teste que l'interpréteur local.
+
+set -uo pipefail
+
+# Le hook s'exécute depuis la racine du dépôt.
+if ! command -v uv >/dev/null 2>&1; then
+  echo "pre-push : uv introuvable dans le PATH — vérification ignorée." >&2
+  echo "           installer uv, ou pousser avec --no-verify." >&2
+  exit 0
+fi
+
+# Dossier temporaire local : sous Windows, le dossier temp système est parfois
+# inaccessible à pytest (PermissionError), ce qui ferait échouer le hook à tort.
+TMPDIR_LOCAL=".pytest-tmp"
+
+echo "pre-push : lint (ruff)…"
+if ! uv run ruff check . ; then
+  echo >&2
+  echo "✗ pre-push : le lint a échoué — push annulé." >&2
+  echo "  corriger, ou : uv run ruff check . --fix" >&2
+  exit 1
+fi
+
+echo "pre-push : tests (pytest)…"
+if ! uv run pytest -q --basetemp="${TMPDIR_LOCAL}" ; then
+  echo >&2
+  echo "✗ pre-push : des tests échouent — push annulé." >&2
+  exit 1
+fi
+
+echo "✓ pre-push : lint et tests OK."
+exit 0
