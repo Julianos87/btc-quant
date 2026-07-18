@@ -1,9 +1,23 @@
 name: tests
 
+# ─────────────────────────────────────────────────────────────────────────────
+# EN SOMMEIL jusqu'au 1er août 2026.
+#
+# Le quota GitHub Actions gratuit du compte (2 000 min/mois, dépôts privés) est
+# épuisé pour juillet : les jobs sont refusés avant de démarrer et chaque push
+# produisait un échec inutile. Le quota se réinitialise le 1er du mois.
+#
+# RÉACTIVATION : décommenter les deux déclencheurs ci-dessous. Rien d'autre à
+# changer — le workflow est valide, il a déjà été accepté par GitHub.
+#
+# En attendant, le hook .githooks/pre-push couvre le lint et les tests, y
+# compris sous Python 3.12 (la version du VPS).
+# ─────────────────────────────────────────────────────────────────────────────
 on:
-  push:
-    branches: [main]
-  pull_request:
+  # push:
+  #   branches: [main]
+  # pull_request:
+  workflow_dispatch:  # déclenchement manuel uniquement
   # La branche `backups` reçoit le track record poussé chaque nuit par le VPS :
   # aucun code n'y change, inutile d'y déclencher la CI.
 

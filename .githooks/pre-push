@@ -32,12 +32,25 @@ if ! uv run ruff check . ; then
   exit 1
 fi
 
-echo "pre-push : tests (pytest)…"
+echo "pre-push : tests sur l'interpréteur local…"
 if ! uv run pytest -q --basetemp="${TMPDIR_LOCAL}" ; then
   echo >&2
   echo "✗ pre-push : des tests échouent — push annulé." >&2
   exit 1
 fi
 
-echo "✓ pre-push : lint et tests OK."
+# Le VPS tourne Python 3.12, le poste de dev 3.11 : sans ce second passage, rien
+# ne vérifierait le code sur la version réellement en production. uv télécharge
+# et met en cache l'interpréteur au premier appel.
+echo "pre-push : tests sur Python 3.12 (version du VPS)…"
+if ! uv run --python 3.12 --isolated \
+        --with-requirements requirements.txt --with pytest --with-editable . \
+        pytest -q --basetemp="${TMPDIR_LOCAL}" ; then
+  echo >&2
+  echo "✗ pre-push : des tests échouent sous Python 3.12 — push annulé." >&2
+  echo "  cette version est celle du VPS : ne pas ignorer." >&2
+  exit 1
+fi
+
+echo "✓ pre-push : lint et tests OK (local + Python 3.12)."
 exit 0
