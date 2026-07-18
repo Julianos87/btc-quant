@@ -118,12 +118,15 @@ class CarryRunner:
             # la venue. Nul à levier 1 (position financée par le seul capital).
             borrow = (self.leverage - 1.0) * self.borrow_rate_ann / self.venue.payments_per_year
             for ts, rate in new.items():
+                # portage retenu AVANT mise à jour : le journal sert à auditer
+                # le modèle, il doit montrer le montant réellement débité
+                carry_cost = self.equity * borrow
                 gain = self.equity * (rate * self.leverage - borrow)
                 self.equity += gain
                 log.info(
                     "[CARRY] Funding %s : %+.4f%% -> %+.2f USDT "
-                    "(dont portage %-.2f USDT, équity %.2f)",
-                    ts, rate * 100, gain, self.equity * borrow, self.equity,
+                    "(dont portage -%.2f USDT, équity %.2f)",
+                    ts, rate * 100, gain, carry_cost, self.equity,
                 )
         self.last_funding_ts = funding.index[-1]
 
