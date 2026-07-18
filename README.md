@@ -161,6 +161,16 @@ uv run pytest -q      # tests
 uv run ruff check .   # lint
 ```
 
+Un hook `pre-push` rejoue le lint et les tests localement et refuse le push si
+l'un des deux échoue. Il est versionné dans `.githooks/`, mais git n'active pas
+un dossier de hooks tout seul : après un nouveau clone, il faut rejouer
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Pour outrepasser ponctuellement : `git push --no-verify`.
+
 Sous Windows, si pytest échoue avec `PermissionError` sur le dossier temporaire
 système, lui en donner un accessible : `uv run pytest -q --basetemp=.pytest-tmp`.
 
