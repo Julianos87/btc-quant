@@ -113,7 +113,8 @@ La parité du **filtre d’entrée funding** n’est donc pas démontrée dans l
 
 ## Installation
 
-Prérequis : Python 3.10 ou version ultérieure.
+Prérequis : Python 3.11 ou version ultérieure (le VPS tourne 3.12). Sous 3.10,
+les dépendances basculeraient sur la majeure précédente de pandas.
 
 ### Avec uv (recommandé)
 
@@ -153,7 +154,7 @@ uv export --no-dev --no-hashes --no-emit-project -o requirements.txt
 ## Qualité
 
 Les tests et le lint tournent automatiquement à chaque push et pull request
-(voir `.github/workflows/tests.yml`), sur Python 3.10, 3.11 et 3.12.
+(voir `.github/workflows/tests.yml`), sur Python 3.11 et 3.12.
 
 ```bash
 uv run pytest -q      # tests

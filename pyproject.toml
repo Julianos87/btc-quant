@@ -2,7 +2,10 @@
 name = "btcquant"
 version = "0.1.0"
 description = "Système de trading systématique BTC : backtest, walk-forward, paper/live"
-requires-python = ">=3.10"
+# Plancher à 3.11 : sous 3.10, le lock bascule sur pandas 2.x (majeure
+# précédente), alors que le VPS tourne 3.12/pandas 3.0 et le poste de dev
+# 3.11/pandas 3.0. Abaisser ce plancher réintroduirait deux moteurs de calcul.
+requires-python = ">=3.11"
 # Source de vérité unique des dépendances. requirements.txt est GÉNÉRÉ à partir
 # d'ici (voir la cible « deps » ci-dessous et le commentaire en tête du fichier) :
 # ne pas l'éditer à la main, il resservirait à installer des versions non testées.
@@ -33,7 +36,7 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py311"
 line-length = 100
 extend-exclude = ["data", "state", "backups", "reports"]
 

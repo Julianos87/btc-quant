@@ -13,11 +13,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 3.10 = plancher déclaré ; 3.11 = poste de dev ; 3.12 = ce qu'installe
-        # `apt-get install python3` sur une Ubuntu 24.04 récente. Ces versions ne
-        # résolvent PAS la même majeure de pandas (2.3 sous 3.10, 3.0 au-dessus) :
-        # tant que le plancher reste 3.10, il faut voir les trois tourner.
-        python-version: ["3.10", "3.11", "3.12"]
+        # 3.11 = plancher déclaré et version du poste de dev ;
+        # 3.12 = version réellement en service sur le VPS (relevé du 18/07/2026).
+        python-version: ["3.11", "3.12"]
 
     steps:
       - uses: actions/checkout@v4

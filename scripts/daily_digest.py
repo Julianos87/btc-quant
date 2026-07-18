@@ -8,7 +8,7 @@ et drawdown courant. No-op silencieux si Telegram n'est pas configuré.
 import argparse
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -116,7 +116,7 @@ def main() -> None:
     label = "semaine" if args.weekly else "24 h"
     lines = [
         f"{'🗓 Bilan hebdomadaire' if args.weekly else '📊'} Tandem — "
-        f"{datetime.now(timezone.utc):%d/%m/%Y %H:%M} UTC",
+        f"{datetime.now(UTC):%d/%m/%Y %H:%M} UTC",
         f"Équity totale : {total:,.0f} $ (départ 10 000 $"
         + (f" + apports {deposits:,.0f} $" if deposits else "")
         + f", {total/invested-1:+.1%})",

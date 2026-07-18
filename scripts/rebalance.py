@@ -26,7 +26,7 @@ import json
 import os
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,7 +62,7 @@ def _log_flow(kind: str, trend_flow: float, carry_flow: float) -> None:
     with open(path, "a", encoding="utf-8") as fh:
         if is_new:
             fh.write("ts,kind,trend_flow,carry_flow\n")
-        fh.write(f"{datetime.now(timezone.utc).isoformat()},{kind},"
+        fh.write(f"{datetime.now(UTC).isoformat()},{kind},"
                  f"{trend_flow:.2f},{carry_flow:.2f}\n")
 
 
