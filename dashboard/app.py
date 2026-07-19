@@ -98,6 +98,9 @@ _ex_lock = threading.Lock()
 # on ne l'appelle JAMAIS — prix via la dernière bougie 1m (~0,5 s), variation
 # 24 h via les bougies 1h, funding via l'historique des paiements (horaires).
 SYMBOL = "BTC/USDC:USDC"
+#: capital initial du portefeuille 60/40 (6 000 trend + 4 000 carry) — base des
+#: métriques de performance ; les apports ultérieurs passent par flows.csv
+INITIAL_CAPITAL = 10_000.0
 
 
 def _hl():
@@ -347,7 +350,11 @@ def _live_metrics() -> dict:
     out["cur_dd"] = float(comb.iloc[-1] / comb.cummax().iloc[-1] - 1.0)
     years = (comb.index[-1] - comb.index[0]).total_seconds() / (365.25 * 86400)
     if years > 0:
-        cagr = (comb.iloc[-1] / comb.iloc[0]) ** (1.0 / years) - 1.0
+        # base = capital investi, PAS le premier point enregistré : le carry paie
+        # ses frais d'entrée avant le premier tick (série démarrée à 9 976 au lieu
+        # de 10 000), et partir du creux affichait +9 %/an sur un portefeuille en
+        # perte. Les apports étant neutralisés (net_of_flows), la base est fixe.
+        cagr = (comb.iloc[-1] / INITIAL_CAPITAL) ** (1.0 / years) - 1.0
         out["cagr"] = float(cagr)
         if max_dd < 0:
             out["calmar"] = float(cagr / abs(max_dd))
@@ -469,7 +476,7 @@ def summary():
     )
     carry_equity = float(carry_state.get("equity", 0.0))
     total = trend_equity + carry_equity
-    initial_total = 10_000.0
+    initial_total = INITIAL_CAPITAL
     flows = _read_flows()
     deposits = _deposits_total(flows)
     invested = initial_total + deposits  # capital réellement engagé
@@ -696,9 +703,11 @@ def readiness():
     days = 0.0
     if len(trend_eq) > 1:
         days = (trend_eq.index[-1] - trend_eq.index[0]).total_seconds() / 86400
+    # int() tronque comme /api/metrics : les deux cartes affichent le même nombre
+    # de jours (f"{7.6:.0f}" arrondissait à 8 pendant que metrics affichait 7)
     add("days", "Durée du paper trading",
         "ok" if days >= READINESS["min_days"] else "pending",
-        f"{days:.0f} j", f"≥ {READINESS['min_days']} j")
+        f"{int(days)} j", f"≥ {READINESS['min_days']} j")
 
     if len(trend_eq) > 1:
         days_with_data = trend_eq.resample("1D").count()

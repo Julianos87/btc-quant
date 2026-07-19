@@ -1227,13 +1227,20 @@ function drawYearly() {
   const vals = years.flatMap(y => [y.portfolio, y.btc]).filter(v => v != null);
   let vmax = Math.max(0, ...vals), vmin = Math.min(0, ...vals);
   const pad = (vmax - vmin) * 0.12;
-  vmax += pad; if (vmin < 0) vmin -= pad;
+  vmax += pad;
+  // un rendement ne descend pas sous -100 % : le pad affichait « -108 % » en axe
+  if (vmin < 0) vmin = Math.max(vmin - pad, -1);
   const Y = v => M.t + (vmax - v) / (vmax - vmin) * (H - M.t - M.b);
   const cell = (W - M.l - M.r) / years.length;
   const bw = Math.min(26, Math.max(7, (cell * 0.6 - 2) / 2));
   let g = "";
-  for (let i = 0; i <= 4; i++) {
-    const v = vmin + (vmax - vmin) * i / 4, y = Y(v);
+  // graduations « rondes » multiples d'un pas 1/2/2,5/5×10^k, ancrées sur 0 %
+  // (la division uniforme min→max donnait des ticks arbitraires : +5 %, +119 %…)
+  const rawStep = (vmax - vmin) / 4;
+  const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => (vmax - vmin) / s <= 5.5) || 10 * mag;
+  for (let v = Math.ceil(vmin / step) * step; v <= vmax + 1e-9; v += step) {
+    const y = Y(v);
     g += `<line x1="${M.l}" x2="${W - M.r}" y1="${y}" y2="${y}" stroke="${col("--grid")}"/>`;
     g += `<text x="${M.l + 2}" y="${y - 4}" fill="${col("--muted")}" font-size="10" style="font-variant-numeric:tabular-nums">${fmtPct(v, 0)}</text>`;
   }
