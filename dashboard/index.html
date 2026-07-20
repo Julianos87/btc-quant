@@ -190,13 +190,13 @@
 
   #chartwrap { position:relative; }
   #chart { width:100%; height:380px; display:block; }
-  #tooltip {
+  #tooltip, #ptip {
     position:absolute; pointer-events:none; display:none; background:var(--surface-solid);
     border:1px solid var(--ring); border-radius:12px; padding:11px 14px; font-size:12.5px;
     box-shadow:0 10px 34px rgba(0,0,0,.30); min-width:195px; z-index:5;
   }
-  #tooltip .t { color:var(--muted); margin-bottom:7px; font-size:11px; letter-spacing:.3px; }
-  #tooltip .row { display:flex; justify-content:space-between; gap:18px; padding:2px 0; }
+  #tooltip .t, #ptip .t { color:var(--muted); margin-bottom:7px; font-size:11px; letter-spacing:.3px; }
+  #tooltip .row, #ptip .row { display:flex; justify-content:space-between; gap:18px; padding:2px 0; }
 
   /* ── moteurs ────────────────────────────────────────────── */
   .engines { display:grid; gap:16px; align-content:start; }
@@ -461,10 +461,19 @@
     </div>
 
     <div class="card" data-card="price">
-      <h2>BTC/USDT · 1 h <span style="color:var(--muted);font-weight:500;font-size:11.5px" id="pos-note">— aucune position ouverte</span></h2>
+      <h2>BTC/USDT · 1 h <span style="color:var(--muted);font-weight:500;font-size:11.5px" id="pos-note">— aucune position ouverte</span>
+        <span class="chips" id="prange" style="margin-left:auto">
+          <button class="chip" data-n="48">2 j</button>
+          <button class="chip" data-n="96">4 j</button>
+          <button class="chip on" data-n="200">8 j</button>
+        </span>
+      </h2>
       <div style="position:relative;margin-top:8px">
         <svg id="pchart" style="width:100%;height:260px;display:block" role="img" aria-label="Prix BTC et positions"></svg>
+        <div id="ptip"></div>
       </div>
+      <div style="color:var(--muted);font-size:11px;margin-top:6px">Pas de take-profit fixe : la sortie se fait par
+        stop suiveur 3×ATR (remonte avec le prix, ne redescend jamais) ou retournement de régime EMA50/200 — les gains courent.</div>
     </div>
 
     <div class="card" data-card="events">
@@ -486,9 +495,11 @@
       <div class="esub">ensemble Donchian 20 / 55 / 100 · futures · <span id="trend-guard">—</span>
         <span class="beat num" id="trend-beat"></span></div>
       <table>
-        <thead><tr><th>Système</th><th>État</th><th>Entrée</th><th>Stop / marge</th><th>PnL lat.</th></tr></thead>
+        <thead><tr><th>Système</th><th>État</th><th>Entrée</th><th>Stop suiveur / marge</th><th>PnL lat.</th></tr></thead>
         <tbody id="slots"></tbody>
       </table>
+      <div style="color:var(--muted);font-size:11px;margin-top:8px">Pas de take-profit : le stop suiveur (3×ATR sous le
+        meilleur close) sert de sortie gagnante quand la tendance s'essouffle ; sortie aussi sur retournement EMA50/200.</div>
     </div>
 
     <div class="card" data-card="carry">
@@ -1273,15 +1284,30 @@ function drawYearly() {
     + (years.some(y => y.partial) ? ` · * ${t("yearly_partial")}` : "");
 }
 
+// ── graphique prix : données + vue (plage zoomable, survol) ─────────────────
+let pcData = null, pcRange = 200, pcView = null;
+const PC_CHCOL = {D20: "#3b82f6", D55: "#f59e0b", D100: "#a855f7"};
+
 async function refreshPrice() {
-  const data = await (await fetch("/api/price")).json();
+  pcData = await (await fetch("/api/price")).json();
+  drawPChart();
+}
+
+function drawPChart() {
+  const data = pcData;
+  if (!data) return;
   const svg = $("pchart"), W = svg.clientWidth, H = svg.clientHeight;
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
-  const candles = data.candles || [];
+  const all = data.candles || [];
   $("pos-note").textContent = data.positions.length
     ? "— " + data.positions.map(p => `${p.name} ${p.direction === 1 ? "LONG" : "SHORT"} @ ${Math.round(p.entry).toLocaleString("fr-FR")}`).join(" · ")
     : "— aucune position ouverte";
-  if (candles.length < 10) { svg.innerHTML = ""; return; }
+  if (all.length < 10) { svg.innerHTML = ""; pcView = null; return; }
+  // fenêtre affichée : les pcRange dernières bougies 1h (chips 2 j / 4 j / 8 j)
+  const start = Math.max(0, all.length - pcRange);
+  const candles = all.slice(start);
+  const side = data.regime_up === false ? "low" : "high";
+  const chans = (data.channels || []).map(ch => ({name: ch.name, vals: (ch[side] || []).slice(start)}));
   const M = {t: 12, r: 64, b: 24, l: 10};
   let lo = Math.min(...candles.map(c => c[3])), hi = Math.max(...candles.map(c => c[2]));
   for (const p of data.positions) { lo = Math.min(lo, p.stop, p.entry); hi = Math.max(hi, p.stop, p.entry); }
@@ -1313,14 +1339,12 @@ async function refreshPrice() {
   // inactif ne fait que du bruit. Escalier : un palier par barre 4h. Chaque
   // ligne porte son étiquette à droite (niveau de cassure), empilée sans
   // chevauchement quand les canaux se confondent.
-  const CHCOL = {D20: "#3b82f6", D55: "#f59e0b", D100: "#a855f7"};
   g += `<clipPath id="pclip"><rect x="${M.l}" y="${M.t}" width="${W - M.l - M.r}" height="${H - M.t - M.b}"/></clipPath>`;
-  const side = data.regime_up === false ? "low" : "high";
   const labels = [];
-  (data.channels || []).forEach(ch => {
-    const c = CHCOL[ch.name] || col("--muted");
+  chans.forEach(ch => {
+    const c = PC_CHCOL[ch.name] || col("--muted");
     let d = "", prev = null, last = null;
-    (ch[side] || []).forEach((v, i) => {
+    ch.vals.forEach((v, i) => {
       if (v == null) { prev = null; return; }
       const x = X(i).toFixed(1), y = Y(v).toFixed(1);
       d += prev == null ? `M${x} ${y}` : `L${x} ${Y(prev).toFixed(1)}L${x} ${y}`;
@@ -1341,10 +1365,55 @@ async function refreshPrice() {
     g += `<line x1="${M.l}" x2="${W - M.r}" y1="${Y(p.entry)}" y2="${Y(p.entry)}" stroke="${ec}" stroke-width="1.3" stroke-dasharray="5 4"/>`;
     g += `<text x="${M.l + 4}" y="${Y(p.entry) - 4}" fill="${ec}" font-size="10" font-weight="700">${p.name} ENTRÉE</text>`;
     g += `<line x1="${M.l}" x2="${W - M.r}" y1="${Y(p.stop)}" y2="${Y(p.stop)}" stroke="${sc}" stroke-width="1.3" stroke-dasharray="5 4"/>`;
-    g += `<text x="${M.l + 4}" y="${Y(p.stop) - 4}" fill="${sc}" font-size="10" font-weight="700">${p.name} STOP</text>`;
+    g += `<text x="${M.l + 4}" y="${Y(p.stop) - 4}" fill="${sc}" font-size="10" font-weight="700">${p.name} STOP SUIVEUR</text>`;
   }
+  g += `<g id="pcursor"></g>`;
   svg.innerHTML = g;
+  pcView = {candles, chans, positions: data.positions, X, Y, M, W, H};
 }
+
+// survol : réticule aimanté à la bougie + infobulle OHLC / canaux / position
+(() => {
+  const svg = $("pchart"), tip = $("ptip");
+  const hide = () => { tip.style.display = "none"; const c = svg.querySelector("#pcursor"); if (c) c.innerHTML = ""; };
+  svg.addEventListener("mouseleave", hide);
+  svg.addEventListener("mousemove", e => {
+    if (!pcView) return;
+    const {candles, chans, positions, X, Y, M, W, H} = pcView;
+    const r = svg.getBoundingClientRect(), mx = e.clientX - r.left;
+    if (mx < M.l || mx > W - M.r) { hide(); return; }
+    const i = Math.max(0, Math.min(candles.length - 1,
+      Math.round((mx - M.l) / (W - M.l - M.r) * (candles.length - 1))));
+    const [ts, o, h, l, cl] = candles[i], x = X(i);
+    const cur = svg.querySelector("#pcursor");
+    if (cur) cur.innerHTML =
+      `<line x1="${x}" x2="${x}" y1="${M.t}" y2="${H - M.b}" stroke="${col("--muted")}" stroke-width="1" stroke-dasharray="2 3" opacity=".7"/>` +
+      `<circle cx="${x}" cy="${Y(cl)}" r="3.2" fill="${cl >= o ? col("--s2") : col("--crit")}"/>`;
+    const d = new Date(ts);
+    const fp = v => Math.round(v).toLocaleString("fr-FR");
+    let html = `<div class="t">${d.toLocaleDateString("fr-FR", {weekday:"short", day:"2-digit", month:"2-digit"})} ${String(d.getHours()).padStart(2,"0")}h</div>`;
+    html += `<div class="row"><span>O / C</span><span class="num">${fp(o)} / <b style="color:${cl >= o ? col("--s2") : col("--crit")}">${fp(cl)}</b></span></div>`;
+    html += `<div class="row"><span>H / B</span><span class="num">${fp(h)} / ${fp(l)}</span></div>`;
+    for (const ch of chans) {
+      const v = ch.vals[i];
+      if (v != null) html += `<div class="row"><span style="color:${PC_CHCOL[ch.name]}">■ ${ch.name} cassure</span><span class="num">${fp(v)}</span></div>`;
+    }
+    for (const p of positions) {
+      html += `<div class="row"><span>${p.name} entrée</span><span class="num">${fp(p.entry)}</span></div>`;
+      html += `<div class="row"><span>${p.name} stop suiveur</span><span class="num">${fp(p.stop)}</span></div>`;
+    }
+    tip.innerHTML = html;
+    tip.style.display = "block";
+    const tw = tip.offsetWidth || 200;
+    tip.style.left = (x + 14 + tw > W ? x - tw - 14 : x + 14) + "px";
+    tip.style.top = Math.max(4, Math.min(e.clientY - r.top - 30, H - tip.offsetHeight - 8)) + "px";
+  });
+})();
+
+document.querySelectorAll("#prange .chip").forEach(b => b.onclick = () => {
+  document.querySelectorAll("#prange .chip").forEach(x => x.classList.remove("on"));
+  b.classList.add("on"); pcRange = +b.dataset.n; drawPChart();
+});
 
 document.querySelectorAll("#range .chip").forEach(b => b.onclick = () => {
   document.querySelectorAll("#range .chip").forEach(x => x.classList.remove("on"));
@@ -1674,7 +1743,7 @@ function applyCardVisibility() {
     c.setAttribute("data-hidden", PREFS.hidden[c.dataset.card] ? "1" : "0");
   });
 }
-function redrawAll() { drawChart(); drawSpark(); refreshPrice(); drawYearly(); if (lastSummary) renderExposureHealth(lastSummary); }
+function redrawAll() { drawChart(); drawSpark(); drawPChart(); drawYearly(); if (lastSummary) renderExposureHealth(lastSummary); }
 
 $("settings-btn").onclick = () => { buildDrawer(); $("drawer").classList.add("open"); $("drawer-bd").classList.add("open"); };
 $("drawer-close").onclick = () => { $("drawer").classList.remove("open"); $("drawer-bd").classList.remove("open"); };
