@@ -144,6 +144,13 @@ def _get_candles_1h() -> list[list]:
     return [[r[0], r[1], r[2], r[3], r[4]] for r in raw]
 
 
+def _get_candles_4h() -> list[list]:
+    # 500 barres : 100 de lookback pour le canal D100 + ~300 de chauffe pour
+    # que l'EMA200 (régime) soit fiable, le reste couvre la fenêtre affichée
+    raw = _hl().fetch_ohlcv(SYMBOL, "4h", limit=500)
+    return [[r[0], r[1], r[2], r[3], r[4]] for r in raw]
+
+
 def _get_funding() -> dict | None:
     """Dernier paiement de funding (HORAIRE sur Hyperliquid) + annualisation."""
     since = int((time.time() - 3 * 3600) * 1000)
@@ -163,6 +170,7 @@ def _get_fx_eur() -> float | None:
 _WARM_JOBS = [
     ("price",   30,   20, lambda: _timed("api", _get_price)),
     ("ohlcv1h", 300,  240, _get_candles_1h),
+    ("ohlcv4h", 300,  240, _get_candles_4h),
     ("funding", 300,  240, _get_funding),
     ("fx_eur",  3600, 3000, _get_fx_eur),
 ]
@@ -614,10 +622,51 @@ def _get_buyhold() -> list[list]:
     return [[r[0], round(r[4], 2)] for r in raw]
 
 
+#: horizons Donchian de l'ensemble trend (cf. config_4x.yaml)
+DONCHIAN_PERIODS = (20, 55, 100)
+
+
+def _donchian_channels(candles_1h: list[list], candles_4h: list[list]) -> tuple[list[dict], bool | None]:
+    """Canaux de Donchian 20/55/100 sur bougies 4h (le timeframe de décision du
+    trend), rééchantillonnés sur les timestamps 1h du graphique.
+
+    Convention identique au moteur (btcquant.indicators.donchian_high/low,
+    reproduite ici car le dashboard n'importe pas le package) : la valeur d'une
+    barre 4h = extrême des N barres PRÉCÉDENTES (barre courante exclue) — c'est
+    le seuil que le runner comparera au close de cette barre. Retourne aussi le
+    régime EMA50>EMA200 (4h) qui conditionne le sens des entrées."""
+    if len(candles_4h) < max(DONCHIAN_PERIODS) + 2:
+        return [], None
+    df = pd.DataFrame(candles_4h, columns=["ts", "open", "high", "low", "close"])
+    four_h = 4 * 3_600_000
+    idx_of = {int(t): i for i, t in enumerate(df["ts"])}
+    map_idx = [idx_of.get(int(c[0]) // four_h * four_h) for c in candles_1h]
+
+    def _sample(series: pd.Series) -> list:
+        return [
+            None if i is None or pd.isna(series.iat[i]) else round(float(series.iat[i]), 1)
+            for i in map_idx
+        ]
+
+    channels = [
+        {
+            "name": f"D{n}",
+            "high": _sample(df["high"].rolling(n, min_periods=n).max().shift(1)),
+            "low": _sample(df["low"].rolling(n, min_periods=n).min().shift(1)),
+        }
+        for n in DONCHIAN_PERIODS
+    ]
+    e50 = df["close"].ewm(span=50, adjust=False, min_periods=50).mean().iat[-1]
+    e200 = df["close"].ewm(span=200, adjust=False, min_periods=200).mean().iat[-1]
+    regime = None if pd.isna(e50) or pd.isna(e200) else bool(e50 > e200)
+    return channels, regime
+
+
 @app.route("/api/price")
 def price_chart():
-    """Dernières ~200 bougies 1h + positions ouvertes (entrée/stop) du trend."""
+    """Dernières ~200 bougies 1h + canaux Donchian + positions ouvertes du trend."""
     candles = _cached("ohlcv1h", 300, _get_candles_1h) or []
+    channels, regime_up = _donchian_channels(candles, _cached("ohlcv4h", 300, _get_candles_4h) or [])
     trend_state = _read_json(STATE / "live_state_4x.json") or {}
     positions = []
     for name, s in trend_state.get("slots", {}).items():
@@ -632,7 +681,9 @@ def price_chart():
                     "entry_ts": pos.get("entry_time"),
                 }
             )
-    return jsonify({"candles": candles, "positions": positions})
+    return jsonify(
+        {"candles": candles, "positions": positions, "channels": channels, "regime_up": regime_up}
+    )
 
 
 @app.route("/api/conformity")
