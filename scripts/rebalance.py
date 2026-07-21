@@ -133,14 +133,18 @@ def main() -> None:
                      f"carry → {total - target_trend_cash:,.0f} $.")
 
     if args.apply and (args.deposit > 0 or do_rebalance):
-        _write_atomic(trend_path, trend)
-        _write_atomic(carry_path, carry)
+        # journal AVANT état : si le process meurt entre les deux écritures,
+        # mieux vaut un flux journalisé mais pas encore appliqué (détectable,
+        # le dashboard sous-compte l'équity) qu'un apport appliqué sans trace
+        # (indétectable, le dashboard le confondrait avec un gain de trading).
         if args.deposit > 0:
             dep_trend = args.deposit * TARGET_TREND
             _log_flow("deposit", dep_trend, args.deposit - dep_trend)
         if do_rebalance:
             transfer = target_trend_cash - trend_cash  # >0 : cash carry → trend
             _log_flow("rebalance", transfer, -transfer)
+        _write_atomic(trend_path, trend)
+        _write_atomic(carry_path, carry)
         parts.append("✅ Appliqué.")
     elif not args.apply:
         parts.append("(simulation — relancer avec --apply pour appliquer)")
