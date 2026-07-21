@@ -26,6 +26,10 @@ rsync -a --exclude .git --exclude venv --exclude __pycache__ \
       --exclude state --exclude backups --exclude backups-repo \
       --exclude .env --exclude data "${CLONE}/" /opt/btcquant/
 chown -R btcquant:btcquant /opt/btcquant
+# rsync -a préserve les modes du clone source ; si son umask est permissif,
+# ça republie /opt/btcquant en lecture pour tous les comptes du VPS à chaque
+# déploiement. On referme systématiquement l'accès "other" ici.
+chmod -R o-rwx /opt/btcquant
 chmod +x /opt/btcquant/scripts/backup_state.sh /opt/btcquant/scripts/rebalance_safe.sh
 
 cp /opt/btcquant/deploy/btcquant-*.service /opt/btcquant/deploy/btcquant-*.timer /etc/systemd/system/
