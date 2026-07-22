@@ -1578,6 +1578,26 @@ function drawPChart() {
     g += `<circle cx="${M.l + 3}" cy="${(l.y - 6.5).toFixed(1)}" r="3" fill="${l.dotColor}" stroke="${col("--surface-solid")}" stroke-width="1"/>`;
     g += `<text x="${M.l + 10}" y="${(l.y - 3).toFixed(1)}" fill="${l.textColor}" font-size="10" font-weight="700">${l.text}</text>`;
   }
+  // pastille SUR la bougie où le trade a réellement été pris (distincte de la
+  // ligne horizontale, qui ne dit que "le niveau" — pas "quand"). Nécessite
+  // entry_ts dans la fenêtre affichée ; sinon (entrée plus ancienne que la
+  // plage 2j/4j/8j sélectionnée) on n'affiche rien ici, la pastille de marge
+  // ci-dessus reste le seul repère — pas de marqueur trompeur en bord de graphe.
+  for (const p of data.positions) {
+    if (!p.entry_ts) continue;
+    const entryMs = Date.parse(String(p.entry_ts).replace(" ", "T"));
+    if (isNaN(entryMs) || entryMs < candles[0][0] || entryMs > candles[candles.length - 1][0]) continue;
+    let idx = 0, bestDiff = Infinity;
+    for (let i = 0; i < candles.length; i++) {
+      const diff = Math.abs(candles[i][0] - entryMs);
+      if (diff < bestDiff) { bestDiff = diff; idx = i; }
+    }
+    const sysColor = PC_CHCOL[p.name] || col("--s1");
+    const ex = X(idx).toFixed(1), ey = Y(p.entry).toFixed(1);
+    const tri = p.direction === 1 ? "M0 -7 L6 4.5 L-6 4.5 Z" : "M0 7 L6 -4.5 L-6 -4.5 Z";
+    const title = escapeSvg(`${p.name} ${p.direction === 1 ? "LONG" : "SHORT"} — entrée réelle @ ${Math.round(p.entry).toLocaleString("fr-FR")}`);
+    g += `<g transform="translate(${ex} ${ey})" fill="${sysColor}" stroke="${col("--surface-solid")}" stroke-width="1.4"><title>${title}</title><path d="${tri}"/></g>`;
+  }
   g += `<g id="pcursor"></g>`;
   svg.innerHTML = g;
   pcView = {candles, chans, positions: data.positions, X, Y, M, W, H};
