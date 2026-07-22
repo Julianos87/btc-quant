@@ -370,6 +370,13 @@
   .kv { display:flex; justify-content:space-between; align-items:center; padding:9px 0; border-bottom:1px solid var(--grid); font-size:13px; }
   .kv:last-child { border-bottom:none; padding-bottom:2px; }
   .kv .k { color:var(--ink-2); }
+  .dup-with-pulse { margin-top:6px; }
+  .dup-with-pulse .kv:first-child { margin-top:0; }
+  /* masque le doublon (prochaine bougie / prochain funding / latence) sur la
+     carte "Exposition & santé" quand "Pulse opérationnel" est AUSSI visible
+     (vue Surveillance) — les deux montrent alors la même chose. En vue
+     Risque, monitor_pulse est absent et ces lignes redeviennent utiles. */
+  body:has([data-card="monitor_pulse"][data-view-hidden="0"]) [data-card="exposure"] .dup-with-pulse { display:none; }
 
   /* ── événements ─────────────────────────────────────────── */
   #events { max-height:420px; overflow-y:auto; margin-top:8px; scrollbar-width:thin; }
@@ -750,9 +757,15 @@
       <div class="gauge-track"><div class="gauge-fill" id="exp-gauge" style="width:0"></div>
         <div class="gauge-mark" style="left:100%"></div></div>
       <div style="font-size:10.5px;color:var(--muted)" data-i18n="leverage_note">levier effectif · repère = 1× (notionnel = équity)</div>
-      <div class="kv" style="margin-top:6px"><span class="k" data-i18n="next_bar">Prochaine bougie 4 h</span><span class="num cd" id="cd-bar">—</span></div>
-      <div class="kv"><span class="k" data-i18n="next_funding">Prochain funding</span><span class="num cd" id="cd-funding">—</span></div>
-      <div class="kv"><span class="k" data-i18n="api_latency">Latence API Hyperliquid</span><span class="num" id="h-latency">—</span></div>
+      <!-- ces trois lignes répètent "Pulse opérationnel" (Prochaine décision,
+           Flux Hyperliquid) — les deux cartes ne coexistent qu'en vue
+           Surveillance : dup-with-pulse s'y masque via :has() ci-dessous,
+           mais reste affiché en vue Risque où monitor_pulse est absent. -->
+      <div class="dup-with-pulse">
+        <div class="kv"><span class="k" data-i18n="next_bar">Prochaine bougie 4 h</span><span class="num cd" id="cd-bar">—</span></div>
+        <div class="kv"><span class="k" data-i18n="next_funding">Prochain funding</span><span class="num cd" id="cd-funding">—</span></div>
+        <div class="kv"><span class="k" data-i18n="api_latency">Latence API Hyperliquid</span><span class="num" id="h-latency">—</span></div>
+      </div>
       <div class="kv"><span class="k" data-i18n="uptime">Uptime dashboard</span><span class="num" id="h-uptime">—</span></div>
     </div>
 
