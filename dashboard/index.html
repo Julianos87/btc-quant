@@ -372,7 +372,19 @@
   .kv .k { color:var(--ink-2); }
 
   /* ── événements ─────────────────────────────────────────── */
-  #events { max-height:420px; overflow-y:auto; margin-top:8px; scrollbar-width:thin; }
+  /* la colonne de gauche est un flex-column : par défaut chaque carte garde sa
+     taille naturelle, sauf le journal des événements (toujours la dernière
+     carte affichée en vue Surveillance/Risque) qui absorbe l'espace restant —
+     évite le vide en bas de colonne quand la colonne de droite est plus haute */
+  .col-left > .card { flex:0 0 auto; }
+  /* .col-grow est posée en JS sur la dernière carte VISIBLE de la colonne
+     (elle change selon la vue : événements en Surveillance/Risque, courbe
+     d'équity en Performance) — elle absorbe l'espace restant plutôt que de
+     laisser du vide en bas quand la colonne de droite est plus haute. */
+  .col-left > .card.col-grow { flex:1 1 auto; display:flex; flex-direction:column; min-height:360px; }
+  .col-left > .card.col-grow[data-card="chart"] #chartwrap { flex:1 1 auto; display:flex; min-height:0; }
+  .col-left > .card.col-grow[data-card="chart"] #chart { flex:1 1 auto; height:auto; min-height:280px; }
+  #events { flex:1 1 auto; min-height:0; overflow-y:auto; margin-top:8px; scrollbar-width:thin; }
   #events::-webkit-scrollbar { width:8px; }
   #events::-webkit-scrollbar-thumb { background:var(--axis); border-radius:99px; }
   .ev { display:flex; align-items:baseline; gap:12px; padding:9px 10px; margin:0 -10px;
@@ -601,7 +613,7 @@
 </section>
 
 <div class="grid">
-  <div class="col-left" style="display:grid;gap:16px;align-content:start">
+  <div class="col-left" style="display:flex;flex-direction:column;gap:16px">
     <div class="card focus-card performance" data-card="performance_brief">
       <h2 data-i18n="performance_snapshot">Synthèse de performance</h2>
       <div class="focus-intro" data-i18n="performance_snapshot_note">Le bilan réalisé, sans bruit opérationnel.</div>
@@ -2140,6 +2152,36 @@ if ($("theme-btn") && $("theme-btn").onclick) $("theme-btn").onclick = withViewT
 document.querySelectorAll("#dashboard-view [data-view]").forEach(btn => {
   if (btn.onclick) btn.onclick = withViewTransition(btn.onclick);
 });
+
+// ── colonne de gauche sans vide en bas : la dernière carte VISIBLE absorbe
+// l'espace restant (voir .col-grow en CSS). Quelle carte est "la dernière"
+// change selon la vue (événements en Surveillance/Risque, courbe d'équity en
+// Performance) — recalculé à chaque changement de vue en enveloppant
+// applyDashboardView, comme le thème/les vues juste au-dessus.
+function updateColumnGrow() {
+  const colLeft = document.querySelector(".col-left");
+  if (!colLeft) return;
+  const cards = [...colLeft.children].filter(c => c.classList.contains("card"));
+  cards.forEach(c => c.classList.remove("col-grow"));
+  const visible = cards.filter(c => c.dataset.viewHidden !== "1");
+  const last = visible[visible.length - 1];
+  if (!last) return;
+  last.classList.add("col-grow");
+  // le graphique d'équity lit sa propre hauteur (clientHeight) au dessin :
+  // une fois le nouveau flex appliqué (frame suivante), on le redessine pour
+  // qu'il occupe vraiment l'espace gagné plutôt que de rester à 380px avec du
+  // vide en dessous.
+  if (last.dataset.card === "chart") requestAnimationFrame(() => { if (typeof drawChart === "function") drawChart(); });
+}
+if (typeof applyDashboardView === "function") {
+  const _origApplyDashboardView = applyDashboardView;
+  applyDashboardView = function (...args) {
+    const result = _origApplyDashboardView(...args);
+    updateColumnGrow();
+    return result;
+  };
+}
+updateColumnGrow(); // état initial : la vue par défaut a déjà été appliquée par le script précédent
 
 // ── fond WebGL : champ de flux réagissant au régime EMA (Donchian), à la
 // volatilité annualisée réalisée et au PnL du jour — un fond décoratif qui
