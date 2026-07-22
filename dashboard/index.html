@@ -1558,19 +1558,26 @@ function drawPChart() {
   // fréquent, les trois Donchian suivent souvent le même mouvement), les
   // libellés se chevauchaient sans repère de collision — même traitement que
   // les étiquettes de canaux (tri par y, écart mini 11px).
+  //
+  // Couleur : la ligne d'entrée reprend la couleur DU SYSTÈME (PC_CHCOL, la
+  // même que son canal) pour qu'on relie canal ↔ entrée d'un coup d'œil. Le
+  // stop garde le rouge universel (convention "danger" à ne pas diluer) mais
+  // porte une pastille de la couleur du système pour dire QUI stoppe où.
   const posLabels = [];
   for (const p of data.positions) {
-    const ec = col("--s1"), sc = col("--crit");
-    g += `<line x1="${M.l}" x2="${W - M.r}" y1="${Y(p.entry)}" y2="${Y(p.entry)}" stroke="${ec}" stroke-width="1.3" stroke-dasharray="5 4"/>`;
-    g += `<line x1="${M.l}" x2="${W - M.r}" y1="${Y(p.stop)}" y2="${Y(p.stop)}" stroke="${sc}" stroke-width="1.3" stroke-dasharray="5 4"/>`;
-    posLabels.push({text: `${p.name} ENTRÉE`, color: ec, y: Y(p.entry)});
-    posLabels.push({text: `${p.name} STOP`, color: sc, y: Y(p.stop)});
+    const sysColor = PC_CHCOL[p.name] || col("--s1"), sc = col("--crit");
+    g += `<line x1="${M.l}" x2="${W - M.r}" y1="${Y(p.entry)}" y2="${Y(p.entry)}" stroke="${sysColor}" stroke-width="1.4" stroke-dasharray="5 4"/>`;
+    g += `<line x1="${M.l}" x2="${W - M.r}" y1="${Y(p.stop)}" y2="${Y(p.stop)}" stroke="${sc}" stroke-width="1.3" stroke-dasharray="2 3"/>`;
+    posLabels.push({text: `${p.name} ENTRÉE`, textColor: sysColor, dotColor: sysColor, y: Y(p.entry)});
+    posLabels.push({text: `${p.name} STOP`, textColor: sc, dotColor: sysColor, y: Y(p.stop)});
   }
   posLabels.sort((a, b) => a.y - b.y);
   for (let i = 1; i < posLabels.length; i++)
     posLabels[i].y = Math.max(posLabels[i].y, posLabels[i - 1].y + 11);
-  for (const l of posLabels)
-    g += `<text x="${M.l + 4}" y="${(l.y - 3).toFixed(1)}" fill="${l.color}" font-size="10" font-weight="700">${l.text}</text>`;
+  for (const l of posLabels) {
+    g += `<circle cx="${M.l + 3}" cy="${(l.y - 6.5).toFixed(1)}" r="3" fill="${l.dotColor}" stroke="${col("--surface-solid")}" stroke-width="1"/>`;
+    g += `<text x="${M.l + 10}" y="${(l.y - 3).toFixed(1)}" fill="${l.textColor}" font-size="10" font-weight="700">${l.text}</text>`;
+  }
   g += `<g id="pcursor"></g>`;
   svg.innerHTML = g;
   pcView = {candles, chans, positions: data.positions, X, Y, M, W, H};
