@@ -372,19 +372,7 @@
   .kv .k { color:var(--ink-2); }
 
   /* ── événements ─────────────────────────────────────────── */
-  /* la colonne de gauche est un flex-column : par défaut chaque carte garde sa
-     taille naturelle, sauf le journal des événements (toujours la dernière
-     carte affichée en vue Surveillance/Risque) qui absorbe l'espace restant —
-     évite le vide en bas de colonne quand la colonne de droite est plus haute */
-  .col-left > .card { flex:0 0 auto; }
-  /* .col-grow est posée en JS sur la dernière carte VISIBLE de la colonne
-     (elle change selon la vue : événements en Surveillance/Risque, courbe
-     d'équity en Performance) — elle absorbe l'espace restant plutôt que de
-     laisser du vide en bas quand la colonne de droite est plus haute. */
-  .col-left > .card.col-grow { flex:1 1 auto; display:flex; flex-direction:column; min-height:360px; }
-  .col-left > .card.col-grow[data-card="chart"] #chartwrap { flex:1 1 auto; display:flex; min-height:0; }
-  .col-left > .card.col-grow[data-card="chart"] #chart { flex:1 1 auto; height:auto; min-height:280px; }
-  #events { flex:1 1 auto; min-height:0; overflow-y:auto; margin-top:8px; scrollbar-width:thin; }
+  #events { max-height:420px; overflow-y:auto; margin-top:8px; scrollbar-width:thin; }
   #events::-webkit-scrollbar { width:8px; }
   #events::-webkit-scrollbar-thumb { background:var(--axis); border-radius:99px; }
   .ev { display:flex; align-items:baseline; gap:12px; padding:9px 10px; margin:0 -10px;
@@ -613,7 +601,7 @@
 </section>
 
 <div class="grid">
-  <div class="col-left" style="display:flex;flex-direction:column;gap:16px">
+  <div class="col-left" style="display:grid;gap:16px;align-content:start">
     <div class="card focus-card performance" data-card="performance_brief">
       <h2 data-i18n="performance_snapshot">Synthèse de performance</h2>
       <div class="focus-intro" data-i18n="performance_snapshot_note">Le bilan réalisé, sans bruit opérationnel.</div>
@@ -2153,35 +2141,108 @@ document.querySelectorAll("#dashboard-view [data-view]").forEach(btn => {
   if (btn.onclick) btn.onclick = withViewTransition(btn.onclick);
 });
 
-// ── colonne de gauche sans vide en bas : la dernière carte VISIBLE absorbe
-// l'espace restant (voir .col-grow en CSS). Quelle carte est "la dernière"
-// change selon la vue (événements en Surveillance/Risque, courbe d'équity en
-// Performance) — recalculé à chaque changement de vue en enveloppant
-// applyDashboardView, comme le thème/les vues juste au-dessus.
-function updateColumnGrow() {
-  const colLeft = document.querySelector(".col-left");
-  if (!colLeft) return;
-  const cards = [...colLeft.children].filter(c => c.classList.contains("card"));
-  cards.forEach(c => c.classList.remove("col-grow"));
-  const visible = cards.filter(c => c.dataset.viewHidden !== "1");
-  const last = visible[visible.length - 1];
-  if (!last) return;
-  last.classList.add("col-grow");
-  // le graphique d'équity lit sa propre hauteur (clientHeight) au dessin :
-  // une fois le nouveau flex appliqué (frame suivante), on le redessine pour
-  // qu'il occupe vraiment l'espace gagné plutôt que de rester à 380px avec du
-  // vide en dessous.
-  if (last.dataset.card === "chart") requestAnimationFrame(() => { if (typeof drawChart === "function") drawChart(); });
-}
-if (typeof applyDashboardView === "function") {
-  const _origApplyDashboardView = applyDashboardView;
-  applyDashboardView = function (...args) {
-    const result = _origApplyDashboardView(...args);
-    updateColumnGrow();
-    return result;
-  };
-}
-updateColumnGrow(); // état initial : la vue par défaut a déjà été appliquée par le script précédent
+// ── équilibrage des deux colonnes : DÉPLACE une carte plutôt que d'en
+// étirer une artificiellement (un fond de carte étiré sur des centaines de
+// pixels de vide, c'est moche). La colonne de droite est plus étroite donc
+// généralement plus haute à contenu égal ; quand l'écart est net, jusqu'à
+// deux cartes de la colonne la plus haute glissent vers l'autre — chacune
+// choisie par une estimation rapide puis GARDÉE UNIQUEMENT si une vraie
+// remesure confirme qu'elle rapproche les deux colonnes (voir tryOneMove).
+// Chaque carte retourne d'abord dans sa colonne d'origine avant tout
+// recalcul, pour ne jamais accumuler les déplacements d'une vue à l'autre.
+// Se redéclenche au changement de vue, au redimensionnement, et une seule
+// fois après le premier chargement de données (les cartes n'ont que leur
+// hauteur "vide" tant que les API n'ont pas répondu).
+(function setupColumnBalance() {
+  const colLeft = document.querySelector(".col-left"), engines = document.querySelector(".engines");
+  if (!colLeft || !engines) return;
+  [...colLeft.children].forEach(c => { if (c.classList.contains("card")) c.dataset.homeCol = "left"; });
+  [...engines.children].forEach(c => { if (c.classList.contains("card")) c.dataset.homeCol = "right"; });
+  const allCards = [...colLeft.children, ...engines.children].filter(c => c.classList.contains("card"));
+  const THRESHOLD = 70;
+
+  // scrollHeight des conteneurs de colonnes est inutilisable ici : CSS Grid
+  // étire déjà .col-left/.engines l'un vers l'autre (align-self:stretch par
+  // défaut), donc leur scrollHeight reflète surtout CETTE hauteur étirée, pas
+  // le vrai besoin de contenu — exactement l'écart qu'on cherche à mesurer.
+  // On somme plutôt la hauteur propre de chaque carte visible (elles, en
+  // revanche, gardent leur taille naturelle : align-content:start).
+  function visibleCards(col) {
+    return [...col.children].filter(c => c.classList.contains("card") && c.dataset.viewHidden !== "1");
+  }
+  function contentHeight(col) {
+    const cards = visibleCards(col);
+    if (!cards.length) return 0;
+    return cards.reduce((s, c) => s + c.getBoundingClientRect().height, 0) + (cards.length - 1) * 16;
+  }
+
+  // Chaque déplacement est JOUÉ POUR DE VRAI puis vérifié par une nouvelle
+  // mesure réelle (pas par une formule approchée) : s'il n'améliore pas
+  // vraiment l'écart, il est annulé immédiatement. Une boucle qui ne se fie
+  // qu'à une estimation peut accepter un geste qui, une fois réellement
+  // appliqué, aide moins que prévu — et enchaîner ainsi vers un optimum local
+  // qui ne se stabilise jamais (observé en test : gauche trop haute → une
+  // carte part à droite → droite devient trop haute → une autre repart à
+  // gauche → sans converger). Ici, deux essais au plus, chacun garanti de ne
+  // jamais empirer la situation grâce à la vérification après coup.
+  function tryOneMove() {
+    const diff = contentHeight(engines) - contentHeight(colLeft);
+    if (Math.abs(diff) < THRESHOLD) return false;
+    const fromCol = diff > 0 ? engines : colLeft, toCol = diff > 0 ? colLeft : engines;
+    const visible = visibleCards(fromCol);
+    if (visible.length < 2) return false; // ne jamais vider une colonne
+    const sign = diff > 0 ? 1 : -1;
+    let candidate = null, bestApprox = Math.abs(diff);
+    for (const c of visible) {
+      const approx = Math.abs(diff - sign * 2 * c.getBoundingClientRect().height);
+      if (approx < bestApprox) { bestApprox = approx; candidate = c; }
+    }
+    if (!candidate) return false;
+    const originalParent = candidate.parentElement, originalNext = candidate.nextSibling;
+    toCol.appendChild(candidate);
+    const newDiff = contentHeight(engines) - contentHeight(colLeft);
+    if (Math.abs(newDiff) < Math.abs(diff)) return true; // vérifié : ça aide vraiment
+    if (originalNext) originalParent.insertBefore(candidate, originalNext);
+    else originalParent.appendChild(candidate);
+    return false;
+  }
+  function rebalanceNow() {
+    allCards.forEach(c => {
+      const home = c.dataset.homeCol === "left" ? colLeft : engines;
+      if (c.parentElement !== home) home.appendChild(c);
+    });
+    if (tryOneMove()) tryOneMove();
+  }
+  // Ni View Transition, ni requestAnimationFrame ici, volontairement : tous
+  // deux se sont révélés peu fiables pour ce cas précis en test (rAF ne se
+  // déclenche pas de façon fiable quand document.hidden vaut true — même
+  // symptôme que rencontré plus haut pour le fond WebGL — et
+  // startViewTransition rejette parfois en "invalid state"). Lire la hauteur
+  // des cartes force de toute façon un recalcul de mise en page immédiat, donc
+  // un appel synchrone est tout aussi exact et ne dépend d'aucun des deux.
+  const rebalance = rebalanceNow;
+
+  if (typeof applyDashboardView === "function") {
+    const _origApplyDashboardView2 = applyDashboardView;
+    applyDashboardView = function (...args) {
+      const result = _origApplyDashboardView2(...args);
+      rebalance();
+      return result;
+    };
+  }
+  let didInitialRebalance = false;
+  if (typeof tick === "function") {
+    const _origTick = tick;
+    tick = async function (...args) {
+      const result = await _origTick(...args);
+      if (!didInitialRebalance) { didInitialRebalance = true; rebalance(); }
+      return result;
+    };
+  }
+  let resizeTimer = null;
+  addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(rebalance, 200); });
+  rebalance(); // état initial, avant même la première réponse API
+})();
 
 // ── fond WebGL : champ de flux réagissant au régime EMA (Donchian), à la
 // volatilité annualisée réalisée et au PnL du jour — un fond décoratif qui
