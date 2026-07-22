@@ -10,51 +10,72 @@
 <link rel="apple-touch-icon" href="/icon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
-    --page:#f2f2ef; --wash1:rgba(42,120,214,.07); --wash2:rgba(123,58,229,.05);
-    --surface:rgba(255,255,255,.72); --surface-solid:#fcfcfb; --surface-2:#efefec;
+    --page:#f2f2ef; --wash1:rgba(42,120,214,.12); --wash2:rgba(123,58,229,.09);
+    --surface:rgba(255,255,255,.68); --surface-solid:#fcfcfb; --surface-2:#efefec;
     --ink:#101012; --ink-2:#4c4b48; --muted:#8b8983;
-    --grid:#e4e3dd; --axis:#c6c5bd; --ring:rgba(16,16,18,.07);
-    --shadow:0 1px 2px rgba(16,16,18,.04), 0 12px 32px -16px rgba(16,16,18,.14);
-    --shadow-hover:0 2px 4px rgba(16,16,18,.05), 0 18px 44px -18px rgba(16,16,18,.20);
+    --grid:#e4e3dd; --axis:#c6c5bd; --ring:rgba(16,16,18,.08);
+    --shadow:0 1px 2px rgba(16,16,18,.05), 0 14px 36px -16px rgba(16,16,18,.18);
+    --shadow-hover:0 3px 6px rgba(16,16,18,.07), 0 22px 50px -18px rgba(16,16,18,.26);
     --s1:#2a78d6; --s2:#149467; --s3:#c88800;
     --good:#0ca30c; --good-text:#0a7d0a; --good-bg:rgba(12,163,12,.10);
     --warn:#a76f00; --warn-bg:rgba(250,178,25,.16);
     --crit:#d03b3b; --crit-bg:rgba(208,59,59,.09);
-    --blur:saturate(1.4) blur(14px);
+    --blur:saturate(1.5) blur(16px);
+    /* ── jetons ajoutés pour le fond WebGL et les halos (lecture CSS uniquement,
+       jamais interpolés dans un attribut SVG — sans risque pour col()) ──── */
+    --glow-1:rgba(42,120,214,.5); --glow-2:rgba(20,148,103,.44);
+    --glow-3:rgba(200,136,0,.44); --glow-crit:rgba(208,59,59,.48);
+    --fx-strength:0.68; --grain-opacity:.03;
   }
   /* thème sombre : appliqué si le système est sombre (sauf forçage clair),
      ou si l'utilisateur force le sombre via data-theme */
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --page:#0a0b0d; --wash1:rgba(57,135,229,.10); --wash2:rgba(144,133,233,.06);
-      --surface:rgba(24,25,28,.72); --surface-solid:#17181b; --surface-2:#1f2024;
+      --page:#08090c; --wash1:rgba(57,135,229,.10); --wash2:rgba(144,133,233,.06);
+      --surface:rgba(22,23,27,.62); --surface-solid:#15161a; --surface-2:#1f2024;
       --ink:#f4f4f2; --ink-2:#b9b8b0; --muted:#83827c;
-      --grid:#232428; --axis:#37383d; --ring:rgba(255,255,255,.075);
-      --shadow:0 1px 2px rgba(0,0,0,.5), 0 16px 40px -20px rgba(0,0,0,.7);
-      --shadow-hover:0 2px 6px rgba(0,0,0,.5), 0 22px 52px -20px rgba(0,0,0,.8);
+      --grid:#232428; --axis:#37383d; --ring:rgba(255,255,255,.08);
+      --shadow:0 1px 2px rgba(0,0,0,.5), 0 20px 50px -22px rgba(0,0,0,.75);
+      --shadow-hover:0 2px 8px rgba(0,0,0,.55), 0 28px 64px -22px rgba(0,0,0,.85);
       --s1:#4a92ec; --s2:#22c08b; --s3:#e3a63a;
       --good:#0ca30c; --good-text:#3ecc5f; --good-bg:rgba(34,192,139,.13);
       --warn:#fab219; --warn-bg:rgba(250,178,25,.12);
       --crit:#ef5e5e; --crit-bg:rgba(239,94,94,.11);
+      --blur:saturate(1.6) blur(20px);
+      --glow-1:rgba(74,146,236,.55); --glow-2:rgba(34,192,139,.5);
+      --glow-3:rgba(227,166,58,.5); --glow-crit:rgba(239,94,94,.55);
+      --fx-strength:0.92; --grain-opacity:.05;
     }
   }
   :root[data-theme="dark"] {
-    --page:#0a0b0d; --wash1:rgba(57,135,229,.10); --wash2:rgba(144,133,233,.06);
-    --surface:rgba(24,25,28,.72); --surface-solid:#17181b; --surface-2:#1f2024;
+    --page:#08090c; --wash1:rgba(57,135,229,.10); --wash2:rgba(144,133,233,.06);
+    --surface:rgba(22,23,27,.62); --surface-solid:#15161a; --surface-2:#1f2024;
     --ink:#f4f4f2; --ink-2:#b9b8b0; --muted:#83827c;
-    --grid:#232428; --axis:#37383d; --ring:rgba(255,255,255,.075);
-    --shadow:0 1px 2px rgba(0,0,0,.5), 0 16px 40px -20px rgba(0,0,0,.7);
-    --shadow-hover:0 2px 6px rgba(0,0,0,.5), 0 22px 52px -20px rgba(0,0,0,.8);
+    --grid:#232428; --axis:#37383d; --ring:rgba(255,255,255,.08);
+    --shadow:0 1px 2px rgba(0,0,0,.5), 0 20px 50px -22px rgba(0,0,0,.75);
+    --shadow-hover:0 2px 8px rgba(0,0,0,.55), 0 28px 64px -22px rgba(0,0,0,.85);
     --s1:#4a92ec; --s2:#22c08b; --s3:#e3a63a;
     --good:#0ca30c; --good-text:#3ecc5f; --good-bg:rgba(34,192,139,.13);
     --warn:#fab219; --warn-bg:rgba(250,178,25,.12);
     --crit:#ef5e5e; --crit-bg:rgba(239,94,94,.11);
+    --blur:saturate(1.6) blur(20px);
+    --glow-1:rgba(74,146,236,.55); --glow-2:rgba(34,192,139,.5);
+    --glow-3:rgba(227,166,58,.5); --glow-crit:rgba(239,94,94,.55);
+    --fx-strength:0.92; --grain-opacity:.05;
   }
+
+  /* propriétés animables (CSS Houdini @property) : angle du logo, dérive du
+     halo de fond — sans ça, ces valeurs ne s'interpoleraient pas en douceur */
+  @property --logo-angle { syntax:'<angle>'; inherits:false; initial-value:135deg; }
+  @property --wash-x { syntax:'<percentage>'; inherits:false; initial-value:12%; }
+  @property --wash-y { syntax:'<percentage>'; inherits:false; initial-value:-8%; }
+
   * { box-sizing:border-box; margin:0; }
   html { scroll-behavior:smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior:auto; } }
   body {
     background:var(--page); color:var(--ink); min-height:100vh;
     font:14px/1.5 "Inter",system-ui,sans-serif; font-feature-settings:"cv11","ss01";
@@ -63,11 +84,36 @@
   body::before {
     content:""; position:fixed; inset:0; z-index:-1; pointer-events:none;
     background:
-      radial-gradient(900px 480px at 12% -8%, var(--wash1), transparent 65%),
-      radial-gradient(800px 420px at 88% -12%, var(--wash2), transparent 60%);
+      radial-gradient(900px 480px at var(--wash-x) var(--wash-y), var(--wash1), transparent 65%),
+      radial-gradient(800px 420px at calc(100% - var(--wash-x)) -12%, var(--wash2), transparent 60%);
+    animation:wash-drift 46s ease-in-out infinite alternate;
   }
-  .num { font-variant-numeric:tabular-nums; font-feature-settings:"tnum"; }
+  @keyframes wash-drift { to { --wash-x:34%; --wash-y:6%; } }
+  @media (prefers-reduced-motion: reduce) { body::before { animation:none; } }
+  /* grain fin (feTurbulence en data-URI) : casse le côté "trop lisse" du verre
+     sans dépendance externe — coût nul, une seule image statique en overlay */
+  body::after {
+    content:""; position:fixed; inset:0; z-index:-1; pointer-events:none;
+    opacity:var(--grain-opacity); mix-blend-mode:overlay;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  /* toile de fond WebGL : sous tout le reste, jamais interactive. Repli propre
+     si WebGL est indisponible ou désactivé (--fx-off) : elle reste invisible et
+     les dégradés animés ci-dessus (body::before) portent seuls l'ambiance. */
+  #fx {
+    position:fixed; inset:0; width:100vw; height:100vh; z-index:-2; pointer-events:none;
+    display:block; opacity:0; transition:opacity 1.4s ease;
+  }
+  #fx.ready { opacity:1; }
+  html.no-webgl #fx, html.fx-off #fx { display:none; }
+  .num { font-variant-numeric:tabular-nums; font-feature-settings:"tnum"; font-family:"JetBrains Mono","Inter",monospace; }
   .display { font-family:"Space Grotesk","Inter",sans-serif; }
+  :focus-visible { outline:2px solid color-mix(in oklch, var(--s1) 70%, white); outline-offset:2px; border-radius:4px; }
+  ::selection { background:color-mix(in oklch, var(--s1) 55%, transparent); color:var(--ink); }
+  * { scrollbar-color:var(--axis) transparent; scrollbar-width:thin; }
+  *::-webkit-scrollbar { width:9px; height:9px; }
+  *::-webkit-scrollbar-thumb { background:var(--axis); border-radius:99px; border:2px solid transparent; background-clip:padding-box; }
+  *::-webkit-scrollbar-thumb:hover { background:var(--muted); background-clip:padding-box; }
 
   /* ── header ─────────────────────────────────────────────── */
   header {
@@ -75,14 +121,36 @@
     padding:18px 4px 16px; margin:0 -4px 24px;
     background:linear-gradient(180deg, var(--page) 62%, transparent);
   }
-  .brand { display:flex; align-items:center; gap:14px; }
+  /* liseré signature : un dégradé qui glisse en continu sous le header —
+     discret mais reconnaissable, la petite touche qui dit "produit fini" */
+  header::after {
+    content:""; position:absolute; left:4px; right:4px; bottom:0; height:1px;
+    background:linear-gradient(90deg, transparent, var(--s1), var(--s2), var(--s3), transparent);
+    background-size:220% 100%; opacity:.55; pointer-events:none;
+    animation:accent-sweep 9s linear infinite;
+  }
+  @keyframes accent-sweep { to { background-position:-220% 0; } }
+  @media (prefers-reduced-motion: reduce) { header::after { animation:none; background-position:0 0; } }
+  .brand { display:flex; align-items:center; gap:14px; position:relative; }
+  .brand::before {
+    content:""; position:absolute; left:-14px; top:50%; translate:0 -50%; width:74px; height:74px;
+    background:radial-gradient(circle, var(--glow-1), transparent 70%); filter:blur(10px);
+    opacity:.8; pointer-events:none; z-index:-1;
+  }
   .logo {
     width:44px; height:44px; border-radius:13px; display:grid; place-items:center; color:#fff;
-    font-size:23px; font-weight:700; font-family:"Space Grotesk";
-    background:linear-gradient(140deg,#3d8bec 0%,#2a78d6 45%,#6b4de0 130%);
-    box-shadow:0 6px 18px -6px rgba(42,120,214,.55), inset 0 1px 0 rgba(255,255,255,.28);
+    font-size:23px; font-weight:700; font-family:"Space Grotesk"; position:relative;
+    background:linear-gradient(var(--logo-angle),#3d8bec 0%,#2a78d6 45%,#6b4de0 130%);
+    box-shadow:0 6px 18px -6px rgba(42,120,214,.55), inset 0 1px 0 rgba(255,255,255,.28), 0 0 26px -4px var(--glow-1);
+    animation:logo-turn 26s linear infinite;
   }
-  .brand h1 { font-family:"Space Grotesk"; font-size:17.5px; font-weight:700; letter-spacing:.3px; }
+  @keyframes logo-turn { to { --logo-angle:495deg; } }
+  @media (prefers-reduced-motion: reduce) { .logo { animation:none; } }
+  .brand h1 {
+    font-family:"Space Grotesk"; font-size:18.5px; font-weight:700; letter-spacing:.4px;
+    background:linear-gradient(100deg, var(--ink) 55%, var(--s1) 130%);
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+  }
   .brand .sub { font-size:12px; color:var(--muted); margin-top:1px; letter-spacing:.1px; }
   .mode {
     display:inline-flex; align-items:center; gap:8px; padding:6px 14px; border-radius:99px;
@@ -143,23 +211,83 @@
     .status-detail { display:block; margin-top:1px; }
   }
 
-  /* ── cartes ─────────────────────────────────────────────── */
+  /* ── cartes : verre dépoli + spotlight qui suit le pointeur ──────────────
+     --mx/--my sont posées par le JS additif (pointermove) ; sans lui, les
+     valeurs par défaut (50%) recentrent simplement le halo — jamais cassé. */
   .card {
-    background:linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,0) 42%), var(--surface);
+    position:relative; isolation:isolate;
+    --rx:0deg; --ry:0deg; --lift:0px;
+    background:linear-gradient(180deg, color-mix(in oklch, white 6%, transparent), transparent 42%), var(--surface);
     backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
-    border:1px solid var(--ring); border-radius:18px; padding:22px 24px;
-    box-shadow:var(--shadow); transition:box-shadow .25s ease, transform .25s ease;
+    border:1px solid var(--ring); border-radius:20px; padding:22px 24px;
+    box-shadow:var(--shadow);
+    transform:perspective(1000px) translateY(var(--lift)) rotateX(var(--rx)) rotateY(var(--ry));
+    transition:box-shadow .3s cubic-bezier(.2,.8,.2,1), transform .18s ease-out, border-color .3s ease;
   }
-  .card:hover { box-shadow:var(--shadow-hover); }
+  .card::before {
+    content:""; position:absolute; inset:0; border-radius:inherit; z-index:-1; opacity:0;
+    background:radial-gradient(460px circle at var(--mx,50%) var(--my,50%), color-mix(in oklch, var(--s1) 26%, transparent), transparent 72%);
+    transition:opacity .5s ease; pointer-events:none;
+  }
+  /* liseré fin qui suit aussi le pointeur : renforce l'illusion de profondeur
+     du tilt sans dupliquer le halo (::before) déjà utilisé pour le spotlight */
+  .card::after {
+    content:""; position:absolute; inset:0; border-radius:inherit; z-index:2; opacity:0; pointer-events:none;
+    background:radial-gradient(220px circle at var(--mx,50%) var(--my,50%), color-mix(in oklch, white 55%, transparent), transparent 100%);
+    mix-blend-mode:overlay; transition:opacity .5s ease;
+  }
+  .card:hover { --lift:-3px; box-shadow:var(--shadow-hover), 0 0 0 1px color-mix(in oklch, var(--s1) 16%, transparent); border-color:color-mix(in oklch, var(--s1) 30%, var(--ring)); }
+  .card:hover::before, .card:hover::after { opacity:1; }
+  @media (hover:none) { .card::before, .card::after { display:none; } }
   .card h2 { font-size:13px; font-weight:700; display:flex; align-items:center; gap:10px; letter-spacing:.1px; }
-  .eyebrow { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:1.4px; font-weight:700; margin-bottom:10px; }
+  .card h2::before {
+    content:""; width:3px; height:13px; border-radius:2px; flex:none;
+    background:linear-gradient(180deg, var(--s1), var(--s2));
+  }
+  /* identité "terminal" : chaque libellé de section se lit comme un
+     commentaire de code — cohérent avec un produit pensé par/pour des devs */
+  .eyebrow {
+    font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:1.6px;
+    font-weight:700; margin-bottom:10px; font-family:"JetBrains Mono",monospace;
+  }
+  .eyebrow::before { content:"// "; color:color-mix(in oklch, var(--s1) 65%, var(--muted)); }
+  /* entrée en cascade au chargement : basée sur le temps (pas le défilement),
+     donc visible immédiatement pour tout ce qui est déjà à l'écran — c'est là
+     que se joue la première impression. Gardée par reduced-motion seulement :
+     tout navigateur l'exécute, animation-fill-mode both évite tout flash. */
+  @media (prefers-reduced-motion: no-preference) {
+    .card, .tile { animation:enter-rise .7s cubic-bezier(.16,1,.3,1) both; }
+    @keyframes enter-rise { from { opacity:0; transform:translateY(22px) scale(.98); filter:blur(6px); } to { opacity:1; transform:none; filter:blur(0); } }
+    .tiles .tile:nth-child(1) { animation-delay:.02s; } .tiles .tile:nth-child(2) { animation-delay:.08s; }
+    .tiles .tile:nth-child(3) { animation-delay:.14s; } .tiles .tile:nth-child(4) { animation-delay:.20s; }
+    .col-left .card:nth-child(1) { animation-delay:.12s; } .col-left .card:nth-child(2) { animation-delay:.18s; }
+    .col-left .card:nth-child(3) { animation-delay:.24s; } .col-left .card:nth-child(4) { animation-delay:.30s; }
+    .col-left .card:nth-child(5) { animation-delay:.36s; } .col-left .card:nth-child(6) { animation-delay:.42s; }
+    .engines .card:nth-child(1) { animation-delay:.14s; } .engines .card:nth-child(2) { animation-delay:.20s; }
+    .engines .card:nth-child(3) { animation-delay:.26s; } .engines .card:nth-child(4) { animation-delay:.32s; }
+    .engines .card:nth-child(5) { animation-delay:.38s; } .engines .card:nth-child(6) { animation-delay:.44s; }
+    .engines .card:nth-child(7) { animation-delay:.50s; } .engines .card:nth-child(8) { animation-delay:.56s; }
+    .engines .card:nth-child(9) { animation-delay:.62s; }
+  }
 
-  .tiles { display:grid; grid-template-columns:1.6fr 1fr 1fr 1fr; gap:16px; margin-bottom:16px; }
+  .tiles { display:grid; grid-template-columns:2.2fr 1fr 1fr 1fr; gap:16px; margin-bottom:16px; }
   .tiles.view-empty { display:none; }
   @media (max-width:1120px){ .tiles { grid-template-columns:1fr 1fr; } }
   .tile .val { font-size:27px; font-weight:700; letter-spacing:-.4px; }
   .tile.hero { position:relative; overflow:hidden; }
-  .tile.hero .val { font-size:44px; font-family:"Space Grotesk"; font-weight:700; letter-spacing:-.5px; }
+  .tile.hero::after {
+    content:""; position:absolute; inset:-40% -10% auto auto; width:60%; height:180%;
+    background:radial-gradient(circle, var(--glow-1), transparent 68%); opacity:.55; pointer-events:none;
+    animation:hero-pulse 5s ease-in-out infinite;
+  }
+  @keyframes hero-pulse { 0%,100% { opacity:.45; transform:scale(1); } 50% { opacity:.75; transform:scale(1.08); } }
+  @media (prefers-reduced-motion: reduce) { .tile.hero::after { animation:none; } }
+  .tile.hero .val {
+    font-size:clamp(46px, 4.6vw, 72px); font-family:"Space Grotesk"; font-weight:700; letter-spacing:-.8px;
+    background:linear-gradient(105deg, var(--ink) 30%, var(--s1) 96%);
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+    display:inline-block; line-height:1.05;
+  }
   .tile .sub { font-size:12.5px; color:var(--ink-2); margin-top:7px; }
   #spark { position:absolute; right:0; bottom:0; width:46%; height:64px; opacity:.9; pointer-events:none; }
   .delta {
@@ -176,6 +304,13 @@
   /* ── layout ─────────────────────────────────────────────── */
   .grid { display:grid; grid-template-columns:minmax(0,2.15fr) minmax(310px,1fr); gap:16px; }
   @media (max-width:1120px){ .grid { grid-template-columns:1fr; } }
+  /* conteneurs de mise en page : les grilles internes (focus-grid, ops-grid,
+     metrics-grid…) peuvent ainsi réagir à LEUR propre largeur de colonne —
+     utile quand le drawer de réglages est ouvert et rétrécit la colonne sans
+     changer la largeur du viewport (les @media seuls ne verraient rien) */
+  .col-left, .engines { container-type:inline-size; }
+  .col-left { container-name:colleft; }
+  .engines { container-name:colright; }
   .controls { display:flex; align-items:center; gap:14px; margin:4px 0 10px; flex-wrap:wrap; }
   .chips { display:flex; background:var(--surface-2); border:1px solid var(--ring); border-radius:10px; padding:3px; gap:2px; }
   .chip {
@@ -188,8 +323,16 @@
   .legend span { display:inline-flex; align-items:center; gap:7px; }
   .swatch { width:10px; height:10px; border-radius:3.5px; box-shadow:inset 0 0 0 1px rgba(0,0,0,.08); }
 
-  #chartwrap { position:relative; }
-  #chart { width:100%; height:380px; display:block; }
+  #chartwrap { position:relative; border-radius:14px; overflow:hidden; }
+  #chartwrap::before {
+    content:""; position:absolute; inset:0; z-index:0; pointer-events:none;
+    background:radial-gradient(120% 100% at 50% 100%, color-mix(in oklch, var(--s1) 6%, transparent), transparent 60%);
+  }
+  #chart { width:100%; height:380px; display:block; position:relative; z-index:1; }
+  /* les marqueurs "vivants" (points d'ancrage, réticule) reçoivent une ombre
+     portée neutre : lisible sur les deux thèmes, sans jamais flouter le texte
+     des axes (le filtre ne cible que les <circle>, pas la racine du SVG) */
+  #chart circle, #pchart circle { filter:drop-shadow(0 1px 2px rgba(0,0,0,.35)); }
   #tooltip, #ptip {
     position:absolute; pointer-events:none; display:none; background:var(--surface-solid);
     border:1px solid var(--ring); border-radius:12px; padding:11px 14px; font-size:12.5px;
@@ -216,6 +359,10 @@
   .badge.long  { background:var(--good-bg); color:var(--good-text); }
   .badge.short { background:var(--crit-bg); color:var(--crit); }
   .badge.flat  { background:color-mix(in srgb,var(--muted) 12%,transparent); color:var(--muted); }
+  /* liseré discret sur toute la ligne d'un slot en position — n'affecte pas
+     la boîte (box-shadow inset), donc aucun décalage de mise en page */
+  tr.slotclick:has(.badge.long) td:first-child { box-shadow:inset 3px 0 0 color-mix(in oklch, var(--s2) 55%, transparent); }
+  tr.slotclick:has(.badge.short) td:first-child { box-shadow:inset 3px 0 0 color-mix(in oklch, var(--crit) 55%, transparent); }
   .stop-gap { display:flex; align-items:center; gap:5px; margin-top:4px; color:var(--muted); font-size:10px; white-space:nowrap; }
   .stop-gap i { display:block; width:24px; height:4px; border-radius:99px; background:var(--s2); }
   .stop-gap.urgent { color:var(--crit); }
@@ -268,6 +415,7 @@
   /* ── métriques live (mini-tuiles) ────────────────────────── */
   .metrics-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:9px; margin-top:4px; }
   @media (max-width:520px){ .metrics-grid { grid-template-columns:1fr 1fr; } }
+  @container colright (max-width:340px){ .metrics-grid { grid-template-columns:1fr 1fr; } .records { grid-template-columns:1fr; } }
   .metric { background:var(--surface-2); border:1px solid var(--ring); border-radius:11px; padding:11px 12px; }
   .metric .ml { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.7px; }
   .metric .mv { font-size:20px; font-weight:700; margin-top:3px; letter-spacing:-.3px; }
@@ -298,6 +446,10 @@
   .ops-note { margin-top:1px; color:var(--muted); font-size:10.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   @media (max-width:760px) { .focus-grid { grid-template-columns:1fr 1fr; } }
   @media (max-width:520px) { .ops-grid { grid-template-columns:1fr; } .focus-metric .fv { font-size:19px; } }
+  @container colleft (max-width:480px) {
+    .focus-grid { grid-template-columns:1fr 1fr; }
+    .ops-grid { grid-template-columns:1fr; }
+  }
 
   /* ── jauge d'exposition ─────────────────────────────────── */
   .gauge-track { height:11px; border-radius:99px; background:var(--surface-2);
@@ -319,7 +471,8 @@
   .setgrp .gl { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:1px; font-weight:700; margin-bottom:10px; }
   .setrow { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:9px 0; border-bottom:1px solid var(--grid); font-size:13px; }
   .setrow:last-child { border-bottom:none; }
-  .setrow .sk { color:var(--ink-2); }
+  .setrow .sk { color:var(--ink-2); transition:color .2s ease; }
+  .setrow:has(input:checked) .sk { color:var(--ink); }
   .setrow select, .setrow input[type=text], .setrow input[type=date], .setrow input[type=number] {
     background:var(--surface-2); border:1px solid var(--ring); color:var(--ink); border-radius:8px;
     padding:6px 9px; font:inherit; font-size:12.5px; }
@@ -346,13 +499,46 @@
   .modal .mstat { display:grid; grid-template-columns:repeat(3,1fr); gap:9px; margin-bottom:16px; }
   .slotclick { cursor:pointer; }
   .slotclick:hover td:first-child { text-decoration:underline; }
+  /* ouverture en fondu + léger zoom, avec repli total sur navigateurs sans
+     @starting-style : le display:none/flex ci-dessus reste la seule mécanique */
+  @supports (transition-behavior: allow-discrete) {
+    .modal-backdrop { opacity:0; transition:opacity .22s ease, display .22s allow-discrete; }
+    .modal-backdrop.open { opacity:1; }
+    .modal { transform:scale(.96) translateY(6px); transition:transform .25s cubic-bezier(.2,.8,.2,1); }
+    .modal-backdrop.open .modal { transform:none; }
+    @starting-style {
+      .modal-backdrop.open { opacity:0; }
+      .modal-backdrop.open .modal { transform:scale(.96) translateY(6px); }
+    }
+  }
 
   /* ── countdown ───────────────────────────────────────────── */
   .cd { font-variant-numeric:tabular-nums; }
   [data-hidden="1"], [data-view-hidden="1"] { display:none !important; }
+
+  .brand h1, .card h2, .focus-intro { text-wrap:balance; }
+
+  /* ── transitions de vue natives (bascule thème / vues du dashboard) ──────
+     Déclenchées en JS via document.startViewTransition() quand disponible ;
+     sinon le changement reste instantané (comportement d'origine). */
+  @media (prefers-reduced-motion: no-preference) {
+    ::view-transition-old(root) { animation:vt-out .35s cubic-bezier(.4,0,.2,1) both; }
+    ::view-transition-new(root) { animation:vt-in .4s cubic-bezier(.2,.8,.2,1) both; }
+    @keyframes vt-out { to { opacity:0; transform:scale(.99); } }
+    @keyframes vt-in { from { opacity:0; transform:scale(1.01); } }
+  }
+
+  /* ── liseré des cartes visibles quand une alerte critique est active
+     (classe posée par le JS additif via MutationObserver sur #alert) ────── */
+  html.has-alert header { box-shadow:inset 0 -1px 0 color-mix(in oklch, var(--crit) 45%, transparent); }
+
+  /* ── groupe "effets visuels" du panneau de réglages (statique, non généré
+     par buildDrawer() — reprend exactement le style des autres setrow) ──── */
+  .fx-note { font-size:11px; color:var(--muted); margin-top:-4px; margin-bottom:2px; }
 </style>
 </head>
 <body>
+<canvas id="fx" aria-hidden="true"></canvas>
 
 <header>
   <div class="brand">
@@ -415,7 +601,7 @@
 </section>
 
 <div class="grid">
-  <div style="display:grid;gap:16px;align-content:start">
+  <div class="col-left" style="display:grid;gap:16px;align-content:start">
     <div class="card focus-card performance" data-card="performance_brief">
       <h2 data-i18n="performance_snapshot">Synthèse de performance</h2>
       <div class="focus-intro" data-i18n="performance_snapshot_note">Le bilan réalisé, sans bruit opérationnel.</div>
@@ -620,6 +806,13 @@
       <label class="toggle"><input type="checkbox" id="pref-notif-pos"><span class="sl"></span></label></div>
     <div class="setrow"><span class="sk" data-i18n="pref_notif_dd">Alerte si drawdown dépasse</span>
       <span><input type="number" id="pref-dd" min="1" max="30" step="1" style="width:56px"> %</span></div>
+  </div>
+
+  <div class="setgrp">
+    <div class="gl">Effets visuels</div>
+    <div class="fx-note">Fond animé (WebGL) réagissant au régime de marché et à la volatilité — à couper pour économiser la batterie.</div>
+    <div class="setrow"><span class="sk">Fond animé</span>
+      <label class="toggle"><input type="checkbox" id="pref-fx" checked><span class="sl"></span></label></div>
   </div>
 
   <div class="setgrp">
@@ -1789,6 +1982,316 @@ document.querySelectorAll("#range .chip").forEach(x => x.classList.toggle("on", 
 tick();
 refreshYearly(); // référence statique : un seul chargement, redessinée aux changements de vue/thème
 restartTimer();
+</script>
+
+<script>
+"use strict";
+/* ── couche additive : fond WebGL, spotlight, transitions de vue ──────────
+   Rien ici ne modifie la logique de données/rendu du script précédent :
+   uniquement des ajouts (nouveaux écouteurs, nouveaux éléments) et deux
+   enveloppes légères autour de handlers déjà assignés (thème, vues) pour les
+   faire passer par View Transitions quand le navigateur le permet. PREFS, $,
+   lastSummary, lastMetrics, pcData sont déclarés par ce script précédent —
+   deux <script> classiques dans le même document partagent leur portée
+   globale (contrairement à des modules), donc ils restent lisibles ici. */
+
+if (PREFS.fx === undefined) PREFS.fx = true;
+
+// ── bascule "fond animé" (drawer de réglages) ───────────────────────────
+function applyFxPref() { document.documentElement.classList.toggle("fx-off", !PREFS.fx); }
+const fxCheckbox = $("pref-fx");
+if (fxCheckbox) {
+  fxCheckbox.checked = PREFS.fx;
+  fxCheckbox.onchange = e => { PREFS.fx = e.target.checked; savePrefs(); applyFxPref(); };
+}
+applyFxPref();
+// buildDrawer() régénère #pref-cards mais pas ce groupe statique : on
+// resynchronise juste la case à chaque ouverture du tiroir.
+if ($("settings-btn")) $("settings-btn").addEventListener("click", () => { if (fxCheckbox) fxCheckbox.checked = PREFS.fx; });
+
+// ── spotlight + tilt 3D des cartes : suivent le pointeur, tout le rendu est
+// du CSS pur (--mx/--my/--rx/--ry sont juste posées ici). Amplitude de tilt
+// volontairement faible (±2,2°) : un effet "magnétique" discret, pas un gadget.
+if (matchMedia("(hover:hover)").matches && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  const TILT_MAX = 2.2;
+  document.querySelectorAll(".card").forEach(card => {
+    card.addEventListener("pointermove", e => {
+      const r = card.getBoundingClientRect();
+      const mx = e.clientX - r.left, my = e.clientY - r.top;
+      card.style.setProperty("--mx", mx + "px");
+      card.style.setProperty("--my", my + "px");
+      const px = mx / r.width - 0.5, py = my / r.height - 0.5;
+      card.style.setProperty("--ry", (px * TILT_MAX * 2) + "deg");
+      card.style.setProperty("--rx", (py * -TILT_MAX * 2) + "deg");
+    });
+    card.addEventListener("pointerleave", () => {
+      card.style.setProperty("--rx", "0deg");
+      card.style.setProperty("--ry", "0deg");
+    });
+  });
+} else {
+  // pointeur tactile ou mouvement réduit : le halo reste centré, jamais de tilt
+  document.querySelectorAll(".card").forEach(card => {
+    card.style.setProperty("--rx", "0deg"); card.style.setProperty("--ry", "0deg");
+  });
+}
+
+// ── compteur animé (odomètre) sur l'équity héro et le prix BTC ──────────
+// On enveloppe refreshSummary (comme pour le thème/les vues) plutôt que de
+// re-parser le texte affiché : lastSummary porte déjà les nombres bruts,
+// donc aucun risque de mauvaise lecture selon la devise/langue affichée.
+(() => {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+  function ticker(el, format) {
+    if (!el) return () => {};
+    let shown = null, animating = false;
+    return target => {
+      if (target == null || animating) { if (target != null) shown = target; return; }
+      if (shown == null) { shown = target; return; }
+      if (Math.abs(target - shown) < 0.005) { shown = target; return; }
+      const from = shown, to = target, dur = 700, t0 = performance.now();
+      animating = true;
+      (function step(now) {
+        const p = Math.min(1, (now - t0) / dur);
+        const eased = 1 - Math.pow(1 - p, 3);
+        el.textContent = format(from + (to - from) * eased);
+        if (p < 1) requestAnimationFrame(step);
+        else { shown = to; animating = false; }
+      })(t0);
+    };
+  }
+  const tickEquity = ticker($("t-equity"), v => fmt$(v, 0));
+  const tickPrice = ticker($("h-price"), v => v.toLocaleString(LOCALE(), {maximumFractionDigits:0}) + " $");
+
+  const _origRefreshSummary = refreshSummary;
+  refreshSummary = async function (...args) {
+    await _origRefreshSummary(...args);
+    if (lastSummary) {
+      tickEquity(lastSummary.totals.equity);
+      if (lastSummary.btc.price != null) tickPrice(lastSummary.btc.price);
+    }
+  };
+})();
+
+// ── liseré d'alerte critique sur le header : classe posée sur <html>,
+// observée depuis #alert plutôt qu'un sélecteur :has() sur un attribut style
+// (le style inline est reposé à chaque tick — un MutationObserver est plus sûr) ──
+(() => {
+  const alertEl = $("alert");
+  if (!alertEl) return;
+  const sync = () => document.documentElement.classList.toggle("has-alert", alertEl.style.display === "flex");
+  new MutationObserver(sync).observe(alertEl, {attributes:true, attributeFilter:["style","class"]});
+  sync();
+})();
+
+// ── View Transitions : bascule thème + changement de vue ───────────────
+// Enveloppe les handlers déjà posés par le script précédent (ils s'exécutent
+// normalement) dans document.startViewTransition quand elle existe ; sinon
+// comportement strictement identique à avant (changement instantané).
+function withViewTransition(fn) {
+  return (...args) => {
+    if (document.startViewTransition && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      document.startViewTransition(() => fn(...args));
+    } else {
+      fn(...args);
+    }
+  };
+}
+if ($("theme-btn") && $("theme-btn").onclick) $("theme-btn").onclick = withViewTransition($("theme-btn").onclick);
+document.querySelectorAll("#dashboard-view [data-view]").forEach(btn => {
+  if (btn.onclick) btn.onclick = withViewTransition(btn.onclick);
+});
+
+// ── fond WebGL : champ de flux réagissant au régime EMA (Donchian), à la
+// volatilité annualisée réalisée et au PnL du jour — un fond décoratif qui
+// reste informatif plutôt que purement esthétique. Repli total si WebGL est
+// indisponible, désactivé par préférence, ou si le mouvement réduit est
+// demandé : le canvas reste invisible et les dégradés CSS animés du body
+// portent seuls l'ambiance de fond. ─────────────────────────────────────
+(function initFx() {
+  const canvas = $("fx");
+  if (!canvas) return;
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+  const gl = canvas.getContext("webgl", {alpha:true, antialias:false, premultipliedAlpha:true})
+    || canvas.getContext("experimental-webgl", {alpha:true, antialias:false});
+  if (!gl) { document.documentElement.classList.add("no-webgl"); return; }
+
+  const VERT = `
+    attribute vec2 a_pos;
+    void main(){ gl_Position = vec4(a_pos, 0.0, 1.0); }
+  `;
+  const FRAG = `
+    precision highp float;
+    uniform vec2 u_resolution;
+    uniform float u_time;
+    uniform float u_regime;
+    uniform float u_vol;
+    uniform float u_pnl;
+    uniform float u_theme;
+    uniform float u_intensity;
+
+    vec2 hash2(vec2 p){
+      p = vec2(dot(p, vec2(127.1,311.7)), dot(p, vec2(269.5,183.3)));
+      return -1.0 + 2.0*fract(sin(p)*43758.5453123);
+    }
+    float vnoise(vec2 p){
+      vec2 i = floor(p), f = fract(p);
+      vec2 u = f*f*(3.0-2.0*f);
+      return mix(
+        mix(dot(hash2(i+vec2(0.0,0.0)), f-vec2(0.0,0.0)), dot(hash2(i+vec2(1.0,0.0)), f-vec2(1.0,0.0)), u.x),
+        mix(dot(hash2(i+vec2(0.0,1.0)), f-vec2(0.0,1.0)), dot(hash2(i+vec2(1.0,1.0)), f-vec2(1.0,1.0)), u.x),
+        u.y);
+    }
+    float fbm(vec2 p){
+      float v = 0.0, a = 0.5;
+      mat2 m = mat2(1.6,1.2,-1.2,1.6);
+      for (int i=0; i<5; i++){ v += a*vnoise(p); p = m*p; a *= 0.5; }
+      return v;
+    }
+    void main(){
+      vec2 uv = (gl_FragCoord.xy - 0.5*u_resolution.xy) / u_resolution.y;
+      float t = u_time * (0.06 + 0.09*u_vol);
+      vec2 p = uv * 1.6;
+      vec2 warp = vec2(fbm(p + vec2(0.0, t)), fbm(p + vec2(5.2, -t)));
+      float n1 = fbm(p + warp*1.5 + t*0.35);
+      float n2 = fbm(p*2.0 - warp*1.2 - t*0.55);
+      float field = (n1*0.6 + n2*0.4) * 1.25; // contraste renforcé entre creux et crêtes
+
+      vec3 warm = mix(vec3(0.22,0.06,0.09), vec3(0.78,0.40,0.09), smoothstep(-0.15,0.55,field));
+      vec3 cool = mix(vec3(0.04,0.08,0.20), vec3(0.08,0.56,0.68), smoothstep(-0.15,0.55,field));
+      vec3 base = mix(warm, cool, u_regime);
+      base += max(0.0, u_pnl) * vec3(0.05,0.11,0.03);
+      base -= max(0.0,-u_pnl) * vec3(0.03,0.06,0.11);
+
+      // point chaud qui dérive lentement sur sa propre orbite : casse la
+      // monotonie d'un pur champ de bruit, comme une source qui traverse la
+      // brume — teinté à l'opposé du régime pour un contraste complémentaire
+      vec2 corePos = vec2(sin(u_time*0.055)*0.55, cos(u_time*0.041)*0.4 - 0.05);
+      float core = smoothstep(0.5, 0.0, length(uv - corePos));
+      vec3 coreColor = mix(vec3(0.35,0.55,0.95), vec3(0.95,0.65,0.25), 1.0 - u_regime);
+      base += core * core * coreColor * 0.5;
+
+      float vign = smoothstep(1.15, 0.1, length(uv*vec2(1.0,1.35)));
+      vec3 color = base * (0.3 + 1.05*field) * vign;
+      float luma = dot(color, vec3(0.299,0.587,0.114));
+      color = mix(vec3(luma), color, 1.3);
+      // thème clair : on penche vers un blanc cassé teinté plutôt que de garder
+      // une palette sombre à pleine opacité (sinon ça fait des taches grises
+      // sur fond clair) — l'intensité elle-même reste pilotée par --fx-strength
+      vec3 lightColor = mix(vec3(0.97,0.975,0.985), color, 0.45);
+      color = mix(lightColor, color, u_theme);
+
+      gl_FragColor = vec4(color, clamp(u_intensity, 0.0, 1.0));
+    }
+  `;
+
+  function compile(type, src) {
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, src);
+    gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+      console.error("shader fx:", gl.getShaderInfoLog(sh));
+      gl.deleteShader(sh);
+      return null;
+    }
+    return sh;
+  }
+  const vs = compile(gl.VERTEX_SHADER, VERT), fs = compile(gl.FRAGMENT_SHADER, FRAG);
+  if (!vs || !fs) { document.documentElement.classList.add("no-webgl"); return; }
+  const prog = gl.createProgram();
+  gl.attachShader(prog, vs); gl.attachShader(prog, fs); gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error("link fx:", gl.getProgramInfoLog(prog));
+    document.documentElement.classList.add("no-webgl");
+    return;
+  }
+  gl.useProgram(prog);
+
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  // triangle unique couvrant tout le viewport (évite la diagonale d'un quad à deux triangles)
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+  const aPos = gl.getAttribLocation(prog, "a_pos");
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  const U = name => gl.getUniformLocation(prog, name);
+  const uRes = U("u_resolution"), uTime = U("u_time"), uRegime = U("u_regime"),
+        uVol = U("u_vol"), uPnl = U("u_pnl"), uTheme = U("u_theme"), uIntensity = U("u_intensity");
+
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+  // rendu sous-échantillonné (jamais à la pleine résolution physique) : un
+  // champ de bruit flou n'a rien à gagner du DPR natif, et le compositeur
+  // lisse l'agrandissement gratuitement — le coût GPU s'en trouve divisé
+  const SCALE = Math.min(1, 1.6 / Math.max(1, window.devicePixelRatio || 1));
+  function resize() {
+    const w = Math.max(1, Math.round(innerWidth * SCALE)), h = Math.max(1, Math.round(innerHeight * SCALE));
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  }
+  resize();
+  addEventListener("resize", resize);
+
+  let regime = 0.5, vol = 0.5, pnl = 0, lost = false;
+  const start = performance.now();
+  let lastFrame = 0;
+  const FRAME_MS = 1000 / 30; // 30 fps : largement suffisant pour un champ de bruit, ménage la batterie
+
+  canvas.addEventListener("webglcontextlost", e => { e.preventDefault(); lost = true; });
+  canvas.addEventListener("webglcontextrestored", () => { lost = false; resize(); });
+  // pas de gate manuel sur document.hidden : requestAnimationFrame est déjà
+  // nativement throttlé/suspendu par le navigateur en arrière-plan (c'est
+  // exactement ce pour quoi rAF existe) — un gate applicatif en plus s'est
+  // révélé produire un premier rendu jamais déclenché dans certains contextes
+  // d'aperçu où visibilityState reste "hidden" en permanence malgré un onglet
+  // au premier plan pour l'utilisateur.
+
+  function targetRegime() {
+    if (typeof pcData !== "undefined" && pcData && pcData.regime_up != null) return pcData.regime_up ? 1 : 0;
+    return 0.5;
+  }
+  function targetVol() {
+    const v = (typeof lastMetrics !== "undefined" && lastMetrics) ? lastMetrics.vol_annual : null;
+    if (v == null) return 0.5;
+    return Math.max(0, Math.min(1.6, v / 0.75));
+  }
+  function targetPnl() {
+    const p = (typeof lastSummary !== "undefined" && lastSummary) ? lastSummary.totals.day_pnl_pct : null;
+    if (p == null) return 0;
+    return Math.max(-1, Math.min(1, p * 9));
+  }
+  function themeVal() {
+    const forced = document.documentElement.getAttribute("data-theme");
+    if (forced === "dark") return 1;
+    if (forced === "light") return 0;
+    return matchMedia("(prefers-color-scheme: dark)").matches ? 1 : 0;
+  }
+  const strength = () => parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--fx-strength")) || 0.5;
+
+  function frame(now) {
+    requestAnimationFrame(frame);
+    if (lost || !PREFS.fx) return;
+    if (now - lastFrame < FRAME_MS) return;
+    lastFrame = now;
+    regime += (targetRegime() - regime) * 0.015;
+    vol += (targetVol() - vol) * 0.02;
+    pnl += (targetPnl() - pnl) * 0.02;
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uTime, (now - start) / 1000);
+    gl.uniform1f(uRegime, regime);
+    gl.uniform1f(uVol, vol);
+    gl.uniform1f(uPnl, pnl);
+    gl.uniform1f(uTheme, themeVal());
+    gl.uniform1f(uIntensity, strength());
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    canvas.classList.add("ready");
+  }
+  requestAnimationFrame(frame);
+})();
 </script>
 </body>
 </html>
