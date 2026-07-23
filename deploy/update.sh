@@ -36,12 +36,6 @@ cp /opt/btcquant/deploy/btcquant-*.service /opt/btcquant/deploy/btcquant-*.timer
 systemctl daemon-reload
 systemctl restart btcquant-dashboard
 
-# Caddyfile (reverse proxy TLS) : rechargé si présent, best-effort — un VPS
-# installé avant l'ajout de Caddy n'a pas encore ce service, on ne doit pas
-# faire échouer toute la mise à jour pour ça.
-if [ -d /etc/caddy ] && cp /opt/btcquant/deploy/Caddyfile /etc/caddy/Caddyfile 2>/dev/null; then
-  systemctl reload caddy 2>/dev/null || echo "⚠ Caddyfile copié mais reload caddy échoué — vérifier manuellement."
-fi
 if [ "${1:-}" = "--engines" ]; then
   systemctl restart btcquant-trend btcquant-carry
 fi

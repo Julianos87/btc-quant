@@ -26,9 +26,9 @@ STATE = ROOT / "state"
 START_TIME = time.time()  # démarrage du serveur dashboard (uptime)
 
 app = Flask(__name__)
-# Derrière Caddy (deploy/Caddyfile, terminaison TLS) : Flask n'écoute qu'en
+# Derrière un reverse proxy TLS (nginx, Caddy...) : Flask n'écoute qu'en
 # 127.0.0.1 (DASHBOARD_HOST), donc le seul appelant possible de X-Forwarded-*
-# est Caddy lui-même — faire confiance à UN SEUL hop est donc sûr (x_proto=1
+# est ce proxy lui-même — faire confiance à UN SEUL hop est donc sûr (x_proto=1
 # rend request.is_secure correct, ce dont dépend le cookie `secure=` posé plus
 # bas). Sans reverse proxy (dev local), ces en-têtes sont simplement absents
 # et ProxyFix ne change rien.

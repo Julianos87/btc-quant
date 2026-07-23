@@ -5,13 +5,13 @@
 **Méthode** : revue manuelle fichier par fichier (OWASP Top 10, secrets exposés, erreurs d'autorisation, dépendances vulnérables, bugs à risque de perte financière) + `pip-audit` sur l'environnement figé (`uv.lock` / `requirements.txt`) + `ruff` + suite de tests (`pytest`).
 **Verdict global** : dépôt dans un état déjà mature — plusieurs classes de bugs à risque financier ont visiblement déjà été corrigées et couvertes par des tests de non-régression (`tests/test_audit_fixes.py`, `tests/test_funding_parity.py`, `tests/test_carry_financing.py`). Aucun secret, aucune injection, aucune désérialisation dangereuse trouvés. Les problèmes identifiés ici concernent le durcissement du dashboard exposé sur Internet et une dépendance transitive au CVE connu.
 
-**Mise à jour 2026-07-23 (suite)** : domaine `tandemalgo.duckdns.org` fourni par l'utilisateur → le point 1 (absence de TLS) est maintenant traité dans le dépôt (Caddy en reverse proxy, TLS automatique, Flask replié en local). Reste à **activer sur le VPS** (voir « Activation sur le VPS » en fin de section 1) : cette partie ne peut pas être vérifiée depuis cet environnement, qui n'a pas d'accès SSH à la machine de production.
+**Mise à jour 2026-07-23 (suite, activée)** : domaine `tandemalgo.duckdns.org` fourni par l'utilisateur → le point 1 (absence de TLS) est traité et **activé en production**. Le scaffolding Caddy initialement ajouté ici (`deploy/Caddyfile`, sections Caddy de `install.sh`/`update.sh`) a été retiré : le VPS de production est une machine **partagée** avec d'autres projets, dont nginx tient déjà les ports 80/443 en name-based virtual hosting — Caddy n'aurait pas pu s'y installer sans conflit. Le TLS a été mis en place directement sur le VPS (session avec accès SSH) via un vhost nginx + certificat Let's Encrypt (`certbot --nginx`), sur le même modèle qu'un autre domaine déjà servi par ce VPS. Vérifié : `https://tandemalgo.duckdns.org` répond avec un certificat valide, cookie de session `Secure`, et les autres sites du VPS ne sont pas affectés.
 
 ## Résumé des constats
 
 | # | Sévérité | Composant | Constat | Statut |
 |---|---|---|---|---|
-| 1 | **Élevée** | `deploy/install.sh`, `dashboard/app.py` | Dashboard exposé publiquement en HTTP pur (pas de TLS) ; le jeton d'accès et le cookie de session voyagent en clair | ✅ Corrigé dans le dépôt (Caddy + `tandemalgo.duckdns.org`) — ⚠️ **à activer sur le VPS**, non vérifiable depuis cette session |
+| 1 | **Élevée** | `deploy/install.sh`, `dashboard/app.py` | Dashboard exposé publiquement en HTTP pur (pas de TLS) ; le jeton d'accès et le cookie de session voyagent en clair | ✅ Corrigé et activé (nginx + certbot sur `tandemalgo.duckdns.org`, vérifié en production) |
 | 2 | Moyenne | `dashboard/app.py` | Aucun en-tête de sécurité HTTP (`Referrer-Policy`, `X-Frame-Options`, `X-Content-Type-Options`, CSP) | ✅ Corrigé |
 | 3 | Moyenne | `dashboard/app.py` | Cookie d'authentification sans attribut `Secure` | ✅ Corrigé (et vérifié `Secure` effectif derrière Caddy, voir §3) |
 | 4 | Faible | `requirements.txt` / `uv.lock` | `setuptools==82.0.1` — CVE connu `PYSEC-2026-3447` (contournement d'exclusion `MANIFEST.in` par non-normalisation Unicode, sdist) | ✅ Corrigé (bump `ccxt` → 4.5.68, qui entraîne `setuptools` → 83.0.0) |
@@ -21,7 +21,7 @@
 
 ## 1. [Élevée] Dashboard exposé sans TLS — jeton et cookie en clair
 
-**Fichiers** : `deploy/install.sh`, `deploy/update.sh`, `deploy/Caddyfile` (nouveau), `dashboard/app.py`, `deploy/btcquant-dashboard.service`
+**Fichiers** : `deploy/install.sh`, `dashboard/app.py` ; côté VPS : vhost nginx dédié + certificat certbot (pas versionnés, spécifiques à la machine de production)
 
 Le dashboard implémente un modèle d'authentification par « capability URL » : un jeton long et aléatoire (`DASHBOARD_TOKEN`, généré par `openssl rand -hex 24`) donne un accès en lecture pendant un an via un cookie persistant (`COOKIE_MAX_AGE = 365 * 24 * 3600`). Le code documente explicitement que ce jeton est le seul rempart de confidentialité (`app.py:29-39`) : « Le dashboard est exposé sur Internet ».
 
@@ -31,24 +31,22 @@ Or `deploy/install.sh` servait ce dashboard en clair, Flask écoutant directemen
 
 ### Correctif appliqué (domaine `tandemalgo.duckdns.org` fourni par l'utilisateur)
 
-- **`deploy/Caddyfile`** (nouveau) : reverse proxy Caddy vers `127.0.0.1:8666`, TLS Let's Encrypt automatique (émission + renouvellement) pour `tandemalgo.duckdns.org` — aucun certificat à gérer à la main.
-- **`deploy/install.sh`** : installe Caddy (dépôt officiel, absent des dépôts Debian/Ubuntu de base), déploie le Caddyfile, bascule `DASHBOARD_HOST=0.0.0.0` → `127.0.0.1` dans le `.env` généré (Flask n'est plus joignable que depuis Caddy, sur la même machine), met à jour le message final (URL en `https://`, pare-feu 80/443 au lieu de 8666).
-- **`deploy/update.sh`** : redéploie le Caddyfile et recharge Caddy à chaque mise à jour (best-effort, ne bloque pas la mise à jour si Caddy n'est pas encore installé sur un VPS existant).
-- **`dashboard/app.py`** : ajout de `ProxyFix` (`werkzeug.middleware.proxy_fix`, `x_for=1, x_proto=1, x_host=1`) pour que `request.is_secure` reflète le `X-Forwarded-Proto` posé par Caddy — c'est ce qui permet au cookie `secure=request.is_secure` (point 3) de passer effectivement à `Secure` une fois derrière TLS. Ne fait confiance qu'à **un seul** hop de proxy, ce qui est correct et sûr puisque Flask n'écoute plus qu'en local (seul Caddy, sur la même machine, peut lui parler directement — un client externe ne peut pas forger ces en-têtes en contournant Caddy).
-- Vérifié par un test simulant une requête derrière Caddy (`X-Forwarded-Proto: https`) : le cookie de session obtient bien l'attribut `Secure` ; sans cet en-tête (accès direct/dev local), le comportement est inchangé.
+- **`dashboard/app.py`** : ajout de `ProxyFix` (`werkzeug.middleware.proxy_fix`, `x_for=1, x_proto=1, x_host=1`) pour que `request.is_secure` reflète le `X-Forwarded-Proto` posé par le reverse proxy — c'est ce qui permet au cookie `secure=request.is_secure` (point 3) de passer effectivement à `Secure` une fois derrière TLS. Ne fait confiance qu'à **un seul** hop de proxy, ce qui est correct et sûr puisque Flask n'écoute plus qu'en local (seul le proxy, sur la même machine, peut lui parler directement).
+- Vérifié par un test simulant une requête derrière un reverse proxy (`X-Forwarded-Proto: https`) : le cookie de session obtient bien l'attribut `Secure` ; sans cet en-tête (accès direct/dev local), le comportement est inchangé.
+- **`deploy/install.sh`** : `DASHBOARD_HOST` par défaut est `127.0.0.1` (Flask jamais exposé directement) ; la mise en place du reverse proxy TLS est laissée à l'opérateur, selon ce qui tourne déjà sur la machine cible (voir ci-dessous pour ce qui a été fait sur le VPS de production).
 
-### ⚠️ Activation sur le VPS — action manuelle requise, non vérifiable depuis cette session
+### ✅ Activation sur le VPS de production — faite et vérifiée (23/07/2026)
 
-Cette session n'a **pas d'accès SSH au VPS de production** : le correctif ci-dessus n'existe pour l'instant que dans le dépôt Git, sur cette branche. Pour qu'il s'applique réellement, une fois la branche fusionnée/déployée :
+Une tentative initiale prévoyait Caddy (`deploy/Caddyfile` + sections dédiées dans `install.sh`/`update.sh`), écrite par une session sans accès SSH au VPS. Une fois l'accès SSH disponible (session Claude Code locale), il s'est avéré que **le VPS de production est partagé avec d'autres projets** (smc-spot, neobank, pumpbot, picsou, btc-sprint...) dont **nginx tient déjà les ports 80/443** en name-based virtual hosting, y compris un autre domaine déjà en TLS (`bank2.duckdns.org` via certbot). Installer Caddy aurait échoué à bind ces ports, ou cassé les autres sites si ça avait réussi — le scaffolding Caddy a donc été retiré du dépôt (non applicable à cette machine) plutôt qu'exécuté.
 
-1. Vérifier que `tandemalgo.duckdns.org` pointe bien vers l'IP publique du VPS (`dig +short tandemalgo.duckdns.org`) et que les ports **80** et **443** sont ouverts sur le pare-feu (443 pour le TLS, 80 pour la validation ACME + redirection HTTP→HTTPS que Caddy gère seul) ;
-2. Sur le VPS : `sudo bash /opt/btcquant/deploy/update.sh` ne suffit **pas** à installer Caddy la première fois (il ne fait que recopier le Caddyfile s'il est déjà installé) — repasser par `sudo bash deploy/install.sh` depuis un clone à jour, qui est conçu pour être rejouable ;
-3. **Le `.env` existant n'est pas régénéré automatiquement** (le script ne le touche que s'il est absent, pour ne pas perdre le jeton) : éditer à la main `/opt/btcquant/.env` sur le VPS et changer `DASHBOARD_HOST=0.0.0.0` en `DASHBOARD_HOST=127.0.0.1`, puis `sudo systemctl restart btcquant-dashboard` ;
-4. Vérifier `systemctl status caddy` et `curl -I https://tandemalgo.duckdns.org` (doit répondre, certificat valide) ;
-5. Si le pare-feu ouvrait `8666/tcp` publiquement, le refermer (`ufw delete allow 8666/tcp`) une fois le nouveau chemin `https://tandemalgo.duckdns.org/?k=<jeton>` confirmé fonctionnel ;
-6. Si l'IP du VPS n'est pas fixe, s'assurer que le client de mise à jour DuckDNS tourne bien côté serveur (hors périmètre de ce dépôt — jeton DuckDNS non géré ici).
+Ce qui a réellement été fait sur le VPS, en reproduisant le patron déjà en place pour `bank2.duckdns.org` :
+1. Nouveau vhost nginx `/etc/nginx/sites-available/tandemalgo` (proxy vers `127.0.0.1:8666`), activé dans `sites-enabled` ;
+2. Certificat obtenu via `sudo certbot --nginx -d tandemalgo.duckdns.org --redirect` (réutilise le compte Let's Encrypt déjà enregistré sur cette machine) — renouvellement automatique programmé par certbot ;
+3. `deploy/update.sh` exécuté pour déployer `dashboard/app.py` (ProxyFix, en-têtes de sécurité) et redémarrer `btcquant-dashboard` ;
+4. Pare-feu : 80/tcp et 443/tcp étaient déjà ouverts (utilisés par les autres projets du VPS) ;
+5. Ancien accès `http://<ip>:8091/?k=...` (nginx, sans TLS) fermé : vhost nginx supprimé, règle ufw `8091/tcp` retirée.
 
-Tant que ces étapes n'ont pas été rejouées sur le VPS lui-même, l'ancien accès `http://<ip>:8666/?k=...` reste probablement actif en parallèle.
+Vérifié : `curl -I https://tandemalgo.duckdns.org` répond avec un certificat valide ; cookie de session posé avec `Secure=TRUE` ; `bank2.duckdns.org` et les autres sites du VPS répondent normalement (non affectés) ; ancien port `8091` refuse la connexion.
 
 ---
 
@@ -87,7 +85,7 @@ resp.set_cookie(
     httponly=True, samesite="Lax", secure=request.is_secure,
 )
 ```
-Tant que le VPS n'a pas Caddy devant lui (voir « Activation sur le VPS », point 1), `request.is_secure` vaut `False` et le comportement est inchangé. Une fois Caddy actif, `ProxyFix` (ajouté au point 1) fait remonter le `X-Forwarded-Proto: https` posé par Caddy, et le cookie obtient bien `Secure` — vérifié par un test simulant cet en-tête (§1).
+Sans reverse proxy TLS devant Flask, `request.is_secure` vaut `False` et le comportement est inchangé. Derrière un reverse proxy TLS (nginx en production, voir §1), `ProxyFix` (ajouté au point 1) fait remonter le `X-Forwarded-Proto: https` posé par le proxy, et le cookie obtient bien `Secure` — vérifié par un test simulant cet en-tête (§1) et en production (curl + inspection du cookie).
 
 ---
 
@@ -145,9 +143,8 @@ Revue exhaustive des zones à risque, sans correctif nécessaire :
 | Fichier | Changement |
 |---|---|
 | `dashboard/app.py` | En-têtes `Referrer-Policy`, `X-Content-Type-Options`, `X-Frame-Options`, `Content-Security-Policy` ; `ProxyFix` (1 hop) ; cookie de session `secure=request.is_secure` |
-| `deploy/Caddyfile` (nouveau) | Reverse proxy TLS automatique pour `tandemalgo.duckdns.org` → `127.0.0.1:8666` |
-| `deploy/install.sh` | Installe Caddy, déploie le Caddyfile, `DASHBOARD_HOST` → `127.0.0.1`, message final en `https://`, pare-feu 80/443 |
-| `deploy/update.sh` | Redéploie le Caddyfile et recharge Caddy à chaque mise à jour (best-effort) |
+| `deploy/install.sh` | `DASHBOARD_HOST` par défaut `127.0.0.1` (Flask jamais exposé directement), message final invitant à mettre un reverse proxy devant |
+| VPS de production (non versionné) | Vhost nginx + certificat certbot pour `tandemalgo.duckdns.org` → `127.0.0.1:8666` ; ancien vhost/règle ufw `:8091` retirés |
 | `uv.lock` | `ccxt` 4.5.66 → 4.5.68 (entraîne `setuptools` 82.0.1 → 83.0.0, corrige `PYSEC-2026-3447`) |
 | `requirements.txt` | Régénéré depuis `uv.lock` via `uv export --no-dev --no-hashes --no-emit-project -o requirements.txt` (procédure documentée du README) |
 
@@ -161,5 +158,6 @@ test simulé X-Forwarded-Proto   → cookie Secure posé correctement derrière 
 
 ## Non corrigé automatiquement — nécessite une action humaine
 
-1. **Activation sur le VPS** (§1) — cette session n'a pas d'accès SSH à la machine de production : le Caddyfile, l'installation de Caddy et le passage de `DASHBOARD_HOST` en `127.0.0.1` existent dans le dépôt mais doivent être rejoués sur le VPS lui-même (séquence détaillée en fin de §1). Non vérifiable depuis cet environnement.
-2. Vérifier que le DNS `tandemalgo.duckdns.org` pointe bien vers l'IP du VPS et que le client de mise à jour DuckDNS (si l'IP n'est pas fixe) tourne côté serveur — hors périmètre de ce dépôt.
+Aucun point restant : l'activation TLS en production (§1) a été faite et vérifiée le 23/07/2026.
+
+Point de vigilance permanent, hors périmètre de ce dépôt : si l'IP du VPS n'est pas fixe, s'assurer que le client de mise à jour DuckDNS tourne bien côté serveur pour que `tandemalgo.duckdns.org` reste à jour.
