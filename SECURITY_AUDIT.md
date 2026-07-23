@@ -5,13 +5,15 @@
 **Méthode** : revue manuelle fichier par fichier (OWASP Top 10, secrets exposés, erreurs d'autorisation, dépendances vulnérables, bugs à risque de perte financière) + `pip-audit` sur l'environnement figé (`uv.lock` / `requirements.txt`) + `ruff` + suite de tests (`pytest`).
 **Verdict global** : dépôt dans un état déjà mature — plusieurs classes de bugs à risque financier ont visiblement déjà été corrigées et couvertes par des tests de non-régression (`tests/test_audit_fixes.py`, `tests/test_funding_parity.py`, `tests/test_carry_financing.py`). Aucun secret, aucune injection, aucune désérialisation dangereuse trouvés. Les problèmes identifiés ici concernent le durcissement du dashboard exposé sur Internet et une dépendance transitive au CVE connu.
 
+**Mise à jour 2026-07-23 (suite)** : domaine `tandemalgo.duckdns.org` fourni par l'utilisateur → le point 1 (absence de TLS) est maintenant traité dans le dépôt (Caddy en reverse proxy, TLS automatique, Flask replié en local). Reste à **activer sur le VPS** (voir « Activation sur le VPS » en fin de section 1) : cette partie ne peut pas être vérifiée depuis cet environnement, qui n'a pas d'accès SSH à la machine de production.
+
 ## Résumé des constats
 
 | # | Sévérité | Composant | Constat | Statut |
 |---|---|---|---|---|
-| 1 | **Élevée** | `deploy/install.sh`, `dashboard/app.py` | Dashboard exposé publiquement en HTTP pur (pas de TLS) ; le jeton d'accès et le cookie de session voyagent en clair | ⚠️ Non corrigé automatiquement — décision d'infrastructure (domaine/certificat) |
+| 1 | **Élevée** | `deploy/install.sh`, `dashboard/app.py` | Dashboard exposé publiquement en HTTP pur (pas de TLS) ; le jeton d'accès et le cookie de session voyagent en clair | ✅ Corrigé dans le dépôt (Caddy + `tandemalgo.duckdns.org`) — ⚠️ **à activer sur le VPS**, non vérifiable depuis cette session |
 | 2 | Moyenne | `dashboard/app.py` | Aucun en-tête de sécurité HTTP (`Referrer-Policy`, `X-Frame-Options`, `X-Content-Type-Options`, CSP) | ✅ Corrigé |
-| 3 | Moyenne | `dashboard/app.py` | Cookie d'authentification sans attribut `Secure` | ✅ Corrigé |
+| 3 | Moyenne | `dashboard/app.py` | Cookie d'authentification sans attribut `Secure` | ✅ Corrigé (et vérifié `Secure` effectif derrière Caddy, voir §3) |
 | 4 | Faible | `requirements.txt` / `uv.lock` | `setuptools==82.0.1` — CVE connu `PYSEC-2026-3447` (contournement d'exclusion `MANIFEST.in` par non-normalisation Unicode, sdist) | ✅ Corrigé (bump `ccxt` → 4.5.68, qui entraîne `setuptools` → 83.0.0) |
 | 5 | Info | Ensemble du dépôt | Aucun secret commis, aucune injection (SQL/commande/YAML/`eval`), aucune désérialisation dangereuse | ✅ Pas d'action requise |
 
@@ -19,27 +21,34 @@
 
 ## 1. [Élevée] Dashboard exposé sans TLS — jeton et cookie en clair
 
-**Fichiers** : `deploy/install.sh`, `dashboard/app.py`, `deploy/btcquant-dashboard.service`
+**Fichiers** : `deploy/install.sh`, `deploy/update.sh`, `deploy/Caddyfile` (nouveau), `dashboard/app.py`, `deploy/btcquant-dashboard.service`
 
 Le dashboard implémente un modèle d'authentification par « capability URL » : un jeton long et aléatoire (`DASHBOARD_TOKEN`, généré par `openssl rand -hex 24`) donne un accès en lecture pendant un an via un cookie persistant (`COOKIE_MAX_AGE = 365 * 24 * 3600`). Le code documente explicitement que ce jeton est le seul rempart de confidentialité (`app.py:29-39`) : « Le dashboard est exposé sur Internet ».
 
-Or `deploy/install.sh` sert ce dashboard en clair :
-```bash
-systemctl enable --now btcquant-trend btcquant-carry btcquant-dashboard
-...
-echo " ⚠ Ouvrir le port si pare-feu actif :  ufw allow 8666/tcp"
-echo "   http://$(hostname -I | awk '{print $1}'):8666/?k=${TOKEN}"
-```
-Flask écoute directement sur `0.0.0.0:8666` (`dashboard/app.py:1001-1003`), sans reverse proxy ni certificat TLS dans aucun fichier de `deploy/`.
+Or `deploy/install.sh` servait ce dashboard en clair, Flask écoutant directement sur `0.0.0.0:8666`, sans reverse proxy ni certificat TLS dans aucun fichier de `deploy/`.
 
 **Impact** : un attaquant en position d'observer le trafic réseau (Wi-Fi public, routeur compromis, FAI, tout point sur le chemin) peut capturer le jeton — soit dans l'URL de la première visite (`?k=...`), soit dans l'en-tête `Set-Cookie` — et obtenir un accès en lecture permanent (équity, positions ouvertes, stops, historique de trades). Le risque est une divulgation d'informations financières personnelles, pas une prise de contrôle (toutes les routes sont en lecture seule, cf. commentaire `app.py:35-36`), mais reste réel compte tenu de l'exposition publique documentée.
 
-**Recommandation (non appliquée automatiquement — décision d'infrastructure)** :
-- Mettre un reverse proxy (Caddy ou nginx) devant Flask avec un certificat TLS automatique (Let's Encrypt), puis lier Flask à `127.0.0.1` uniquement (`DASHBOARD_HOST=127.0.0.1`) ;
-- Rediriger tout le trafic HTTP vers HTTPS ;
-- Si un reverse proxy est ajouté, penser à configurer `werkzeug.middleware.proxy_fix.ProxyFix` (ou à faire confiance à `X-Forwarded-Proto`) pour que `request.is_secure` reflète le protocole vu par le client — sinon le correctif du point 3 ci-dessous ne posera jamais l'attribut `Secure`.
+### Correctif appliqué (domaine `tandemalgo.duckdns.org` fourni par l'utilisateur)
 
-Ce point n'a pas été corrigé dans ce commit car il s'agit d'un choix d'infrastructure (nom de domaine, autorité de certification, topologie réseau) qui dépasse ce qu'un correctif de code peut trancher en sécurité.
+- **`deploy/Caddyfile`** (nouveau) : reverse proxy Caddy vers `127.0.0.1:8666`, TLS Let's Encrypt automatique (émission + renouvellement) pour `tandemalgo.duckdns.org` — aucun certificat à gérer à la main.
+- **`deploy/install.sh`** : installe Caddy (dépôt officiel, absent des dépôts Debian/Ubuntu de base), déploie le Caddyfile, bascule `DASHBOARD_HOST=0.0.0.0` → `127.0.0.1` dans le `.env` généré (Flask n'est plus joignable que depuis Caddy, sur la même machine), met à jour le message final (URL en `https://`, pare-feu 80/443 au lieu de 8666).
+- **`deploy/update.sh`** : redéploie le Caddyfile et recharge Caddy à chaque mise à jour (best-effort, ne bloque pas la mise à jour si Caddy n'est pas encore installé sur un VPS existant).
+- **`dashboard/app.py`** : ajout de `ProxyFix` (`werkzeug.middleware.proxy_fix`, `x_for=1, x_proto=1, x_host=1`) pour que `request.is_secure` reflète le `X-Forwarded-Proto` posé par Caddy — c'est ce qui permet au cookie `secure=request.is_secure` (point 3) de passer effectivement à `Secure` une fois derrière TLS. Ne fait confiance qu'à **un seul** hop de proxy, ce qui est correct et sûr puisque Flask n'écoute plus qu'en local (seul Caddy, sur la même machine, peut lui parler directement — un client externe ne peut pas forger ces en-têtes en contournant Caddy).
+- Vérifié par un test simulant une requête derrière Caddy (`X-Forwarded-Proto: https`) : le cookie de session obtient bien l'attribut `Secure` ; sans cet en-tête (accès direct/dev local), le comportement est inchangé.
+
+### ⚠️ Activation sur le VPS — action manuelle requise, non vérifiable depuis cette session
+
+Cette session n'a **pas d'accès SSH au VPS de production** : le correctif ci-dessus n'existe pour l'instant que dans le dépôt Git, sur cette branche. Pour qu'il s'applique réellement, une fois la branche fusionnée/déployée :
+
+1. Vérifier que `tandemalgo.duckdns.org` pointe bien vers l'IP publique du VPS (`dig +short tandemalgo.duckdns.org`) et que les ports **80** et **443** sont ouverts sur le pare-feu (443 pour le TLS, 80 pour la validation ACME + redirection HTTP→HTTPS que Caddy gère seul) ;
+2. Sur le VPS : `sudo bash /opt/btcquant/deploy/update.sh` ne suffit **pas** à installer Caddy la première fois (il ne fait que recopier le Caddyfile s'il est déjà installé) — repasser par `sudo bash deploy/install.sh` depuis un clone à jour, qui est conçu pour être rejouable ;
+3. **Le `.env` existant n'est pas régénéré automatiquement** (le script ne le touche que s'il est absent, pour ne pas perdre le jeton) : éditer à la main `/opt/btcquant/.env` sur le VPS et changer `DASHBOARD_HOST=0.0.0.0` en `DASHBOARD_HOST=127.0.0.1`, puis `sudo systemctl restart btcquant-dashboard` ;
+4. Vérifier `systemctl status caddy` et `curl -I https://tandemalgo.duckdns.org` (doit répondre, certificat valide) ;
+5. Si le pare-feu ouvrait `8666/tcp` publiquement, le refermer (`ufw delete allow 8666/tcp`) une fois le nouveau chemin `https://tandemalgo.duckdns.org/?k=<jeton>` confirmé fonctionnel ;
+6. Si l'IP du VPS n'est pas fixe, s'assurer que le client de mise à jour DuckDNS tourne bien côté serveur (hors périmètre de ce dépôt — jeton DuckDNS non géré ici).
+
+Tant que ces étapes n'ont pas été rejouées sur le VPS lui-même, l'ancien accès `http://<ip>:8666/?k=...` reste probablement actif en parallèle.
 
 ---
 
@@ -78,7 +87,7 @@ resp.set_cookie(
     httponly=True, samesite="Lax", secure=request.is_secure,
 )
 ```
-`request.is_secure` vaut aujourd'hui toujours `False` (pas de TLS), donc **aucun changement de comportement actuel** — mais le cookie se durcira automatiquement dès qu'un TLS sera mis en place (point 1), sans qu'il faille repenser au correctif à ce moment-là. Rappel : cela suppose que `request.is_secure` reflète bien le protocole vu par le client (voir note `ProxyFix` au point 1 si un reverse proxy est ajouté).
+Tant que le VPS n'a pas Caddy devant lui (voir « Activation sur le VPS », point 1), `request.is_secure` vaut `False` et le comportement est inchangé. Une fois Caddy actif, `ProxyFix` (ajouté au point 1) fait remonter le `X-Forwarded-Proto: https` posé par Caddy, et le cookie obtient bien `Secure` — vérifié par un test simulant cet en-tête (§1).
 
 ---
 
@@ -135,18 +144,22 @@ Revue exhaustive des zones à risque, sans correctif nécessaire :
 
 | Fichier | Changement |
 |---|---|
-| `dashboard/app.py` | Ajout des en-têtes `Referrer-Policy`, `X-Content-Type-Options`, `X-Frame-Options`, `Content-Security-Policy` ; cookie de session `secure=request.is_secure` |
+| `dashboard/app.py` | En-têtes `Referrer-Policy`, `X-Content-Type-Options`, `X-Frame-Options`, `Content-Security-Policy` ; `ProxyFix` (1 hop) ; cookie de session `secure=request.is_secure` |
+| `deploy/Caddyfile` (nouveau) | Reverse proxy TLS automatique pour `tandemalgo.duckdns.org` → `127.0.0.1:8666` |
+| `deploy/install.sh` | Installe Caddy, déploie le Caddyfile, `DASHBOARD_HOST` → `127.0.0.1`, message final en `https://`, pare-feu 80/443 |
+| `deploy/update.sh` | Redéploie le Caddyfile et recharge Caddy à chaque mise à jour (best-effort) |
 | `uv.lock` | `ccxt` 4.5.66 → 4.5.68 (entraîne `setuptools` 82.0.1 → 83.0.0, corrige `PYSEC-2026-3447`) |
 | `requirements.txt` | Régénéré depuis `uv.lock` via `uv export --no-dev --no-hashes --no-emit-project -o requirements.txt` (procédure documentée du README) |
 
 **Vérifications post-correctifs** :
 ```
-uv run pytest -q         → 88 passed
-uv run ruff check .      → All checks passed!
-pip-audit -r requirements.txt → No known vulnerabilities found
+uv run pytest -q                → 88 passed
+uv run ruff check .             → All checks passed!
+pip-audit -r requirements.txt   → No known vulnerabilities found
+test simulé X-Forwarded-Proto   → cookie Secure posé correctement derrière proxy
 ```
 
-## Non corrigé automatiquement — nécessite une décision humaine
+## Non corrigé automatiquement — nécessite une action humaine
 
-1. **TLS pour le dashboard** (§1) — nécessite un nom de domaine et un choix de reverse proxy/autorité de certification, hors périmètre d'un correctif de code sûr.
-2. Si TLS est ajouté ultérieurement derrière un reverse proxy, configurer `ProxyFix` pour que `request.is_secure` (utilisé au §3) reflète correctement le protocole côté client.
+1. **Activation sur le VPS** (§1) — cette session n'a pas d'accès SSH à la machine de production : le Caddyfile, l'installation de Caddy et le passage de `DASHBOARD_HOST` en `127.0.0.1` existent dans le dépôt mais doivent être rejoués sur le VPS lui-même (séquence détaillée en fin de §1). Non vérifiable depuis cet environnement.
+2. Vérifier que le DNS `tandemalgo.duckdns.org` pointe bien vers l'IP du VPS et que le client de mise à jour DuckDNS (si l'IP n'est pas fixe) tourne côté serveur — hors périmètre de ce dépôt.

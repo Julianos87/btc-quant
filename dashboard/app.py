@@ -19,12 +19,20 @@ from pathlib import Path
 import ccxt
 import pandas as pd
 from flask import Flask, Response, jsonify, request, send_file
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE = ROOT / "state"
 START_TIME = time.time()  # démarrage du serveur dashboard (uptime)
 
 app = Flask(__name__)
+# Derrière Caddy (deploy/Caddyfile, terminaison TLS) : Flask n'écoute qu'en
+# 127.0.0.1 (DASHBOARD_HOST), donc le seul appelant possible de X-Forwarded-*
+# est Caddy lui-même — faire confiance à UN SEUL hop est donc sûr (x_proto=1
+# rend request.is_secure correct, ce dont dépend le cookie `secure=` posé plus
+# bas). Sans reverse proxy (dev local), ces en-têtes sont simplement absents
+# et ProxyFix ne change rien.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 # ── accès par lien secret (« capability URL ») ───────────────────────────────
 # Le dashboard est exposé sur Internet : sans garde, équity, positions, stops
