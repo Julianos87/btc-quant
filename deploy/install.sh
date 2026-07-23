@@ -6,7 +6,21 @@ set -euo pipefail
 
 echo "── Dépendances système ──"
 apt-get update -y
-apt-get install -y python3 python3-venv rsync openssl
+apt-get install -y python3 python3-venv rsync openssl \
+                    debian-keyring debian-archive-keyring apt-transport-https curl gnupg
+
+echo "── Caddy (reverse proxy TLS automatique) ──"
+# Certificat Let's Encrypt provisionné et renouvelé automatiquement pour le
+# domaine du Caddyfile (voir deploy/Caddyfile) — aucune manip manuelle de
+# certificat. Dépôt officiel Caddy (pas dans les dépôts Debian/Ubuntu de base).
+if ! command -v caddy &>/dev/null; then
+  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+    | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+    | tee /etc/apt/sources.list.d/caddy-stable.list
+  apt-get update -y
+  apt-get install -y caddy
+fi
 
 echo "── Utilisateur de service ──"
 id -u btcquant &>/dev/null || useradd -r -m -s /usr/sbin/nologin btcquant
@@ -23,10 +37,12 @@ python3 -m venv /opt/btcquant/venv
 echo "── Configuration dashboard (.env) ──"
 # accès par lien secret : dashboard/app.py lit DASHBOARD_TOKEN (voir le
 # commentaire « capability URL » en tête de fichier). Pas de mot de passe.
+# DASHBOARD_HOST=127.0.0.1 : Flask n'écoute qu'en local, Caddy (ci-dessous)
+# est seul exposé publiquement et fait la terminaison TLS.
 if [ ! -f /opt/btcquant/.env ]; then
   TOKEN=$(openssl rand -hex 24)
   cat > /opt/btcquant/.env <<EOF
-DASHBOARD_HOST=0.0.0.0
+DASHBOARD_HOST=127.0.0.1
 DASHBOARD_PORT=8666
 DASHBOARD_TOKEN=${TOKEN}
 EOF
@@ -34,6 +50,11 @@ EOF
 fi
 
 chown -R btcquant:btcquant /opt/btcquant
+
+echo "── Caddyfile (reverse proxy) ──"
+cp /opt/btcquant/deploy/Caddyfile /etc/caddy/Caddyfile
+systemctl enable --now caddy
+systemctl reload caddy
 
 echo "── Services & timers systemd ──"
 cp /opt/btcquant/deploy/btcquant-*.service /etc/systemd/system/
@@ -52,9 +73,11 @@ echo "════════════════════════�
 echo " Installation terminée."
 TOKEN=$(grep '^DASHBOARD_TOKEN=' /opt/btcquant/.env | cut -d= -f2)
 echo " Dashboard — lien secret (à mettre en favori, il pose un cookie 1 an) :"
-echo "   http://$(hostname -I | awk '{print $1}'):8666/?k=${TOKEN}"
+echo "   https://tandemalgo.duckdns.org/?k=${TOKEN}"
 echo
-echo " ⚠ Ouvrir le port si pare-feu actif :  ufw allow 8666/tcp"
-echo " Statut   : systemctl status btcquant-trend btcquant-carry btcquant-dashboard"
-echo " Journaux : journalctl -u btcquant-trend -f"
+echo " ⚠ Pare-feu : ouvrir 80/tcp et 443/tcp (Caddy). Le 8666 n'a plus besoin"
+echo "   d'être exposé (Flask écoute en local uniquement) :"
+echo "     ufw allow 80/tcp && ufw allow 443/tcp"
+echo " Statut   : systemctl status caddy btcquant-trend btcquant-carry btcquant-dashboard"
+echo " Journaux : journalctl -u btcquant-trend -f   |   journalctl -u caddy -f"
 echo "════════════════════════════════════════════════════════════"

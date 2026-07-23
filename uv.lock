@@ -221,7 +221,7 @@ dev = [
 
 [[package]]
 name = "ccxt"
-version = "4.5.66"
+version = "4.5.68"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohappyeyeballs" },
@@ -249,9 +249,9 @@ dependencies = [
     { name = "yarl" },
     { name = "zlib-ng" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d0/12/bb96953d5414e2a20a19f13aab66bd542034c5a171bc48d2da6efde9d80f/ccxt-4.5.66.tar.gz", hash = "sha256:cc9931a23fea83c0ecda5878ce90d13f595e8fcc00bced077a0fef964faac4ae", size = 5945576, upload-time = "2026-07-16T18:42:48.222Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/00/6e/84ed26fc535d3b063edb8586103a531775e1c83eb5ed4dd63ca3825c0844/ccxt-4.5.68.tar.gz", hash = "sha256:f35fc4591e6177d5887c65431bf24719243a9883b0e62602179587103f0407bf", size = 5954841, upload-time = "2026-07-22T13:48:47.617Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/02/4b/55b0f2171aa0a56ccc699a1102c955120709d5c73bb5cc0f41f5f950f1db/ccxt-4.5.66-py3-none-any.whl", hash = "sha256:f3ffc9b5e2a7b65503c901ed59ca9c62ce503a3480c66a2479713fab0a88816a", size = 6387583, upload-time = "2026-07-16T18:42:45.849Z" },
+    { url = "https://files.pythonhosted.org/packages/50/8d/ca5421654da87d412f200d9b0dfe6433ce54f693c852b00282ce50c76430/ccxt-4.5.68-py3-none-any.whl", hash = "sha256:da5c76822e8975c0743d3be6342ef31036069c8c922506c5c068e72786d3017b", size = 6396947, upload-time = "2026-07-22T13:48:44.746Z" },
 ]
 
 [[package]]
@@ -1839,11 +1839,11 @@ wheels = [
 
 [[package]]
 name = "setuptools"
-version = "82.0.1"
+version = "83.0.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/4f/db/cfac1baf10650ab4d1c111714410d2fbb77ac5a616db26775db562c8fab2/setuptools-82.0.1.tar.gz", hash = "sha256:7d872682c5d01cfde07da7bccc7b65469d3dca203318515ada1de5eda35efbf9", size = 1152316, upload-time = "2026-03-09T12:47:17.221Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/34/26/f5d29e25ffdb535afef2d35cdb55b325298f96debd670da4c325e08d70f4/setuptools-83.0.0.tar.gz", hash = "sha256:025bccbbf0fa05b6192bc64ae1e7b16e001fd6d6d4d5de03c97b1c1ade523bef", size = 1154254, upload-time = "2026-07-04T15:31:22.699Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9d/76/f789f7a86709c6b087c5a2f52f911838cad707cc613162401badc665acfe/setuptools-82.0.1-py3-none-any.whl", hash = "sha256:a59e362652f08dcd477c78bb6e7bd9d80a7995bc73ce773050228a348ce2e5bb", size = 1006223, upload-time = "2026-03-09T12:47:15.026Z" },
+    { url = "https://files.pythonhosted.org/packages/5d/40/e1e72872c6354b306daef1703549e8e83b4d43cfea356311bf722a043752/setuptools-83.0.0-py3-none-any.whl", hash = "sha256:29b23c360f22f414dc7336bb39178cc7bcbf6021ed2733cde173f09dba19abb3", size = 1008090, upload-time = "2026-07-04T15:31:20.885Z" },
 ]
 
 [[package]]

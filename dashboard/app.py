@@ -19,12 +19,20 @@ from pathlib import Path
 import ccxt
 import pandas as pd
 from flask import Flask, Response, jsonify, request, send_file
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE = ROOT / "state"
 START_TIME = time.time()  # démarrage du serveur dashboard (uptime)
 
 app = Flask(__name__)
+# Derrière Caddy (deploy/Caddyfile, terminaison TLS) : Flask n'écoute qu'en
+# 127.0.0.1 (DASHBOARD_HOST), donc le seul appelant possible de X-Forwarded-*
+# est Caddy lui-même — faire confiance à UN SEUL hop est donc sûr (x_proto=1
+# rend request.is_secure correct, ce dont dépend le cookie `secure=` posé plus
+# bas). Sans reverse proxy (dev local), ces en-têtes sont simplement absents
+# et ProxyFix ne change rien.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 # ── accès par lien secret (« capability URL ») ───────────────────────────────
 # Le dashboard est exposé sur Internet : sans garde, équity, positions, stops
@@ -57,6 +65,25 @@ def _guard():
 
 
 @app.after_request
+def _security_headers(resp: Response) -> Response:
+    """En-têtes défensifs pour un dashboard exposé sur Internet :
+    - Referrer-Policy : empêche le jeton `?k=...` de fuiter dans l'en-tête
+      Referer d'une requête vers un tiers (ex. Google Fonts) ;
+    - X-Content-Type-Options / X-Frame-Options / CSP : durcissement standard
+      contre le sniffing MIME, le clickjacking et l'injection de script."""
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src https://fonts.gstatic.com; img-src 'self' data:; "
+        "connect-src 'self'; script-src 'self' 'unsafe-inline'",
+    )
+    return resp
+
+
+@app.after_request
 def _gzip_response(resp: Response) -> Response:
     """Compression des réponses JSON/CSV : l'équity et les bougies pèsent des
     dizaines de Ko — gzip divise par ~5-10 le transfert (net sur mobile)."""
@@ -83,7 +110,7 @@ def _persist_token(resp: Response) -> Response:
     if AUTH_TOKEN and request.args.get("k") and request.cookies.get(COOKIE_NAME) != AUTH_TOKEN:
         resp.set_cookie(
             COOKIE_NAME, AUTH_TOKEN, max_age=COOKIE_MAX_AGE,
-            httponly=True, samesite="Lax",
+            httponly=True, samesite="Lax", secure=request.is_secure,
         )
     return resp
 

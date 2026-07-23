@@ -20,7 +20,7 @@ attrs==26.1.0
     #   ccxt
 blinker==1.9.0
     # via flask
-ccxt==4.5.66
+ccxt==4.5.68
     # via btcquant
 certifi==2026.6.17
     # via
@@ -117,7 +117,7 @@ pyyaml==6.0.3
     # via btcquant
 requests==2.34.2
     # via ccxt
-setuptools==82.0.1
+setuptools==83.0.0
     # via ccxt
 six==1.17.0
     # via python-dateutil
