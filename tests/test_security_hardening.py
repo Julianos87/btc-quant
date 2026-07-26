@@ -98,6 +98,8 @@ def test_runtime_services_use_installed_entrypoints():
     assert 'pip" install --quiet --no-deps "${STAGING}"' in release
     assert 'chown -R root:btcquant "${STAGING}"' in release
     assert 'chown -R root:root "${STAGING}"' not in release
+    assert '"1s|^#!${STAGING}/venv/bin/python|#!${TARGET}/venv/bin/python|"' in release
+    assert 'grep -RIl "^#!${STAGING}/" "${STAGING}/venv/bin"' in release
 
 
 def test_production_requirements_are_pinned_with_hashes():

@@ -59,6 +59,23 @@ python3 -m venv "${STAGING}/venv"
 "${STAGING}/venv/bin/pip" install --quiet --upgrade pip
 "${STAGING}/venv/bin/pip" install --quiet -r "${STAGING}/requirements.txt"
 "${STAGING}/venv/bin/pip" install --quiet --no-deps "${STAGING}"
+
+# Les scripts console d'un virtualenv contiennent un shebang absolu. Comme la
+# release est construite sous STAGING puis renommée atomiquement, ces shebangs
+# doivent viser TARGET avant le mv final.
+while IFS= read -r launcher; do
+  sed -i \
+    "1s|^#!${STAGING}/venv/bin/python|#!${TARGET}/venv/bin/python|" \
+    "${launcher}"
+done < <(
+  find "${STAGING}/venv/bin" -maxdepth 1 -type f \
+    -exec grep -Il "^#!${STAGING}/venv/bin/python" {} +
+)
+if grep -RIl "^#!${STAGING}/" "${STAGING}/venv/bin" | grep -q .; then
+  echo "Un lanceur de virtualenv référence encore le staging." >&2
+  exit 1
+fi
+
 "${STAGING}/venv/bin/python" -m compileall -q "${STAGING}/src" "${STAGING}/dashboard"
 (
   cd "${STAGING}"
