@@ -17,17 +17,61 @@ activable, retries réseau, clientOrderId déterministe (idempotence).
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import time
+import uuid
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Any
 
 import ccxt
 
 from ..notify import notify
+from .safety import require_live_execution_enabled
+from .resilience import RetryPolicy
+from .units import exchange_float
 
 log = logging.getLogger(__name__)
 
-MAX_RETRIES = 4
+QTY_TOLERANCE = 1e-8
+
+
+class CarrySagaStatus(StrEnum):
+    FILLED = "FILLED"
+    PARTIAL = "PARTIAL"
+    REJECTED = "REJECTED"
+    UNBALANCED = "UNBALANCED"
+
+
+@dataclass(frozen=True)
+class CarryLegFill:
+    leg: str
+    side: str
+    requested_qty: float
+    filled_qty: float
+    average_price: float | None
+    broker_order_id: str | None
+
+
+@dataclass(frozen=True)
+class CarrySagaResult:
+    status: CarrySagaStatus
+    spot_qty: float
+    perp_qty: float
+    spot_fill: CarryLegFill | None = None
+    perp_fill: CarryLegFill | None = None
+    compensation_fill: CarryLegFill | None = None
+    error: str | None = None
+
+    @property
+    def neutral_qty(self) -> float:
+        return min(self.spot_qty, self.perp_qty)
+
+    @property
+    def is_balanced(self) -> bool:
+        return abs(self.spot_qty - self.perp_qty) <= QTY_TOLERANCE
 
 
 class CarryBroker:
@@ -37,6 +81,7 @@ class CarryBroker:
         testnet: bool = True,
         leverage: int = 3,
     ) -> None:
+        require_live_execution_enabled(testnet=testnet)
         key = os.environ.get("BINANCE_API_KEY")
         secret = os.environ.get("BINANCE_API_SECRET")
         if not key or not secret:
@@ -47,6 +92,7 @@ class CarryBroker:
         common = {"apiKey": key, "secret": secret, "enableRateLimit": True, "timeout": 30_000}
         self.spot: ccxt.Exchange = ccxt.binance({**common, "options": {"defaultType": "spot"}})
         self.perp: ccxt.Exchange = ccxt.binanceusdm(common)
+        self._retry = RetryPolicy()
         if testnet:
             self.spot.set_sandbox_mode(True)
             self.perp.set_sandbox_mode(True)
@@ -54,96 +100,288 @@ class CarryBroker:
         self.spot.load_markets()
         self.perp.load_markets()
         self._with_retries(self.perp.set_leverage, max(1, int(leverage)), self.perp_symbol)
-        self._seq = 0
 
     # ── helpers ──────────────────────────────────────────────────────────────
     def _with_retries(self, fn, *args, **kwargs):
-        for attempt in range(MAX_RETRIES):
-            try:
-                return fn(*args, **kwargs)
-            except (ccxt.NetworkError, ccxt.ExchangeNotAvailable, ccxt.RequestTimeout) as e:
-                wait = 2**attempt
-                log.warning("Erreur réseau %s, retry %ss", e.__class__.__name__, wait)
-                time.sleep(wait)
-        return fn(*args, **kwargs)
+        retry = getattr(self, "_retry", None)
+        if retry is None:
+            retry = self._retry = RetryPolicy()
+        return retry.call(
+            fn,
+            *args,
+            retry_on=(ccxt.NetworkError, ccxt.ExchangeNotAvailable, ccxt.RequestTimeout),
+            **kwargs,
+        )
 
-    def _coid(self, tag: str) -> str:
-        self._seq += 1
-        return f"btcq-carry-{tag}-{int(time.time())}-{self._seq}"
+    @staticmethod
+    def _coid(intent_id: str, tag: str) -> str:
+        digest = hashlib.sha256(f"{intent_id}:{tag}".encode()).hexdigest()[:20]
+        return f"btcq-{tag}-{digest}"
+
+    def _common_qty(self, raw_qty: float) -> float:
+        spot_qty = exchange_float(
+            self.spot.amount_to_precision(self.symbol, raw_qty),
+            name="quantité spot normalisée",
+            positive=True,
+        )
+        perp_qty = exchange_float(
+            self.perp.amount_to_precision(self.perp_symbol, raw_qty),
+            name="quantité perp normalisée",
+            positive=True,
+        )
+        common = min(spot_qty, perp_qty)
+        spot_common = exchange_float(
+            self.spot.amount_to_precision(self.symbol, common),
+            name="quantité spot commune",
+            positive=True,
+        )
+        perp_common = exchange_float(
+            self.perp.amount_to_precision(self.perp_symbol, common),
+            name="quantité perp commune",
+            positive=True,
+        )
+        if abs(spot_common - perp_common) > QTY_TOLERANCE:
+            raise ValueError(f"Précisions spot/perp incompatibles : {spot_common} vs {perp_common}")
+        return min(spot_common, perp_common)
+
+    def _market_fill(
+        self,
+        exchange: ccxt.Exchange,
+        symbol: str,
+        *,
+        leg: str,
+        side: str,
+        qty: float,
+        client_order_id: str,
+        reduce_only: bool = False,
+    ) -> CarryLegFill:
+        params: dict[str, Any] = {"newClientOrderId": client_order_id}
+        if reduce_only:
+            params["reduceOnly"] = True
+        # Un timeout est ambigu : la saga doit rester transitionnelle et être
+        # rapprochée, jamais renvoyer aveuglément la jambe.
+        order = exchange.create_order(
+            symbol,
+            "market",
+            side,
+            qty,
+            None,
+            params,
+        )
+        deadline = time.monotonic() + 30.0
+        while str(order.get("status") or "").lower() not in (
+            "closed",
+            "canceled",
+            "cancelled",
+            "rejected",
+            "expired",
+        ):
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.5)
+            order = self._with_retries(exchange.fetch_order, order["id"], symbol)
+        return CarryLegFill(
+            leg=leg,
+            side=side.upper(),
+            requested_qty=qty,
+            filled_qty=float(order.get("filled") or 0.0),
+            average_price=(float(order["average"]) if order.get("average") is not None else None),
+            broker_order_id=str(order["id"]) if order.get("id") is not None else None,
+        )
 
     def last_price(self) -> float:
         return float(self.perp.fetch_ticker(self.perp_symbol)["last"])
 
-    def funding_rate(self) -> float:
-        return float(self.perp.fetch_funding_rate(self.perp_symbol)["fundingRate"])
-
-    def free_usdt(self) -> float:
-        """Solde USDT libre côté spot (base de sizing de la position carry)."""
-        bal = self._with_retries(self.spot.fetch_balance)
-        return float(bal.get("free", {}).get("USDT", 0.0))
-
     # ── ouverture / fermeture des deux jambes ────────────────────────────────
-    def open_position(self, notional_usdt: float) -> dict | None:
-        """Achète `notional_usdt` de BTC au comptant ET short le même montant en
-        perp. Retourne {qty, spot_price, perp_price} ou None en cas d'échec."""
+    def open_position(
+        self,
+        notional_usdt: float,
+        *,
+        intent_id: str | None = None,
+    ) -> CarrySagaResult:
+        """Saga d'ouverture : spot, hedge perp, puis compensation si nécessaire."""
+
+        intent = intent_id or f"carry-open-{uuid.uuid4().hex}"
         price = self.last_price()
-        qty = float(self.perp.amount_to_precision(self.perp_symbol, notional_usdt / price))
+        try:
+            qty = self._common_qty(notional_usdt / price)
+        except Exception as error:
+            return CarrySagaResult(
+                CarrySagaStatus.REJECTED,
+                0.0,
+                0.0,
+                error=f"{type(error).__name__}: {error}",
+            )
         if qty <= 0:
-            return None
-
-        # jambe 1 : achat spot
-        try:
-            spot_order = self._with_retries(
-                self.spot.create_order, self.symbol, "market", "buy", qty, None,
-                {"newClientOrderId": self._coid("spotbuy")},
+            return CarrySagaResult(
+                CarrySagaStatus.REJECTED,
+                0.0,
+                0.0,
+                error="Quantité commune nulle",
             )
-        except Exception as e:
-            log.error("Échec jambe spot : %s — position non ouverte", e)
-            notify(f"⚠ Carry live : échec achat spot ({e}) — position non ouverte")
-            return None
 
-        # jambe 2 : short perp. Si elle échoue, on défait le spot (sinon on est long nu).
         try:
-            perp_order = self._with_retries(
-                self.perp.create_order, self.perp_symbol, "market", "sell", qty, None,
-                {"newClientOrderId": self._coid("perpshort")},
+            spot_fill = self._market_fill(
+                self.spot,
+                self.symbol,
+                leg="SPOT",
+                side="buy",
+                qty=qty,
+                client_order_id=self._coid(intent, "spotbuy"),
             )
-        except Exception as e:
-            log.error("Échec jambe perp : %s — annulation du spot", e)
-            notify(f"⚠ Carry live : short perp échoué ({e}), on revend le spot pour rester neutre")
+        except Exception as error:
+            return CarrySagaResult(
+                CarrySagaStatus.REJECTED,
+                0.0,
+                0.0,
+                error=f"Jambe spot : {type(error).__name__}: {error}",
+            )
+        if spot_fill.filled_qty <= QTY_TOLERANCE:
+            return CarrySagaResult(
+                CarrySagaStatus.REJECTED,
+                0.0,
+                0.0,
+                spot_fill=spot_fill,
+                error="Aucun fill spot",
+            )
+
+        hedge_qty = float(self.perp.amount_to_precision(self.perp_symbol, spot_fill.filled_qty))
+        perp_fill: CarryLegFill | None
+        perp_error: str | None
+        try:
+            perp_fill = self._market_fill(
+                self.perp,
+                self.perp_symbol,
+                leg="PERP",
+                side="sell",
+                qty=hedge_qty,
+                client_order_id=self._coid(intent, "perpshort"),
+            )
+        except Exception as error:
+            perp_fill = None
+            perp_error = f"{type(error).__name__}: {error}"
+        else:
+            perp_error = None
+
+        spot_qty = spot_fill.filled_qty
+        perp_qty = perp_fill.filled_qty if perp_fill else 0.0
+        compensation = None
+        excess_spot = max(0.0, spot_qty - perp_qty)
+        if excess_spot > QTY_TOLERANCE:
             try:
-                self._with_retries(self.spot.create_order, self.symbol, "market", "sell", qty, None,
-                                   {"newClientOrderId": self._coid("spotunwind")})
-            except Exception as e2:
-                notify(f"🛑 CARRY CRITIQUE : spot non défait ({e2}) — POSITION LONGUE NUE, "
-                       f"intervention manuelle requise")
-            return None
+                unwind_qty = float(self.spot.amount_to_precision(self.symbol, excess_spot))
+                compensation = self._market_fill(
+                    self.spot,
+                    self.symbol,
+                    leg="SPOT_COMPENSATION",
+                    side="sell",
+                    qty=unwind_qty,
+                    client_order_id=self._coid(intent, "spotunwind"),
+                )
+                spot_qty -= compensation.filled_qty
+            except Exception as error:
+                return CarrySagaResult(
+                    CarrySagaStatus.UNBALANCED,
+                    spot_qty,
+                    perp_qty,
+                    spot_fill,
+                    perp_fill,
+                    error=(f"Hedge={perp_error}; compensation={type(error).__name__}: {error}"),
+                )
 
-        sp = float(spot_order.get("average") or price)
-        pp = float(perp_order.get("average") or price)
-        log.info("Carry ouvert : %.6f BTC — spot %.2f / perp short %.2f", qty, sp, pp)
-        notify(f"🔵 Carry live OUVERT : {qty:.5f} BTC neutre (spot {sp:,.0f} / short {pp:,.0f})")
-        return {"qty": qty, "spot_price": sp, "perp_price": pp}
+        balanced = abs(spot_qty - perp_qty) <= QTY_TOLERANCE
+        status = (
+            CarrySagaStatus.FILLED
+            if balanced and spot_qty >= qty - QTY_TOLERANCE
+            else CarrySagaStatus.PARTIAL
+            if balanced and spot_qty > QTY_TOLERANCE
+            else CarrySagaStatus.REJECTED
+            if balanced
+            else CarrySagaStatus.UNBALANCED
+        )
+        return CarrySagaResult(
+            status,
+            spot_qty,
+            perp_qty,
+            spot_fill,
+            perp_fill,
+            compensation,
+            perp_error,
+        )
 
-    def close_position(self, qty: float) -> bool:
-        """Referme les deux jambes : vend le spot, rachète le short perp."""
-        ok = True
+    def close_position(
+        self,
+        qty: float,
+        *,
+        intent_id: str | None = None,
+    ) -> CarrySagaResult:
+        """Ferme le perp puis la même quantité spot ; toute divergence est exposée."""
+
+        intent = intent_id or f"carry-close-{uuid.uuid4().hex}"
         try:
-            self._with_retries(self.spot.create_order, self.symbol, "market", "sell", qty, None,
-                               {"newClientOrderId": self._coid("spotsell")})
-        except Exception as e:
-            log.error("Échec vente spot : %s", e); ok = False
-            notify(f"⚠ Carry live : échec vente spot ({e})")
+            perp_fill = self._market_fill(
+                self.perp,
+                self.perp_symbol,
+                leg="PERP",
+                side="buy",
+                qty=qty,
+                client_order_id=self._coid(intent, "perpcover"),
+                reduce_only=True,
+            )
+        except Exception as error:
+            return CarrySagaResult(
+                CarrySagaStatus.REJECTED,
+                qty,
+                qty,
+                error=f"Rachat perp : {type(error).__name__}: {error}",
+            )
+        if perp_fill.filled_qty <= QTY_TOLERANCE:
+            return CarrySagaResult(
+                CarrySagaStatus.REJECTED,
+                qty,
+                qty,
+                perp_fill=perp_fill,
+                error="Aucun fill de couverture perp",
+            )
+        spot_sell_qty = float(self.spot.amount_to_precision(self.symbol, perp_fill.filled_qty))
         try:
-            self._with_retries(self.perp.create_order, self.perp_symbol, "market", "buy", qty, None,
-                               {"newClientOrderId": self._coid("perpcover"), "reduceOnly": True})
-        except Exception as e:
-            log.error("Échec rachat perp : %s", e); ok = False
-            notify(f"⚠ Carry live : échec rachat short perp ({e})")
-        if ok:
-            log.info("Carry fermé : %.6f BTC (deux jambes)", qty)
-            notify(f"⚪ Carry live FERMÉ : {qty:.5f} BTC")
-        return ok
+            spot_fill = self._market_fill(
+                self.spot,
+                self.symbol,
+                leg="SPOT",
+                side="sell",
+                qty=spot_sell_qty,
+                client_order_id=self._coid(intent, "spotsell"),
+            )
+        except Exception as error:
+            return CarrySagaResult(
+                CarrySagaStatus.UNBALANCED,
+                qty,
+                max(0.0, qty - perp_fill.filled_qty),
+                perp_fill=perp_fill,
+                error=f"Vente spot : {type(error).__name__}: {error}",
+            )
+        remaining_spot = max(0.0, qty - spot_fill.filled_qty)
+        remaining_perp = max(0.0, qty - perp_fill.filled_qty)
+        if abs(remaining_spot - remaining_perp) > QTY_TOLERANCE:
+            return CarrySagaResult(
+                CarrySagaStatus.UNBALANCED,
+                remaining_spot,
+                remaining_perp,
+                spot_fill,
+                perp_fill,
+                error="Fills de fermeture déséquilibrés",
+            )
+        status = (
+            CarrySagaStatus.FILLED if remaining_spot <= QTY_TOLERANCE else CarrySagaStatus.PARTIAL
+        )
+        return CarrySagaResult(
+            status,
+            remaining_spot,
+            remaining_perp,
+            spot_fill,
+            perp_fill,
+        )
 
     def reconcile(self) -> bool:
         """Vérifie que spot détenu ≈ short perp (position réellement neutre)."""
@@ -156,11 +394,14 @@ class CarryBroker:
                 if p.get("side") == "short":
                     perp_short += float(p.get("contracts") or 0.0)
         except Exception as e:
-            log.warning("Réconciliation carry impossible : %s", e)
-            return True
+            log.error("Réconciliation carry impossible : %s", e)
+            notify(f"⛔ Carry live : réconciliation impossible ({e})")
+            return False
         diff = abs(spot_btc - perp_short)
         if diff > 1e-4:
-            notify(f"⚠ Carry live : déséquilibre des jambes — spot {spot_btc:.5f} BTC "
-                   f"vs short {perp_short:.5f} BTC (écart {diff:.5f}). Vérifier.")
+            notify(
+                f"⚠ Carry live : déséquilibre des jambes — spot {spot_btc:.5f} BTC "
+                f"vs short {perp_short:.5f} BTC (écart {diff:.5f}). Vérifier."
+            )
             return False
         return True

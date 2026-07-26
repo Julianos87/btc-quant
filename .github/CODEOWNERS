@@ -1,0 +1,10 @@
+# Toute modification exige la revue du propriétaire du système.
+* @Julianos87
+
+# Les chemins pouvant modifier le risque ou envoyer des ordres sont rappelés
+# explicitement pour rester visibles lors des évolutions du dépôt.
+/config*.yaml @Julianos87
+/src/btcquant/execution/ @Julianos87
+/src/btcquant/risk.py @Julianos87
+/src/btcquant/strategies/ @Julianos87
+/deploy/ @Julianos87

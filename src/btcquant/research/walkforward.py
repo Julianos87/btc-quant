@@ -16,9 +16,9 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from ..backtest.engine import BacktestEngine
+from ..backtest.metrics import compute_metrics
 from ..strategies.base import Strategy
-from .engine import BacktestEngine
-from .metrics import compute_metrics
 
 log = logging.getLogger(__name__)
 
@@ -92,7 +92,9 @@ def walk_forward(
                 "best_params": best_params,
                 f"is_{objective}": best_score,
                 "oos_sharpe": oos_res.metrics.get("sharpe"),
-                "oos_return": oos_equity.iloc[-1] / oos_equity.iloc[0] - 1.0 if len(oos_equity) > 1 else 0.0,
+                "oos_return": oos_equity.iloc[-1] / oos_equity.iloc[0] - 1.0
+                if len(oos_equity) > 1
+                else 0.0,
                 "oos_max_dd": oos_res.metrics.get("max_drawdown"),
                 "oos_trades": oos_res.metrics.get("n_trades"),
             }
@@ -123,5 +125,5 @@ def walk_forward(
         folds=folds,
         oos_equity=oos_equity_full,
         oos_metrics=oos_metrics,
-        efficiency=efficiency,
+        efficiency=float(efficiency),
     )

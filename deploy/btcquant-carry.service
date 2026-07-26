@@ -6,12 +6,22 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=btcquant
-WorkingDirectory=/opt/btcquant
+WorkingDirectory=/opt/btcquant/current
 Environment=PYTHONIOENCODING=utf-8
 EnvironmentFile=-/opt/btcquant/.env
-ExecStart=/opt/btcquant/venv/bin/python scripts/run_carry.py --capital 4000 --leverage 3
+ExecStart=/opt/btcquant/current/venv/bin/btcquant-carry --capital 4000 --leverage 3
 Restart=always
 RestartSec=30
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/btcquant/state
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target

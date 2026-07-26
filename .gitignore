@@ -10,8 +10,13 @@ venv/
 .env
 *.egg-info/
 .pytest_cache/
+.coverage
+htmlcov/
+pytest-*/
 .ruff_cache/
+.uv-cache/
 .pytest-tmp/
+.dashboard-local.*.log
 
 # uv.lock est VOLONTAIREMENT versionné (versions figées = installs
 # reproductibles VPS / CI / poste local). Ne pas l'ajouter ici.

@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-07-26T19:37:30.197892+00:00",
+  "purpose": "Safety Baseline anti-régression; aucune promesse de performance",
+  "provenance": {
+    "base_git_commit": "ea848d43e3b4fb7e8c424988c12a641acf882b84",
+    "source_tree_sha256": "aeedd5dca26c6e6261d4fe8bdeacb144ba1b469f5d99addb78207c5e89303ca0",
+    "config": {
+      "path": "config_4x.yaml",
+      "sha256": "5df26dd937257d35ff897aec1e3e3eecb1fdc5ac205aead5f2e345a8ba74e6be"
+    },
+    "data": [
+      {
+        "path": "data/binance_BTC-USDT_1h.csv",
+        "bytes": 4810172,
+        "sha256": "2470bc2440a38db210812dbb3cfa4f85fea397cc3b5d8edb22072bef4dac03c9"
+      },
+      {
+        "path": "data/binanceusdm_BTCUSDT_USDT_funding.csv",
+        "bytes": 294753,
+        "sha256": "57c6bff18d9fd7aab0ef5c206813657e008977179f8a50142e81c9b00d9208a9"
+      }
+    ],
+    "base_rows": 66263,
+    "base_span": [
+      "2019-01-01T00:00:00+00:00",
+      "2026-07-26T10:00:00+00:00"
+    ],
+    "funding_rows": 7534,
+    "funding_span": [
+      "2019-09-10T08:00:00+00:00",
+      "2026-07-26T08:00:00.002000+00:00"
+    ]
+  },
+  "results": {
+    "strategies": {
+      "trend_ls_20": {
+        "timeframe": "4h",
+        "market": "perp",
+        "capital_fraction": 0.3333,
+        "trades": 196,
+        "final_equity": 95923.76387188338,
+        "sharpe": 1.3885845947598892,
+        "max_drawdown": -0.596597954790312
+      },
+      "trend_ls_55": {
+        "timeframe": "4h",
+        "market": "perp",
+        "capital_fraction": 0.3333,
+        "trades": 154,
+        "final_equity": 46276.60274176708,
+        "sharpe": 1.2316719505627223,
+        "max_drawdown": -0.49403400274235865
+      },
+      "trend_ls_100": {
+        "timeframe": "4h",
+        "market": "perp",
+        "capital_fraction": 0.3334,
+        "trades": 129,
+        "final_equity": 57967.79466984747,
+        "sharpe": 1.357468810664846,
+        "max_drawdown": -0.4004996000236699
+      }
+    },
+    "combined": {
+      "trades": 479,
+      "final_equity": 200168.16128349793,
+      "cagr": 0.5993958614628154,
+      "sharpe": 1.3607664758811082,
+      "max_drawdown": -0.5287833278407402
+    },
+    "conformity": {
+      "profile": "trend 4x — baseline reproductible",
+      "n_trades": 479,
+      "trades_per_year": 64.1643337408313,
+      "win_rate": 0.3736951983298539,
+      "avg_win_pct": 0.09369161945266319,
+      "avg_loss_pct": -0.030586500699459323,
+      "worst_loss_streak": 21,
+      "max_drawdown": -0.5287833278407402,
+      "dd_time_fraction": {
+        "5": 0.9056615309366594,
+        "10": 0.6482024944974322,
+        "15": 0.3705062362435803,
+        "20": 0.22053069210075812,
+        "25": 0.14820249449743214,
+        "30": 0.13872584984103692,
+        "35": 0.07587429689410614,
+        "40": 0.05154071900220103,
+        "45": 0.019014428955734897,
+        "50": 0.003607238933724627
+      },
+      "monthly_return_p10": -0.0993527045399357,
+      "monthly_return_p90": 0.2789095604079198,
+      "worst_month": -0.17371966728988852
+    }
+  }
+}

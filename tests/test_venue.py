@@ -61,6 +61,24 @@ def test_hyperliquid_price_from_candle():
     assert v.last_price() == pytest.approx(61_234.5)
 
 
+def test_testnet_switches_hyperliquid_public_api_to_sandbox(monkeypatch):
+    switched: list[bool] = []
+
+    class FakeHyperliquid:
+        def __init__(self, _config):
+            pass
+
+        def set_sandbox_mode(self, enabled):
+            switched.append(enabled)
+
+    monkeypatch.setattr("btcquant.execution.venue.ccxt.hyperliquid", FakeHyperliquid)
+
+    venue = Venue("hyperliquid", "BTC/USDC:USDC", testnet=True)
+
+    assert venue.exchange is venue.funding_exchange
+    assert switched == [True]
+
+
 def test_funding_history_sorted_series():
     v = _stub_venue(Venue("hyperliquid", "BTC/USDC:USDC"))
     s = v.funding_history(1)
@@ -73,8 +91,9 @@ def test_carry_annualizes_hourly_funding(tmp_path):
     """Funding horaire constant de 1.25e-5 → ~10,9 %/an : le carry doit entrer
     (seuil 3 %) et payer le coût de bascule, avec l'annualisation ×24×365
     (l'ancienne convention 8 h, ×3×365, n'aurait vu que ~1,4 % → jamais entré)."""
-    runner = CarryRunner(initial_capital=4000.0, leverage=3.0,
-                         state_file=tmp_path / "carry_state.json")
+    runner = CarryRunner(
+        initial_capital=4000.0, leverage=3.0, state_file=tmp_path / "carry_state.json"
+    )
     _stub_venue(runner.venue, funding_rate=1.25e-5)
     assert not runner.in_position
     runner._tick()

@@ -13,10 +13,11 @@ coupe-circuits : drawdown maximal et perte journalière.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
-@dataclass
+@dataclass(frozen=True)
 class RiskConfig:
     initial_capital: float = 10_000.0
     risk_per_trade: float = 0.0075
@@ -27,6 +28,36 @@ class RiskConfig:
     #: multiplicateur de notionnel maximal (futures uniquement). 1.0 = pas de
     #: levier. Le levier MULTIPLIE gains, pertes et drawdowns à l'identique.
     max_leverage: float = 1.0
+
+    def __post_init__(self) -> None:
+        finite = {
+            "initial_capital": self.initial_capital,
+            "risk_per_trade": self.risk_per_trade,
+            "max_position_pct": self.max_position_pct,
+            "max_drawdown_halt": self.max_drawdown_halt,
+            "max_leverage": self.max_leverage,
+        }
+        for name, value in finite.items():
+            if not math.isfinite(value):
+                raise ValueError(f"{name} doit être fini")
+        if self.initial_capital <= 0:
+            raise ValueError("initial_capital doit être strictement positif")
+        if not 0 < self.risk_per_trade <= 1:
+            raise ValueError("risk_per_trade doit être dans ]0, 1]")
+        if not 0 < self.max_position_pct <= 1:
+            raise ValueError("max_position_pct doit être dans ]0, 1]")
+        if not 0 < self.max_drawdown_halt < 1:
+            raise ValueError("max_drawdown_halt doit être dans ]0, 1[")
+        if self.max_leverage <= 0:
+            raise ValueError("max_leverage doit être strictement positif")
+        if self.vol_target_annual is not None and (
+            not math.isfinite(self.vol_target_annual) or self.vol_target_annual <= 0
+        ):
+            raise ValueError("vol_target_annual doit être strictement positif")
+        if self.daily_loss_limit is not None and (
+            not math.isfinite(self.daily_loss_limit) or not 0 < self.daily_loss_limit < 1
+        ):
+            raise ValueError("daily_loss_limit doit être dans ]0, 1[")
 
 
 def position_size(
@@ -40,7 +71,11 @@ def position_size(
     """Quantité (positive, en BTC) à ouvrir, long ou short selon `direction`."""
     if equity <= 0 or entry_price <= 0:
         return 0.0
-    stop_distance = direction * (entry_price - stop_price)
+    raw_stop_distance = direction * (entry_price - stop_price)
+    # Une même distance construite par ``entry ± distance`` peut différer de
+    # quelques ULP entre long et short. Normaliser à 12 chiffres significatifs
+    # (bien au-delà des précisions exchange) évite un biais de sizing par côté.
+    stop_distance = float(f"{raw_stop_distance:.12g}")
     if stop_distance <= 0:
         return 0.0
 
@@ -78,9 +113,8 @@ class KillSwitch:
 
         if equity < self.peak_equity * (1.0 - self.cfg.max_drawdown_halt):
             self.halted = True
-        if (
-            self.cfg.daily_loss_limit is not None
-            and equity < self._day_start_equity * (1.0 - self.cfg.daily_loss_limit)
+        if self.cfg.daily_loss_limit is not None and equity < self._day_start_equity * (
+            1.0 - self.cfg.daily_loss_limit
         ):
             self.daily_lockout = True
 

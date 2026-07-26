@@ -1,7 +1,6 @@
 """Tests du journal des flux (apports/rééquilibrages) et de sa prise en
 compte par le dashboard : un apport ne doit jamais ressembler à un gain."""
 
-import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -14,27 +13,32 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "dashboard"))
 
 import app as dash  # dashboard/app.py
+from btcquant.execution.state_store import StateStore
+from btcquant.execution.readiness import ReadinessPolicy, start_campaign
+from btcquant.entrypoints import digest, rebalance
 
 
 def _load_rebalance():
-    spec = importlib.util.spec_from_file_location("rebalance", ROOT / "scripts" / "rebalance.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    return rebalance
 
 
 def _write_states(state: Path, trend_cash: float = 2000.0, carry_equity: float = 4000.0) -> None:
     state.mkdir(exist_ok=True)
-    (state / "live_state_4x.json").write_text(json.dumps({
-        "slots": {f"trend_ls_{n}": {"cash": trend_cash, "position": None}
-                  for n in (20, 55, 100)},
-        "peak_equity": trend_cash * 3,
-        "day_start_equity": trend_cash * 3,
-        "halted": False,
-    }))
-    (state / "carry_state.json").write_text(json.dumps(
-        {"equity": carry_equity, "in_position": False}
-    ))
+    (state / "live_state_4x.json").write_text(
+        json.dumps(
+            {
+                "slots": {
+                    f"trend_ls_{n}": {"cash": trend_cash, "position": None} for n in (20, 55, 100)
+                },
+                "peak_equity": trend_cash * 3,
+                "day_start_equity": trend_cash * 3,
+                "halted": False,
+            }
+        )
+    )
+    (state / "carry_state.json").write_text(
+        json.dumps({"equity": carry_equity, "in_position": False})
+    )
 
 
 def test_rebalance_deposit_logs_flow(tmp_path, monkeypatch, capsys):
@@ -45,13 +49,15 @@ def test_rebalance_deposit_logs_flow(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["rebalance.py", "--apply", "--deposit", "100"])
     reb.main()
 
-    trend = json.loads((tmp_path / "live_state_4x.json").read_text())
-    carry = json.loads((tmp_path / "carry_state.json").read_text())
+    store = StateStore(tmp_path / "btcquant.db")
+    trend = store.load_engine_state("trend")
+    carry = store.load_engine_state("carry")
+    assert trend is not None and carry is not None
     assert trend["slots"]["trend_ls_20"]["cash"] == pytest.approx(2020.0)
     assert trend["peak_equity"] == pytest.approx(6060.0)  # l'apport n'est pas un gain
     assert carry["equity"] == pytest.approx(4040.0)
 
-    flows = pd.read_csv(tmp_path / "flows.csv")
+    flows = pd.DataFrame(store.read_flows())
     assert len(flows) == 1  # apport seul : allocation à la cible, pas de transfert
     row = flows.iloc[0]
     assert row["kind"] == "deposit"
@@ -67,12 +73,13 @@ def test_rebalance_transfer_logs_zero_sum_flow(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["rebalance.py", "--apply"])
     reb.main()
 
-    flows = pd.read_csv(tmp_path / "flows.csv")
+    flows = pd.DataFrame(StateStore(tmp_path / "btcquant.db").read_flows())
     assert list(flows["kind"]) == ["rebalance"]
     assert flows["trend_flow"].iloc[0] + flows["carry_flow"].iloc[0] == pytest.approx(0.0)
 
 
 # ── côté dashboard ───────────────────────────────────────────────────────────
+
 
 def _write_equity(path: Path, values: dict[str, float]) -> None:
     with open(path, "w", encoding="utf-8") as fh:
@@ -88,18 +95,18 @@ def dash_state(tmp_path, monkeypatch):
     monkeypatch.setattr(dash, "STATE", tmp_path)
     days = pd.date_range("2026-06-01", periods=30, freq="1D", tz="UTC")
     deposit_ts = days[15] + pd.Timedelta(hours=4)
-    _write_equity(tmp_path / "equity_trend.csv",
-                  {ts.isoformat(): 6000.0 for ts in days})
-    _write_equity(tmp_path / "equity_carry.csv",
-                  {ts.isoformat(): (4000.0 if ts < deposit_ts else 4040.0) for ts in days})
+    _write_equity(tmp_path / "equity_trend.csv", {ts.isoformat(): 6000.0 for ts in days})
+    _write_equity(
+        tmp_path / "equity_carry.csv",
+        {ts.isoformat(): (4000.0 if ts < deposit_ts else 4040.0) for ts in days},
+    )
     (tmp_path / "flows.csv").write_text(
-        "ts,kind,trend_flow,carry_flow\n"
-        f"{deposit_ts.isoformat()},deposit,0.00,40.00\n"
+        f"ts,kind,trend_flow,carry_flow\n{deposit_ts.isoformat()},deposit,0.00,40.00\n"
     )
     (tmp_path / "carry_state.json").write_text(json.dumps({"equity": 4040.0, "in_position": False}))
-    (tmp_path / "live_state_4x.json").write_text(json.dumps(
-        {"slots": {}, "peak_equity": 6000.0, "halted": False}
-    ))
+    (tmp_path / "live_state_4x.json").write_text(
+        json.dumps({"slots": {}, "peak_equity": 6000.0, "halted": False})
+    )
     return tmp_path
 
 
@@ -120,6 +127,13 @@ def test_analytics_funding_excludes_deposits(dash_state):
 
 
 def test_readiness_drawdown_unaffected(dash_state):
+    store = StateStore(dash_state / "btcquant.db")
+    store.migrate_legacy_journals(dash_state)
+    start_campaign(
+        store,
+        ReadinessPolicy(),
+        started_at="2026-06-01T00:00:00+00:00",
+    )
     r = dash.app.test_client().get("/api/readiness").get_json()
     dd = next(c for c in r["checks"] if c["key"] == "drawdown")
     assert dd["status"] == "ok"
@@ -140,9 +154,7 @@ def test_flows_same_timestamp_no_crash(dash_state):
     labels dupliqués — les flux d'un même timestamp sont agrégés."""
     ts = pd.Timestamp("2026-06-20T04:00:00", tz="UTC").isoformat()
     (dash_state / "flows.csv").write_text(
-        "ts,kind,trend_flow,carry_flow\n"
-        f"{ts},deposit,0.00,40.00\n"
-        f"{ts},rebalance,24.00,-24.00\n"
+        f"ts,kind,trend_flow,carry_flow\n{ts},deposit,0.00,40.00\n{ts},rebalance,24.00,-24.00\n"
     )
     m = dash.app.test_client().get("/api/metrics")
     assert m.status_code == 200
@@ -153,14 +165,13 @@ def test_flows_same_timestamp_no_crash(dash_state):
 def test_digest_tolerates_torn_last_line(tmp_path, monkeypatch):
     """Le digest lit les CSV pendant que les runners écrivent : une dernière
     ligne tronquée ne doit pas le faire planter (même garde que le dashboard)."""
-    spec = importlib.util.spec_from_file_location("daily_digest", ROOT / "scripts" / "daily_digest.py")
-    digest = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(digest)
     monkeypatch.setattr(digest, "STATE", tmp_path)
     (tmp_path / "equity_trend.csv").write_text(
-        "ts,equity\n2026-06-01T00:00:00+00:00,6000.00\n2026-06-0")  # ligne coupée
+        "ts,equity\n2026-06-01T00:00:00+00:00,6000.00\n2026-06-0"
+    )  # ligne coupée
     (tmp_path / "flows.csv").write_text(
-        "ts,kind,trend_flow,carry_flow\n2026-06-01T04:00")  # ligne coupée
+        "ts,kind,trend_flow,carry_flow\n2026-06-01T04:00"
+    )  # ligne coupée
     s = digest._equity("equity_trend.csv")
     assert len(s) == 1 and float(s.iloc[0]) == 6000.0
     assert len(digest._flows()) == 0

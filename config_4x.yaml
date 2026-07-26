@@ -64,9 +64,12 @@ strategies:
     params: { donchian: 100, adx_min: 20, funding_long_max: 0.0008, funding_short_min: -0.0008 }
 
 execution:
-  mode: paper             # paper | live — NE PASSER EN live QU'APRÈS VALIDATION
+  # Le code rejette toute autre valeur tant que le moteur transactionnel
+  # (journal d'ordres, reprise et réconciliation stricte) n'est pas livré.
+  mode: paper
   testnet: true
-  state_file: state/live_state_4x.json
+  state_file: state/btcquant.db
+  legacy_state_file: state/live_state_4x.json
   poll_buffer_seconds: 20
   # Venue LIVE depuis le 17/07/2026 : Hyperliquid (funding horaire, converti en
   # équivalent 8 h par venue.py). La référence backtest reste Binance 2019-2026

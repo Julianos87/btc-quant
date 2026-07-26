@@ -29,9 +29,7 @@ def _cache_path(data_dir: str | Path, exchange_id: str, symbol: str, timeframe: 
     return Path(data_dir) / f"{exchange_id}_{safe_symbol}_{timeframe}.csv"
 
 
-def _fetch_paginated(
-    ex: ccxt.Exchange, symbol: str, timeframe: str, since_ms: int
-) -> pd.DataFrame:
+def _fetch_paginated(ex: ccxt.Exchange, symbol: str, timeframe: str, since_ms: int) -> pd.DataFrame:
     tf_ms = ex.parse_timeframe(timeframe) * 1000
     all_rows: list[list] = []
     cursor = since_ms
@@ -54,7 +52,9 @@ def _fetch_paginated(
         if last_ts <= cursor and len(batch) > 1:
             break  # l'exchange ne progresse plus, on évite la boucle infinie
         cursor = last_ts + tf_ms
-        log.info("  … %s bougies, jusqu'à %s", len(all_rows), pd.Timestamp(last_ts, unit="ms", tz="UTC"))
+        log.info(
+            "  … %s bougies, jusqu'à %s", len(all_rows), pd.Timestamp(last_ts, unit="ms", tz="UTC")
+        )
     df = pd.DataFrame(all_rows, columns=["timestamp", *COLUMNS])
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
     df = df.drop_duplicates("timestamp").set_index("timestamp").sort_index()
@@ -78,7 +78,12 @@ def load_ohlcv(
     cached: pd.DataFrame | None = None
     if path.exists():
         cached = pd.read_csv(path, index_col="timestamp", parse_dates=True)
-        cached.index = pd.DatetimeIndex(cached.index, tz="UTC") if cached.index.tz is None else cached.index
+        cached_index = pd.DatetimeIndex(cached.index)
+        cached.index = (
+            cached_index.tz_localize("UTC")
+            if cached_index.tz is None
+            else cached_index.tz_convert("UTC")
+        )
 
     if refresh:
         ex = _make_exchange(exchange_id)
@@ -86,8 +91,13 @@ def load_ohlcv(
             start_ms = int(cached.index[-1].timestamp() * 1000)
         else:
             start_ms = int(pd.Timestamp(since, tz="UTC").timestamp() * 1000)
-        log.info("Téléchargement %s %s %s depuis %s", exchange_id, symbol, timeframe,
-                 pd.Timestamp(start_ms, unit="ms", tz="UTC"))
+        log.info(
+            "Téléchargement %s %s %s depuis %s",
+            exchange_id,
+            symbol,
+            timeframe,
+            pd.Timestamp(start_ms, unit="ms", tz="UTC"),
+        )
         fresh = _fetch_paginated(ex, symbol, timeframe, start_ms)
         df = pd.concat([cached, fresh]) if cached is not None else fresh
         df = df[~df.index.duplicated(keep="last")].sort_index()

@@ -4,7 +4,16 @@ Description=btcquant - résumé quotidien Telegram
 [Service]
 Type=oneshot
 User=btcquant
-WorkingDirectory=/opt/btcquant
+WorkingDirectory=/opt/btcquant/current
 Environment=PYTHONIOENCODING=utf-8
 EnvironmentFile=-/opt/btcquant/.env
-ExecStart=/opt/btcquant/venv/bin/python scripts/daily_digest.py
+ExecStart=/opt/btcquant/current/venv/bin/btcquant-digest
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/btcquant/state
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+LockPersonality=true

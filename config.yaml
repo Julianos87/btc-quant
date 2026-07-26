@@ -80,9 +80,10 @@ strategies:
       max_bars_held: 48
 
 execution:
-  mode: paper             # paper | live  — NE PASSER EN live QU'APRÈS VALIDATION
+  mode: paper             # seule valeur autorisée par la Safety Baseline
   testnet: true           # sandbox Binance quand mode=live
-  state_file: state/live_state.json
+  state_file: state/btcquant_1x.db
+  legacy_state_file: state/live_state.json
   poll_buffer_seconds: 20 # marge après la clôture de bougie avant de lire les données
   live_exchange: hyperliquid          # venue des runners (backtest : exchange: ci-dessus)
   live_symbol: "BTC/USDC:USDC"

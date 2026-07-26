@@ -10,8 +10,10 @@ Usage : python scripts/make_yearly_reference.py [--no-refresh]
 """
 
 import argparse
+import hashlib
 import json
 import logging
+import subprocess
 import sys
 from datetime import date
 from pathlib import Path
@@ -23,8 +25,14 @@ import pandas as pd
 
 from btcquant.backtest import BacktestEngine
 from btcquant.carry import add_funding_columns, backtest_carry, load_funding
-from btcquant.config import build_strategies, load_config, risk_from_config
+from btcquant.config import (
+    build_strategies,
+    execution_config_from_config,
+    load_config,
+    risk_from_config,
+)
 from btcquant.data import TIMEFRAME_TO_PANDAS, load_ohlcv, resample
+from btcquant.domain import ExecutionSimulator
 from btcquant.risk import RiskConfig
 
 log = logging.getLogger(__name__)
@@ -37,31 +45,56 @@ CARRY_EXIT_ANN = 0.0
 CARRY_SMOOTH_DAYS = 14
 
 
+def _portable_bytes(path: Path) -> bytes:
+    """Normalise les fichiers texte suivis entre Windows et Linux."""
+
+    return path.read_bytes().replace(b"\r\n", b"\n")
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(_portable_bytes(path)).hexdigest()
+
+
+def _source_tree_sha256() -> str:
+    digest = hashlib.sha256()
+    for path in sorted((ROOT / "src").rglob("*.py")):
+        digest.update(path.relative_to(ROOT).as_posix().encode())
+        digest.update(b"\0")
+        digest.update(_portable_bytes(path))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
 def trend_equity(cfg: dict, base: pd.DataFrame, refresh: bool) -> pd.Series:
     """Équity du moteur trend : somme des slots de config_4x.yaml (comme run_backtest)."""
     risk = risk_from_config(cfg)
     curves = []
     for strategy, fraction, market in build_strategies(cfg):
-        df = base if strategy.timeframe == cfg["data"]["base_timeframe"] else resample(
-            base, TIMEFRAME_TO_PANDAS[strategy.timeframe]
+        df = (
+            base
+            if strategy.timeframe == cfg["data"]["base_timeframe"]
+            else resample(base, TIMEFRAME_TO_PANDAS[strategy.timeframe])
         )
-        slot_risk = RiskConfig(**{**risk.__dict__, "initial_capital": risk.initial_capital * fraction})
+        slot_risk = RiskConfig(
+            **{**risk.__dict__, "initial_capital": risk.initial_capital * fraction}
+        )
         is_perp = market == "perp"
         if is_perp:
             try:
-                fund = load_funding(f"{cfg['symbol']}:{cfg['quote_currency']}",
-                                    data_dir=ROOT / "data", refresh=refresh)
-                df = add_funding_columns(
-                    df, fund, TIMEFRAME_TO_PANDAS[strategy.timeframe]
+                fund = load_funding(
+                    f"{cfg['symbol']}:{cfg['quote_currency']}",
+                    data_dir=ROOT / "data",
+                    refresh=refresh,
                 )
+                df = add_funding_columns(df, fund, TIMEFRAME_TO_PANDAS[strategy.timeframe])
             except Exception as e:
                 log.warning("Funding réel indisponible (%s), constante plate utilisée", e)
+        fee_rate = cfg["costs"]["perp_fee_rate"] if is_perp else cfg["costs"]["fee_rate"]
         engine = BacktestEngine(
-            fee_rate=cfg["costs"]["perp_fee_rate"] if is_perp else cfg["costs"]["fee_rate"],
-            slippage_bps=cfg["costs"]["slippage_bps"],
             risk=slot_risk,
             funding_rate_8h=cfg["costs"].get("funding_rate_8h", 0.0) if is_perp else 0.0,
             allow_short=is_perp,
+            execution_simulator=ExecutionSimulator(execution_config_from_config(cfg, fee_rate)),
         )
         curves.append(engine.run(strategy, df).equity)
     return pd.concat(curves, axis=1, sort=True).ffill().dropna().sum(axis=1)
@@ -81,7 +114,9 @@ def yearly_stats(daily: pd.Series) -> dict[int, dict]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default=ROOT / "config_4x.yaml")
-    parser.add_argument("--no-refresh", action="store_true", help="utilise uniquement le cache local")
+    parser.add_argument(
+        "--no-refresh", action="store_true", help="utilise uniquement le cache local"
+    )
     args = parser.parse_args()
     refresh = not args.no_refresh
 
@@ -89,21 +124,34 @@ def main() -> None:
     cfg = load_config(args.config)
 
     base = load_ohlcv(
-        cfg["exchange"], cfg["symbol"], cfg["data"]["base_timeframe"],
-        cfg["data"]["since"], data_dir=ROOT / cfg["data"]["dir"], refresh=refresh,
+        cfg["exchange"],
+        cfg["symbol"],
+        cfg["data"]["base_timeframe"],
+        cfg["data"]["since"],
+        data_dir=ROOT / cfg["data"]["dir"],
+        refresh=refresh,
     )
-    print(f"Données : {len(base)} bougies, {base.index[0]} → {base.index[-1]}")
+    print(f"Données : {len(base)} bougies, {base.index[0]} -> {base.index[-1]}")
 
     trend = trend_equity(cfg, base, refresh).resample("1D").last().dropna()
     funding = load_funding(data_dir=ROOT / "data", refresh=refresh)
-    carry = backtest_carry(
-        funding, initial_capital=CARRY_CAPITAL, leverage=CARRY_LEVERAGE,
-        enter_ann=CARRY_ENTER_ANN, exit_ann=CARRY_EXIT_ANN, smooth_days=CARRY_SMOOTH_DAYS,
-    )["equity"].resample("1D").last().dropna()
+    carry = (
+        backtest_carry(
+            funding,
+            initial_capital=CARRY_CAPITAL,
+            leverage=CARRY_LEVERAGE,
+            enter_ann=CARRY_ENTER_ANN,
+            exit_ann=CARRY_EXIT_ANN,
+            smooth_days=CARRY_SMOOTH_DAYS,
+        )["equity"]
+        .resample("1D")
+        .last()
+        .dropna()
+    )
 
     idx = trend.index.intersection(carry.index)
     portfolio = trend[idx] + carry[idx]
-    btc = base["close"].resample("1D").last().dropna()[idx[0]:]
+    btc = base["close"].resample("1D").last().dropna()[idx[0] :]
 
     stats = {
         "portfolio": yearly_stats(portfolio),
@@ -114,29 +162,55 @@ def main() -> None:
     current_year = date.today().year
     years = []
     for year in sorted(stats["portfolio"]):
-        years.append({
-            "year": year,
-            "portfolio": stats["portfolio"][year]["ret"],
-            "trend": stats["trend"][year]["ret"],
-            "carry": stats["carry"][year]["ret"],
-            "btc": stats["btc"].get(year, {}).get("ret"),
-            "max_dd": stats["portfolio"][year]["max_dd"],
-            "partial": year == current_year or year == int(idx[0].year) and idx[0].dayofyear > 5,
-        })
+        years.append(
+            {
+                "year": year,
+                "portfolio": stats["portfolio"][year]["ret"],
+                "trend": stats["trend"][year]["ret"],
+                "carry": stats["carry"][year]["ret"],
+                "btc": stats["btc"].get(year, {}).get("ret"),
+                "max_dd": stats["portfolio"][year]["max_dd"],
+                "partial": year == current_year
+                or year == int(idx[0].year)
+                and idx[0].dayofyear > 5,
+            }
+        )
 
     out = {
+        "schema_version": 2,
         "generated": date.today().isoformat(),
         "profile": "portefeuille 60/40 — trend 4x (Donchian 20/55/100) + carry 3x, funding réel",
         "span": [str(idx[0].date()), str(idx[-1].date())],
+        "provenance": {
+            "base_git_commit": subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+            ).strip(),
+            "source_tree_sha256": _source_tree_sha256(),
+            "config": {
+                "path": Path(args.config).resolve().relative_to(ROOT).as_posix(),
+                "sha256": _sha256(Path(args.config)),
+            },
+            "base_data_sha256": _sha256(
+                ROOT
+                / cfg["data"]["dir"]
+                / (
+                    f"{cfg['exchange']}_{cfg['symbol'].replace('/', '-')}_"
+                    f"{cfg['data']['base_timeframe']}.csv"
+                )
+            ),
+            "base_rows": len(base),
+        },
         "years": years,
     }
     dest = ROOT / "dashboard" / "yearly_reference.json"
     dest.write_text(json.dumps(out, indent=2), encoding="utf-8")
     print(f"\n{'année':>6} {'portefeuille':>13} {'trend':>8} {'carry':>8} {'BTC':>8} {'max DD':>8}")
     for y in years:
-        print(f"{y['year']:>6} {y['portfolio']:>+12.1%} {y['trend']:>+7.1%} {y['carry']:>+7.1%} "
-              f"{(y['btc'] if y['btc'] is not None else float('nan')):>+7.1%} {y['max_dd']:>7.1%}"
-              + ("  (partielle)" if y["partial"] else ""))
+        print(
+            f"{y['year']:>6} {y['portfolio']:>+12.1%} {y['trend']:>+7.1%} {y['carry']:>+7.1%} "
+            f"{(y['btc'] if y['btc'] is not None else float('nan')):>+7.1%} {y['max_dd']:>7.1%}"
+            + ("  (partielle)" if y["partial"] else "")
+        )
     print(f"\nÉcrit : {dest}")
 
 

@@ -3,10 +3,10 @@ Description=btcquant - rééquilibrage 60/40 mensuel (arrêt/relance des moteurs
 
 [Service]
 Type=oneshot
-# root requis : le wrapper arrête et relance les services des moteurs —
-# sans quoi les runners écrasent le rééquilibrage avec leur état mémoire
 User=root
-WorkingDirectory=/opt/btcquant
-Environment=PYTHONIOENCODING=utf-8
-EnvironmentFile=-/opt/btcquant/.env
-ExecStart=/usr/bin/bash scripts/rebalance_safe.sh
+ExecStart=/usr/local/libexec/btcquant-rebalance
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/btcquant/state

@@ -1,0 +1,32 @@
+[Unit]
+Description=btcquant - trend Hyperliquid TESTNET
+After=network-online.target
+Wants=network-online.target
+Conflicts=btcquant-trend.service
+ConditionPathExists=/opt/btcquant/state/HYPERLIQUID_TESTNET_APPROVED
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=btcquant
+WorkingDirectory=/opt/btcquant/current
+Environment=PYTHONIOENCODING=utf-8
+Environment=BTCQUANT_ENABLE_TESTNET=I_ACCEPT_TESTNET_ORDERS
+EnvironmentFile=/opt/btcquant/.env
+ExecStart=/opt/btcquant/current/venv/bin/btcquant-trend --config config_testnet.yaml
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/btcquant/state
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

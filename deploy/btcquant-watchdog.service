@@ -3,8 +3,16 @@ Description=btcquant - watchdog (détection moteur figé)
 
 [Service]
 Type=oneshot
-User=root
-WorkingDirectory=/opt/btcquant
+User=btcquant
+WorkingDirectory=/opt/btcquant/current
 Environment=PYTHONIOENCODING=utf-8
 EnvironmentFile=-/opt/btcquant/.env
-ExecStart=/opt/btcquant/venv/bin/python scripts/watchdog.py
+ExecStart=/opt/btcquant/current/venv/bin/btcquant-watchdog
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/btcquant/state
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+LockPersonality=true

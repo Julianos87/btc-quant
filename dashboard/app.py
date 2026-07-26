@@ -1,15 +1,14 @@
 """Dashboard local du portefeuille 60/40 (paper trading).
 
 Lit les états et journaux réels des runners — aucune donnée simulée.
-Usage : python dashboard/app.py  (puis http://localhost:8666)
+Usage local : python -m dashboard.app  (puis http://localhost:8666)
 """
 
 from __future__ import annotations
 
 import gzip
-import hmac
 import json
-import math
+import logging
 import os
 import re
 import threading
@@ -18,14 +17,32 @@ from pathlib import Path
 
 import ccxt
 import pandas as pd
-from flask import Flask, Response, jsonify, request, send_file
+from flask import Flask, Response, jsonify, make_response, redirect, request
+from dashboard.auth import DashboardAuthenticator
+from dashboard.web import web
+from btcquant.reporting.analytics import (
+    best_and_worst_day,
+    carry_funding_curve,
+    combined_equity,
+    deposits_total,
+    live_metrics,
+    net_of_flows,
+    trade_analytics,
+)
+from btcquant.reporting.repository import ReportingReadError, ReportingRepository
+from btcquant.execution.health import execution_health
+from btcquant.execution.readiness import evaluate_readiness
+from btcquant.execution.state_store import StateStore
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 ROOT = Path(__file__).resolve().parents[1]
+log = logging.getLogger(__name__)
 STATE = ROOT / "state"
+repository = ReportingRepository(STATE)
 START_TIME = time.time()  # démarrage du serveur dashboard (uptime)
 
 app = Flask(__name__)
+app.register_blueprint(web)
 # Derrière un reverse proxy TLS (nginx, Caddy...) : Flask n'écoute qu'en
 # 127.0.0.1 (DASHBOARD_HOST), donc le seul appelant possible de X-Forwarded-*
 # est ce proxy lui-même — faire confiance à UN SEUL hop est donc sûr (x_proto=1
@@ -34,11 +51,10 @@ app = Flask(__name__)
 # et ProxyFix ne change rien.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
-# ── accès par lien secret (« capability URL ») ───────────────────────────────
-# Le dashboard est exposé sur Internet : sans garde, équity, positions, stops
-# et logs seraient publics. Plutôt qu'un mot de passe à retaper, on utilise un
-# jeton long et aléatoire (DASHBOARD_TOKEN) : la première visite avec ?k=<jeton>
-# pose un cookie d'un an, et plus rien n'est jamais demandé ensuite.
+# ── session dashboard ───────────────────────────────────────────────────────
+# DASHBOARD_TOKEN est saisi par POST sur /login : il n'apparaît donc ni dans
+# l'URL, ni dans l'historique, ni dans les logs du proxy ou le manifest.
+# Le navigateur reçoit seulement une preuve signée à durée limitée.
 #
 # Toutes les routes sont en lecture seule (aucune ne passe d'ordre ni ne modifie
 # l'état) : le jeton protège la confidentialité, pas l'intégrité.
@@ -46,39 +62,86 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 # Sans DASHBOARD_TOKEN défini, seul localhost est servi (usage en dev).
 # Révocation : changer DASHBOARD_TOKEN dans .env et redémarrer le service.
 AUTH_TOKEN = os.environ.get("DASHBOARD_TOKEN")
-COOKIE_NAME = "tandem_key"
-COOKIE_MAX_AGE = 365 * 24 * 3600
+COOKIE_NAME = "tandem_session"
+COOKIE_MAX_AGE = 12 * 3600
+authenticator = DashboardAuthenticator(
+    lambda: AUTH_TOKEN,
+    cookie_name=COOKIE_NAME,
+    max_age=COOKIE_MAX_AGE,
+)
+
+
+@app.errorhandler(ReportingReadError)
+def _reporting_unavailable(error: ReportingReadError):
+    app.logger.error("Source de reporting indisponible: %s", error)
+    return jsonify({"error": "reporting_unavailable"}), 503
 
 
 @app.before_request
 def _guard():
-    if not AUTH_TOKEN:
+    if request.path in ("/login", "/healthz"):
+        return None
+    if not authenticator.configured:
         if request.remote_addr not in ("127.0.0.1", "::1"):
             return Response("Accès refusé : définir DASHBOARD_TOKEN pour l'accès distant.", 403)
         return None
-    # jeton fourni dans l'URL (première visite / lien en favori) ou déjà en cookie
-    supplied = request.args.get("k") or request.cookies.get(COOKIE_NAME) or ""
-    if not hmac.compare_digest(supplied, AUTH_TOKEN):
-        # 404 plutôt que 401 : ne révèle pas qu'il y a quelque chose à trouver ici
-        return Response("Not Found", 404)
+    if not authenticator.valid_session(request.cookies.get(COOKIE_NAME) or ""):
+        return redirect("/login", code=303)
     return None
+
+
+@app.get("/healthz")
+def healthz():
+    """Sonde minimale sans donnée métier ni accès exchange."""
+
+    return jsonify({"status": "ok"})
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if not authenticator.configured:
+        return redirect("/")
+    error = ""
+    if request.method == "POST":
+        supplied = request.form.get("token") or ""
+        if authenticator.verify_token(supplied):
+            response = make_response(redirect("/", code=303))
+            authenticator.set_session_cookie(response, secure=request.is_secure)
+            return response
+        error = "Accès refusé"
+    return Response(
+        """<!doctype html><html lang="fr"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Connexion TANDEM</title>
+<style>body{font:16px system-ui;background:#0b1020;color:#eef2ff;display:grid;
+place-items:center;height:100vh;margin:0}form{display:grid;gap:16px;width:min(360px,85vw);
+padding:28px;background:#151c30;border-radius:14px}input,button{font:inherit;padding:12px;
+border-radius:8px;border:1px solid #3b4664}button{cursor:pointer;font-weight:700}</style>
+<form method="post"><h1>TANDEM</h1><label>Jeton d’accès
+<input type="password" name="token" required autocomplete="current-password"></label>
+<button type="submit">Se connecter</button>"""
+        + (f"<p>{error}</p>" if error else "")
+        + "</form></html>",
+        status=403 if error else 200,
+        mimetype="text/html",
+    )
 
 
 @app.after_request
 def _security_headers(resp: Response) -> Response:
     """En-têtes défensifs pour un dashboard exposé sur Internet :
-    - Referrer-Policy : empêche le jeton `?k=...` de fuiter dans l'en-tête
-      Referer d'une requête vers un tiers (ex. Google Fonts) ;
+    - Referrer-Policy : évite de divulguer les chemins de navigation ;
     - X-Content-Type-Options / X-Frame-Options / CSP : durcissement standard
       contre le sniffing MIME, le clickjacking et l'injection de script."""
     resp.headers["Referrer-Policy"] = "no-referrer"
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["Cache-Control"] = "no-store"
     resp.headers.setdefault(
         "Content-Security-Policy",
         "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
         "font-src https://fonts.gstatic.com; img-src 'self' data:; "
-        "connect-src 'self'; script-src 'self' 'unsafe-inline'",
+        "connect-src 'self'; script-src 'self'",
     )
     return resp
 
@@ -90,8 +153,8 @@ def _gzip_response(resp: Response) -> Response:
     if (
         resp.status_code == 200
         and not resp.direct_passthrough
-        and resp.mimetype in ("application/json", "text/csv", "application/javascript",
-                              "image/svg+xml", "text/html")
+        and resp.mimetype
+        in ("application/json", "text/csv", "application/javascript", "image/svg+xml", "text/html")
         and (resp.content_length or 0) > 512
         and "gzip" in request.headers.get("Accept-Encoding", "")
     ):
@@ -103,18 +166,26 @@ def _gzip_response(resp: Response) -> Response:
     return resp
 
 
-@app.after_request
-def _persist_token(resp: Response) -> Response:
-    """Après une visite avec ?k=<jeton> valide, on mémorise le jeton en cookie :
-    l'utilisateur n'a plus jamais à le fournir (y compris en PWA installée)."""
-    if AUTH_TOKEN and request.args.get("k") and request.cookies.get(COOKIE_NAME) != AUTH_TOKEN:
-        resp.set_cookie(
-            COOKIE_NAME, AUTH_TOKEN, max_age=COOKIE_MAX_AGE,
-            httponly=True, samesite="Lax", secure=request.is_secure,
-        )
-    return resp
-
 _cache: dict = {}
+_warm_thread: threading.Thread | None = None
+_warm_thread_lock = threading.Lock()
+
+
+def start_warm_loop() -> None:
+    """Démarre une seule boucle de préchauffage par processus WSGI."""
+
+    global _warm_thread
+    with _warm_thread_lock:
+        if _warm_thread is not None and _warm_thread.is_alive():
+            return
+        _warm_thread = threading.Thread(
+            target=_warm_loop,
+            name="dashboard-warm-cache",
+            daemon=True,
+        )
+        _warm_thread.start()
+
+
 # les objets ccxt ne sont pas thread-safe ; le serveur Flask sert les requêtes
 # en parallèle (9 fetchs simultanés au chargement de la page) → on sérialise
 # tous les appels exchange derrière un verrou pour éviter les races.
@@ -126,7 +197,7 @@ _ex_lock = threading.Lock()
 # 24 h via les bougies 1h, funding via l'historique des paiements (horaires).
 SYMBOL = "BTC/USDC:USDC"
 #: capital initial du portefeuille 60/40 (6 000 trend + 4 000 carry) — base des
-#: métriques de performance ; les apports ultérieurs passent par flows.csv
+#: métriques de performance ; les apports ultérieurs passent par le journal SQLite
 INITIAL_CAPITAL = 10_000.0
 
 
@@ -156,7 +227,12 @@ def _cached(key: str, ttl: float, fn):
             value = fn()
         _cache[key] = (now, value)
         return value
-    except Exception:
+    except Exception as error:
+        log.warning(
+            "Source réseau dashboard indisponible pour %s (%s)",
+            key,
+            type(error).__name__,
+        )
         return hit[1] if hit else None
 
 
@@ -195,11 +271,11 @@ def _get_fx_eur() -> float | None:
 
 #     (clé cache, TTL endpoint, TTL préchauffage, fetch)
 _WARM_JOBS = [
-    ("price",   30,   20, lambda: _timed("api", _get_price)),
-    ("ohlcv1h", 300,  240, _get_candles_1h),
-    ("ohlcv4h", 300,  240, _get_candles_4h),
-    ("funding", 300,  240, _get_funding),
-    ("fx_eur",  3600, 3000, _get_fx_eur),
+    ("price", 30, 20, lambda: _timed("api", _get_price)),
+    ("ohlcv1h", 300, 240, _get_candles_1h),
+    ("ohlcv4h", 300, 240, _get_candles_4h),
+    ("funding", 300, 240, _get_funding),
+    ("fx_eur", 3600, 3000, _get_fx_eur),
 ]
 
 
@@ -216,15 +292,21 @@ def _warm_loop() -> None:
         time.sleep(10)
 
 
+def _repository() -> ReportingRepository:
+    """Suit le répertoire STATE actif (tests, staging ou production)."""
+
+    global repository
+    if repository.state_dir != STATE:
+        repository = ReportingRepository(STATE)
+    return repository
+
+
 def _read_json(path: Path) -> dict | None:
-    try:
-        return json.loads(path.read_text())
-    except Exception:
-        return None
+    return _repository().read_json(path)
 
 
 def _age_seconds(path: Path) -> float | None:
-    return time.time() - path.stat().st_mtime if path.exists() else None
+    return _repository().age_seconds(path)
 
 
 # ── cache de parsing des CSV d'état ──────────────────────────────────────────
@@ -235,95 +317,31 @@ _parse_cache: dict = {}
 
 
 def _file_key(path: Path) -> tuple | None:
-    try:
-        st = path.stat()
-        return (st.st_mtime_ns, st.st_size)
-    except OSError:
-        return None
+    return _repository().file_key(path)
 
 
-def _parsed(path: Path, parser):
-    key = _file_key(path)
-    hit = _parse_cache.get(str(path))
-    if hit is not None and hit[0] == key:
-        return hit[1]
-    value = parser(path)
-    _parse_cache[str(path)] = (key, value)
-    return value
-
-
-def _parse_equity(path: Path) -> pd.Series:
-    """Lecture tolérante : le runner peut être en train d'appendre — une
-    dernière ligne tronquée ne doit pas faire un 500 sur tout l'endpoint."""
-    if not path.exists():
-        return pd.Series(dtype=float)
-    try:
-        df = pd.read_csv(path, on_bad_lines="skip")
-        ts = pd.to_datetime(df["ts"], utc=True, format="ISO8601", errors="coerce")
-        s = pd.Series(df["equity"].values, index=ts)
-        return s[s.index.notna()].sort_index()
-    except Exception:
-        return pd.Series(dtype=float)
+def _database_key() -> tuple:
+    return _repository().database_key()
 
 
 def _read_equity(name: str) -> pd.Series:
-    return _parsed(STATE / name, _parse_equity)
-
-
-def _parse_trades(path: Path) -> pd.DataFrame:
-    """Même tolérance pour trades.csv (append concurrent par le runner)."""
-    if not path.exists():
-        return pd.DataFrame()
-    try:
-        return pd.read_csv(path, on_bad_lines="skip")
-    except Exception:
-        return pd.DataFrame()
+    return _repository().read_equity(name)
 
 
 def _read_trades() -> pd.DataFrame:
-    return _parsed(STATE / "trades.csv", _parse_trades)
-
-
-def _parse_flows(path: Path) -> pd.DataFrame:
-    """Journal des flux externes (apports, transferts entre poches) écrit par
-    scripts/rebalance.py. Colonnes : ts, kind, trend_flow, carry_flow."""
-    empty = pd.DataFrame(columns=["ts", "kind", "trend_flow", "carry_flow"])
-    if not path.exists():
-        return empty
-    try:
-        df = pd.read_csv(path, on_bad_lines="skip")
-        df["ts"] = pd.to_datetime(df["ts"], utc=True, format="ISO8601", errors="coerce")
-        # une ligne tronquée peut garder un timestamp lisible mais des montants
-        # absents (NaN) : on n'accepte que les lignes complètes
-        ok = df["ts"].notna() & df["trend_flow"].notna() & df["carry_flow"].notna()
-        return df[ok].sort_values("ts")
-    except Exception:
-        return empty
+    return _repository().read_trades()
 
 
 def _read_flows() -> pd.DataFrame:
-    return _parsed(STATE / "flows.csv", _parse_flows)
+    return _repository().read_flows()
 
 
 def _deposits_total(flows: pd.DataFrame) -> float:
-    """Somme des apports (les transferts entre poches s'annulent)."""
-    if not len(flows):
-        return 0.0
-    return float((flows["trend_flow"] + flows["carry_flow"]).sum())
+    return deposits_total(flows)
 
 
 def _net_of_flows(s: pd.Series, flows: pd.DataFrame, col: str) -> pd.Series:
-    """Soustrait d'une série d'équity le cumul des flux externes de sa poche
-    (col = "trend_flow" ou "carry_flow"). À appliquer sur les échantillons
-    NATIFS, avant tout resampling : les moteurs sont arrêtés pendant un
-    rebalance, donc le premier échantillon qui suit un flux l'inclut déjà —
-    la série nette reste continue, sans faux creux ni faux gain."""
-    if not len(s) or not len(flows):
-        return s
-    # agrégation par timestamp : deux flux au même instant (apport + transfert
-    # dans le même run de rebalance) feraient échouer le reindex (labels dupliqués)
-    cum = flows.groupby("ts")[col].sum().cumsum()
-    return s - cum.reindex(s.index, method="ffill").fillna(0.0)
+    return net_of_flows(s, flows, col)
 
 
 def _timed(label: str, fn):
@@ -345,10 +363,13 @@ def _combined_equity(net_of_flows: bool = False) -> pd.Series:
     Mise en cache sur les (mtime, taille) des trois CSV : cinq endpoints la
     recalculent à chaque chargement de page, le resampling minute est le
     poste de calcul le plus cher du dashboard."""
-    key = (net_of_flows,
-           _file_key(STATE / "equity_trend.csv"),
-           _file_key(STATE / "equity_carry.csv"),
-           _file_key(STATE / "flows.csv"))
+    key = (
+        net_of_flows,
+        _database_key(),
+        _file_key(STATE / "equity_trend.csv"),
+        _file_key(STATE / "equity_carry.csv"),
+        _file_key(STATE / "flows.csv"),
+    )
     hit = _parse_cache.get(f"combined_{net_of_flows}")
     if hit is not None and hit[0] == key:
         return hit[1]
@@ -361,126 +382,13 @@ def _combined_equity(net_of_flows: bool = False) -> pd.Series:
             flows = _read_flows()
             trend = _net_of_flows(trend, flows, "trend_flow")
             carry = _net_of_flows(carry, flows, "carry_flow")
-        t = trend.resample("1min").last().ffill()
-        c = carry.resample("1min").last().ffill()
-        idx = t.index.intersection(c.index)
-        combined = (t[idx] + c[idx]).dropna()
+        combined = combined_equity(trend, carry)
     _parse_cache[f"combined_{net_of_flows}"] = (key, combined)
     return combined
 
 
 def _live_metrics() -> dict:
-    """Sharpe / Sortino / Calmar glissants + drawdown sur l'équity combinée
-    (rendements journaliers), apports neutralisés. Renvoie None quand
-    l'historique est trop court."""
-    comb = _combined_equity(net_of_flows=True)
-    out = {"sharpe": None, "sortino": None, "calmar": None, "cagr": None,
-           "max_dd": None, "cur_dd": None, "vol_annual": None, "days": 0}
-    if len(comb) < 3:
-        return out
-    daily = comb.resample("1D").last().dropna()
-    out["days"] = int((comb.index[-1] - comb.index[0]).total_seconds() // 86400)
-    max_dd = float((comb / comb.cummax() - 1.0).min())
-    out["max_dd"] = max_dd
-    out["cur_dd"] = float(comb.iloc[-1] / comb.cummax().iloc[-1] - 1.0)
-    years = (comb.index[-1] - comb.index[0]).total_seconds() / (365.25 * 86400)
-    if years > 0:
-        # base = capital investi, PAS le premier point enregistré : le carry paie
-        # ses frais d'entrée avant le premier tick (série démarrée à 9 976 au lieu
-        # de 10 000), et partir du creux affichait +9 %/an sur un portefeuille en
-        # perte. Les apports étant neutralisés (net_of_flows), la base est fixe.
-        cagr = (comb.iloc[-1] / INITIAL_CAPITAL) ** (1.0 / years) - 1.0
-        out["cagr"] = float(cagr)
-        if max_dd < 0:
-            out["calmar"] = float(cagr / abs(max_dd))
-    rets = daily.pct_change().dropna()
-    # moins de 14 rendements journaliers : un Sharpe annualisé n'a aucun sens
-    # (le premier jour affichait 37) — on rend None, le front affiche « — »
-    if len(rets) >= 14 and rets.std() > 0:
-        sq = math.sqrt(365)
-        out["sharpe"] = float(rets.mean() / rets.std() * sq)
-        out["vol_annual"] = float(rets.std() * sq)
-        downside = rets[rets < 0]
-        if len(downside) > 1 and downside.std() > 0:
-            out["sortino"] = float(rets.mean() / downside.std() * sq)
-    return out
-
-
-@app.route("/")
-def index():
-    return send_file(Path(__file__).parent / "index.html")
-
-
-ICON_SVG = """<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>
-<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>
-<stop offset='0' stop-color='#3d8bec'/><stop offset='1' stop-color='#6b4de0'/></linearGradient></defs>
-<rect width='100' height='100' rx='22' fill='url(#g)'/>
-<text x='50' y='68' font-size='52' text-anchor='middle' fill='white'
- font-family='system-ui' font-weight='700'>&#8383;</text></svg>"""
-
-
-@app.route("/icon.svg")
-def icon():
-    return Response(ICON_SVG, mimetype="image/svg+xml")
-
-
-@app.route("/manifest.json")
-def manifest():
-    return jsonify(
-        {
-            "name": "Tandem",
-            "short_name": "Tandem",
-            "description": "Portefeuille systématique 60/40 — suivi paper trading",
-            # le jeton reste dans l'URL de lancement : si le cookie de la PWA
-            # expire ou est purgé, l'app se ré-authentifie seule au démarrage
-            "start_url": f"/?k={AUTH_TOKEN}" if AUTH_TOKEN else "/",
-            "display": "standalone",
-            "background_color": "#0a0b0d",
-            "theme_color": "#0a0b0d",
-            "icons": [{"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml"}],
-        }
-    )
-
-
-SERVICE_WORKER = """
-// Service worker btcquant : cache offline léger + support notifications.
-const CACHE = 'btcq-v1';
-self.addEventListener('install', e => { self.skipWaiting(); });
-self.addEventListener('activate', e => { e.waitUntil(clients.claim()); });
-self.addEventListener('fetch', e => {
-  const url = new URL(e.request.url);
-  // les API passent toujours par le réseau ; le shell est mis en cache
-  if (url.pathname.startsWith('/api/')) return;
-  e.respondWith(
-    fetch(e.request).then(r => {
-      const copy = r.clone();
-      caches.open(CACHE).then(c => c.put(e.request, copy)).catch(()=>{});
-      return r;
-    }).catch(() => caches.match(e.request))
-  );
-});
-// affichage d'une notification demandée par la page (postMessage)
-self.addEventListener('message', e => {
-  if (e.data && e.data.type === 'notify') {
-    self.registration.showNotification(e.data.title, {
-      body: e.data.body, icon: '/icon.svg', badge: '/icon.svg', tag: e.data.tag,
-    });
-  }
-});
-self.addEventListener('notificationclick', e => {
-  e.notification.close();
-  e.waitUntil(clients.matchAll({type:'window'}).then(cs => {
-    for (const c of cs) if ('focus' in c) return c.focus();
-    return clients.openWindow('/');
-  }));
-});
-"""
-
-
-@app.route("/sw.js")
-def service_worker():
-    return Response(SERVICE_WORKER, mimetype="application/javascript",
-                    headers={"Cache-Control": "no-cache"})
+    return live_metrics(_combined_equity(net_of_flows=True), INITIAL_CAPITAL)
 
 
 @app.route("/api/summary")
@@ -506,10 +414,14 @@ def summary():
     trend_age = _age_seconds(STATE / "live_state_4x.json")
     carry_age = _age_seconds(STATE / "carry_state.json")
 
-    trend_equity = float(trend_eq.iloc[-1]) if len(trend_eq) else sum(
-        s.get("cash", 0.0) for s in trend_state.get("slots", {}).values()
+    trend_equity = (
+        float(trend_eq.iloc[-1])
+        if len(trend_eq)
+        else sum(s.get("cash", 0.0) for s in trend_state.get("slots", {}).values())
     )
-    carry_equity = float(carry_state.get("equity", 0.0))
+    carry_equity = (
+        float(carry_eq.iloc[-1]) if len(carry_eq) else float(carry_state.get("equity", 0.0))
+    )
     total = trend_equity + carry_equity
     initial_total = INITIAL_CAPITAL
     flows = _read_flows()
@@ -534,7 +446,12 @@ def summary():
     slots = []
     for name, s in trend_state.get("slots", {}).items():
         pos = s.get("position")
-        row = {"name": name, "cash": s.get("cash"), "state": "FLAT", "last_bar": s.get("last_bar_ts")}
+        row = {
+            "name": name,
+            "cash": s.get("cash"),
+            "state": "FLAT",
+            "last_bar": s.get("last_bar_ts"),
+        }
         if pos:
             direction = pos.get("direction", 1)
             upnl = None
@@ -542,8 +459,11 @@ def summary():
                 upnl = direction * pos["qty"] * (price - pos["entry_price"])
             row.update(
                 state="LONG" if direction == 1 else "SHORT",
-                qty=pos["qty"], entry=pos["entry_price"], stop=pos["stop_price"],
-                bars=pos.get("bars_held"), upnl=upnl,
+                qty=pos["qty"],
+                entry=pos["entry_price"],
+                stop=pos["stop_price"],
+                bars=pos.get("bars_held"),
+                upnl=upnl,
             )
         slots.append(row)
 
@@ -562,6 +482,14 @@ def summary():
     # prochaine bougie 4h (le trend décide à la clôture des bougies 4h UTC)
     now_ts = pd.Timestamp.now(tz="UTC")
     next_bar = now_ts.floor("4h") + pd.Timedelta(hours=4)
+    operational: dict = {"execution": {}, "open_incidents": []}
+    database = STATE / "btcquant.db"
+    if database.exists():
+        store = StateStore(database, initialize=False)
+        operational["execution"] = {
+            engine: execution_health(store, engine).to_dict() for engine in ("trend", "carry")
+        }
+        operational["open_incidents"] = store.read_incidents(open_only=True)
 
     return jsonify(
         {
@@ -599,7 +527,7 @@ def summary():
                 "initial": initial_total,
                 "deposits": deposits,
                 "pnl": total - invested,
-                "pnl_pct": total / invested - 1.0,
+                "pnl_pct": total / invested - 1.0 if invested > 0 else None,
                 "day_pnl_pct": day_pnl_pct,
                 "allocation_trend": trend_equity / total if total else None,
                 "gross_notional": gross_notional,
@@ -609,8 +537,28 @@ def summary():
                 "server_uptime_s": time.time() - START_TIME,
                 "api_latency_ms": _cache.get("api_ms"),
                 "next_bar_ts": int(next_bar.timestamp() * 1000),
+                **operational,
             },
             "fx": {"eur_usd": eur_usd},
+        }
+    )
+
+
+@app.route("/api/operations")
+def operations():
+    database = STATE / "btcquant.db"
+    if not database.exists():
+        return jsonify({"execution": {}, "incidents": []})
+    store = StateStore(database, initialize=False)
+    incidents = store.read_incidents()
+    for incident in incidents:
+        incident["context"] = json.loads(incident["context"])
+    return jsonify(
+        {
+            "execution": {
+                engine: execution_health(store, engine).to_dict() for engine in ("trend", "carry")
+            },
+            "incidents": incidents,
         }
     )
 
@@ -628,10 +576,14 @@ def equity():
     combined = _combined_equity()
     buyhold = _cached("buyhold", 600, _get_buyhold) or []
 
-    return jsonify({
-        "trend": pack(trend), "carry": pack(carry),
-        "combined": pack(combined), "buyhold": buyhold,
-    })
+    return jsonify(
+        {
+            "trend": pack(trend),
+            "carry": pack(carry),
+            "combined": pack(combined),
+            "buyhold": buyhold,
+        }
+    )
 
 
 def _get_buyhold() -> list[list]:
@@ -653,7 +605,9 @@ def _get_buyhold() -> list[list]:
 DONCHIAN_PERIODS = (20, 55, 100)
 
 
-def _donchian_channels(candles_1h: list[list], candles_4h: list[list]) -> tuple[list[dict], bool | None]:
+def _donchian_channels(
+    candles_1h: list[list], candles_4h: list[list]
+) -> tuple[list[dict], bool | None]:
     """Canaux de Donchian 20/55/100 sur bougies 4h (le timeframe de décision du
     trend), rééchantillonnés sur les timestamps 1h du graphique.
 
@@ -693,7 +647,9 @@ def _donchian_channels(candles_1h: list[list], candles_4h: list[list]) -> tuple[
 def price_chart():
     """Dernières ~200 bougies 1h + canaux Donchian + positions ouvertes du trend."""
     candles = _cached("ohlcv1h", 300, _get_candles_1h) or []
-    channels, regime_up = _donchian_channels(candles, _cached("ohlcv4h", 300, _get_candles_4h) or [])
+    channels, regime_up = _donchian_channels(
+        candles, _cached("ohlcv4h", 300, _get_candles_4h) or []
+    )
     trend_state = _read_json(STATE / "live_state_4x.json") or {}
     positions = []
     for name, s in trend_state.get("slots", {}).items():
@@ -716,8 +672,11 @@ def price_chart():
 @app.route("/api/conformity")
 def conformity():
     """Réalisé (paper) vs attendu (backtest) — la carte « Est-ce normal ? »."""
-    ref_path = Path(__file__).parent / "backtest_reference.json"
-    ref = json.loads(ref_path.read_text(encoding="utf-8")) if ref_path.exists() else None
+    ref_path = ROOT / "audit" / "baseline_reference.json"
+    baseline = json.loads(ref_path.read_text(encoding="utf-8")) if ref_path.exists() else None
+    ref = baseline["results"].get("conformity") if baseline else None
+    if ref is not None:
+        ref = {**ref, "provenance": baseline["provenance"]}
 
     out = {"reference": ref, "realized": None, "drawdown": None}
     df = _read_trades()
@@ -726,12 +685,14 @@ def conformity():
         wins = int((df["pnl"] > 0).sum())
         # intervalle de Wilson à 95 % sur le win rate
         p, z = wins / n, 1.96
-        denom = 1 + z*z/n
-        center = (p + z*z/(2*n)) / denom
-        half = z * ((p*(1-p)/n + z*z/(4*n*n)) ** 0.5) / denom
+        denom = 1 + z * z / n
+        center = (p + z * z / (2 * n)) / denom
+        half = z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5) / denom
         out["realized"] = {
-            "n": n, "wins": wins, "win_rate": p,
-            "win_rate_ci": [max(0.0, center-half), min(1.0, center+half)],
+            "n": n,
+            "wins": wins,
+            "win_rate": p,
+            "win_rate_ci": [max(0.0, center - half), min(1.0, center + half)],
             "avg_win": float(df.loc[df["pnl"] > 0, "pnl"].mean()) if wins else None,
             "avg_loss": float(df.loc[df["pnl"] <= 0, "pnl"].mean()) if wins < n else None,
             "current_loss_streak": int(
@@ -754,93 +715,12 @@ def conformity():
     return jsonify(out)
 
 
-# ── critères go/no-go de la phase paper (fixés à froid, le 14/07/2026) ──────
-# Le passage au testnet ne se décide PAS au feeling : chaque critère est
-# mesurable et évalué automatiquement. Modifier ces seuils = décision de
-# protocole, à documenter dans le journal du projet.
-READINESS = {
-    "min_days": 90,        # durée minimale de paper trading
-    "min_trades": 30,      # échantillon minimal de trades clôturés
-    "min_uptime": 0.95,    # part des jours avec données d'équity
-    "max_dd_floor": -0.45, # DD paper toléré (backtest : -53 % ; au-delà de -45 %, discussion)
-}
-
-
 @app.route("/api/readiness")
 def readiness():
-    """Évaluation automatique des critères de passage paper → testnet."""
-    ref_path = Path(__file__).parent / "backtest_reference.json"
-    ref = _read_json(ref_path) or {}
-    checks = []
-
-    def add(key, label, status, value, target, note=""):
-        checks.append({"key": key, "label": label, "status": status,
-                       "value": value, "target": target, "note": note})
-
-    trend_eq = _read_equity("equity_trend.csv")
-    days = 0.0
-    if len(trend_eq) > 1:
-        days = (trend_eq.index[-1] - trend_eq.index[0]).total_seconds() / 86400
-    # int() tronque comme /api/metrics : les deux cartes affichent le même nombre
-    # de jours (f"{7.6:.0f}" arrondissait à 8 pendant que metrics affichait 7)
-    add("days", "Durée du paper trading",
-        "ok" if days >= READINESS["min_days"] else "pending",
-        f"{int(days)} j", f"≥ {READINESS['min_days']} j")
-
-    if len(trend_eq) > 1:
-        days_with_data = trend_eq.resample("1D").count()
-        uptime = float((days_with_data > 0).mean())
-        add("uptime", "Présence des moteurs",
-            "ok" if uptime >= READINESS["min_uptime"] else "warn",
-            f"{uptime:.0%}", f"≥ {READINESS['min_uptime']:.0%}",
-            "" if uptime >= READINESS["min_uptime"] else "trous dans l'historique d'équity")
-    else:
-        add("uptime", "Présence des moteurs", "pending", "—", f"≥ {READINESS['min_uptime']:.0%}")
-
-    df = _read_trades()
-    n = int(len(df))
-    add("trades", "Trades clôturés",
-        "ok" if n >= READINESS["min_trades"] else "pending",
-        str(n), f"≥ {READINESS['min_trades']}")
-
-    # win rate compatible avec le backtest (IC de Wilson à 95 %)
-    if n >= 20 and ref.get("win_rate") is not None:
-        wins = int((df["pnl"] > 0).sum())
-        p, z = wins / n, 1.96
-        denom = 1 + z * z / n
-        center = (p + z * z / (2 * n)) / denom
-        half = z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5) / denom
-        lo, hi = center - half, center + half
-        compatible = lo <= ref["win_rate"] <= hi
-        add("winrate", "Win rate vs backtest",
-            "ok" if compatible else "warn",
-            f"{p:.0%} [{max(0, lo):.0%}–{min(1, hi):.0%}]", f"∋ {ref['win_rate']:.0%}",
-            "" if compatible else "écart significatif — comprendre avant d'avancer")
-    else:
-        add("winrate", "Win rate vs backtest", "pending", f"{n} trades",
-            "≥ 20 trades requis")
-
-    # drawdown paper dans l'enveloppe tolérée (apports neutralisés)
-    comb = _combined_equity(net_of_flows=True)
-    if len(comb) > 2:
-        max_dd = float((comb / comb.cummax() - 1.0).min())
-        add("drawdown", "Drawdown maximal paper",
-            "ok" if max_dd >= READINESS["max_dd_floor"] else "warn",
-            f"{max_dd:.1%}", f"≥ {READINESS['max_dd_floor']:.0%}",
-            "" if max_dd >= READINESS["max_dd_floor"] else "plus profond que l'enveloppe tolérée")
-    else:
-        add("drawdown", "Drawdown maximal paper", "pending", "—",
-            f"≥ {READINESS['max_dd_floor']:.0%}")
-
-    trend_state = _read_json(STATE / "live_state_4x.json") or {}
-    halted = bool(trend_state.get("halted", False))
-    add("killswitch", "Kill-switch jamais déclenché",
-        "warn" if halted else "ok", "déclenché" if halted else "non", "non")
-
-    n_ok = sum(1 for c in checks if c["status"] == "ok")
-    ready = all(c["status"] == "ok" for c in checks)
-    return jsonify({"ready": ready, "n_ok": n_ok, "n_total": len(checks),
-                    "checks": checks, "thresholds": READINESS})
+    """Évaluation du protocole transactionnel paper → testnet."""
+    database = STATE / "btcquant.db"
+    store = StateStore(database)
+    return jsonify(evaluate_readiness(store, persist=False))
 
 
 @app.route("/api/yearly")
@@ -892,8 +772,14 @@ def strategy_detail(name: str):
     """Drill-down d'un sous-système : sa position courante + ses trades + stats."""
     trend_state = _read_json(STATE / "live_state_4x.json") or {}
     slot = trend_state.get("slots", {}).get(name, {})
-    out = {"name": name, "position": slot.get("position"), "cash": slot.get("cash"),
-           "last_bar": slot.get("last_bar_ts"), "trades": [], "stats": {}}
+    out = {
+        "name": name,
+        "position": slot.get("position"),
+        "cash": slot.get("cash"),
+        "last_bar": slot.get("last_bar_ts"),
+        "trades": [],
+        "stats": {},
+    }
     df = _read_trades()
     if len(df):
         if "strategy" in df.columns:
@@ -915,11 +801,11 @@ def strategy_detail(name: str):
 @app.route("/api/trades.csv")
 def trades_csv():
     """Export brut des trades clôturés (téléchargement)."""
-    path = STATE / "trades.csv"
-    if not path.exists():
+    trades = _read_trades()
+    if trades.empty:
         return Response("aucun trade\n", mimetype="text/csv")
     return Response(
-        path.read_text(encoding="utf-8"),
+        trades.to_csv(index=False),
         mimetype="text/csv",
         headers={"Content-Disposition": "attachment; filename=tandem_trades.csv"},
     )
@@ -930,67 +816,33 @@ def analytics():
     """Répartition du PnL (sous-système, direction), records, funding cumulé."""
     out = {"by_strategy": [], "by_direction": [], "records": {}, "funding_cum": []}
 
-    df = _read_trades()
-    if len(df):
-        for key, field in (("by_strategy", "strategy"), ("by_direction", "direction")):
-            grp = df.groupby(field)
-            out[key] = [
-                {
-                    "name": str(k).replace("trend_ls_", "D"),
-                    "n": int(len(g)),
-                    "wins": int((g["pnl"] > 0).sum()),
-                    "pnl": float(g["pnl"].sum()),
-                }
-                for k, g in grp
-            ]
-        best = df.loc[df["pnl"].idxmax()]
-        worst = df.loc[df["pnl"].idxmin()]
-        # plus longue série gagnante / perdante (ordre chronologique)
-        chrono = df.sort_values("exit_ts")["pnl"]
-        def longest(win: bool) -> int:
-            best_run = run = 0
-            for v in chrono:
-                hit = (v > 0) if win else (v <= 0)
-                run = run + 1 if hit else 0
-                best_run = max(best_run, run)
-            return best_run
-        out["records"] = {
-            "biggest_win": float(best["pnl"]),
-            "biggest_win_strat": str(best["strategy"]).replace("trend_ls_", "D"),
-            "biggest_loss": float(worst["pnl"]),
-            "biggest_loss_strat": str(worst["strategy"]).replace("trend_ls_", "D"),
-            "longest_win_streak": longest(True),
-            "longest_loss_streak": longest(False),
-        }
+    breakdown, records = trade_analytics(_read_trades())
+    out.update(breakdown)
+    out["records"] = records
 
     # PnL cumulé du carry = équity − capital initial (4000) − flux reçus par
     # la poche carry (apports 40 % et transferts de rééquilibrage : sans cette
     # soustraction, chaque apport apparaîtrait comme du funding gagné)
     carry = _read_equity("equity_carry.csv")
     flows = _read_flows()
-    if len(carry) > 1:
-        base = 4000.0
-        cum = carry - base
-        if len(flows):
-            carry_flows = flows.groupby("ts")["carry_flow"].sum().cumsum()
-            cum = cum - carry_flows.reindex(cum.index, method="ffill").fillna(0.0)
-        out["records"]["funding_total"] = float(cum.iloc[-1])
-        if len(cum) > 400:
-            cum = cum.resample("1h").last().dropna()
-        out["funding_cum"] = [[int(ts.timestamp() * 1000), round(float(v), 2)] for ts, v in cum.items()]
+    funding_total, funding_curve = carry_funding_curve(carry, flows, 4000.0)
+    if funding_total is not None:
+        out["records"]["funding_total"] = funding_total
+        out["funding_cum"] = funding_curve
 
     # meilleur / pire jour sur l'équity combinée (apports neutralisés)
     comb = _combined_equity(net_of_flows=True)
-    if len(comb) > 2:
-        daily = comb.resample("1D").last().pct_change().dropna()
-        if len(daily):
-            out["records"]["best_day"] = float(daily.max())
-            out["records"]["worst_day"] = float(daily.min())
+    best_day, worst_day = best_and_worst_day(comb)
+    if best_day is not None:
+        out["records"]["best_day"] = best_day
+        out["records"]["worst_day"] = worst_day
     return jsonify(out)
 
 
 LOG_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})[,.](\d+)\s+(\w+)\s+(.*)$")
-KEEP = re.compile(r"Entrée|Sortie|ENTRÉE|SORTIE|Funding|stop|STOP|KILL|ERROR|WARNING|démarré|kill", re.I)
+KEEP = re.compile(
+    r"Entrée|Sortie|ENTRÉE|SORTIE|Funding|stop|STOP|KILL|ERROR|WARNING|démarré|kill", re.I
+)
 
 
 @app.route("/api/events")
@@ -1010,13 +862,15 @@ def events():
             # Les logs Python utilisent le fuseau local du VPS : mktime le
             # convertit correctement en epoch UTC, y compris avec l'heure d'été.
             ts_ms = int(time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")) * 1000)
-            out.append({
-                "ts": m.group(1),
-                "ts_ms": ts_ms,
-                "level": m.group(3),
-                "source": source,
-                "msg": msg.strip(),
-            })
+            out.append(
+                {
+                    "ts": m.group(1),
+                    "ts_ms": ts_ms,
+                    "level": m.group(3),
+                    "source": source,
+                    "msg": msg.strip(),
+                }
+            )
     out.sort(key=lambda e: e["ts"], reverse=True)
     return jsonify(out[:60])
 
@@ -1024,7 +878,8 @@ def events():
 if __name__ == "__main__":
     # préchauffage réseau en arrière-plan : les requêtes ne paient jamais la
     # latence exchange (démarré ici et pas à l'import — les tests s'en passent)
-    threading.Thread(target=_warm_loop, daemon=True).start()
+    start_warm_loop()
     host = os.environ.get("DASHBOARD_HOST", "127.0.0.1")
-    app.run(host=host, port=int(os.environ.get("DASHBOARD_PORT", "8666")),
-            debug=False, threaded=True)
+    app.run(
+        host=host, port=int(os.environ.get("DASHBOARD_PORT", "8666")), debug=False, threaded=True
+    )

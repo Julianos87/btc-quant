@@ -20,8 +20,14 @@ import pandas as pd
 from btcquant.backtest import BacktestEngine
 from btcquant.backtest.metrics import compute_metrics, format_metrics
 from btcquant.carry import add_funding_columns, load_funding
-from btcquant.config import build_strategies, load_config, risk_from_config
+from btcquant.config import (
+    build_strategies,
+    execution_config_from_config,
+    load_config,
+    risk_from_config,
+)
 from btcquant.data import TIMEFRAME_TO_PANDAS, load_ohlcv, resample
+from btcquant.domain import ExecutionSimulator
 from btcquant.indicators import bars_per_year
 from btcquant.risk import RiskConfig
 
@@ -43,7 +49,9 @@ def with_real_funding(df, symbol_perp: str, timeframe: str, refresh: bool):
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default=ROOT / "config.yaml")
-    parser.add_argument("--no-refresh", action="store_true", help="utilise uniquement le cache local")
+    parser.add_argument(
+        "--no-refresh", action="store_true", help="utilise uniquement le cache local"
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.WARNING)
@@ -53,34 +61,45 @@ def main() -> None:
     reports.mkdir(exist_ok=True)
 
     base = load_ohlcv(
-        cfg["exchange"], cfg["symbol"], cfg["data"]["base_timeframe"],
-        cfg["data"]["since"], data_dir=ROOT / cfg["data"]["dir"],
+        cfg["exchange"],
+        cfg["symbol"],
+        cfg["data"]["base_timeframe"],
+        cfg["data"]["since"],
+        data_dir=ROOT / cfg["data"]["dir"],
         refresh=not args.no_refresh,
     )
-    print(f"Données : {len(base)} bougies {cfg['data']['base_timeframe']}, "
-          f"{base.index[0]} → {base.index[-1]}\n")
+    print(
+        f"Données : {len(base)} bougies {cfg['data']['base_timeframe']}, "
+        f"{base.index[0]} → {base.index[-1]}\n"
+    )
 
     curves: dict[str, pd.Series] = {}
     for strategy, fraction, market in build_strategies(cfg):
-        df = base if strategy.timeframe == cfg["data"]["base_timeframe"] else resample(
-            base, TIMEFRAME_TO_PANDAS[strategy.timeframe]
+        df = (
+            base
+            if strategy.timeframe == cfg["data"]["base_timeframe"]
+            else resample(base, TIMEFRAME_TO_PANDAS[strategy.timeframe])
         )
-        slot_risk = RiskConfig(**{**risk.__dict__, "initial_capital": risk.initial_capital * fraction})
+        slot_risk = RiskConfig(
+            **{**risk.__dict__, "initial_capital": risk.initial_capital * fraction}
+        )
         is_perp = market == "perp"
         if is_perp:
             symbol_perp = f"{cfg['symbol']}:{cfg['quote_currency']}"
             df = with_real_funding(df, symbol_perp, strategy.timeframe, refresh=not args.no_refresh)
+        fee_rate = cfg["costs"]["perp_fee_rate"] if is_perp else cfg["costs"]["fee_rate"]
         engine = BacktestEngine(
-            fee_rate=cfg["costs"]["perp_fee_rate"] if is_perp else cfg["costs"]["fee_rate"],
-            slippage_bps=cfg["costs"]["slippage_bps"],
             risk=slot_risk,
             funding_rate_8h=cfg["costs"].get("funding_rate_8h", 0.0) if is_perp else 0.0,
             allow_short=is_perp,
+            execution_simulator=ExecutionSimulator(execution_config_from_config(cfg, fee_rate)),
         )
         result = engine.run(strategy, df)
         curves[strategy.name] = result.equity
 
-        print(f"═══ {strategy.name} ({strategy.timeframe}, {market}, {fraction:.0%} du capital) ═══")
+        print(
+            f"═══ {strategy.name} ({strategy.timeframe}, {market}, {fraction:.0%} du capital) ═══"
+        )
         print(format_metrics(result.metrics))
         print()
 
@@ -91,10 +110,20 @@ def main() -> None:
     finest_bpy = max(bars_per_year(s.timeframe) for s, _, _ in build_strategies(cfg))
     combo_metrics = compute_metrics(combined, [], finest_bpy)
     print("═══ Portefeuille combiné ═══")
-    print(format_metrics({**combo_metrics, "n_trades": sum(len(pd.read_csv(reports / f'trades_{n}.csv')) for n in curves),
-                          "win_rate": float("nan"), "profit_factor": float("nan"),
-                          "avg_win_pct": float("nan"), "avg_loss_pct": float("nan"),
-                          "avg_bars_held": float("nan"), "exposure": float("nan")}))
+    print(
+        format_metrics(
+            {
+                **combo_metrics,
+                "n_trades": sum(len(pd.read_csv(reports / f"trades_{n}.csv")) for n in curves),
+                "win_rate": float("nan"),
+                "profit_factor": float("nan"),
+                "avg_win_pct": float("nan"),
+                "avg_loss_pct": float("nan"),
+                "avg_bars_held": float("nan"),
+                "exposure": float("nan"),
+            }
+        )
+    )
 
     fig, ax = plt.subplots(figsize=(12, 6))
     for name, eq in curves.items():

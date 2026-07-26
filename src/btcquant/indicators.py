@@ -17,10 +17,6 @@ def ema(series: pd.Series, period: int) -> pd.Series:
     return series.ewm(span=period, adjust=False, min_periods=period).mean()
 
 
-def sma(series: pd.Series, period: int) -> pd.Series:
-    return series.rolling(period, min_periods=period).mean()
-
-
 def true_range(df: pd.DataFrame) -> pd.Series:
     prev_close = df["close"].shift(1)
     tr = pd.concat(
@@ -38,18 +34,6 @@ def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     """ATR lissé à la Wilder (RMA)."""
     tr = true_range(df)
     return tr.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
-
-
-def rsi(series: pd.Series, period: int = 14) -> pd.Series:
-    """RSI de Wilder."""
-    delta = series.diff()
-    gain = delta.clip(lower=0.0)
-    loss = (-delta).clip(lower=0.0)
-    avg_gain = gain.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
-    avg_loss = loss.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
-    rs = avg_gain / avg_loss.replace(0.0, np.nan)
-    out = 100.0 - 100.0 / (1.0 + rs)
-    return out.fillna(100.0).where(avg_loss.notna(), np.nan)
 
 
 def adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
@@ -80,7 +64,7 @@ def donchian_low(df: pd.DataFrame, period: int) -> pd.Series:
 
 def realized_vol(series: pd.Series, period: int, bars_per_year: float) -> pd.Series:
     """Volatilité annualisée des rendements log sur `period` barres."""
-    log_ret = np.log(series / series.shift(1))
+    log_ret = pd.Series(np.log(series / series.shift(1)), index=series.index)
     return log_ret.rolling(period, min_periods=period).std() * np.sqrt(bars_per_year)
 
 
