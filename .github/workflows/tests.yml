@@ -50,9 +50,7 @@ jobs:
           enable-cache: true
 
       - name: Synchroniser l'environnement depuis uv.lock
-        # Le typage cible Python 3.11 (version minimale du projet). Épingler
-        # aussi l'interpréteur du job évite de charger les stubs NumPy 3.12.
-        run: uv sync --locked --dev --python 3.11
+        run: uv sync --locked --dev
 
       - name: Ruff
         run: uv run ruff check .
@@ -66,7 +64,9 @@ jobs:
           node --check dashboard/static/effects.js
 
       - name: Typage
-        run: uv run --python 3.11 mypy src
+        # Le typage cible la version minimale du projet sans modifier
+        # l'environnement 3.12 utilisé ensuite pour vérifier le SBOM.
+        run: uv run --isolated --python 3.11 mypy src
 
       - name: Audit des dépendances
         run: >-
