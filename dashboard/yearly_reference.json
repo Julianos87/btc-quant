@@ -7,14 +7,14 @@
     "2026-07-26"
   ],
   "provenance": {
-    "base_git_commit": "ea848d43e3b4fb7e8c424988c12a641acf882b84",
-    "source_tree_sha256": "aeedd5dca26c6e6261d4fe8bdeacb144ba1b469f5d99addb78207c5e89303ca0",
+    "base_git_commit": "871afd4e2942d647e924542f4613700f804244db",
+    "source_tree_sha256": "53265af99c07938a7089eba4a60f9579f5fc4897a8e1cc7e2e09a62f4218f9c7",
     "config": {
       "path": "config_4x.yaml",
       "sha256": "5df26dd937257d35ff897aec1e3e3eecb1fdc5ac205aead5f2e345a8ba74e6be"
     },
-    "base_data_sha256": "2470bc2440a38db210812dbb3cfa4f85fea397cc3b5d8edb22072bef4dac03c9",
-    "base_rows": 66263
+    "base_data_sha256": "b1e80ef00b091cbb6a66dd091eb49116bee24817c456ad7999a8e0cbe9e546fd",
+    "base_rows": 66272
   },
   "years": [
     {
@@ -82,10 +82,10 @@
     },
     {
       "year": 2026,
-      "portfolio": -0.12759169631227774,
+      "portfolio": -0.12759208667295652,
       "trend": -0.1325628526171052,
-      "carry": -0.0330904379178405,
-      "btc": -0.26392800675244743,
+      "carry": -0.033098249001812796,
+      "btc": -0.26187297357550454,
       "max_dd": -0.3639721037027853,
       "partial": true
     }
