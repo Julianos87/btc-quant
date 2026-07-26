@@ -9,8 +9,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _portable_bytes(path: Path) -> bytes:
+    """Normalise les fichiers texte suivis entre Windows et Linux."""
+
+    return path.read_bytes().replace(b"\r\n", b"\n")
+
+
 def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    return hashlib.sha256(_portable_bytes(path)).hexdigest()
 
 
 def _source_tree_sha256() -> str:
@@ -18,7 +24,7 @@ def _source_tree_sha256() -> str:
     for path in sorted((ROOT / "src").rglob("*.py")):
         digest.update(path.relative_to(ROOT).as_posix().encode())
         digest.update(b"\0")
-        digest.update(path.read_bytes())
+        digest.update(_portable_bytes(path))
         digest.update(b"\0")
     return digest.hexdigest()
 

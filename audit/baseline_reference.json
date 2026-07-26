@@ -1,24 +1,24 @@
 {
   "schema_version": 1,
-  "generated_at_utc": "2026-07-26T13:39:14.057825+00:00",
+  "generated_at_utc": "2026-07-26T19:37:30.197892+00:00",
   "purpose": "Safety Baseline anti-régression; aucune promesse de performance",
   "provenance": {
-    "base_git_commit": "9d58fcf8fadf72fa89874d914365cee4edca9b23",
-    "source_tree_sha256": "8c0254f1618b737963580472ce29bf282ca9ef89b8a0d9decbd66e69b2790830",
+    "base_git_commit": "ea848d43e3b4fb7e8c424988c12a641acf882b84",
+    "source_tree_sha256": "aeedd5dca26c6e6261d4fe8bdeacb144ba1b469f5d99addb78207c5e89303ca0",
     "config": {
       "path": "config_4x.yaml",
-      "sha256": "426f6a56b9b8f0cc14f45ce59e3df4520bba07061d04e92bff9061b231e874b7"
+      "sha256": "5df26dd937257d35ff897aec1e3e3eecb1fdc5ac205aead5f2e345a8ba74e6be"
     },
     "data": [
       {
         "path": "data/binance_BTC-USDT_1h.csv",
         "bytes": 4810172,
-        "sha256": "f5fca8ab67459e4ba60526e39d4b60e6cbf53a34bba230867107240baac943e4"
+        "sha256": "2470bc2440a38db210812dbb3cfa4f85fea397cc3b5d8edb22072bef4dac03c9"
       },
       {
         "path": "data/binanceusdm_BTCUSDT_USDT_funding.csv",
         "bytes": 294753,
-        "sha256": "527fe3f8b87b93a4f27c45e43b2f07e4a65d0156eb45fb5332133282579ff3f6"
+        "sha256": "57c6bff18d9fd7aab0ef5c206813657e008977179f8a50142e81c9b00d9208a9"
       }
     ],
     "base_rows": 66263,
@@ -74,8 +74,8 @@
       "n_trades": 479,
       "trades_per_year": 64.1643337408313,
       "win_rate": 0.3736951983298539,
-      "avg_win_pct": 0.09369161945266313,
-      "avg_loss_pct": -0.03058650069945933,
+      "avg_win_pct": 0.09369161945266319,
+      "avg_loss_pct": -0.030586500699459323,
       "worst_loss_streak": 21,
       "max_drawdown": -0.5287833278407402,
       "dd_time_fraction": {

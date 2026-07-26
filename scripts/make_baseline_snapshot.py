@@ -37,12 +37,14 @@ CONFIG = ROOT / "config_4x.yaml"
 DESTINATION = ROOT / "audit" / "baseline_reference.json"
 
 
+def _portable_bytes(path: Path) -> bytes:
+    """Normalise les fichiers texte suivis entre Windows et Linux."""
+
+    return path.read_bytes().replace(b"\r\n", b"\n")
+
+
 def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return hashlib.sha256(_portable_bytes(path)).hexdigest()
 
 
 def _git_commit() -> str:
@@ -54,7 +56,7 @@ def _tree_sha256(paths: list[Path]) -> str:
     for path in sorted(paths):
         digest.update(path.relative_to(ROOT).as_posix().encode())
         digest.update(b"\0")
-        digest.update(path.read_bytes())
+        digest.update(_portable_bytes(path))
         digest.update(b"\0")
     return digest.hexdigest()
 
