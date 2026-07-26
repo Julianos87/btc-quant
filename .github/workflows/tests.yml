@@ -85,6 +85,11 @@ jobs:
         run: uv run python scripts/check_sbom.py
 
       - name: Vérifier la provenance des références
+        # Les caches data/ sont volontairement non versionnés et propres à
+        # chaque machine. La CI valide code, config et métadonnées ; la
+        # vérification complète des données reste active par défaut en local.
+        env:
+          BTCQUANT_VERIFY_REFERENCE_DATA: "0"
         run: uv run python scripts/check_reference_provenance.py
 
       - name: Syntaxe des scripts de déploiement

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,14 +37,16 @@ def _check_file(path: Path, expected: str, label: str) -> None:
 
 def main() -> None:
     source_hash = _source_tree_sha256()
+    verify_local_data = os.environ.get("BTCQUANT_VERIFY_REFERENCE_DATA", "1") != "0"
     baseline = json.loads((ROOT / "audit" / "baseline_reference.json").read_text(encoding="utf-8"))
     provenance = baseline["provenance"]
     if provenance["source_tree_sha256"] != source_hash:
         raise SystemExit("Baseline périmée : relancer scripts/make_baseline_snapshot.py")
     config = provenance["config"]
     _check_file(ROOT / config["path"], config["sha256"], "config baseline")
-    for item in provenance["data"]:
-        _check_file(ROOT / item["path"], item["sha256"], "données baseline")
+    if verify_local_data:
+        for item in provenance["data"]:
+            _check_file(ROOT / item["path"], item["sha256"], "données baseline")
     if "conformity" not in baseline["results"]:
         raise SystemExit("Baseline incomplète : référence de conformité absente")
 
@@ -53,8 +56,9 @@ def main() -> None:
         raise SystemExit("Référence annuelle périmée : relancer make_yearly_reference.py")
     config = yearly_provenance["config"]
     _check_file(ROOT / config["path"], config["sha256"], "config annuelle")
-    base_data = ROOT / "data" / "binance_BTC-USDT_1h.csv"
-    _check_file(base_data, yearly_provenance["base_data_sha256"], "données annuelles")
+    if verify_local_data:
+        base_data = ROOT / "data" / "binance_BTC-USDT_1h.csv"
+        _check_file(base_data, yearly_provenance["base_data_sha256"], "données annuelles")
 
 
 if __name__ == "__main__":
