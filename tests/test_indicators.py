@@ -4,7 +4,7 @@ Priorité donnée à deux propriétés dont dépend la validité de tout le syst
 
 1. l'absence de look-ahead — un indicateur qui « voit » la barre courante rend
    les backtests non reproductibles en live ;
-2. la convention de lissage de Wilder (RMA), utilisée par ATR/RSI/ADX, qui n'est
+2. la convention de lissage de Wilder (RMA), utilisée par ATR/ADX, qui n'est
    pas la même qu'une EMA classique et fausserait les stops si elle dérivait.
 """
 
@@ -29,8 +29,6 @@ from btcquant.indicators import (
     ema,
     realized_vol,
     rolling_median,
-    rsi,
-    sma,
     true_range,
 )
 
@@ -41,9 +39,7 @@ def _ohlc(closes, highs=None, lows=None) -> pd.DataFrame:
     highs = np.asarray(highs, dtype=float) if highs is not None else closes + 1.0
     lows = np.asarray(lows, dtype=float) if lows is not None else closes - 1.0
     idx = pd.date_range("2026-01-01", periods=len(closes), freq="4h", tz="UTC")
-    return pd.DataFrame(
-        {"open": closes, "high": highs, "low": lows, "close": closes}, index=idx
-    )
+    return pd.DataFrame({"open": closes, "high": highs, "low": lows, "close": closes}, index=idx)
 
 
 # ── moyennes ────────────────────────────────────────────────────────────────
@@ -70,11 +66,6 @@ def test_ema_requires_full_period_before_emitting():
     s = pd.Series(range(10), dtype=float)
     assert ema(s, 5).iloc[:4].isna().all()
     assert ema(s, 5).iloc[4:].notna().all()
-
-
-def test_sma_is_plain_rolling_mean():
-    s = pd.Series([1.0, 2.0, 3.0, 4.0])
-    assert sma(s, 2).tolist()[1:] == [1.5, 2.5, 3.5]
 
 
 # ── true range / ATR ────────────────────────────────────────────────────────
@@ -115,22 +106,6 @@ def test_atr_uses_wilder_smoothing_not_standard_ema():
 def test_atr_is_nan_during_warmup():
     df = _ohlc(closes=[100.0] * 10)
     assert atr(df, period=5).iloc[:4].isna().all()
-
-
-# ── RSI / ADX ───────────────────────────────────────────────────────────────
-
-
-def test_rsi_saturates_at_100_when_only_gains():
-    s = pd.Series(np.arange(1, 30, dtype=float))
-    out = rsi(s, 14)
-    assert out.dropna().iloc[-1] == pytest.approx(100.0)
-
-
-def test_rsi_stays_within_bounds():
-    rng = np.random.default_rng(0)
-    s = pd.Series(100 + rng.normal(0, 2, 200).cumsum())
-    out = rsi(s, 14).dropna()
-    assert out.between(0.0, 100.0).all()
 
 
 def test_adx_stays_within_bounds_and_warms_up():

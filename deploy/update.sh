@@ -1,46 +1,129 @@
 #!/usr/bin/env bash
-# Mise à jour du VPS depuis GitHub — SANS toucher au track record.
-#
-# Usage (sur le VPS) :
-#   sudo bash /opt/btcquant/deploy/update.sh             # dashboard seul
-#   sudo bash /opt/btcquant/deploy/update.sh --engines   # + moteurs trend/carry
-#
-# Depuis le poste local (alias « vps » dans ~/.ssh/config) :
-#   ssh vps "sudo bash /opt/btcquant/deploy/update.sh"
-#
-# Mécanique : le clone git vit dans /home/btcquant/btc-quant (clé de
-# déploiement GitHub de l'utilisateur de service). On pull, puis on copie
-# vers /opt/btcquant en EXCLUANT state/ et backups/ (l'équity paper accumulée
-# — l'écraser ruinerait les critères go/no-go), .env (jeton dashboard,
-# Telegram) et backups-repo/ (dépôt de la sauvegarde hors-site).
-#
-# Les moteurs ne sont redémarrés que sur demande (--engines) : leur état est
-# persisté et le redémarrage est sûr, mais on ne les touche pas si seule la
-# couche dashboard/scripts a changé.
+# Déploiement atomique depuis le clone de service, avec rollback automatique.
 set -euo pipefail
+
+ROOT=/opt/btcquant
 CLONE=/home/btcquant/btc-quant
+CURRENT="${ROOT}/current"
+PREVIOUS="${ROOT}/previous"
+RESTART_ENGINES=false
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "Ce script doit être exécuté par root." >&2
+  exit 1
+fi
+
+case "${1:-}" in
+  "") ;;
+  --engines) RESTART_ENGINES=true ;;
+  --rollback)
+    if [ ! -L "${PREVIOUS}" ]; then
+      echo "Aucune release précédente disponible." >&2
+      exit 1
+    fi
+    TARGET="$(readlink -f "${PREVIOUS}")"
+    OLD="$(readlink -f "${CURRENT}")"
+    ln -sfn "${TARGET}" "${ROOT}/.current-next"
+    mv -Tf "${ROOT}/.current-next" "${CURRENT}"
+    ln -sfn "${OLD}" "${PREVIOUS}"
+    cp "${CURRENT}/deploy/"btcquant-*.service "${CURRENT}/deploy/"btcquant-*.timer \
+      /etc/systemd/system/
+    install -o root -g root -m 0755 "${CURRENT}/deploy/rebalance-root.sh" \
+      /usr/local/libexec/btcquant-rebalance
+    systemctl daemon-reload
+    if ! systemctl restart btcquant-dashboard ||
+      ! systemctl is-active --quiet btcquant-dashboard ||
+      ! curl --fail --silent --show-error --max-time 10 \
+        http://127.0.0.1:8666/healthz >/dev/null; then
+      echo "Le rollback demandé est invalide ; restauration de ${OLD}." >&2
+      ln -sfn "${OLD}" "${ROOT}/.current-next"
+      mv -Tf "${ROOT}/.current-next" "${CURRENT}"
+      cp "${CURRENT}/deploy/"btcquant-*.service \
+        "${CURRENT}/deploy/"btcquant-*.timer /etc/systemd/system/
+      systemctl daemon-reload
+      systemctl restart btcquant-dashboard
+      exit 1
+    fi
+    echo "Rollback activé : ${TARGET}"
+    exit 0
+    ;;
+  *)
+    echo "Usage : update.sh [--engines|--rollback]" >&2
+    exit 2
+    ;;
+esac
+
+if [ ! -f "${ROOT}/.env" ]; then
+  echo "Refus de déployer : ${ROOT}/.env est absent." >&2
+  exit 1
+fi
+if [ ! -L "${CURRENT}" ]; then
+  echo "Refus de déployer : ${CURRENT} n'est pas un lien de release." >&2
+  exit 1
+fi
+if ! grep -q '^BACKUP_ENCRYPTION_KEY=.\+' "${ROOT}/.env"; then
+  echo "Refus de déployer : BACKUP_ENCRYPTION_KEY est absente." >&2
+  exit 1
+fi
+bash "${CURRENT}/deploy/preflight.sh"
 
 sudo -u btcquant git -C "${CLONE}" pull --ff-only
+if [ -n "$(sudo -u btcquant git -C "${CLONE}" status --porcelain --untracked-files=no)" ]; then
+  echo "Refus de déployer un clone contenant des modifications suivies." >&2
+  exit 1
+fi
+RELEASE_ID="$(sudo -u btcquant git -C "${CLONE}" rev-parse HEAD)"
+OLD_TARGET="$(readlink -f "${CURRENT}")"
 
-rsync -a --exclude .git --exclude venv --exclude __pycache__ \
-      --exclude state --exclude backups --exclude backups-repo \
-      --exclude .env --exclude data "${CLONE}/" /opt/btcquant/
-chown -R btcquant:btcquant /opt/btcquant
-# rsync -a préserve les modes du clone source ; si son umask est permissif,
-# ça republie /opt/btcquant en lecture pour tous les comptes du VPS à chaque
-# déploiement. On referme systématiquement l'accès "other" ici.
-chmod -R o-rwx /opt/btcquant
-chmod +x /opt/btcquant/scripts/backup_state.sh /opt/btcquant/scripts/rebalance_safe.sh
+# Sauvegarde cohérente avant toute migration de schéma ou bascule.
+BACKUP_ENCRYPTION_KEY="$(
+  sed -n 's/^BACKUP_ENCRYPTION_KEY=//p' "${ROOT}/.env" | tail -n 1
+)"
+export BACKUP_ENCRYPTION_KEY
+"${CURRENT}/scripts/backup_state.sh"
 
-cp /opt/btcquant/deploy/btcquant-*.service /opt/btcquant/deploy/btcquant-*.timer /etc/systemd/system/
+TARGET="$(bash "${CLONE}/deploy/create-release.sh" "${CLONE}" "${RELEASE_ID}")"
+systemd-analyze verify "${TARGET}/deploy/"*.service "${TARGET}/deploy/"*.timer
+
+rollback_on_error() {
+  code=$?
+  trap - ERR
+  echo "Échec du déploiement ; retour à ${OLD_TARGET}." >&2
+  ln -sfn "${OLD_TARGET}" "${ROOT}/.current-next"
+  mv -Tf "${ROOT}/.current-next" "${CURRENT}"
+  cp "${CURRENT}/deploy/"btcquant-*.service "${CURRENT}/deploy/"btcquant-*.timer \
+    /etc/systemd/system/ || true
+  systemctl daemon-reload || true
+  systemctl restart btcquant-dashboard || true
+  if ${RESTART_ENGINES}; then
+    systemctl restart btcquant-trend btcquant-carry || true
+  fi
+  exit "${code}"
+}
+trap rollback_on_error ERR
+
+ln -sfn "${TARGET}" "${ROOT}/.current-next"
+mv -Tf "${ROOT}/.current-next" "${CURRENT}"
+ln -sfn "${OLD_TARGET}" "${PREVIOUS}"
+
+cp "${CURRENT}/deploy/"btcquant-*.service "${CURRENT}/deploy/"btcquant-*.timer \
+  /etc/systemd/system/
+install -o root -g root -m 0755 "${CURRENT}/deploy/rebalance-root.sh" \
+  /usr/local/libexec/btcquant-rebalance
 systemctl daemon-reload
 systemctl restart btcquant-dashboard
-
-if [ "${1:-}" = "--engines" ]; then
+if ${RESTART_ENGINES}; then
   systemctl restart btcquant-trend btcquant-carry
 fi
 
-echo "Mise à jour appliquée : $(sudo -u btcquant git -C "${CLONE}" log --oneline -1)"
-systemctl is-active btcquant-trend btcquant-carry btcquant-dashboard >/dev/null \
-  && echo "Services : tous actifs." \
-  || { echo "⚠ Un service est inactif :"; systemctl --no-pager status btcquant-trend btcquant-carry btcquant-dashboard | grep -E "●|Active:"; }
+systemctl is-active --quiet btcquant-dashboard
+curl --fail --silent --show-error --max-time 10 \
+  http://127.0.0.1:8666/healthz >/dev/null
+if ${RESTART_ENGINES}; then
+  systemctl is-active --quiet btcquant-trend
+  systemctl is-active --quiet btcquant-carry
+fi
+
+trap - ERR
+echo "Release active : ${RELEASE_ID}"
+echo "Rollback manuel : sudo bash ${CURRENT}/deploy/update.sh --rollback"

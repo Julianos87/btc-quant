@@ -2,7 +2,7 @@
 
 > Deux moteurs complémentaires : le **trend** cherche à capter les tendances du marché ; le **carry** étudie une exposition delta-neutre au funding.
 
-[![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-%E2%89%A53.11-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 ![Mode](https://img.shields.io/badge/mode-paper%20trading-orange)
 ![Status](https://img.shields.io/badge/statut-exp%C3%A9rimental-blue)
 
@@ -24,7 +24,7 @@ Le VPS exécute actuellement les deux moteurs en **paper trading**. Aucun ordre 
 Le service `btcquant-trend` lance :
 
 ```bash
-python scripts/run_live.py --config config_4x.yaml
+btcquant-trend --config config_4x.yaml
 ```
 
 Le capital initial de la poche est de 6 000 USDT. Il est réparti entre trois horizons :
@@ -44,7 +44,7 @@ Le profil `config.yaml` à x1 reste disponible comme profil de recherche prudent
 Le service `btcquant-carry` lance :
 
 ```bash
-python scripts/run_carry.py --capital 4000 --leverage 3
+btcquant-carry --capital 4000 --leverage 3
 ```
 
 Le modèle paper simule une position spot longue et une position perpétuelle courte. Il entre lorsque le funding annualisé lissé dépasse 3 % et sort lorsqu’il devient négatif.
@@ -137,11 +137,53 @@ Ces chiffres sont des résultats de simulation. Ils ne constituent pas une garan
 Le moteur de backtest et le runner partagent :
 
 - les mêmes classes de stratégie ;
+- le même noyau de décision déterministe (`btcquant.domain.decision`) pour
+  l'avancement des positions, le funding, le resserrement des stops et les
+  demandes d'entrée/sortie ;
 - le même dimensionnement par risque et volatilité ;
 - les mêmes frais et hypothèses de slippage ;
 - le même principe de décision à la clôture d’une bougie ;
 - une comptabilité du funding sur les positions perpétuelles ;
 - des coupe-circuits de drawdown et de perte journalière.
+
+Le noyau métier ne passe aucun ordre et n'effectue aucun I/O : il reçoit une
+barre et un état de position, puis renvoie un nouvel état indépendant accompagné
+d'événements typés. Le backtest exécute toujours les demandes à l'ouverture
+suivante ; le runner les transmet à son broker dès la clôture observée. Cette
+différence d'adaptateur est explicite et n'est plus mélangée aux règles de
+stratégie.
+
+### Simulateur d'exécution commun
+
+Le backtest et `PaperBroker` utilisent également le même
+`ExecutionSimulator`. Il centralise :
+
+- frais et slippage défavorable ;
+- limite de participation au volume et fills partiels ;
+- impact de marché proportionnel à la participation ;
+- rejets déterministes à partir de l'identifiant d'ordre et d'une seed ;
+- prix retardé pour les scénarios de latence ;
+- déclenchement conservateur des stops, gaps inclus ;
+- rejeu idempotent d'un même ordre.
+
+Sans configuration supplémentaire, le modèle reproduit exactement l'ancien
+comportement (fill complet, sans rejet ni impact additionnel). Les scénarios de
+stress optionnels se configurent sous `execution.simulation` :
+
+```yaml
+execution:
+  mode: paper
+  simulation:
+    rejection_rate: 0.01
+    max_volume_participation: 0.05
+    market_impact_bps: 10.0
+    min_qty: 0.0001
+    seed: 42
+```
+
+`fee_rate` et `slippage_bps` restent exclusivement dans `costs`. Une latence
+non nulle exige une vraie observation de prix retardée : le simulateur refuse
+explicitement de l'inventer à partir d'une seule bougie.
 
 ### Écart funding — corrigé le 18 juillet 2026
 
@@ -174,15 +216,107 @@ drawdown maximal inchangé. `tests/test_funding_parity.py` fige la correction.
 |---|---|
 | Backtest trend | Implémenté |
 | Paper trading trend x4 | Actif |
-| Backtest carry synthétique | Implémenté |
+| Backtest carry | Funding, basis, emprunt variable, haircuts, marge et liquidation |
 | Paper trading carry x3 | Actif |
 | Rééquilibrage 60/40 | Implémenté |
 | Dashboard et suivi des apports | Implémentés |
-| Exécution trend testnet/live | Codée, non validée pour le profil actif |
-| Exécution carry double-jambe | Expérimentale, non validée |
+| Persistance | SQLite transactionnel, migration JSON/CSV automatique |
+| Exécution trend testnet | Qualification PASS + confirmation explicite de session |
+| Exécution carry testnet | Qualification PASS + confirmation explicite de session |
 | Utilisation en argent réel | Non validée |
 
+### Persistance et reprise
+
+`state/btcquant.db` est la source de vérité unique. Elle journalise les
+checkpoints des moteurs, positions, intentions et résultats d'ordres, événements,
+trades, courbes d'équity et flux de capital. SQLite fonctionne en WAL avec
+transactions `BEGIN IMMEDIATE`, contraintes d'intégrité et sauvegarde en ligne.
+Chaque checkpoint est également inclus dans le journal avec un SHA-256
+canonique ; `StateStore.replay_engine_state()` reconstruit l'état depuis les
+événements et refuse un journal altéré.
+
+Au premier démarrage, les anciens `*_state.json`, `equity_*.csv`, `trades.csv`
+et `flows.csv` sont importés une seule fois puis conservés uniquement comme
+sauvegarde froide.
+
+Chaque ordre externe reçoit désormais un `client_order_id` stable, transmis à
+l'exchange et relié à l'intention SQLite. Après un crash :
+
+- ordre absent de l'exchange ou terminal sans fill : classement automatique
+  `RECOVERED_ABORTED`, reprise autorisée ;
+- timeout de recherche : ordre maintenu `PENDING`, démarrage interdit mais
+  nouvelle tentative possible au prochain redémarrage ;
+- ordre ouvert, partiel ou rempli sans checkpoint local certain : classement
+  `UNBALANCED`, démarrage interdit jusqu'à réconciliation manuelle ;
+- ordre paper interrompu : abandon automatique, car aucun effet externe ne
+  survit au processus.
+
+Le résultat d'ordre, le checkpoint des positions et le trade éventuel restent
+validés dans une seule transaction. Un crash pendant cette transaction laisse
+l'intégralité de l'opération en `PENDING`, jamais un demi-état.
+
+### Observabilité d'exécution
+
+SQLite conserve également le prix de référence précédant chaque ordre. Le
+watchdog et le dashboard en dérivent, sur une fenêtre glissante :
+
+- ratio réellement rempli ;
+- taux de rejet et de fills partiels ;
+- slippage moyen et percentile 95 ;
+- ordres `PENDING` trop anciens ;
+- ordres `UNBALANCED`.
+
+Les anomalies ouvrent un incident persistant et dédupliqué dans la table
+`incidents`. Une même anomalie n'envoie qu'une notification ; elle est résolue
+automatiquement lorsque la condition disparaît et sera notifiée à nouveau si
+elle réapparaît. Les incidents sont visibles dans `/api/operations`, dans le
+cockpit du dashboard, le bilan quotidien et `scripts/inspect_state.py`.
+
+### Qualification paper → testnet
+
+Le passage au testnet est maintenant un contrôle bloquant, pas une décision
+visuelle prise depuis le dashboard. Le protocole v1 impose notamment :
+
+- 90 jours d'observation et 95 % de présence quotidienne des deux moteurs ;
+- au moins 30 trades clôturés, 50 ordres terminaux et 5 par moteur ;
+- aucun ordre non résolu ni incident ouvert ;
+- au plus 2 % de rejets, 10 % de fills partiels et 20 bps de slippage p95 ;
+- un drawdown supérieur à -45 %, des états moteurs frais et aucun kill-switch.
+
+Les seuils sont copiés dans SQLite au démarrage : une campagne conserve donc
+ses règles même si une future version du protocole change. Les rapports
+`PASS`/`FAIL` sont eux aussi historisés.
+
+```powershell
+btcquant-readiness start
+btcquant-readiness status
+btcquant-readiness finalize
+```
+
+`finalize` refuse de terminer une campagne tant qu'un seul critère échoue.
+`scripts/test_testnet.py` et les brokers externes exigent ensuite la preuve
+d'une campagne `PASSED` récente, puis une confirmation limitée à la session :
+
+```powershell
+$env:BTCQUANT_ENABLE_TESTNET = "I_ACCEPT_TESTNET_ORDERS"
+python scripts/test_testnet.py
+```
+
+Le script referme ses positions dans un bloc de nettoyage même si un contrôle
+intermédiaire échoue. L'argent réel reste verrouillé inconditionnellement.
+
+Diagnostic local :
+
+```bash
+python scripts/inspect_state.py
+```
+
 ## Installation
+
+Le déploiement VPS utilise des releases immuables, une bascule atomique et un
+rollback. La procédure staging, restauration et exploitation est détaillée dans
+[`docs/DEPLOYMENT_RUNBOOK.md`](docs/DEPLOYMENT_RUNBOOK.md). Elle doit être
+exécutée intégralement avant toute mise à jour du VPS.
 
 Prérequis : Python 3.11 ou version ultérieure (le VPS tourne 3.12). Sous 3.10,
 les dépendances basculeraient sur la majeure précédente de pandas.
@@ -200,6 +334,13 @@ uv sync            # crée .venv et installe les versions figées
 uv run pytest -q   # vérification
 ```
 
+Les groupes `exchange` et `dashboard` font partie de l'environnement standard.
+Les dépendances graphiques et expérimentales sont isolées :
+
+```bash
+uv sync --group research
+```
+
 ### Avec pip
 
 `requirements.txt` est **généré** depuis `uv.lock` et contient des versions
@@ -210,6 +351,7 @@ python -m venv .venv
 .venv\Scripts\activate        # Windows
 source .venv/bin/activate     # Linux/macOS
 pip install -r requirements.txt
+pip install -e . --no-deps
 ```
 
 ### Modifier une dépendance
@@ -219,7 +361,8 @@ installer des versions non testées. Passer par `pyproject.toml` :
 
 ```bash
 uv add <paquet>          # ou éditer [project.dependencies] puis : uv lock
-uv export --no-dev --no-hashes --no-emit-project -o requirements.txt
+uv export --no-default-groups --group exchange --group dashboard \
+  --no-emit-project -o requirements.txt
 ```
 
 ## Qualité
@@ -262,13 +405,13 @@ python scripts/run_backtest.py --config config_4x.yaml
 Lancer le paper runner trend actif :
 
 ```bash
-python scripts/run_live.py --config config_4x.yaml
+btcquant-trend --config config_4x.yaml
 ```
 
 Lancer le paper runner carry :
 
 ```bash
-python scripts/run_carry.py --capital 4000 --leverage 3
+btcquant-carry --capital 4000 --leverage 3
 ```
 
 Générer la référence annuelle du portefeuille :
@@ -280,7 +423,7 @@ python scripts/make_yearly_reference.py
 Lancer le dashboard :
 
 ```bash
-python dashboard/app.py
+python -m dashboard.app
 ```
 
 ## Structure du dépôt
@@ -293,17 +436,22 @@ src/btcquant/
   indicators.py              indicateurs techniques
   risk.py                    dimensionnement et coupe-circuits
   carry.py                   modèle et backtest du carry
-  strategies/                stratégies trend
-  backtest/                  moteur et walk-forward
+  domain/                    décisions et exécution métier déterministes
+  strategies/                stratégies autorisées par le runtime
+  backtest/                  moteur de backtest partagé
   execution/                 brokers et runners
+  reporting/                 repository et calculs de reporting partagés
+  research/                  walk-forward et stratégies expérimentales
+research/configs/            profils historiques non déployables
 scripts/                     commandes et maintenance
-dashboard/                   suivi du portefeuille
+dashboard/                   serveur, HTML et assets statiques séparés
 deploy/                      services et timers VPS
 tests/                       tests automatisés
-.github/workflows/           CI (tests + lint)
+.github/                     CI, Dependabot et ownership
 pyproject.toml               dépendances et outillage (source de vérité)
 uv.lock                      versions figées
 requirements.txt             export figé de uv.lock (généré)
+sbom.cdx.json                inventaire CycloneDX des dépendances de production
 ```
 
 ## Limites

@@ -12,8 +12,8 @@
 #   pas à supprimer les stops.
 # - lancer ce profil UNIQUEMENT après avoir vécu le profil 1x en réel.
 #
-# Usage : python scripts/run_backtest.py --config config_3x.yaml
-#         python scripts/run_live.py --config config_3x.yaml
+# Profil historique archivé : ne pas utiliser pour le runtime.
+# Usage recherche : python scripts/run_backtest.py --config research/configs/config_3x.yaml
 
 exchange: binance
 symbol: BTC/USDT
@@ -66,9 +66,10 @@ strategies:
     params: { donchian: 100, adx_min: 20, funding_long_max: 0.0008, funding_short_min: -0.0008 }
 
 execution:
-  mode: paper             # paper | live — NE PASSER EN live QU'APRÈS VALIDATION
+  mode: paper             # seule valeur autorisée par la Safety Baseline
   testnet: true
-  state_file: state/live_state_3x.json   # état séparé du profil 1x
+  state_file: state/btcquant_3x.db
+  legacy_state_file: state/live_state_3x.json
   poll_buffer_seconds: 20
   live_exchange: hyperliquid          # venue des runners (backtest : exchange: ci-dessus)
   live_symbol: "BTC/USDC:USDC"

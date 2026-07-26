@@ -31,13 +31,13 @@ def notify(text: str) -> bool:
         return False
     try:
         data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
-        req = urllib.request.Request(
-            f"https://api.telegram.org/bot{token}/sendMessage", data=data
-        )
+        req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=data)
         with urllib.request.urlopen(req, timeout=10) as resp:
             return json.load(resp).get("ok", False)
     except Exception as e:  # une notification ratée ne doit jamais casser le bot
-        log.warning("Notification Telegram échouée : %s", e)
+        # Ne jamais sérialiser l'exception complète : urllib peut y inclure
+        # l'URL, qui contient le token Telegram.
+        log.warning("Notification Telegram échouée (%s)", type(e).__name__)
         return False
 
 

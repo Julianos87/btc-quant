@@ -14,9 +14,9 @@ Règles (pas d'encaissement aveugle) :
 Coûts : 4 exécutions par cycle (2 jambes × entrée + sortie), proportionnels
 au levier. Le levier multiplie le notionnel des deux jambes (portfolio margin).
 
-Limites modélisées honnêtement : le PnL de base (écart spot-perp) est supposé
-nul en moyenne (vrai en tenant jusqu'à convergence), le risque de marge
-intra-position n'est pas simulé — d'où le plafond de levier recommandé (3x).
+Le modèle accepte les prix spot/perp, un taux d'emprunt variable et les
+paramètres de marge. Sans ces données, les hypothèses synthétiques restent
+visibles dans le résultat et ne peuvent pas servir à qualifier le carry réel.
 """
 
 from __future__ import annotations
@@ -82,9 +82,7 @@ def load_funding(
     return cached
 
 
-def add_funding_columns(
-    df: pd.DataFrame, funding_8h: pd.Series, pandas_freq: str
-) -> pd.DataFrame:
+def add_funding_columns(df: pd.DataFrame, funding_8h: pd.Series, pandas_freq: str) -> pd.DataFrame:
     """Ajoute les DEUX colonnes de funding attendues par le moteur, qui n'ont
     ni la même unité ni le même usage — les confondre était la cause de l'écart
     backtest/paper documenté jusqu'en juillet 2026 :
@@ -92,6 +90,10 @@ def add_funding_columns(
     - ``funding_rate`` : **somme des paiements tombant dans la barre**, servant
       au P&L. Sur des barres 4 h et un funding 8 h, une barre sur deux vaut
       exactement 0 (les paiements tombent à 00/08/16 UTC).
+    - ``funding_at_open`` : paiement exactement à l'ouverture de la barre ;
+      il concerne seulement la position détenue avant les ordres d'ouverture.
+    - ``funding_after_open`` : paiements postérieurs à l'ouverture et antérieurs
+      à la clôture ; ils concernent la position détenue pendant la barre.
     - ``funding`` : **dernier taux 8 h connu** à la clôture de la barre, servant
       au filtre d'entrée de `TrendLS`. C'est l'équivalent backtest de
       `Venue.funding_rate_8h()` côté live.
@@ -99,13 +101,22 @@ def add_funding_columns(
     Alimenter le filtre avec ``funding_rate`` le rendrait actif une barre sur
     deux seulement, et sous-estimerait le taux d'un facteur deux sur les autres.
 
-    Pas de look-ahead : le taux payé à t est connu à t, et la barre étiquetée t
-    ne clôture qu'en t+1 barre.
+    Pas de look-ahead : le filtre d'une barre utilise le dernier paiement connu
+    avant sa clôture, jamais un paiement futur.
     """
     out = df.copy()
-    per_bar = funding_8h.resample(pandas_freq, label="left", closed="left").sum()
+    offset = pd.tseries.frequencies.to_offset(pandas_freq)
+    funding_index = pd.DatetimeIndex(funding_8h.index)
+    bucket = funding_index.floor(pandas_freq)
+    at_open_mask = funding_index == bucket
+    at_open = funding_8h[at_open_mask].groupby(bucket[at_open_mask]).sum()
+    after_open = funding_8h[~at_open_mask].groupby(bucket[~at_open_mask]).sum()
+    per_bar = funding_8h.groupby(bucket).sum()
     out["funding_rate"] = per_bar.reindex(out.index).fillna(0.0)
-    out["funding"] = funding_8h.reindex(out.index, method="ffill")
+    out["funding_at_open"] = at_open.reindex(out.index).fillna(0.0)
+    out["funding_after_open"] = after_open.reindex(out.index).fillna(0.0)
+    close_times = pd.DatetimeIndex(out.index + offset)
+    out["funding"] = funding_8h.reindex(close_times, method="ffill").to_numpy()
     return out
 
 
@@ -127,6 +138,12 @@ def backtest_carry(
     smooth_days: int = 7,
     initial_capital: float = 10_000.0,
     borrow_rate_ann: float = DEFAULT_BORROW_RATE_ANN,
+    borrow_rate_ann_series: pd.Series | None = None,
+    spot_price: pd.Series | None = None,
+    perp_price: pd.Series | None = None,
+    collateral_haircut: float = 0.0,
+    maintenance_margin_rate: float = 0.0,
+    liquidation_fee_rate: float = 0.0,
 ) -> dict:
     """Backtest du cash-and-carry avec règles d'entrée/sortie sur funding lissé.
 
@@ -145,7 +162,48 @@ def backtest_carry(
     """
     if leverage < 1.0:
         raise ValueError("leverage < 1 non modélisé (sous-emploi du capital)")
-    borrow_per_period = (leverage - 1.0) * borrow_rate_ann / PAYMENTS_PER_YEAR
+    for name, value in (
+        ("borrow_rate_ann", borrow_rate_ann),
+        ("collateral_haircut", collateral_haircut),
+        ("maintenance_margin_rate", maintenance_margin_rate),
+        ("liquidation_fee_rate", liquidation_fee_rate),
+    ):
+        if not np.isfinite(value) or value < 0:
+            raise ValueError(f"{name} doit être fini et positif ou nul")
+    if collateral_haircut >= 1:
+        raise ValueError("collateral_haircut doit être inférieur à 1")
+    if maintenance_margin_rate >= 0.5:
+        raise ValueError("maintenance_margin_rate doit être inférieur à 0.5")
+
+    def aligned(name: str, values: pd.Series) -> pd.Series:
+        numeric = values.astype(float).reindex(funding.index)
+        if numeric.isna().any() or not np.isfinite(numeric.to_numpy()).all():
+            raise ValueError(f"{name} doit couvrir exactement tous les paiements de funding")
+        return numeric
+
+    if borrow_rate_ann_series is None:
+        borrow_rates = pd.Series(float(borrow_rate_ann), index=funding.index)
+    else:
+        borrow_rates = aligned("borrow_rate_ann_series", borrow_rate_ann_series)
+        if (borrow_rates < 0).any():
+            raise ValueError("borrow_rate_ann_series contient un taux négatif")
+    borrow_per_period = (leverage - 1.0) * borrow_rates / PAYMENTS_PER_YEAR
+
+    if (spot_price is None) != (perp_price is None):
+        raise ValueError("spot_price et perp_price doivent être fournis ensemble")
+    if spot_price is None:
+        basis_return = pd.Series(0.0, index=funding.index)
+        basis_mode = "synthetic_zero"
+    else:
+        spot = aligned("spot_price", spot_price)
+        perp = aligned("perp_price", perp_price)  # type: ignore[arg-type]
+        if (spot <= 0).any() or (perp <= 0).any():
+            raise ValueError("les prix spot/perp doivent être strictement positifs")
+        # Une position long spot / short perp gagne la performance du spot et
+        # perd celle du perp. Cette différence matérialise convergence et
+        # divergence du basis, au lieu de les supposer nulles.
+        basis_return = (spot.pct_change() - perp.pct_change()).fillna(0.0)
+        basis_mode = "observed"
     smooth = funding.rolling(smooth_days * PAYMENTS_PER_DAY, min_periods=PAYMENTS_PER_DAY).mean()
     smooth_ann = smooth * PAYMENTS_PER_YEAR
 
@@ -165,12 +223,40 @@ def backtest_carry(
     switches = applied != applied.shift(1, fill_value=False)
     # le coût d'emprunt court uniquement quand la position est ouverte : hors
     # position, rien n'est emprunté puisque rien n'est immobilisé en spot.
-    pnl = (
-        applied * funding * leverage
-        - applied * borrow_per_period
-        - switches * cost_per_switch
-    )
+    funding_component = applied * funding * leverage
+    borrow_component = applied * borrow_per_period
+    basis_component = applied * basis_return * leverage
+    pnl = funding_component - borrow_component + basis_component - switches * cost_per_switch
     equity = initial_capital * (1.0 + pnl).cumprod()
+
+    # Modèle de liquidation conservateur par cycle. Le notionnel reste celui
+    # engagé à l'entrée du cycle ; le collatéral spot subit le haircut et les
+    # deux jambes consomment de la maintenance margin.
+    liquidated = False
+    liquidation_ts = None
+    entry_equity = initial_capital
+    for i, timestamp in enumerate(funding.index):
+        if bool(applied.iloc[i]) and (i == 0 or not bool(applied.iloc[i - 1])):
+            entry_equity = initial_capital if i == 0 else float(equity.iloc[i - 1])
+        if not bool(applied.iloc[i]):
+            continue
+        spot_notional = entry_equity * leverage
+        effective_collateral = float(equity.iloc[i]) - spot_notional * collateral_haircut
+        maintenance = 2.0 * spot_notional * maintenance_margin_rate
+        if effective_collateral <= maintenance:
+            liquidated = True
+            liquidation_ts = timestamp
+            before = initial_capital if i == 0 else float(equity.iloc[i - 1])
+            after = max(
+                0.0,
+                float(equity.iloc[i]) - 2.0 * spot_notional * liquidation_fee_rate,
+            )
+            pnl.iloc[i] = after / before - 1.0
+            if i + 1 < len(pnl):
+                pnl.iloc[i + 1 :] = 0.0
+                applied.iloc[i + 1 :] = False
+            equity = initial_capital * (1.0 + pnl).cumprod()
+            break
 
     years = len(funding) / PAYMENTS_PER_YEAR
     dd = (equity / equity.cummax() - 1.0).min()
@@ -188,6 +274,17 @@ def backtest_carry(
         "years": years,
         "leverage": leverage,
         "borrow_rate_ann": borrow_rate_ann,
+        "borrow_rate_ann_mean": float(borrow_rates.mean()),
+        "basis_mode": basis_mode,
+        "basis_return_ann": float(basis_component.mean() * PAYMENTS_PER_YEAR),
+        "collateral_haircut": collateral_haircut,
+        "maintenance_margin_rate": maintenance_margin_rate,
+        "liquidation_fee_rate": liquidation_fee_rate,
+        "liquidated": liquidated,
+        "liquidation_ts": liquidation_ts,
+        "real_market_inputs_complete": bool(
+            basis_mode == "observed" and borrow_rate_ann_series is not None
+        ),
         #: coût de financement annualisé effectivement supporté (0 si levier 1)
-        "borrow_cost_ann": (leverage - 1.0) * borrow_rate_ann * float(applied.mean()),
+        "borrow_cost_ann": float(borrow_component.mean() * PAYMENTS_PER_YEAR),
     }

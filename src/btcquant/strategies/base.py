@@ -18,8 +18,16 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from enum import IntEnum
 
 import pandas as pd
+
+
+class Direction(IntEnum):
+    """Sens signé d’une position ; sérialisable comme entier aux frontières."""
+
+    SHORT = -1
+    LONG = 1
 
 
 @dataclass
@@ -30,13 +38,13 @@ class Position:
     entry_price: float
     qty: float
     stop_price: float
-    direction: int = 1
+    direction: Direction = Direction.LONG
     bars_held: int = 0
     #: plus haut close depuis l'entrée pour un long, plus bas pour un short
     best_close: float = field(default=0.0)
 
-    def notional(self, price: float) -> float:
-        return self.qty * price
+    def __post_init__(self) -> None:
+        self.direction = Direction(self.direction)
 
     def unrealized(self, price: float) -> float:
         return self.direction * self.qty * (price - self.entry_price)
@@ -54,8 +62,7 @@ class Strategy(ABC):
 
     @staticmethod
     @abstractmethod
-    def default_params() -> dict:
-        ...
+    def default_params() -> dict: ...
 
     @abstractmethod
     def prepare(self, df: pd.DataFrame) -> pd.DataFrame:

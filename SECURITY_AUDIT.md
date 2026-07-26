@@ -1,9 +1,21 @@
 # Audit de sécurité applicative — TANDEM (btc-quant)
 
+> **Archive historique.** Ce document décrit l'état antérieur à la Safety
+> Baseline et à la migration SQLite transactionnelle du 24 juillet 2026. Il ne
+> constitue plus une validation de la version courante.
+
 **Date** : 2026-07-23
 **Périmètre** : intégralité du dépôt (`src/btcquant`, `dashboard/`, `scripts/`, `deploy/`, `tests/`, config, CI, dépendances)
 **Méthode** : revue manuelle fichier par fichier (OWASP Top 10, secrets exposés, erreurs d'autorisation, dépendances vulnérables, bugs à risque de perte financière) + `pip-audit` sur l'environnement figé (`uv.lock` / `requirements.txt`) + `ruff` + suite de tests (`pytest`).
 **Verdict global** : dépôt dans un état déjà mature — plusieurs classes de bugs à risque financier ont visiblement déjà été corrigées et couvertes par des tests de non-régression (`tests/test_audit_fixes.py`, `tests/test_funding_parity.py`, `tests/test_carry_financing.py`). Aucun secret, aucune injection, aucune désérialisation dangereuse trouvés. Les problèmes identifiés ici concernent le durcissement du dashboard exposé sur Internet et une dépendance transitive au CVE connu.
+
+> **Mise à jour locale du 25 juillet 2026** — le mécanisme historique de
+> capability URL décrit plus bas a été supprimé. L’authentification passe
+> désormais par `POST /login`, puis par un cookie signé de 12 heures ; le
+> manifest ne contient plus de secret. Les sauvegardes hors-site sont chiffrées
+> et leur déchiffrement est vérifié avant publication. La validation locale
+> actuelle compte **187 tests**, avec Ruff, format et mypy au vert. Ces
+> changements ne sont pas réputés déployés tant que le VPS n’a pas été vérifié.
 
 **Mise à jour 2026-07-23 (suite, activée)** : domaine `tandemalgo.duckdns.org` fourni par l'utilisateur → le point 1 (absence de TLS) est traité et **activé en production**. Le scaffolding Caddy initialement ajouté ici (`deploy/Caddyfile`, sections Caddy de `install.sh`/`update.sh`) a été retiré : le VPS de production est une machine **partagée** avec d'autres projets, dont nginx tient déjà les ports 80/443 en name-based virtual hosting — Caddy n'aurait pas pu s'y installer sans conflit. Le TLS a été mis en place directement sur le VPS (session avec accès SSH) via un vhost nginx + certificat Let's Encrypt (`certbot --nginx`), sur le même modèle qu'un autre domaine déjà servi par ce VPS. Vérifié : `https://tandemalgo.duckdns.org` répond avec un certificat valide, cookie de session `Secure`, et les autres sites du VPS ne sont pas affectés.
 

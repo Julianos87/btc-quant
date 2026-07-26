@@ -28,8 +28,10 @@ def main() -> None:
         cfg["data"]["since"],
         data_dir=ROOT / cfg["data"]["dir"],
     )
-    print(f"\n{symbol} {cfg['data']['base_timeframe']} : {len(df)} bougies, "
-          f"{df.index[0]} → {df.index[-1]}")
+    print(
+        f"\n{symbol} {cfg['data']['base_timeframe']} : {len(df)} bougies, "
+        f"{df.index[0]} → {df.index[-1]}"
+    )
 
 
 if __name__ == "__main__":

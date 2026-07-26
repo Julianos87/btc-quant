@@ -20,7 +20,9 @@ def compute_metrics(
     cagr = (equity.iloc[-1] / equity.iloc[0]) ** (1.0 / years) - 1.0 if years > 0 else np.nan
 
     vol = returns.std() * np.sqrt(bars_per_year)
-    sharpe = returns.mean() / returns.std() * np.sqrt(bars_per_year) if returns.std() > 0 else np.nan
+    sharpe = (
+        returns.mean() / returns.std() * np.sqrt(bars_per_year) if returns.std() > 0 else np.nan
+    )
     downside = returns[returns < 0]
     sortino = (
         returns.mean() / downside.std() * np.sqrt(bars_per_year)
@@ -56,7 +58,11 @@ def compute_metrics(
         "calmar": calmar,
         "n_trades": len(trades),
         "win_rate": len(wins) / len(trades) if trades else np.nan,
-        "profit_factor": gross_win / gross_loss if gross_loss > 0 else np.inf if gross_win > 0 else np.nan,
+        "profit_factor": gross_win / gross_loss
+        if gross_loss > 0
+        else np.inf
+        if gross_win > 0
+        else np.nan,
         "avg_win_pct": np.mean([t.pnl_pct for t in wins]) if wins else np.nan,
         "avg_loss_pct": np.mean([t.pnl_pct for t in losses]) if losses else np.nan,
         "avg_bars_held": np.mean([t.bars_held for t in trades]) if trades else np.nan,

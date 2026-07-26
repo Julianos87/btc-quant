@@ -81,8 +81,12 @@ def test_net_return_matches_closed_form():
     rate, lev, r = 0.0002, 3.0, 0.10
     f = _flat_funding(rate=rate, n=3 * 365)
     res = backtest_carry(
-        f, leverage=lev, borrow_rate_ann=r, initial_capital=1000,
-        fee_rate=0.0, slippage_bps=0.0,
+        f,
+        leverage=lev,
+        borrow_rate_ann=r,
+        initial_capital=1000,
+        fee_rate=0.0,
+        slippage_bps=0.0,
     )
     expo = res["exposure"]
     per_period = lev * rate - (lev - 1) * r / PAYMENTS_PER_YEAR
@@ -141,3 +145,70 @@ def test_default_borrow_rate_is_not_zero():
     assert DEFAULT_BORROW_RATE_ANN > 0.0
     res = backtest_carry(_flat_funding(), leverage=3.0, initial_capital=4000)
     assert res["borrow_cost_ann"] > 0.0
+
+
+def test_observed_basis_changes_carry_pnl():
+    funding = _flat_funding(rate=0.0, n=12)
+    spot = pd.Series(100.0, index=funding.index)
+    perp = pd.Series([100.0 + i * 2 for i in range(12)], index=funding.index)
+
+    result = backtest_carry(
+        funding,
+        leverage=1.0,
+        fee_rate=0.0,
+        slippage_bps=0.0,
+        enter_ann=-1.0,
+        exit_ann=-1.0,
+        spot_price=spot,
+        perp_price=perp,
+    )
+
+    assert result["basis_mode"] == "observed"
+    assert result["basis_return_ann"] < 0
+    assert result["cagr"] < 0
+
+
+def test_variable_borrow_rate_is_used_and_disclosed():
+    funding = _flat_funding(n=30)
+    rates = pd.Series(0.25, index=funding.index)
+    result = backtest_carry(
+        funding,
+        leverage=3.0,
+        borrow_rate_ann_series=rates,
+    )
+    assert result["borrow_rate_ann_mean"] == pytest.approx(0.25)
+    assert result["real_market_inputs_complete"] is False
+
+
+def test_adverse_basis_can_trigger_maintenance_liquidation():
+    funding = _flat_funding(rate=0.0, n=20)
+    spot = pd.Series(100.0, index=funding.index)
+    perp = pd.Series([100.0] * 5 + [180.0] * 15, index=funding.index)
+    result = backtest_carry(
+        funding,
+        leverage=3.0,
+        fee_rate=0.0,
+        slippage_bps=0.0,
+        enter_ann=-1.0,
+        exit_ann=-1.0,
+        spot_price=spot,
+        perp_price=perp,
+        collateral_haircut=0.05,
+        maintenance_margin_rate=0.05,
+        liquidation_fee_rate=0.005,
+    )
+    assert result["liquidated"] is True
+    assert result["liquidation_ts"] is not None
+
+
+def test_real_market_inputs_are_explicitly_qualified():
+    funding = _flat_funding(n=12)
+    prices = pd.Series(100.0, index=funding.index)
+    rates = pd.Series(0.08, index=funding.index)
+    result = backtest_carry(
+        funding,
+        borrow_rate_ann_series=rates,
+        spot_price=prices,
+        perp_price=prices,
+    )
+    assert result["real_market_inputs_complete"] is True

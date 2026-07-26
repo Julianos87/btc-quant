@@ -21,6 +21,10 @@ import time
 import ccxt
 import pandas as pd
 
+from .resilience import RetryPolicy
+
+NETWORK_ERRORS = (ccxt.NetworkError, ccxt.ExchangeNotAvailable, ccxt.RequestTimeout)
+
 
 class Venue:
     def __init__(self, exchange_id: str, symbol: str) -> None:
@@ -29,6 +33,7 @@ class Venue:
         self.is_hourly_funding = exchange_id == "hyperliquid"
         klass = getattr(ccxt, exchange_id)
         self.exchange: ccxt.Exchange = klass({"enableRateLimit": True, "timeout": 30_000})
+        self._retry = RetryPolicy()
         if self.is_hourly_funding:
             self.funding_exchange = self.exchange
             self.payments_per_day = 24
@@ -45,12 +50,25 @@ class Venue:
     # ── prix & bougies ───────────────────────────────────────────────────────
     def last_price(self) -> float:
         if self.is_hourly_funding:
-            candles = self.exchange.fetch_ohlcv(self.symbol, "1m", limit=1)
+            candles = self._retry.call(
+                self.exchange.fetch_ohlcv,
+                self.symbol,
+                "1m",
+                limit=1,
+                retry_on=NETWORK_ERRORS,
+            )
             return float(candles[-1][4])
-        return float(self.exchange.fetch_ticker(self.symbol)["last"])
+        ticker = self._retry.call(self.exchange.fetch_ticker, self.symbol, retry_on=NETWORK_ERRORS)
+        return float(ticker["last"])
 
     def fetch_ohlcv(self, timeframe: str, limit: int = 1000) -> list[list]:
-        return self.exchange.fetch_ohlcv(self.symbol, timeframe, limit=limit)
+        return self._retry.call(
+            self.exchange.fetch_ohlcv,
+            self.symbol,
+            timeframe,
+            limit=limit,
+            retry_on=NETWORK_ERRORS,
+        )
 
     # ── funding ──────────────────────────────────────────────────────────────
     def funding_rate_8h(self) -> float:
@@ -59,17 +77,38 @@ class Venue:
             # pas de fetch_funding_rate sur hyperliquid : dernier paiement de
             # l'historique, ×8 pour l'équivalent 8 h
             since = int((time.time() - 3 * 3600) * 1000)
-            hist = self.funding_exchange.fetch_funding_rate_history(self.symbol, since=since)
+            hist = self._retry.call(
+                self.funding_exchange.fetch_funding_rate_history,
+                self.symbol,
+                since=since,
+                retry_on=NETWORK_ERRORS,
+            )
             if not hist:
                 raise ccxt.ExchangeError("historique de funding vide")
             return float(hist[-1]["fundingRate"]) * 8.0
-        return float(self.funding_exchange.fetch_funding_rate(self.symbol)["fundingRate"])
+        funding = self._retry.call(
+            self.funding_exchange.fetch_funding_rate,
+            self.symbol,
+            retry_on=NETWORK_ERRORS,
+        )
+        return float(funding["fundingRate"])
 
     def funding_history(self, days: float) -> pd.Series:
         """Paiements de funding des `days` derniers jours (taux par période
         NATIVE, un point par paiement réel), indexés par horodatage UTC."""
-        since = int((time.time() - days * 86_400) * 1000)
-        rows = self.funding_exchange.fetch_funding_rate_history(self.symbol, since=since)
+        since = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)
+        return self.funding_history_since(since)
+
+    def funding_history_since(self, since: pd.Timestamp) -> pd.Series:
+        """Paiements natifs strictement horodatés depuis ``since``."""
+
+        since_ms = int(since.timestamp() * 1000)
+        rows = self._retry.call(
+            self.funding_exchange.fetch_funding_rate_history,
+            self.symbol,
+            since=since_ms,
+            retry_on=NETWORK_ERRORS,
+        )
         return pd.Series(
             [float(r["fundingRate"]) for r in rows],
             index=pd.DatetimeIndex(

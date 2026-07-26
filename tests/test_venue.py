@@ -73,8 +73,9 @@ def test_carry_annualizes_hourly_funding(tmp_path):
     """Funding horaire constant de 1.25e-5 → ~10,9 %/an : le carry doit entrer
     (seuil 3 %) et payer le coût de bascule, avec l'annualisation ×24×365
     (l'ancienne convention 8 h, ×3×365, n'aurait vu que ~1,4 % → jamais entré)."""
-    runner = CarryRunner(initial_capital=4000.0, leverage=3.0,
-                         state_file=tmp_path / "carry_state.json")
+    runner = CarryRunner(
+        initial_capital=4000.0, leverage=3.0, state_file=tmp_path / "carry_state.json"
+    )
     _stub_venue(runner.venue, funding_rate=1.25e-5)
     assert not runner.in_position
     runner._tick()

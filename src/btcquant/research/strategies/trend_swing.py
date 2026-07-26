@@ -20,8 +20,8 @@ from __future__ import annotations
 
 import pandas as pd
 
-from ..indicators import atr, donchian_high, ema
-from .base import Position, Strategy
+from ...indicators import atr, donchian_high, ema
+from ...strategies.base import Position, Strategy
 
 
 class TrendSwing(Strategy):

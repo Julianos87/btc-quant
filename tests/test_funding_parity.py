@@ -49,6 +49,8 @@ def test_both_columns_are_created():
     out = add_funding_columns(_bars_4h(), _funding_8h(), "4h")
     assert "funding_rate" in out.columns, "colonne du P&L manquante"
     assert "funding" in out.columns, "colonne du filtre d'entrée manquante"
+    assert "funding_at_open" in out.columns
+    assert "funding_after_open" in out.columns
 
 
 def test_funding_rate_is_zero_on_half_the_4h_bars():
@@ -80,6 +82,18 @@ def test_funding_column_keeps_8h_unit():
     assert payment_bars["funding_rate"].iloc[0] == pytest.approx(rate)
     # …et la colonne du filtre vaut ce même taux 8 h partout
     assert out["funding"].dropna().iloc[-1] == pytest.approx(rate)
+
+
+def test_hourly_payments_are_split_from_the_opening_snapshot():
+    bars = _bars_4h(n=4)
+    index = pd.date_range("2026-01-01", periods=12, freq="1h", tz="UTC")
+    hourly = pd.Series([0.0001] * len(index), index=index)
+
+    out = add_funding_columns(bars, hourly, "4h")
+
+    assert out["funding_at_open"].iloc[0] == pytest.approx(0.0001)
+    assert out["funding_after_open"].iloc[0] == pytest.approx(0.0003)
+    assert out["funding_rate"].iloc[0] == pytest.approx(0.0004)
 
 
 def test_no_lookahead_before_first_payment():
@@ -132,8 +146,15 @@ def test_missing_funding_column_leaves_filter_neutral():
     """Si le funding n'a pas pu être chargé, le backtest tourne sans la colonne
     et le filtre doit rester neutre plutôt que de tout bloquer."""
     strat = TrendLS(funding_long_max=0.0008)
-    row = pd.Series({
-        "close": 110.0, "atr": 2.0, "donchian_high": 100.0, "donchian_low": 90.0,
-        "ema_slow": 100.0, "regime_up": True, "adx": 30.0,
-    })
+    row = pd.Series(
+        {
+            "close": 110.0,
+            "atr": 2.0,
+            "donchian_high": 100.0,
+            "donchian_low": 90.0,
+            "ema_slow": 100.0,
+            "regime_up": True,
+            "adx": 30.0,
+        }
+    )
     assert strat.entry_signal(row) == 1

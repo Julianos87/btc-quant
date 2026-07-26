@@ -37,11 +37,22 @@ SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
 
 def _engine(sleeve_capital: float, short_mult: float = 1.0) -> BacktestEngine:
     risk = RiskConfig(
-        initial_capital=sleeve_capital, risk_per_trade=0.0075, max_position_pct=0.95,
-        vol_target_annual=0.40, max_drawdown_halt=0.30, daily_loss_limit=None, max_leverage=1.0,
+        initial_capital=sleeve_capital,
+        risk_per_trade=0.0075,
+        max_position_pct=0.95,
+        vol_target_annual=0.40,
+        max_drawdown_halt=0.30,
+        daily_loss_limit=None,
+        max_leverage=1.0,
     )
-    return BacktestEngine(fee_rate=PERP_FEE, slippage_bps=SLIPPAGE_BPS, risk=risk,
-                          funding_rate_8h=FUNDING_8H, allow_short=True, short_size_mult=short_mult)
+    return BacktestEngine(
+        fee_rate=PERP_FEE,
+        slippage_bps=SLIPPAGE_BPS,
+        risk=risk,
+        funding_rate_8h=FUNDING_8H,
+        allow_short=True,
+        short_size_mult=short_mult,
+    )
 
 
 def add_real_funding(df: pd.DataFrame, symbol_perp: str) -> pd.DataFrame:
@@ -51,8 +62,9 @@ def add_real_funding(df: pd.DataFrame, symbol_perp: str) -> pd.DataFrame:
     return add_funding_columns(df, fund, TIMEFRAME_TO_PANDAS[TIMEFRAME])
 
 
-def symbol_ensemble(df: pd.DataFrame, sleeve: float, stop_cfg: dict | None = None,
-                    short_mult: float = 1.0) -> pd.Series:
+def symbol_ensemble(
+    df: pd.DataFrame, sleeve: float, stop_cfg: dict | None = None, short_mult: float = 1.0
+) -> pd.Series:
     """Équity de l'ensemble 3-horizons pour UN actif (chaque horizon = sleeve/3)."""
     stop_cfg = stop_cfg or {}
     curves = []
@@ -74,10 +86,13 @@ def portfolio(dfs: dict[str, pd.DataFrame], stop_cfg: dict | None = None) -> pd.
 def block_bootstrap_sharpe_diff(ret_a, ret_b, block=30, n_boot=3000, seed=0):
     idx = ret_a.index.intersection(ret_b.index)
     a, b = ret_a.reindex(idx).to_numpy(), ret_b.reindex(idx).to_numpy()
-    m = len(a); sq = np.sqrt(BPY)
+    m = len(a)
+    sq = np.sqrt(BPY)
     sharpe = lambda x: x.mean() / x.std() * sq if x.std() > 0 else 0.0
     obs = sharpe(a) - sharpe(b)
-    rng = np.random.default_rng(seed); nb = int(np.ceil(m / block)); wins = 0
+    rng = np.random.default_rng(seed)
+    nb = int(np.ceil(m / block))
+    wins = 0
     for _ in range(n_boot):
         starts = rng.integers(0, m - block + 1, size=nb)
         sel = np.concatenate([np.arange(s, s + block) for s in starts])[:m]
@@ -97,14 +112,18 @@ def load_all() -> dict[str, pd.DataFrame]:
 def main() -> None:
     dfs = load_all()
     common_start = max(df.index[0] for df in dfs.values())
-    print(f"Fenêtre commune : {common_start.date()} → {min(df.index[-1] for df in dfs.values()).date()}\n")
+    print(
+        f"Fenêtre commune : {common_start.date()} → {min(df.index[-1] for df in dfs.values()).date()}\n"
+    )
 
     # Perf par actif (ensemble seul), sur son propre historique
     print("═══ Ensemble trend par actif (plein historique de l'actif) ═══")
     for sym, df in dfs.items():
         eq = symbol_ensemble(df, CAPITAL)
         m = compute_metrics(eq, [], BPY)
-        print(f"  {sym:10} Sharpe {m['sharpe']:.2f}  CAGR {m['cagr']:+.1%}  maxDD {m['max_drawdown']:+.1%}")
+        print(
+            f"  {sym:10} Sharpe {m['sharpe']:.2f}  CAGR {m['cagr']:+.1%}  maxDD {m['max_drawdown']:+.1%}"
+        )
 
     # Comparaison honnête sur la FENÊTRE COMMUNE
     print("\n═══ #1 Diversification — comparaison sur fenêtre commune ═══")
@@ -119,10 +138,14 @@ def main() -> None:
     r_comb = combined.pct_change().dropna()
     diff, pval = block_bootstrap_sharpe_diff(r_comb, r_btc)
 
-    print(f"  BTC seul        : Sharpe {m_btc['sharpe']:.2f}  CAGR {m_btc['cagr']:+.1%}  "
-          f"maxDD {m_btc['max_drawdown']:+.1%}")
-    print(f"  BTC+ETH+SOL     : Sharpe {m_comb['sharpe']:.2f}  CAGR {m_comb['cagr']:+.1%}  "
-          f"maxDD {m_comb['max_drawdown']:+.1%}")
+    print(
+        f"  BTC seul        : Sharpe {m_btc['sharpe']:.2f}  CAGR {m_btc['cagr']:+.1%}  "
+        f"maxDD {m_btc['max_drawdown']:+.1%}"
+    )
+    print(
+        f"  BTC+ETH+SOL     : Sharpe {m_comb['sharpe']:.2f}  CAGR {m_comb['cagr']:+.1%}  "
+        f"maxDD {m_comb['max_drawdown']:+.1%}"
+    )
     print(f"  → ΔSharpe {diff:+.2f}  |  p-value (diversif. meilleure) = {pval:.3f}")
 
     # corrélation des rendements entre sleeves (diversification réelle ?)
@@ -138,11 +161,14 @@ def main() -> None:
     eq_flat = symbol_ensemble(btc, CAPITAL)
     eq_real = symbol_ensemble(add_real_funding(btc, "BTC/USDT:USDT"), CAPITAL)
     m_flat, m_real = compute_metrics(eq_flat, [], BPY), compute_metrics(eq_real, [], BPY)
-    d2, p2 = block_bootstrap_sharpe_diff(eq_real.pct_change().dropna(),
-                                         eq_flat.pct_change().dropna())
+    d2, p2 = block_bootstrap_sharpe_diff(
+        eq_real.pct_change().dropna(), eq_flat.pct_change().dropna()
+    )
     print(f"  funding plat (0.01%/8h) : Sharpe {m_flat['sharpe']:.2f}  CAGR {m_flat['cagr']:+.1%}")
     print(f"  funding RÉEL            : Sharpe {m_real['sharpe']:.2f}  CAGR {m_real['cagr']:+.1%}")
-    print(f"  → ΔSharpe {d2:+.2f} (le backtest plat {'sur' if d2 < 0 else 'sous'}-estimait le coût réel)")
+    print(
+        f"  → ΔSharpe {d2:+.2f} (le backtest plat {'sur' if d2 < 0 else 'sous'}-estimait le coût réel)"
+    )
 
     # ── #3 Tilt net-long : sous-dimensionner les shorts (BTC) ───────────────
     print("\n═══ #3 Tilt net-long (multiplicateur de taille des shorts, BTC) ═══")
@@ -152,11 +178,15 @@ def main() -> None:
         m = compute_metrics(eq, [], BPY)
         label = {1.0: "symétrique", 0.5: "tilt 50% shorts", 0.0: "long-only"}[sm]
         if sm == 1.0:
-            print(f"  {label:16}: Sharpe {m['sharpe']:.2f}  CAGR {m['cagr']:+.1%}  maxDD {m['max_drawdown']:+.1%}  (réf.)")
+            print(
+                f"  {label:16}: Sharpe {m['sharpe']:.2f}  CAGR {m['cagr']:+.1%}  maxDD {m['max_drawdown']:+.1%}  (réf.)"
+            )
         else:
             d3, p3 = block_bootstrap_sharpe_diff(eq.pct_change().dropna(), base_ret)
-            print(f"  {label:16}: Sharpe {m['sharpe']:.2f}  CAGR {m['cagr']:+.1%}  maxDD {m['max_drawdown']:+.1%}  "
-                  f"ΔSharpe {d3:+.2f}  p {p3:.3f}")
+            print(
+                f"  {label:16}: Sharpe {m['sharpe']:.2f}  CAGR {m['cagr']:+.1%}  maxDD {m['max_drawdown']:+.1%}  "
+                f"ΔSharpe {d3:+.2f}  p {p3:.3f}"
+            )
 
 
 if __name__ == "__main__":

@@ -159,7 +159,11 @@ def test_trailing_stop_follows_best_close():
     s = TrendLS(atr_mult=3.0)
     pos = Position(
         entry_time=pd.Timestamp("2026-01-01", tz="UTC"),
-        entry_price=100.0, qty=1.0, stop_price=94.0, direction=1, best_close=120.0,
+        entry_price=100.0,
+        qty=1.0,
+        stop_price=94.0,
+        direction=1,
+        best_close=120.0,
     )
     assert s.trailing_stop(_row(atr=2.0), pos) == pytest.approx(114.0)
 
@@ -168,7 +172,11 @@ def test_trailing_stop_is_mirrored_for_short():
     s = TrendLS(atr_mult=3.0)
     pos = Position(
         entry_time=pd.Timestamp("2026-01-01", tz="UTC"),
-        entry_price=100.0, qty=1.0, stop_price=106.0, direction=-1, best_close=80.0,
+        entry_price=100.0,
+        qty=1.0,
+        stop_price=106.0,
+        direction=-1,
+        best_close=80.0,
     )
     assert s.trailing_stop(_row(atr=2.0), pos) == pytest.approx(86.0)
 
@@ -177,7 +185,11 @@ def test_trailing_stop_none_when_atr_missing():
     s = TrendLS()
     pos = Position(
         entry_time=pd.Timestamp("2026-01-01", tz="UTC"),
-        entry_price=100.0, qty=1.0, stop_price=94.0, direction=1, best_close=100.0,
+        entry_price=100.0,
+        qty=1.0,
+        stop_price=94.0,
+        direction=1,
+        best_close=100.0,
     )
     assert s.trailing_stop(_row(atr=np.nan), pos) is None
 
@@ -189,7 +201,10 @@ def test_exit_on_regime_reversal():
     s = TrendLS()
     long_pos = Position(
         entry_time=pd.Timestamp("2026-01-01", tz="UTC"),
-        entry_price=100.0, qty=1.0, stop_price=94.0, direction=1,
+        entry_price=100.0,
+        qty=1.0,
+        stop_price=94.0,
+        direction=1,
     )
     assert s.exit_signal(_row(regime_up=False), long_pos) is True
     assert s.exit_signal(_row(regime_up=True), long_pos) is False
@@ -199,7 +214,10 @@ def test_exit_on_regime_reversal_for_short():
     s = TrendLS()
     short_pos = Position(
         entry_time=pd.Timestamp("2026-01-01", tz="UTC"),
-        entry_price=100.0, qty=1.0, stop_price=106.0, direction=-1,
+        entry_price=100.0,
+        qty=1.0,
+        stop_price=106.0,
+        direction=-1,
     )
     assert s.exit_signal(_row(regime_up=True), short_pos) is True
     assert s.exit_signal(_row(regime_up=False), short_pos) is False
@@ -237,7 +255,7 @@ def test_prepare_omits_adx_when_filter_disabled():
 def test_indicators_are_valid_after_warmup():
     s = TrendLS()
     out = s.prepare(_ohlc(600))
-    tail = out.iloc[s.warmup_bars():]
+    tail = out.iloc[s.warmup_bars() :]
     for col in ("ema_fast", "ema_slow", "donchian_high", "donchian_low", "atr"):
         assert tail[col].notna().all(), f"{col} encore NaN après la chauffe"
 

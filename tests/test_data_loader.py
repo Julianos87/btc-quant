@@ -1,0 +1,144 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import ccxt
+import pandas as pd
+import pytest
+
+from btcquant import data
+
+
+def _ohlcv(timestamp: int, close: float) -> list[float]:
+    return [timestamp, close - 1, close + 1, close - 2, close, 10.0]
+
+
+class PaginatedExchange:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    @staticmethod
+    def parse_timeframe(_timeframe: str) -> int:
+        return 60
+
+    @staticmethod
+    def milliseconds() -> int:
+        return 180_000
+
+    def fetch_ohlcv(self, _symbol, _timeframe, *, since, limit):
+        assert limit == 1000
+        self.calls += 1
+        if self.calls == 1:
+            raise ccxt.NetworkError("temporary")
+        if since == 0:
+            return [_ohlcv(0, 100), _ohlcv(60_000, 101)]
+        return [_ohlcv(120_000, 102)]
+
+
+def test_paginated_fetch_retries_and_advances_without_duplicates(monkeypatch):
+    sleeps: list[int] = []
+    monkeypatch.setattr(data.time, "sleep", sleeps.append)
+
+    frame = data._fetch_paginated(PaginatedExchange(), "BTC/USDT", "1m", 0)
+
+    assert sleeps == [1]
+    assert frame["close"].tolist() == [100.0, 101.0, 102.0]
+    assert str(frame.index.tz) == "UTC"
+
+
+def test_paginated_fetch_fails_after_bounded_retries(monkeypatch):
+    exchange = PaginatedExchange()
+    monkeypatch.setattr(
+        exchange,
+        "fetch_ohlcv",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ccxt.ExchangeNotAvailable("down")),
+    )
+    monkeypatch.setattr(data.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError, match="5 tentatives"):
+        data._fetch_paginated(exchange, "BTC/USDT", "1m", 0)
+
+
+def test_cached_load_without_refresh_is_utc_and_drops_open_candle(tmp_path: Path):
+    path = tmp_path / "binance_BTC-USDT_1h.csv"
+    path.write_text(
+        "timestamp,open,high,low,close,volume\n"
+        "2030-01-01 00:00:00,99,101,98,100,10\n"
+        "2030-01-01 01:00:00,100,102,99,101,11\n",
+        encoding="utf-8",
+    )
+
+    frame = data.load_ohlcv(
+        "binance",
+        "BTC/USDT",
+        "1h",
+        "2030-01-01",
+        data_dir=tmp_path,
+        refresh=False,
+    )
+
+    assert frame["close"].tolist() == [100]
+    assert str(frame.index.tz) == "UTC"
+
+
+def test_refresh_merges_cache_and_replaces_duplicate_timestamp(tmp_path: Path, monkeypatch):
+    path = tmp_path / "binance_BTC-USDT_1h.csv"
+    path.write_text(
+        "timestamp,open,high,low,close,volume\n2030-01-01T00:00:00Z,99,101,98,100,10\n",
+        encoding="utf-8",
+    )
+    fresh_index = pd.to_datetime(
+        ["2030-01-01T00:00:00Z", "2030-01-01T01:00:00Z", "2030-01-01T02:00:00Z"]
+    )
+    fresh = pd.DataFrame(
+        {
+            "open": [100.0, 101.0, 102.0],
+            "high": [102.0, 103.0, 104.0],
+            "low": [99.0, 100.0, 101.0],
+            "close": [101.0, 102.0, 103.0],
+            "volume": [10.0, 11.0, 12.0],
+        },
+        index=fresh_index,
+    )
+    monkeypatch.setattr(data, "_make_exchange", lambda _exchange_id: object())
+    monkeypatch.setattr(data, "_fetch_paginated", lambda *_args: fresh)
+
+    frame = data.load_ohlcv(
+        "binance",
+        "BTC/USDT",
+        "1h",
+        "2030-01-01",
+        data_dir=tmp_path,
+    )
+
+    assert frame["close"].tolist() == [101.0, 102.0]
+    persisted = pd.read_csv(path)
+    assert len(persisted) == 3
+
+
+def test_missing_cache_and_resampling_edge_cases(tmp_path: Path):
+    with pytest.raises(FileNotFoundError, match="Aucun cache"):
+        data.load_ohlcv(
+            "binance",
+            "BTC/USDT",
+            "1h",
+            "2030-01-01",
+            data_dir=tmp_path,
+            refresh=False,
+        )
+
+    index = pd.date_range("2030-01-01", periods=4, freq="1h", tz="UTC")
+    source = pd.DataFrame(
+        {
+            "open": [1.0, 2.0, 3.0, 4.0],
+            "high": [2.0, 3.0, 4.0, 5.0],
+            "low": [0.0, 1.0, 2.0, 3.0],
+            "close": [1.5, 2.5, 3.5, 4.5],
+            "volume": [1.0, 2.0, 3.0, 4.0],
+        },
+        index=index,
+    )
+    result = data.resample(source, "2h")
+    assert result["open"].tolist() == [1.0, 3.0]
+    assert result["high"].tolist() == [3.0, 5.0]
+    assert result["volume"].tolist() == [3.0, 7.0]
