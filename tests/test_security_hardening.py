@@ -96,6 +96,8 @@ def test_runtime_services_use_installed_entrypoints():
     assert "/venv/bin/btcquant-digest --weekly" in weekly
     assert "/venv/bin/btcquant-rebalance" in rebalance
     assert 'pip" install --quiet --no-deps "${STAGING}"' in release
+    assert 'chown -R root:btcquant "${STAGING}"' in release
+    assert 'chown -R root:root "${STAGING}"' not in release
 
 
 def test_production_requirements_are_pinned_with_hashes():

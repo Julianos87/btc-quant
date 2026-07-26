@@ -66,7 +66,9 @@ python3 -m venv "${STAGING}/venv"
     "import dashboard.app; from btcquant.config import load_config; load_config('config_4x.yaml')"
 )
 
-chown -R root:root "${STAGING}"
+# Le code reste détenu par root (release immuable), mais les services systemd
+# s'exécutent sous btcquant et doivent pouvoir traverser/lire la release.
+chown -R root:btcquant "${STAGING}"
 chmod -R o-rwx "${STAGING}"
 chmod +x "${STAGING}/scripts/backup_state.sh" "${STAGING}/deploy/"*.sh
 mv "${STAGING}" "${TARGET}"
