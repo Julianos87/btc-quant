@@ -74,7 +74,7 @@ jobs:
       - name: Vérifier l'export de production
         run: |
           uv export --locked --no-default-groups --group exchange --group dashboard \
-            --no-emit-project --output-file "${RUNNER_TEMP}/requirements.txt"
+            --no-header --no-emit-project --output-file "${RUNNER_TEMP}/requirements.txt"
           diff -u requirements.txt "${RUNNER_TEMP}/requirements.txt"
 
       - name: Vérifier le SBOM CycloneDX
@@ -86,4 +86,6 @@ jobs:
       - name: Syntaxe des scripts de déploiement
         run: >-
           bash -n deploy/install.sh deploy/update.sh deploy/create-release.sh
-          deploy/preflight.sh deploy/rebalance-root.sh scripts/backup_state.sh
+          deploy/preflight.sh deploy/rebalance-root.sh
+          deploy/start-hyperliquid-testnet.sh deploy/stop-hyperliquid-testnet.sh
+          scripts/backup_state.sh

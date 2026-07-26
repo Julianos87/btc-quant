@@ -41,6 +41,12 @@ def recover_interrupted_orders(
 
     report = RecoveryReport()
     for order in store.unresolved_orders(engine):
+        # Les stops ont leur propre saga persistante. Un stop OPEN est un état
+        # nominal et un stop PENDING doit être repris avec son contexte
+        # (ancien stop, quantité et trigger), indisponible dans ce récupérateur
+        # générique d'ordres market.
+        if order["order_type"] == "STOP":
+            continue
         order_id = int(order["id"])
         if order["status"] == "UNBALANCED":
             report.manual_order_ids.append(order_id)

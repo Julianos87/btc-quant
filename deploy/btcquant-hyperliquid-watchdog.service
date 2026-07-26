@@ -1,0 +1,19 @@
+[Unit]
+Description=btcquant - watchdog Hyperliquid TESTNET
+ConditionPathExists=/opt/btcquant/state/HYPERLIQUID_TESTNET_APPROVED
+
+[Service]
+Type=oneshot
+User=btcquant
+WorkingDirectory=/opt/btcquant/current
+Environment=PYTHONIOENCODING=utf-8
+EnvironmentFile=-/opt/btcquant/.env
+ExecStart=/opt/btcquant/current/venv/bin/btcquant-watchdog --database /opt/btcquant/state/btcquant-testnet.db --service btcquant-hyperliquid-testnet --max-age 600
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/btcquant/state
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+LockPersonality=true

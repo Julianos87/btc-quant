@@ -61,6 +61,24 @@ def test_hyperliquid_price_from_candle():
     assert v.last_price() == pytest.approx(61_234.5)
 
 
+def test_testnet_switches_hyperliquid_public_api_to_sandbox(monkeypatch):
+    switched: list[bool] = []
+
+    class FakeHyperliquid:
+        def __init__(self, _config):
+            pass
+
+        def set_sandbox_mode(self, enabled):
+            switched.append(enabled)
+
+    monkeypatch.setattr("btcquant.execution.venue.ccxt.hyperliquid", FakeHyperliquid)
+
+    venue = Venue("hyperliquid", "BTC/USDC:USDC", testnet=True)
+
+    assert venue.exchange is venue.funding_exchange
+    assert switched == [True]
+
+
 def test_funding_history_sorted_series():
     v = _stub_venue(Venue("hyperliquid", "BTC/USDC:USDC"))
     s = v.funding_history(1)

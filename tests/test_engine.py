@@ -206,6 +206,41 @@ def test_position_size_caps():
     check("sizing short", position_size(10_000, 100, 110, None, cfg, direction=-1), 10.0)
 
 
+def test_kill_switch_exits_at_the_next_open():
+    """Le drawdown constaté à la clôture t liquide à l'ouverture t+1."""
+
+    class DeepStopStrategy(MockStrategy):
+        def initial_stop(self, row: pd.Series, entry_price: float, direction: int = 1) -> float:
+            return 1.0
+
+    opens = [100.0] * 7 + [70.0, 60.0, 50.0, 50.0]
+    df = make_df(
+        opens,
+        lows=[99.0] * 7 + [69.0, 59.0, 49.0, 49.0],
+        highs=[101.0] * len(opens),
+    )
+    # La clôture de la barre 7 vaut 70.5 : avec presque 100 % de notionnel,
+    # le drawdown dépasse 20 %, sans toucher le stop à 1 $.
+    cfg = RiskConfig(
+        initial_capital=10_000.0,
+        risk_per_trade=1.0,
+        max_position_pct=0.95,
+        vol_target_annual=None,
+        max_drawdown_halt=0.20,
+        daily_loss_limit=None,
+    )
+
+    result = BacktestEngine(fee_rate=0.0, slippage_bps=0.0, risk=cfg).run(
+        DeepStopStrategy(enter_bar=5, direction=1, stop_dist=10.0, exit_after=0),
+        df,
+    )
+
+    assert len(result.trades) == 1
+    assert result.trades[0].exit_reason == "kill_switch"
+    assert result.trades[0].exit_time == df.index[8]
+    assert result.trades[0].exit_price == 60.0
+
+
 if __name__ == "__main__":
     test_long_win()
     test_long_stop()

@@ -71,10 +71,11 @@ class LookupBroker(Broker):
         ref_price: float,
         *,
         client_order_id: str | None = None,
+        reduce_only: bool = False,
         available_volume: float | None = None,
         delayed_price: float | None = None,
     ) -> Fill:
-        del side, qty, ref_price, available_volume, delayed_price
+        del side, qty, ref_price, reduce_only, available_volume, delayed_price
         self.last_client_order_id = client_order_id
         if self.crash_before_send:
             raise PowerLoss("crash before broker send")
@@ -96,7 +97,15 @@ class LookupBroker(Broker):
             fee=self.snapshot.fee,
         )
 
-    def place_stop(self, qty: float, stop_price: float, direction: int = 1) -> str:
+    def place_stop(
+        self,
+        qty: float,
+        stop_price: float,
+        direction: int = 1,
+        *,
+        client_order_id: str | None = None,
+    ) -> str:
+        del qty, stop_price, direction, client_order_id
         return "stop-1"
 
 
@@ -421,3 +430,47 @@ def test_crash_after_atomic_checkpoint_needs_no_recovery(tmp_path, monkeypatch):
     persisted = restarted_store.load_engine_state("trend")
     assert persisted is not None
     assert persisted["slots"]["recovery"]["position"]["qty"] == pytest.approx(1.0)
+
+
+def test_hyperliquid_market_exit_uses_reference_price_cloid_and_reduce_only():
+    class FakeExchange:
+        def __init__(self):
+            self.created = None
+
+        def amount_to_precision(self, _symbol, qty):
+            return qty
+
+        def market(self, _symbol):
+            return {"limits": {"cost": {"min": None}}}
+
+        def create_order(self, symbol, order_type, side, qty, price, params):
+            self.created = (symbol, order_type, side, qty, price, params)
+            return {
+                "id": "hl-123",
+                "status": "closed",
+                "average": price,
+                "filled": qty,
+                "amount": qty,
+            }
+
+    broker = object.__new__(CcxtBroker)
+    broker.exchange = FakeExchange()
+    broker.exchange_id = "hyperliquid"
+    broker.symbol = "BTC/USDC:USDC"
+
+    fill = broker.execute_market(
+        "SELL",
+        0.01,
+        50_000.0,
+        client_order_id="close-intent",
+        reduce_only=True,
+    )
+
+    assert fill.broker_order_id == "hl-123"
+    assert broker.exchange.created is not None
+    _, order_type, side, qty, price, params = broker.exchange.created
+    assert (order_type, side, qty, price) == ("market", "sell", 0.01, 50_000.0)
+    assert params["reduceOnly"] is True
+    assert params["clientOrderId"] == CcxtBroker._external_client_order_id(
+        "close-intent", "hyperliquid"
+    )

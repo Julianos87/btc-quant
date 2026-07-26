@@ -27,12 +27,16 @@ NETWORK_ERRORS = (ccxt.NetworkError, ccxt.ExchangeNotAvailable, ccxt.RequestTime
 
 
 class Venue:
-    def __init__(self, exchange_id: str, symbol: str) -> None:
+    def __init__(self, exchange_id: str, symbol: str, *, testnet: bool = False) -> None:
         self.exchange_id = exchange_id
         self.symbol = symbol
         self.is_hourly_funding = exchange_id == "hyperliquid"
         klass = getattr(ccxt, exchange_id)
         self.exchange: ccxt.Exchange = klass({"enableRateLimit": True, "timeout": 30_000})
+        if testnet:
+            if exchange_id != "hyperliquid":
+                raise ValueError("Seul le sandbox Hyperliquid est pris en charge par Venue")
+            self.exchange.set_sandbox_mode(True)
         self._retry = RetryPolicy()
         if self.is_hourly_funding:
             self.funding_exchange = self.exchange

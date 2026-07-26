@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "generated_at_utc": "2026-07-26T11:19:51.954851+00:00",
+  "generated_at_utc": "2026-07-26T13:39:14.057825+00:00",
   "purpose": "Safety Baseline anti-régression; aucune promesse de performance",
   "provenance": {
-    "base_git_commit": "b39512cbffd831daa90f8a1510cc7fe9d2072313",
-    "source_tree_sha256": "3df6be4fdad89a5c359266ff9eb5c44e3fbdda2100489946eeac4f9e5ea049dc",
+    "base_git_commit": "9d58fcf8fadf72fa89874d914365cee4edca9b23",
+    "source_tree_sha256": "8c0254f1618b737963580472ce29bf282ca9ef89b8a0d9decbd66e69b2790830",
     "config": {
       "path": "config_4x.yaml",
       "sha256": "426f6a56b9b8f0cc14f45ce59e3df4520bba07061d04e92bff9061b231e874b7"
@@ -39,35 +39,35 @@
         "market": "perp",
         "capital_fraction": 0.3333,
         "trades": 196,
-        "final_equity": 95821.68509858422,
-        "sharpe": 1.3882478811597512,
-        "max_drawdown": -0.5966561937507278
+        "final_equity": 95923.76387188338,
+        "sharpe": 1.3885845947598892,
+        "max_drawdown": -0.596597954790312
       },
       "trend_ls_55": {
         "timeframe": "4h",
         "market": "perp",
         "capital_fraction": 0.3333,
         "trades": 154,
-        "final_equity": 46247.480890997445,
-        "sharpe": 1.2314540026988037,
-        "max_drawdown": -0.494092331041193
+        "final_equity": 46276.60274176708,
+        "sharpe": 1.2316719505627223,
+        "max_drawdown": -0.49403400274235865
       },
       "trend_ls_100": {
         "timeframe": "4h",
         "market": "perp",
         "capital_fraction": 0.3334,
         "trades": 129,
-        "final_equity": 57946.46330838098,
-        "sharpe": 1.3573341096731033,
-        "max_drawdown": -0.40056871106799385
+        "final_equity": 57967.79466984747,
+        "sharpe": 1.357468810664846,
+        "max_drawdown": -0.4004996000236699
       }
     },
     "combined": {
       "trades": 479,
-      "final_equity": 200015.62929796265,
-      "cagr": 0.5992326193288071,
-      "sharpe": 1.360511536250933,
-      "max_drawdown": -0.5288211988022185
+      "final_equity": 200168.16128349793,
+      "cagr": 0.5993958614628154,
+      "sharpe": 1.3607664758811082,
+      "max_drawdown": -0.5287833278407402
     },
     "conformity": {
       "profile": "trend 4x — baseline reproductible",
@@ -75,24 +75,24 @@
       "trades_per_year": 64.1643337408313,
       "win_rate": 0.3736951983298539,
       "avg_win_pct": 0.09369161945266313,
-      "avg_loss_pct": -0.030586500699459323,
+      "avg_loss_pct": -0.03058650069945933,
       "worst_loss_streak": 21,
-      "max_drawdown": -0.5288211988022185,
+      "max_drawdown": -0.5287833278407402,
       "dd_time_fraction": {
         "5": 0.9056615309366594,
         "10": 0.6482024944974322,
-        "15": 0.37056737588652483,
+        "15": 0.3705062362435803,
         "20": 0.22053069210075812,
         "25": 0.14820249449743214,
         "30": 0.13872584984103692,
-        "35": 0.07984837368549767,
-        "40": 0.05166299828809,
+        "35": 0.07587429689410614,
+        "40": 0.05154071900220103,
         "45": 0.019014428955734897,
         "50": 0.003607238933724627
       },
-      "monthly_return_p10": -0.09935305381400812,
-      "monthly_return_p90": 0.2789095604078918,
-      "worst_month": -0.17372448780442662
+      "monthly_return_p10": -0.0993527045399357,
+      "monthly_return_p90": 0.2789095604079198,
+      "worst_month": -0.17371966728988852
     }
   }
 }

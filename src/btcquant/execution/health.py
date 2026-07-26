@@ -25,6 +25,9 @@ class ExecutionHealth:
     unresolved_order_ids: tuple[int, ...]
     stale_pending_order_ids: tuple[int, ...]
     unbalanced_order_ids: tuple[int, ...]
+    unprotected_slots: tuple[str, ...]
+    stop_transition_slots: tuple[str, ...]
+    reconciliation_required: bool
     fill_ratio: float | None
     rejection_rate: float | None
     partial_rate: float | None
@@ -55,6 +58,18 @@ def execution_health(
     current = now or datetime.now(UTC)
     orders = store.read_orders(engine)[-cfg.order_window :]
     unresolved = store.unresolved_orders(engine)
+    state = store.load_engine_state(engine) or {}
+    unprotected_slots: list[str] = []
+    stop_transition_slots: list[str] = []
+    for slot_name, slot in (state.get("slots") or {}).items():
+        if not isinstance(slot, dict) or slot.get("position") is None:
+            continue
+        transition = slot.get("stop_transition")
+        if transition is not None:
+            stop_transition_slots.append(str(slot_name))
+        previous_stop = transition.get("previous_stop_id") if isinstance(transition, dict) else None
+        if slot.get("stop_order_id") is None and previous_stop is None:
+            unprotected_slots.append(str(slot_name))
     stale_pending: list[int] = []
     unbalanced: list[int] = []
     for order in unresolved:
@@ -71,7 +86,8 @@ def execution_health(
     terminal = [
         order
         for order in orders
-        if order["status"] in ("FILLED", "PARTIAL", "REJECTED", "FAILED", "CANCELED")
+        if order["order_type"] != "STOP"
+        and order["status"] in ("FILLED", "PARTIAL", "REJECTED", "FAILED", "CANCELED")
     ]
     requested = sum(float(order["requested_qty"]) for order in terminal)
     filled = sum(float(order["filled_qty"]) for order in terminal)
@@ -103,6 +119,9 @@ def execution_health(
         unresolved_order_ids=tuple(int(order["id"]) for order in unresolved),
         stale_pending_order_ids=tuple(stale_pending),
         unbalanced_order_ids=tuple(unbalanced),
+        unprotected_slots=tuple(unprotected_slots),
+        stop_transition_slots=tuple(stop_transition_slots),
+        reconciliation_required=bool(state.get("reconciliation_required")),
         fill_ratio=filled / requested if requested else None,
         rejection_rate=rejection_count / len(terminal) if terminal else None,
         partial_rate=partial_count / len(terminal) if terminal else None,
@@ -127,6 +146,27 @@ def sync_execution_incidents(
             kind="unbalanced_orders",
             message=f"{len(health.unbalanced_order_ids)} ordre(s) UNBALANCED",
             context={"order_ids": health.unbalanced_order_ids},
+        ),
+        f"execution:{engine}:unprotected_position": _IncidentCondition(
+            active=bool(health.unprotected_slots),
+            severity="CRITICAL",
+            kind="unprotected_position",
+            message=f"{len(health.unprotected_slots)} position(s) sans stop confirmé",
+            context={"slots": health.unprotected_slots},
+        ),
+        f"execution:{engine}:stop_transition_pending": _IncidentCondition(
+            active=bool(health.stop_transition_slots),
+            severity="CRITICAL",
+            kind="stop_transition_pending",
+            message=f"{len(health.stop_transition_slots)} transition(s) de stop en attente",
+            context={"slots": health.stop_transition_slots},
+        ),
+        f"execution:{engine}:reconciliation_required": _IncidentCondition(
+            active=health.reconciliation_required,
+            severity="CRITICAL",
+            kind="reconciliation_required",
+            message="Le moteur exige une réconciliation manuelle",
+            context={},
         ),
         f"execution:{engine}:stale_pending": _IncidentCondition(
             active=bool(health.stale_pending_order_ids),

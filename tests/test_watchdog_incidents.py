@@ -48,3 +48,32 @@ def test_watchdog_deduplicates_and_resolves_execution_alerts(tmp_path, monkeypat
     assert not any(
         item["kind"] == "unbalanced_orders" for item in store.read_incidents(open_only=True)
     )
+
+
+def test_watchdog_can_monitor_isolated_testnet_database(tmp_path, monkeypatch):
+    messages: list[str] = []
+    monkeypatch.setattr(watchdog, "notify", messages.append)
+    database = tmp_path / "btcquant-testnet.db"
+    StateStore(database).save_engine_state(
+        "trend",
+        {
+            "slots": {
+                "trend_ls_55": {
+                    "position": {"qty": 0.01},
+                    "stop_order_id": None,
+                    "stop_transition": None,
+                }
+            }
+        },
+    )
+
+    watchdog.main(
+        [
+            "--database",
+            str(database),
+            "--service",
+            "btcquant-hyperliquid-testnet",
+        ]
+    )
+
+    assert any("sans stop" in message for message in messages)

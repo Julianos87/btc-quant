@@ -11,7 +11,7 @@ from .broker import Broker, ProtectiveOrderSnapshot
 
 class StopDecisionKind(StrEnum):
     NOOP = "NOOP"
-    REPLACED = "REPLACED"
+    REPLACE_REQUIRED = "REPLACE_REQUIRED"
     FILLED = "FILLED"
     UNCERTAIN = "UNCERTAIN"
 
@@ -20,7 +20,6 @@ class StopDecisionKind(StrEnum):
 class StopDecision:
     kind: StopDecisionKind
     previous_stop_id: str | None = None
-    replacement_stop_id: str | None = None
     previous_status: str | None = None
     snapshot: ProtectiveOrderSnapshot | None = None
     message: str | None = None
@@ -50,7 +49,10 @@ class ProtectiveStopService:
             )
         assert stop_price is not None and direction is not None
         if stop_id is None:
-            return self._replace(None, qty, stop_price, direction)
+            return StopDecision(
+                StopDecisionKind.REPLACE_REQUIRED,
+                message="Position locale sans stop protecteur confirmé",
+            )
         try:
             snapshot = self.broker.protective_order_snapshot(stop_id)
         except Exception as error:
@@ -61,14 +63,25 @@ class ProtectiveStopService:
                 context={"stop_order_id": stop_id},
             )
         if snapshot.status == "OPEN":
-            return StopDecision(StopDecisionKind.NOOP, snapshot=snapshot)
-        if snapshot.status in ("CANCELED", "REJECTED", "EXPIRED"):
-            return self._replace(
-                stop_id,
-                qty,
-                stop_price,
-                direction,
+            if abs(snapshot.requested_qty - qty) <= 1e-9:
+                return StopDecision(StopDecisionKind.NOOP, snapshot=snapshot)
+            return StopDecision(
+                StopDecisionKind.REPLACE_REQUIRED,
+                previous_stop_id=stop_id,
                 previous_status=snapshot.status,
+                snapshot=snapshot,
+                message=(
+                    f"Quantité du stop {stop_id} à réaligner "
+                    f"({snapshot.requested_qty:.8f} != {qty:.8f})"
+                ),
+            )
+        if snapshot.status in ("CANCELED", "REJECTED", "EXPIRED"):
+            return StopDecision(
+                StopDecisionKind.REPLACE_REQUIRED,
+                previous_stop_id=stop_id,
+                previous_status=snapshot.status,
+                snapshot=snapshot,
+                message=f"Stop {stop_id} inactif ({snapshot.status})",
             )
         if snapshot.status == "FILLED" and abs(snapshot.filled_qty - qty) <= 1e-9:
             return StopDecision(
@@ -91,51 +104,4 @@ class ProtectiveStopService:
                 "remaining_qty": snapshot.remaining_qty,
                 "local_qty": qty,
             },
-        )
-
-    def _replace(
-        self,
-        previous_id: str | None,
-        qty: float,
-        stop_price: float,
-        direction: int,
-        *,
-        previous_status: str | None = None,
-    ) -> StopDecision:
-        try:
-            replacement = self.broker.place_stop(qty, stop_price, direction)
-        except Exception as error:
-            prefix = (
-                "Impossible de recréer le stop absent"
-                if previous_id is None
-                else f"Stop {previous_id} inactif et remplacement impossible"
-            )
-            return StopDecision(
-                StopDecisionKind.UNCERTAIN,
-                previous_stop_id=previous_id,
-                previous_status=previous_status,
-                message=f"{prefix} ({type(error).__name__})",
-                context={
-                    "stop_order_id": previous_id,
-                    "status": previous_status,
-                },
-            )
-        if replacement is None:
-            message = (
-                "Le broker n'a pas confirmé la recréation du stop"
-                if previous_id is None
-                else f"Stop {previous_id} inactif sans remplacement confirmé"
-            )
-            return StopDecision(
-                StopDecisionKind.UNCERTAIN,
-                previous_stop_id=previous_id,
-                previous_status=previous_status,
-                message=message,
-                context={"stop_order_id": previous_id, "status": previous_status},
-            )
-        return StopDecision(
-            StopDecisionKind.REPLACED,
-            previous_stop_id=previous_id,
-            replacement_stop_id=replacement,
-            previous_status=previous_status,
         )

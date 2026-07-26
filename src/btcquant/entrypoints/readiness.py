@@ -8,7 +8,12 @@ import os
 import sys
 from pathlib import Path
 
-from btcquant.execution.readiness import evaluate_readiness, finalize_campaign, start_campaign
+from btcquant.execution.readiness import (
+    evaluate_readiness,
+    finalize_campaign,
+    start_campaign,
+    testnet_p1_policy,
+)
 from btcquant.execution.state_store import StateStore
 
 ROOT = Path(os.environ.get("BTCQUANT_ROOT", Path.cwd())).resolve()
@@ -43,12 +48,19 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=("start", "status", "finalize", "cancel"))
     parser.add_argument("--database", default="state/btcquant.db")
+    parser.add_argument(
+        "--profile",
+        choices=("paper", "testnet-p1"),
+        default="paper",
+        help="Politique immuable appliquée uniquement lors de start.",
+    )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
     store = StateStore(ROOT / args.database)
     if args.command == "start":
-        started_campaign = start_campaign(store)
+        policy = testnet_p1_policy() if args.profile == "testnet-p1" else None
+        started_campaign = start_campaign(store, policy)
         print(f"Campagne #{started_campaign['id']} démarrée le {started_campaign['started_at']}.")
         return
     if args.command == "cancel":
@@ -67,13 +79,13 @@ def main() -> None:
     except RuntimeError as error:
         report = evaluate_readiness(store, persist=True)
         if args.json:
-            print(json.dumps(report, ensure_ascii=False, indent=2))
+            print(json.dumps(report, ensure_ascii=True, indent=2))
         else:
             _print_report(report)
             print(f"\nREFUS : {error}")
         raise SystemExit(2) from error
     if args.json:
-        print(json.dumps(report, ensure_ascii=False, indent=2))
+        print(json.dumps(report, ensure_ascii=True, indent=2))
     else:
         _print_report(report)
     raise SystemExit(0 if report["status"] == "PASS" else 2)

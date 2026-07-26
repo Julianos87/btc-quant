@@ -8,33 +8,53 @@ observation déjà commencée.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
 from .state_store import StateStore
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 TERMINAL_STATUSES = {"FILLED", "PARTIAL", "REJECTED", "FAILED", "CANCELED"}
 UNRESOLVED_STATUSES = {"PENDING", "OPEN", "UNBALANCED"}
 
 
 @dataclass(frozen=True)
 class ReadinessPolicy:
+    required_engines: tuple[str, ...] = ("trend",)
     min_observation_days: int = 90
+    min_engine_uptime: float = 0.995
+    min_daily_sample_coverage: float = 0.95
     min_equity_coverage: float = 0.95
     min_closed_trades: int = 30
     min_terminal_orders: int = 50
     min_terminal_orders_per_engine: int = 5
-    max_rejection_rate: float = 0.02
+    max_rejection_rate: float = 0.05
     max_partial_rate: float = 0.10
     max_p95_slippage_bps: float = 20.0
     max_drawdown: float = -0.45
-    max_trend_state_age_seconds: float = 6 * 3600
-    max_carry_state_age_seconds: float = 3 * 3600
+    max_trend_state_age_seconds: float = 10 * 60
+    max_carry_state_age_seconds: float = 20 * 60
     qualification_valid_days: int = 7
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def testnet_p1_policy() -> ReadinessPolicy:
+    """Politique d'observation opérationnelle après le portail paper.
+
+    Le smoke test journalise deux ordres terminaux. La campagne reste surtout
+    bloquée par 30 jours de disponibilité, l'absence d'incident et les SLO ;
+    elle ne dépend pas de l'apparition aléatoire de 30 signaux trend.
+    """
+
+    return ReadinessPolicy(
+        min_observation_days=30,
+        min_closed_trades=0,
+        min_terminal_orders=2,
+        min_terminal_orders_per_engine=2,
+        qualification_valid_days=30,
+    )
 
 
 @dataclass(frozen=True)
@@ -85,8 +105,19 @@ def evaluate_readiness(
             policy = ReadinessPolicy(**passed_campaign["policy"])
             ended = _parse_datetime(passed_campaign["ended_at"])
             age_days = max(0.0, (current - ended).total_seconds() / 86400)
+            checks = list(final_report["checks"])
+            if int(passed_campaign["protocol_version"]) != PROTOCOL_VERSION:
+                checks.append(
+                    ReadinessCheck(
+                        "protocol_version",
+                        "Version du protocole",
+                        False,
+                        f"v{passed_campaign['protocol_version']}",
+                        f"v{PROTOCOL_VERSION}",
+                        "Une nouvelle campagne complète est requise.",
+                    ).to_dict()
+                )
             if age_days > policy.qualification_valid_days:
-                checks = list(final_report["checks"])
                 checks.append(
                     ReadinessCheck(
                         "qualification_age",
@@ -96,6 +127,7 @@ def evaluate_readiness(
                         f"≤ {policy.qualification_valid_days} j",
                     ).to_dict()
                 )
+            if len(checks) != len(final_report["checks"]):
                 final_report.update(
                     status="FAIL",
                     ready=False,
@@ -125,16 +157,58 @@ def evaluate_readiness(
 
     policy = ReadinessPolicy(**campaign["policy"])
     started = _parse_datetime(campaign["started_at"])
+    required_engines = tuple(policy.required_engines)
+    if not required_engines:
+        raise ValueError("La qualification doit exiger au moins un moteur")
     orders = [
         item for item in store.read_orders() if _parse_datetime(item["created_at"]) >= started
     ]
-    terminal = [item for item in orders if item["status"] in TERMINAL_STATUSES]
-    unresolved = [item for item in orders if item["status"] in UNRESOLVED_STATUSES]
+    scoped_orders = [item for item in orders if item["engine"] in required_engines]
+    terminal = [
+        item
+        for item in scoped_orders
+        if item["order_type"] != "STOP" and item["status"] in TERMINAL_STATUSES
+    ]
+    unresolved = [
+        item
+        for item in scoped_orders
+        if item["status"] in ("PENDING", "UNBALANCED")
+        or (item["status"] == "OPEN" and item["order_type"] != "STOP")
+    ]
     trades = [item for item in store.read_trades() if _parse_datetime(item["exit_ts"]) >= started]
-    incidents = store.read_incidents(open_only=True)
+    incidents = [
+        item
+        for item in store.read_incidents(open_only=True)
+        if item.get("engine") is None or item.get("engine") in required_engines
+    ]
 
     elapsed_days = max(0.0, (current - started).total_seconds() / 86400)
-    covered_days = _covered_equity_days(store, started.date(), current.date())
+    equity_timestamps = {
+        engine: _equity_timestamps(
+            store,
+            engine,
+            started,
+            current,
+            _freshness_limit(policy, engine),
+        )
+        for engine in required_engines
+    }
+    coverage_by_engine = {
+        engine: _availability_from_timestamps(
+            equity_timestamps[engine],
+            started,
+            current,
+            _freshness_limit(policy, engine),
+        )
+        for engine in required_engines
+    }
+    covered_days = _covered_equity_days(
+        started,
+        current,
+        required_engines,
+        policy,
+        equity_timestamps,
+    )
     expected_days = max(1, (current.date() - started.date()).days + 1)
     coverage = len(covered_days) / expected_days
 
@@ -144,12 +218,16 @@ def evaluate_readiness(
     partial_rate = partial_count / len(terminal) if terminal else None
     slippages = _slippages(terminal)
     p95_slippage = _percentile(slippages, 0.95)
-    max_drawdown = _max_portfolio_drawdown(store, started.date(), current.date())
+    max_drawdown = _max_portfolio_drawdown(
+        store,
+        started,
+        current,
+        required_engines,
+        policy,
+    )
 
-    trend_age = store.engine_age_seconds("trend", now=current)
-    carry_age = store.engine_age_seconds("carry", now=current)
     halted = any(
-        bool((store.load_engine_state(engine) or {}).get("halted")) for engine in ("trend", "carry")
+        bool((store.load_engine_state(engine) or {}).get("halted")) for engine in required_engines
     )
 
     integrity_ok = store.integrity_check()
@@ -157,9 +235,14 @@ def evaluate_readiness(
         ReadinessCheck(
             "campaign",
             "Campagne de qualification",
-            True,
+            int(campaign["protocol_version"]) == PROTOCOL_VERSION,
             f"#{campaign['id']} / v{campaign['protocol_version']}",
-            "RUNNING",
+            f"RUNNING / v{PROTOCOL_VERSION}",
+            (
+                ""
+                if int(campaign["protocol_version"]) == PROTOCOL_VERSION
+                else "Annuler cette campagne obsolète et en démarrer une nouvelle."
+            ),
         ),
         ReadinessCheck(
             "integrity",
@@ -177,11 +260,21 @@ def evaluate_readiness(
         ),
         ReadinessCheck(
             "uptime",
-            "Présence quotidienne des deux moteurs",
+            "Jours avec couverture equity suffisante",
             coverage >= policy.min_equity_coverage,
             f"{coverage:.1%}",
             f"≥ {policy.min_equity_coverage:.0%}",
         ),
+        *[
+            ReadinessCheck(
+                f"{engine}_uptime",
+                f"Disponibilité temporelle {engine}",
+                coverage_by_engine[engine] >= policy.min_engine_uptime,
+                f"{coverage_by_engine[engine]:.3%}",
+                f"≥ {policy.min_engine_uptime:.1%}",
+            )
+            for engine in required_engines
+        ],
         ReadinessCheck(
             "trades",
             "Trades clôturés",
@@ -205,7 +298,7 @@ def evaluate_readiness(
                 str(sum(item["engine"] == engine for item in terminal)),
                 f"≥ {policy.min_terminal_orders_per_engine}",
             )
-            for engine in ("trend", "carry")
+            for engine in required_engines
         ],
         ReadinessCheck(
             "unresolved",
@@ -247,18 +340,15 @@ def evaluate_readiness(
             "—" if max_drawdown is None else f"{max_drawdown:.1%}",
             f"≥ {policy.max_drawdown:.0%}",
         ),
-        _freshness_check(
-            "trend_freshness",
-            "Fraîcheur moteur trend",
-            trend_age,
-            policy.max_trend_state_age_seconds,
-        ),
-        _freshness_check(
-            "carry_freshness",
-            "Fraîcheur moteur carry",
-            carry_age,
-            policy.max_carry_state_age_seconds,
-        ),
+        *[
+            _freshness_check(
+                f"{engine}_freshness",
+                f"Fraîcheur moteur {engine}",
+                store.engine_age_seconds(engine, now=current),
+                _freshness_limit(policy, engine),
+            )
+            for engine in required_engines
+        ],
         ReadinessCheck(
             "killswitch",
             "Kill-switch inactif",
@@ -337,17 +427,84 @@ def _parse_datetime(value: Any) -> datetime:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
-def _covered_equity_days(store: StateStore, start: date, end: date) -> set[date]:
-    engine_days = []
-    for engine in ("trend", "carry"):
-        engine_days.append(
-            {
-                _parse_datetime(row["ts"]).date()
-                for row in store.read_equity(engine)
-                if start <= _parse_datetime(row["ts"]).date() <= end
-            }
-        )
-    return set.intersection(*engine_days) if engine_days else set()
+def _freshness_limit(policy: ReadinessPolicy, engine: str) -> float:
+    if engine == "trend":
+        return policy.max_trend_state_age_seconds
+    if engine == "carry":
+        return policy.max_carry_state_age_seconds
+    raise ValueError(f"Moteur non pris en charge par la readiness : {engine}")
+
+
+def _equity_timestamps(
+    store: StateStore,
+    engine: str,
+    start: datetime,
+    end: datetime,
+    freshness_seconds: float,
+) -> list[datetime]:
+    earliest = start - timedelta(seconds=freshness_seconds)
+    return sorted(
+        timestamp
+        for row in store.read_equity(engine)
+        if earliest <= (timestamp := _parse_datetime(row["ts"])) <= end
+    )
+
+
+def _availability_from_timestamps(
+    timestamps: list[datetime],
+    start: datetime,
+    end: datetime,
+    freshness_seconds: float,
+) -> float:
+    total = (end - start).total_seconds()
+    if total <= 0:
+        return 0.0
+    intervals: list[tuple[datetime, datetime]] = []
+    freshness = timedelta(seconds=freshness_seconds)
+    for timestamp in timestamps:
+        left = max(start, timestamp)
+        right = min(end, timestamp + freshness)
+        if right > left:
+            intervals.append((left, right))
+    if not intervals:
+        return 0.0
+    covered = 0.0
+    left, right = intervals[0]
+    for next_left, next_right in intervals[1:]:
+        if next_left <= right:
+            right = max(right, next_right)
+        else:
+            covered += (right - left).total_seconds()
+            left, right = next_left, next_right
+    covered += (right - left).total_seconds()
+    return min(1.0, covered / total)
+
+
+def _covered_equity_days(
+    start: datetime,
+    end: datetime,
+    engines: tuple[str, ...],
+    policy: ReadinessPolicy,
+    timestamps: dict[str, list[datetime]],
+) -> set[date]:
+    covered: set[date] = set()
+    day = start.date()
+    while day <= end.date():
+        day_start = max(start, datetime.combine(day, time.min, tzinfo=UTC))
+        day_end = min(end, datetime.combine(day + timedelta(days=1), time.min, tzinfo=UTC))
+        if day_end > day_start and all(
+            _availability_from_timestamps(
+                timestamps[engine],
+                day_start,
+                day_end,
+                _freshness_limit(policy, engine),
+            )
+            >= policy.min_daily_sample_coverage
+            for engine in engines
+        ):
+            covered.add(day)
+        day += timedelta(days=1)
+    return covered
 
 
 def _slippages(orders: list[dict[str, Any]]) -> list[float]:
@@ -374,38 +531,53 @@ def _percentile(values: list[float], fraction: float) -> float | None:
 
 def _max_portfolio_drawdown(
     store: StateStore,
-    start: date,
-    end: date,
+    start: datetime,
+    end: datetime,
+    engines: tuple[str, ...],
+    policy: ReadinessPolicy,
 ) -> float | None:
-    daily: list[dict[date, tuple[datetime, float]]] = []
-    for engine in ("trend", "carry"):
-        values: dict[date, tuple[datetime, float]] = {}
+    samples: dict[str, list[tuple[datetime, float]]] = {}
+    for engine in engines:
+        values: list[tuple[datetime, float]] = []
         for row in store.read_equity(engine):
             timestamp = _parse_datetime(row["ts"])
-            day = timestamp.date()
-            if start <= day <= end:
-                values[day] = (timestamp, float(row["equity"]))
-        daily.append(values)
-    common = sorted(set(daily[0]).intersection(daily[1])) if len(daily) == 2 else []
-    if len(common) < 2:
-        return None
+            if start <= timestamp <= end:
+                values.append((timestamp, float(row["equity"])))
+        samples[engine] = sorted(values)
+    timeline = sorted({timestamp for values in samples.values() for timestamp, _ in values})
     flows = sorted(
         (
             _parse_datetime(flow["ts"]),
-            float(flow["trend_flow"]) + float(flow["carry_flow"]),
+            sum(float(flow[f"{engine}_flow"]) for engine in engines),
         )
         for flow in store.read_flows()
-        if start <= _parse_datetime(flow["ts"]).date() <= end
+        if start <= _parse_datetime(flow["ts"]) <= end
     )
-    equities = []
+    equities: list[float] = []
+    sample_indexes = {engine: 0 for engine in engines}
+    latest: dict[str, tuple[datetime, float]] = {}
     flow_index = 0
     cumulative_flow = 0.0
-    for day in common:
-        sample_time = min(daily[0][day][0], daily[1][day][0])
-        while flow_index < len(flows) and flows[flow_index][0] <= sample_time:
+    for timestamp in timeline:
+        for engine in engines:
+            values = samples[engine]
+            while (
+                sample_indexes[engine] < len(values)
+                and values[sample_indexes[engine]][0] <= timestamp
+            ):
+                latest[engine] = values[sample_indexes[engine]]
+                sample_indexes[engine] += 1
+        while flow_index < len(flows) and flows[flow_index][0] <= timestamp:
             cumulative_flow += flows[flow_index][1]
             flow_index += 1
-        equities.append(daily[0][day][1] + daily[1][day][1] - cumulative_flow)
+        if all(
+            engine in latest
+            and (timestamp - latest[engine][0]).total_seconds() <= _freshness_limit(policy, engine)
+            for engine in engines
+        ):
+            equities.append(sum(latest[engine][1] for engine in engines) - cumulative_flow)
+    if len(equities) < 2:
+        return None
     peak = equities[0]
     worst = 0.0
     for equity in equities:

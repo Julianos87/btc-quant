@@ -1,0 +1,49 @@
+# Configuration dédiée à la campagne P1 Hyperliquid testnet.
+# Ne jamais remplacer ce fichier par une configuration mainnet.
+exchange: hyperliquid
+symbol: "BTC/USDC:USDC"
+quote_currency: USDC
+
+data:
+  dir: data
+  base_timeframe: 1h
+  since: "2019-01-01"
+
+costs:
+  fee_rate: 0.001
+  perp_fee_rate: 0.00045
+  funding_rate_8h: 0.0001
+  slippage_bps: 5.0
+
+risk:
+  # Capital virtuel testnet volontairement limité. Les plafonds du moteur
+  # empêchent le notionnel de dépasser ce budget même si le faucet est supérieur.
+  initial_capital: 1000
+  risk_per_trade: 0.0025
+  max_position_pct: 0.25
+  vol_target_annual: 0.20
+  max_drawdown_halt: 0.10
+  daily_loss_limit: 0.01
+  max_leverage: 1.0
+
+strategies:
+  trend_ls_55:
+    enabled: true
+    type: trend_ls
+    market: perp
+    timeframe: 4h
+    capital_fraction: 1.0
+    params:
+      donchian: 55
+      adx_min: 20
+      funding_long_max: 0.0008
+      funding_short_min: -0.0008
+
+execution:
+  mode: testnet
+  testnet: true
+  state_file: state/btcquant-testnet.db
+  qualification_state_file: state/btcquant.db
+  poll_buffer_seconds: 20
+  live_exchange: hyperliquid
+  live_symbol: "BTC/USDC:USDC"

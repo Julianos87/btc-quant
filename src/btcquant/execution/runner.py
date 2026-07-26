@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import uuid
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -43,7 +44,7 @@ from .funding_service import FundingService
 from .order_service import OrderExecutionService
 from .position_accounting import PositionAccountingService
 from .ports import ClockPort, MarketDataPort, Notifier
-from .protective_stops import ProtectiveStopService, StopDecisionKind
+from .protective_stops import ProtectiveStopService, StopDecision, StopDecisionKind
 from .risk_service import PortfolioRiskService, PortfolioRiskState
 from .recovery import recover_interrupted_orders
 from .state_store import StateStore, database_path
@@ -64,6 +65,9 @@ class StrategySlot:
         self.cash = initial_cash
         self.position: Position | None = None
         self.stop_order_id: str | None = None
+        self.stop_order_local_id: int | None = None
+        self.stop_intent_id: str | None = None
+        self.stop_transition: dict[str, Any] | None = None
         self.last_bar_ts: pd.Timestamp | None = None
         #: frais d'entrée de la position ouverte — inclus dans le PnL du trade
         #: à la sortie (même convention que le backtest)
@@ -179,6 +183,9 @@ class LiveRunner:
                 continue
             slot.cash = s["cash"]
             slot.stop_order_id = s.get("stop_order_id")
+            slot.stop_order_local_id = s.get("stop_order_local_id")
+            slot.stop_intent_id = s.get("stop_intent_id")
+            slot.stop_transition = s.get("stop_transition")
             slot.entry_fee = s.get("entry_fee", 0.0)
             slot.last_bar_ts = pd.Timestamp(s["last_bar_ts"]) if s.get("last_bar_ts") else None
             if s.get("position"):
@@ -231,6 +238,9 @@ class LiveRunner:
                 "cash": slot.cash,
                 "position": pos,
                 "stop_order_id": slot.stop_order_id,
+                "stop_order_local_id": slot.stop_order_local_id,
+                "stop_intent_id": slot.stop_intent_id,
+                "stop_transition": slot.stop_transition,
                 "entry_fee": slot.entry_fee,
                 "last_bar_ts": str(slot.last_bar_ts) if slot.last_bar_ts is not None else None,
             }
@@ -260,12 +270,417 @@ class LiveRunner:
         self.notifier(f"⛔ TREND : {message}. Réconciliation manuelle requise.")
         raise ReconciliationRequired(message)
 
+    def _begin_stop_replacement(
+        self,
+        slot: StrategySlot,
+        *,
+        qty: float,
+        stop_price: float,
+        direction: int,
+        reason: str,
+    ) -> None:
+        """Journalise puis exécute un remplacement de stop récupérable.
+
+        L'ancien stop reste la protection active jusqu'à confirmation du
+        nouveau. Le checkpoint ``PLACING`` précède toujours l'appel exchange.
+        """
+
+        if not self.broker.supports_stop_orders:
+            return
+        if slot.stop_transition is not None:
+            self._resume_stop_transition(slot)
+            return
+        intent_id = f"trend-{slot.strategy.name}-stop-{uuid.uuid4().hex}"
+        slot.stop_transition = {
+            "kind": "REPLACE",
+            "phase": "PLACING",
+            "intent_id": intent_id,
+            "previous_stop_id": slot.stop_order_id,
+            "previous_local_order_id": slot.stop_order_local_id,
+            "replacement_stop_id": None,
+            "qty": float(qty),
+            "stop_price": float(stop_price),
+            "direction": int(direction),
+            "reason": reason,
+        }
+        side = "SELL" if direction == 1 else "BUY"
+        try:
+            self.store.begin_order_and_checkpoint(
+                "trend",
+                slot.strategy.name,
+                intent_id,
+                "STOP",
+                side,
+                qty,
+                reason,
+                self._state_payload(),
+                reference_price=stop_price,
+            )
+        except Exception as error:
+            # Aucun appel exchange n'a encore eu lieu. Le checkpoint market de
+            # la position suffit pour que le redémarrage détecte le stop absent.
+            slot.stop_transition = None
+            raise ReconciliationRequired(
+                "Impossible de journaliser l'intention de stop ; runner arrêté"
+            ) from error
+        self._resume_stop_transition(slot)
+
+    def _stop_transition_pending(
+        self,
+        slot: StrategySlot,
+        message: str,
+        error: BaseException | None = None,
+    ) -> NoReturn:
+        """Arrête le runner sans rendre la saga irrécupérable.
+
+        Le checkpoint contient tout le contexte nécessaire au prochain
+        démarrage. Contrairement à une quantité partiellement remplie, une
+        panne réseau n'exige donc pas encore une décision humaine.
+        """
+
+        transition = dict(slot.stop_transition or {})
+        if error is not None:
+            transition["error"] = f"{type(error).__name__}: {error}"
+        fingerprint = f"execution:trend:protective_stop_transition:{slot.strategy.name}"
+        self.store.record_incident(
+            fingerprint,
+            engine="trend",
+            severity="CRITICAL",
+            kind="protective_stop_transition_pending",
+            message=message,
+            context=transition,
+        )
+        self.notifier(f"⛔ {slot.strategy.name} : {message}. Reprise automatique au redémarrage.")
+        raise ReconciliationRequired(message)
+
+    def _prepare_stop_cancellation(self, slot: StrategySlot, *, reason: str) -> None:
+        if slot.stop_order_id is None or slot.stop_transition is not None:
+            return
+        slot.stop_transition = {
+            "kind": "CANCEL",
+            "phase": "CANCELING",
+            "previous_stop_id": slot.stop_order_id,
+            "previous_local_order_id": slot.stop_order_local_id,
+            "reason": reason,
+        }
+
+    def _lookup_stop_placement(self, intent_id: str):
+        if not self.broker.supports_order_lookup:
+            return None
+        return self.broker.lookup_order(intent_id)
+
+    def _resume_stop_transition(self, slot: StrategySlot) -> None:
+        transition = slot.stop_transition
+        if transition is None:
+            return
+        if transition["kind"] == "CANCEL":
+            previous_id = str(transition["previous_stop_id"])
+            try:
+                self.broker.cancel_stop(previous_id)
+            except Exception as error:
+                self._stop_transition_pending(
+                    slot,
+                    f"Annulation du stop {previous_id} non confirmée",
+                    error,
+                )
+            previous_local = transition.get("previous_local_order_id")
+            try:
+                if previous_local is not None:
+                    self.store.complete_order(
+                        int(previous_local),
+                        status="CANCELED",
+                        broker_order_id=previous_id,
+                    )
+            except Exception as error:
+                raise ReconciliationRequired(
+                    "Stop annulé côté exchange, mais journal SQLite non actualisé"
+                ) from error
+            previous_intent = slot.stop_intent_id
+            slot.stop_order_id = None
+            slot.stop_order_local_id = None
+            slot.stop_intent_id = None
+            slot.stop_transition = None
+            try:
+                self.store.save_engine_state(
+                    "trend",
+                    self._state_payload(),
+                    event_type="protective_order_canceled",
+                    event_payload={"slot": slot.strategy.name, "stop_order_id": previous_id},
+                )
+            except Exception as error:
+                slot.stop_order_id = previous_id
+                slot.stop_order_local_id = (
+                    int(previous_local) if previous_local is not None else None
+                )
+                slot.stop_intent_id = previous_intent
+                slot.stop_transition = transition
+                raise ReconciliationRequired(
+                    "Stop annulé, mais checkpoint final non enregistré"
+                ) from error
+            self.store.resolve_incident(
+                f"execution:trend:protective_stop_transition:{slot.strategy.name}"
+            )
+            return
+
+        intent_id = str(transition["intent_id"])
+        order = self.store.read_order_by_intent(intent_id)
+        if order is None:
+            self._require_manual_reconciliation(
+                "Transition de stop sans intention SQLite",
+                slot=slot,
+                context={"intent_id": intent_id},
+            )
+        order_id = int(order["id"])
+        replacement_id = transition.get("replacement_stop_id")
+        if transition["phase"] == "PLACING":
+            try:
+                snapshot = self._lookup_stop_placement(intent_id)
+            except Exception as error:
+                self._stop_transition_pending(
+                    slot,
+                    "Recherche du stop protecteur interrompue",
+                    error,
+                )
+            if snapshot is not None:
+                if snapshot.filled_qty > 0 or snapshot.status not in ("OPEN",):
+                    self._require_manual_reconciliation(
+                        "Ordre stop retrouvé dans un état non protecteur",
+                        slot=slot,
+                        context={
+                            "intent_id": intent_id,
+                            "status": snapshot.status,
+                            "filled_qty": snapshot.filled_qty,
+                        },
+                    )
+                replacement_id = snapshot.broker_order_id
+            if replacement_id is None:
+                try:
+                    replacement_id = self.broker.place_stop(
+                        float(transition["qty"]),
+                        float(transition["stop_price"]),
+                        int(transition["direction"]),
+                        client_order_id=intent_id,
+                    )
+                except Exception as placement_error:
+                    # Une réponse perdue n'autorise jamais un second identifiant.
+                    # Le lookup avec le même clientOrderId tranche avant reprise.
+                    try:
+                        snapshot = self._lookup_stop_placement(intent_id)
+                    except Exception as lookup_error:
+                        self._stop_transition_pending(
+                            slot,
+                            "Création du stop ambiguë et lookup indisponible",
+                            lookup_error,
+                        )
+                    if (
+                        snapshot is None
+                        or snapshot.broker_order_id is None
+                        or snapshot.status != "OPEN"
+                        or snapshot.filled_qty > 0
+                    ):
+                        self._stop_transition_pending(
+                            slot,
+                            "Création du stop non confirmée",
+                            placement_error,
+                        )
+                    replacement_id = snapshot.broker_order_id
+            if replacement_id is None:
+                self._stop_transition_pending(
+                    slot,
+                    "Le broker n'a pas confirmé l'identifiant du stop protecteur",
+                )
+            transition["replacement_stop_id"] = str(replacement_id)
+            transition["phase"] = "CANCELING"
+            try:
+                self.store.complete_order_and_checkpoint(
+                    order_id,
+                    engine="trend",
+                    state=self._state_payload(),
+                    status="OPEN",
+                    broker_order_id=str(replacement_id),
+                )
+            except Exception as error:
+                # La base contient encore PLACING/PENDING. Revenir au même
+                # état en mémoire garantit que le lookup récupérera l'ordre
+                # distant au prochain démarrage.
+                transition["replacement_stop_id"] = None
+                transition["phase"] = "PLACING"
+                raise ReconciliationRequired(
+                    "Stop créé, mais confirmation SQLite non enregistrée"
+                ) from error
+
+        replacement_id = str(transition["replacement_stop_id"])
+        previous_stop_id = transition.get("previous_stop_id")
+        if previous_stop_id is not None and str(previous_stop_id) != replacement_id:
+            try:
+                self.broker.cancel_stop(str(previous_stop_id))
+            except Exception as error:
+                self._stop_transition_pending(
+                    slot,
+                    f"Le nouveau stop {replacement_id} est actif, "
+                    f"mais l'ancien {previous_stop_id} n'est pas encore annulé",
+                    error,
+                )
+            previous_local = transition.get("previous_local_order_id")
+            try:
+                if previous_local is not None:
+                    self.store.complete_order(
+                        int(previous_local),
+                        status="CANCELED",
+                        broker_order_id=str(previous_stop_id),
+                    )
+            except Exception as error:
+                raise ReconciliationRequired(
+                    "Ancien stop annulé, mais journal SQLite non actualisé"
+                ) from error
+        previous_active_id = slot.stop_order_id
+        previous_active_local_id = slot.stop_order_local_id
+        previous_active_intent = slot.stop_intent_id
+        previous_stop_price = slot.position.stop_price if slot.position is not None else None
+        slot.stop_order_id = replacement_id
+        slot.stop_order_local_id = order_id
+        slot.stop_intent_id = intent_id
+        if slot.position is not None:
+            slot.position.stop_price = float(transition["stop_price"])
+        slot.stop_transition = None
+        try:
+            self.store.save_engine_state(
+                "trend",
+                self._state_payload(),
+                event_type="protective_order_replaced",
+                event_payload={
+                    "slot": slot.strategy.name,
+                    "previous_stop_id": previous_stop_id,
+                    "replacement_stop_id": replacement_id,
+                    "intent_id": intent_id,
+                },
+            )
+        except Exception as error:
+            slot.stop_order_id = previous_active_id
+            slot.stop_order_local_id = previous_active_local_id
+            slot.stop_intent_id = previous_active_intent
+            if slot.position is not None and previous_stop_price is not None:
+                slot.position.stop_price = previous_stop_price
+            slot.stop_transition = transition
+            raise ReconciliationRequired(
+                "Remplacement externe terminé, mais checkpoint final non enregistré"
+            ) from error
+        self.store.resolve_incident(
+            f"execution:trend:protective_stop_transition:{slot.strategy.name}"
+        )
+
+    def _recover_protective_stop_transitions(self) -> None:
+        """Termine les transitions persistées avant toute nouvelle décision."""
+
+        for slot in self.slots:
+            if slot.stop_transition is not None:
+                self._resume_stop_transition(slot)
+            elif slot.position is not None and slot.stop_order_id is None:
+                self._begin_stop_replacement(
+                    slot,
+                    qty=slot.position.qty,
+                    stop_price=slot.position.stop_price,
+                    direction=slot.position.direction,
+                    reason="startup_missing_stop",
+                )
+
+    def _materialize_filled_stop(
+        self,
+        slot: StrategySlot,
+        decision: StopDecision,
+    ) -> None:
+        pos = slot.position
+        assert pos is not None
+        assert decision.snapshot is not None
+        assert decision.previous_stop_id is not None
+        snapshot = decision.snapshot
+        stop_id = decision.previous_stop_id
+        fill_price = snapshot.average_price or pos.stop_price
+        pnl = pos.direction * pos.qty * (fill_price - pos.entry_price) - snapshot.fee
+        slot.cash += pnl
+        trade = self._trade_payload(
+            slot,
+            pos,
+            fill_price,
+            pnl - slot.entry_fee,
+            "stop_exchange",
+        )
+        filled_qty = pos.qty
+        side = "SELL" if pos.direction == 1 else "BUY"
+        slot.position = None
+        slot.stop_order_id = None
+        local_stop_order_id = slot.stop_order_local_id
+        slot.stop_order_local_id = None
+        slot.stop_intent_id = None
+        slot.entry_fee = 0.0
+        self.store.record_observed_fill_and_checkpoint(
+            engine="trend",
+            slot=slot.strategy.name,
+            intent_id=f"observed-stop-{stop_id}",
+            broker_order_id=snapshot.broker_order_id,
+            side=side,
+            requested_qty=filled_qty,
+            filled_qty=filled_qty,
+            price=fill_price,
+            fee=snapshot.fee,
+            reason="stop_exchange",
+            state=self._state_payload(),
+            trade=trade,
+        )
+        if local_stop_order_id is not None:
+            self.store.complete_order(
+                local_stop_order_id,
+                status="FILLED",
+                filled_qty=filled_qty,
+                price=fill_price,
+                fee=snapshot.fee,
+                broker_order_id=snapshot.broker_order_id,
+            )
+        self.store.resolve_incident("execution:trend:protective_order_uncertain")
+        self.notifier(
+            f"{'🟩' if trade['pnl'] >= 0 else '🟥'} {slot.strategy.name} — "
+            f"stop exchange exécuté @ {fill_price:,.0f} $ : {trade['pnl']:+,.2f} $"
+        )
+
+    def _observe_exchange_stop_fills(self) -> None:
+        """Matérialise les fills survenus hors processus avant reconcile().
+
+        Cette étape ne crée ni n'annule aucun ordre. Elle permet à une position
+        locale encore ouverte de devenir plate lorsque son stop confirmé a été
+        exécuté pendant l'arrêt, avant la comparaison de position distante.
+        """
+
+        for slot in self.slots:
+            if (
+                slot.position is None
+                or slot.stop_order_id is None
+                or slot.stop_transition is not None
+            ):
+                continue
+            decision = self.stop_service.inspect(
+                stop_id=slot.stop_order_id,
+                qty=slot.position.qty,
+                stop_price=slot.position.stop_price,
+                direction=slot.position.direction,
+            )
+            if decision.kind == StopDecisionKind.FILLED:
+                self._materialize_filled_stop(slot, decision)
+            elif decision.kind == StopDecisionKind.UNCERTAIN:
+                self._require_manual_reconciliation(
+                    decision.message or "État du stop protecteur incertain au démarrage",
+                    slot=slot,
+                    context=decision.context,
+                )
+
     def _monitor_exchange_stops(self) -> None:
         """Rapproche chaque stop à chaque tick et échoue fermé en cas d'ambiguïté."""
 
         if not self.broker.supports_stop_orders:
             return
         for slot in self.slots:
+            if slot.stop_transition is not None:
+                self._resume_stop_transition(slot)
+                continue
             pos = slot.position
             decision = self.stop_service.inspect(
                 stop_id=slot.stop_order_id,
@@ -281,62 +696,17 @@ class LiveRunner:
                     slot=slot,
                     context=decision.context,
                 )
-            if decision.kind == StopDecisionKind.REPLACED:
-                slot.stop_order_id = decision.replacement_stop_id
-                if decision.previous_stop_id is not None:
-                    self.store.append_event(
-                        "trend",
-                        "protective_order_recreated",
-                        {
-                            "slot": slot.strategy.name,
-                            "previous_stop_id": decision.previous_stop_id,
-                            "replacement_stop_id": decision.replacement_stop_id,
-                            "previous_status": decision.previous_status,
-                        },
-                        aggregate_type="strategy",
-                        aggregate_id=slot.strategy.name,
-                    )
-                self._save_state()
+            if decision.kind == StopDecisionKind.REPLACE_REQUIRED:
+                assert pos is not None
+                self._begin_stop_replacement(
+                    slot,
+                    qty=pos.qty,
+                    stop_price=pos.stop_price,
+                    direction=pos.direction,
+                    reason="monitor_replacement",
+                )
                 continue
-            assert pos is not None
-            assert decision.snapshot is not None
-            assert decision.previous_stop_id is not None
-            snapshot = decision.snapshot
-            stop_id = decision.previous_stop_id
-            fill_price = snapshot.average_price or pos.stop_price
-            pnl = pos.direction * pos.qty * (fill_price - pos.entry_price) - snapshot.fee
-            slot.cash += pnl
-            trade = self._trade_payload(
-                slot,
-                pos,
-                fill_price,
-                pnl - slot.entry_fee,
-                "stop_exchange",
-            )
-            filled_qty = pos.qty
-            side = "SELL" if pos.direction == 1 else "BUY"
-            slot.position = None
-            slot.stop_order_id = None
-            slot.entry_fee = 0.0
-            self.store.record_observed_fill_and_checkpoint(
-                engine="trend",
-                slot=slot.strategy.name,
-                intent_id=f"observed-stop-{stop_id}",
-                broker_order_id=snapshot.broker_order_id,
-                side=side,
-                requested_qty=filled_qty,
-                filled_qty=filled_qty,
-                price=fill_price,
-                fee=snapshot.fee,
-                reason="stop_exchange",
-                state=self._state_payload(),
-                trade=trade,
-            )
-            self.store.resolve_incident("execution:trend:protective_order_uncertain")
-            self.notifier(
-                f"{'🟩' if trade['pnl'] >= 0 else '🟥'} {slot.strategy.name} — "
-                f"stop exchange exécuté @ {fill_price:,.0f} $ : {trade['pnl']:+,.2f} $"
-            )
+            self._materialize_filled_stop(slot, decision)
 
     def _apply_funding_payments(self, mark_price: float) -> None:
         """Applique chaque paiement natif une fois, selon son horodatage."""
@@ -387,6 +757,8 @@ class LiveRunner:
         ref_price: float,
         reason: str,
         available_volume: float | None = None,
+        *,
+        reduce_only: bool = False,
     ) -> tuple[Fill, int, str]:
         submitted = self.order_service.submit_market(
             engine="trend",
@@ -395,6 +767,7 @@ class LiveRunner:
             qty=qty,
             reference_price=ref_price,
             reason=reason,
+            reduce_only=reduce_only,
             available_volume=available_volume,
         )
         return submitted.fill, submitted.order_id, submitted.status
@@ -438,6 +811,7 @@ class LiveRunner:
             ref_price,
             reason,
             available_volume,
+            reduce_only=True,
         )
         if fill.qty <= 0:
             self.store.complete_order_and_checkpoint(
@@ -486,22 +860,13 @@ class LiveRunner:
             assert accounting.remaining_position is not None
             slot.position = accounting.remaining_position
             pos = accounting.remaining_position
-            if slot.stop_order_id and self.broker.supports_stop_orders:
-                # Le stop existant reste actif jusqu'à ce que son remplaçant
-                # protège effectivement la quantité résiduelle.
-                previous_stop_id = slot.stop_order_id
-                replacement_id = self.broker.place_stop(pos.qty, pos.stop_price, pos.direction)
-                if replacement_id is not None:
-                    self.broker.cancel_stop(previous_stop_id)
-                    slot.stop_order_id = replacement_id
             log.warning(
                 "[%s] Sortie PARTIELLE : %.6f restant en position", slot.strategy.name, pos.qty
             )
         else:
-            if slot.stop_order_id and self.broker.supports_stop_orders:
-                self.broker.cancel_stop(slot.stop_order_id)
-                slot.stop_order_id = None
             slot.position = None
+            if self.broker.supports_stop_orders:
+                self._prepare_stop_cancellation(slot, reason=f"position_closed:{reason}")
         self.store.complete_order_and_checkpoint(
             order_id,
             engine="trend",
@@ -513,6 +878,16 @@ class LiveRunner:
             broker_order_id=fill.broker_order_id,
             trade=trade,
         )
+        if partial and self.broker.supports_stop_orders:
+            self._begin_stop_replacement(
+                slot,
+                qty=pos.qty,
+                stop_price=pos.stop_price,
+                direction=pos.direction,
+                reason=f"partial_exit:{reason}",
+            )
+        elif slot.stop_transition is not None:
+            self._resume_stop_transition(slot)
         self.notifier(
             f"{'🟩' if trade_pnl >= 0 else '🟥'} {slot.strategy.name} — sortie "
             f"{'LONG' if pos.direction == 1 else 'SHORT'} ({reason}) @ {fill.price:,.0f} $ : "
@@ -570,8 +945,9 @@ class LiveRunner:
         slot.cash += accounting.cash_delta
         slot.entry_fee = accounting.entry_fee
         slot.position = accounting.position
-        if self.broker.supports_stop_orders:
-            slot.stop_order_id = self.broker.place_stop(fill.qty, stop, direction)
+        # Le fill market et la position sont d'abord matérialisés
+        # atomiquement. La pose du stop possède ensuite sa propre saga ; un
+        # crash entre les deux est détecté au redémarrage comme stop manquant.
         self.store.complete_order_and_checkpoint(
             order_id,
             engine="trend",
@@ -582,6 +958,14 @@ class LiveRunner:
             fee=fill.fee,
             broker_order_id=fill.broker_order_id,
         )
+        if self.broker.supports_stop_orders:
+            self._begin_stop_replacement(
+                slot,
+                qty=fill.qty,
+                stop_price=stop,
+                direction=direction,
+                reason="entry_protection",
+            )
         log.info(
             "[%s] Entrée %s : %.6f @ %.2f, stop %.2f",
             slot.strategy.name,
@@ -645,16 +1029,13 @@ class LiveRunner:
             # 3. appels externes, at-most-once (un échec ici ne rejoue pas la
             # barre ; l'ancien stop exchange continue de protéger en attendant)
             if stop_event and slot.stop_order_id and self.broker.supports_stop_orders:
-                previous_stop_id = slot.stop_order_id
-                replacement_id = self.broker.place_stop(
-                    pos.qty,
-                    stop_event.new_price,
-                    pos.direction,
+                self._begin_stop_replacement(
+                    slot,
+                    qty=pos.qty,
+                    stop_price=stop_event.new_price,
+                    direction=pos.direction,
+                    reason="trailing_stop",
                 )
-                if replacement_id is not None:
-                    self.broker.cancel_stop(previous_stop_id)
-                    slot.stop_order_id = replacement_id
-                    pos.stop_price = stop_event.new_price
             elif stop_event:
                 pos.stop_price = stop_event.new_price
             if exit_event:
@@ -778,8 +1159,13 @@ class LiveRunner:
         if self.broker.supports_stop_orders:  # live : vérifier la cohérence avant de trader
             from .reconcile import reconcile
 
+            self._observe_exchange_stop_fills()
             if not reconcile(self.broker, self.slots, self.symbol):
                 raise RuntimeError("Réconciliation live échouée : runner arrêté (fail-closed)")
+            # Aucune mutation d'ordre protecteur ne précède le rapprochement de
+            # position. Cela évite de poser un stop depuis un état local périmé.
+            self._recover_protective_stop_transitions()
+            self._monitor_exchange_stops()
         try:
             while not stop_event.is_set():
                 try:

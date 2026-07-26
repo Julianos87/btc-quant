@@ -1,7 +1,7 @@
 # Runbook de déploiement VPS
 
-Ce runbook concerne uniquement le **paper trading**. Les brokers externes
-restent verrouillés par la Safety Baseline.
+Ce runbook couvre le **paper trading** puis la campagne P1 sur le **testnet
+Hyperliquid**. Toute exécution mainnet reste verrouillée par la Safety Baseline.
 
 ## Architecture des releases
 
@@ -110,3 +110,67 @@ Le déploiement est refusé si l’un de ces points échoue :
 - opérateur disponible pour surveiller logs, incidents et positions.
 
 Ce feu vert ne vaut pas qualification testnet ou argent réel.
+
+## Portail P1 Hyperliquid testnet
+
+Le testnet ne doit être activé qu'après le `PASS` final de la campagne paper.
+Créer sur Hyperliquid testnet un API wallet dédié à ce seul processus. L'adresse
+interrogée doit être celle du compte principal ou du sous-compte ; la clé privée
+doit être celle de l'API wallet autorisé. Ne jamais installer la clé privée du
+portefeuille principal sur le VPS.
+
+Ajouter avec l'éditeur de secrets de l'hôte, sans afficher les valeurs :
+
+```text
+HYPERLIQUID_WALLET_ADDRESS=0x…
+HYPERLIQUID_PRIVATE_KEY=0x…
+TELEGRAM_BOT_TOKEN=…
+TELEGRAM_CHAT_ID=…
+```
+
+Puis lancer le portail explicite :
+
+```bash
+sudo bash /opt/btcquant/current/deploy/start-hyperliquid-testnet.sh \
+  --i-accept-hyperliquid-testnet-orders
+```
+
+Le portail :
+
+1. vérifie les formats des secrets et la qualification paper v2 ;
+2. démarre une campagne P1 immuable de 30 jours dans
+   `/opt/btcquant/state/btcquant-testnet.db` ;
+3. exécute le smoke test Hyperliquid et remet obligatoirement le compte à plat ;
+4. journalise l'entrée et la sortie du smoke test ;
+5. arrête le moteur paper, crée l'approbation locale et active le runner testnet ;
+6. active un watchdog deux-minutes qui alerte sur moteur silencieux, ordre
+   ambigu, position sans stop, transition de stop pendante, rejet ou slippage.
+
+Contrôles quotidiens :
+
+```bash
+systemctl is-active btcquant-hyperliquid-testnet
+journalctl -u btcquant-hyperliquid-testnet --since today
+sudo -u btcquant /opt/btcquant/current/venv/bin/btcquant-readiness status \
+  --database /opt/btcquant/state/btcquant-testnet.db
+```
+
+La campagne P1 ne passe qu'après 30 jours, 99,5 % de disponibilité, deux ordres
+smoke terminaux, aucun incident ou ordre ambigu, au plus 5 % de rejets et un
+slippage p95 inférieur ou égal à 20 bps. Finalisation :
+
+```bash
+sudo -u btcquant /opt/btcquant/current/venv/bin/btcquant-readiness finalize \
+  --database /opt/btcquant/state/btcquant-testnet.db
+```
+
+Arrêt d'urgence :
+
+```bash
+sudo bash /opt/btcquant/current/deploy/stop-hyperliquid-testnet.sh
+```
+
+L'arrêt du service ne liquide pas arbitrairement une position : vérifier
+immédiatement la position et le stop sur l'interface Hyperliquid testnet. Si le
+stop est absent ou l'état divergent, fermer manuellement en `reduceOnly`, puis
+conserver l'incident ouvert jusqu'à la réconciliation SQLite.

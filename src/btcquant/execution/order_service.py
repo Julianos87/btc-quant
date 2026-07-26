@@ -39,6 +39,7 @@ class OrderExecutionService:
         qty: float,
         reference_price: float,
         reason: str,
+        reduce_only: bool = False,
         available_volume: float | None = None,
     ) -> SubmittedOrder:
         intent_id = f"{engine}-{slot}-{self.intent_factory()}"
@@ -58,6 +59,7 @@ class OrderExecutionService:
                 qty,
                 reference_price,
                 client_order_id=intent_id,
+                reduce_only=reduce_only,
                 available_volume=available_volume,
             )
         except Exception as error:

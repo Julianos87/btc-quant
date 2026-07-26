@@ -94,18 +94,20 @@ d’être rediscuté avant tout passage en réel**.
 
 ## Résultats historiques de référence
 
-Le fichier `dashboard/yearly_reference.json`, régénéré le 18 juillet 2026, rejoue le profil paper 60/40 sur la période du 10 septembre 2019 au 18 juillet 2026 avec funding historique :
+Le fichier `dashboard/yearly_reference.json`, régénéré le 26 juillet 2026,
+rejoue le profil paper 60/40 sur la période du 10 septembre 2019 au
+26 juillet 2026 avec funding historique :
 
 | Année | Portefeuille 60/40 | Trend | Carry | BTC |
 |---|---:|---:|---:|---:|
 | 2019, partielle | +26,7 % | +34,3 % | -1,1 % | -28,7 % |
-| 2020 | +157,3 % | +180,6 % | +41,3 % | +302,0 % |
-| 2021 | +20,2 % | +11,4 % | +107,2 % | +59,8 % |
-| 2022 | -1,0 % | +0,3 % | -8,3 % | -64,2 % |
-| 2023 | +199,9 % | +233,7 % | +3,7 % | +155,6 % |
-| 2024 | +55,0 % | +56,9 % | +17,8 % | +121,3 % |
-| 2025 | -20,7 % | -21,3 % | -6,4 % | -6,3 % |
-| 2026, partielle | -9,3 % | -9,6 % | -3,2 % | -26,6 % |
+| 2020 | +156,6 % | +179,8 % | +41,3 % | +302,0 % |
+| 2021 | +11,6 % | +1,9 % | +107,2 % | +59,8 % |
+| 2022 | -1,2 % | +0,3 % | -8,3 % | -64,2 % |
+| 2023 | +196,3 % | +232,7 % | +3,7 % | +155,6 % |
+| 2024 | +54,6 % | +56,7 % | +17,8 % | +121,3 % |
+| 2025 | -20,6 % | -21,3 % | -6,4 % | -6,3 % |
+| 2026, partielle | -12,8 % | -13,3 % | -3,3 % | -26,4 % |
 
 La colonne carry intègre le coût de financement du levier x3 (voir plus bas).
 Une fois ce coût chiffré, **le carry devient négatif 4 années sur 8** — dont
@@ -118,17 +120,15 @@ La référence du moteur trend à x4 indique également :
 | Indicateur trend | Valeur |
 |---|---:|
 | Trades | 479 |
-| Trades par an | 64,6 |
-| Win rate | 38,0 % |
-| Perte moyenne | -3,08 % |
-| Gain moyen | +9,59 % |
+| Trades par an | 64,2 |
+| Win rate | 37,4 % |
+| Perte moyenne | -3,06 % |
+| Gain moyen | +9,37 % |
 | Drawdown maximal historique | -52,9 % |
 | Plus longue série de pertes | 21 trades |
 
-Ces chiffres intègrent le filtre d'entrée funding, resté inactif en backtest
-jusqu'au 18 juillet 2026 (voir ci-dessous). Le gain de 2021 sur la poche trend
-(+0,3 % → +11,4 %) vient de là : c'est l'année où le funding a été le plus
-durablement extrême, donc celle où le filtre écarte le plus d'entrées.
+Ces chiffres sont régénérés depuis les caches locaux et liés par hash au code,
+à la configuration et aux données dans `audit/baseline_reference.json`.
 
 Ces chiffres sont des résultats de simulation. Ils ne constituent pas une garantie de performance future.
 
@@ -221,8 +221,8 @@ drawdown maximal inchangé. `tests/test_funding_parity.py` fige la correction.
 | Rééquilibrage 60/40 | Implémenté |
 | Dashboard et suivi des apports | Implémentés |
 | Persistance | SQLite transactionnel, migration JSON/CSV automatique |
-| Exécution trend testnet | Qualification PASS + confirmation explicite de session |
-| Exécution carry testnet | Qualification PASS + confirmation explicite de session |
+| Exécution trend testnet | Hyperliquid uniquement, portail P1 et service VPS opt-in |
+| Exécution carry testnet | Désactivée |
 | Utilisation en argent réel | Non validée |
 
 ### Persistance et reprise
@@ -264,7 +264,9 @@ watchdog et le dashboard en dérivent, sur une fenêtre glissante :
 - taux de rejet et de fills partiels ;
 - slippage moyen et percentile 95 ;
 - ordres `PENDING` trop anciens ;
-- ordres `UNBALANCED`.
+- ordres `UNBALANCED` ;
+- position sans stop confirmé, transition de stop pendante ou réconciliation
+  manuelle exigée.
 
 Les anomalies ouvrent un incident persistant et dédupliqué dans la table
 `incidents`. Une même anomalie n'envoie qu'une notification ; elle est résolue
@@ -275,13 +277,20 @@ cockpit du dashboard, le bilan quotidien et `scripts/inspect_state.py`.
 ### Qualification paper → testnet
 
 Le passage au testnet est maintenant un contrôle bloquant, pas une décision
-visuelle prise depuis le dashboard. Le protocole v1 impose notamment :
+visuelle prise depuis le dashboard. Le protocole v2 impose notamment :
 
-- 90 jours d'observation et 95 % de présence quotidienne des deux moteurs ;
-- au moins 30 trades clôturés, 50 ordres terminaux et 5 par moteur ;
+- 90 jours d'observation, 99,5 % de disponibilité temporelle et 95 % de jours
+  dont les échantillons couvrent au moins 95 % du temps ;
+- au moins 30 trades clôturés, 50 ordres terminaux et 5 par moteur requis ;
 - aucun ordre non résolu ni incident ouvert ;
-- au plus 2 % de rejets, 10 % de fills partiels et 20 bps de slippage p95 ;
-- un drawdown supérieur à -45 %, des états moteurs frais et aucun kill-switch.
+- au plus 5 % de rejets, 10 % de fills partiels et 20 bps de slippage p95 ;
+- un drawdown intrajournalier supérieur à -45 %, des états moteurs frais
+  (trend 10 min, carry 20 min) et aucun kill-switch.
+
+La campagne standard qualifie uniquement `trend`, seul moteur autorisable en
+testnet. Le carry devra être ajouté explicitement à `required_engines` lorsqu'il
+disposera d'un chemin d'exécution qualifiable ; il ne peut plus bloquer ou
+valider artificiellement la promotion trend.
 
 Les seuils sont copiés dans SQLite au démarrage : une campagne conserve donc
 ses règles même si une future version du protocole change. Les rapports
@@ -294,16 +303,39 @@ btcquant-readiness finalize
 ```
 
 `finalize` refuse de terminer une campagne tant qu'un seul critère échoue.
-`scripts/test_testnet.py` et les brokers externes exigent ensuite la preuve
-d'une campagne `PASSED` récente, puis une confirmation limitée à la session :
+`scripts/test_testnet.py` et le broker Hyperliquid exigent ensuite la preuve
+d'une campagne paper `PASSED` récente, puis une confirmation explicite :
 
 ```powershell
 $env:BTCQUANT_ENABLE_TESTNET = "I_ACCEPT_TESTNET_ORDERS"
 python scripts/test_testnet.py
 ```
 
-Le script referme ses positions dans un bloc de nettoyage même si un contrôle
-intermédiaire échoue. L'argent réel reste verrouillé inconditionnellement.
+Le script utilise exclusivement `api.hyperliquid-testnet.xyz`, valide un ordre
+IOC, un stop-market `reduceOnly`, le lookup par `cloid`, puis referme la position
+dans un bloc de nettoyage. Il journalise les deux ordres terminaux dans
+`state/btcquant-testnet.db`.
+
+Sur le VPS, le portail démarre ensuite une campagne P1 distincte de 30 jours :
+
+```bash
+sudo bash /opt/btcquant/current/deploy/start-hyperliquid-testnet.sh \
+  --i-accept-hyperliquid-testnet-orders
+```
+
+Le service est bloqué sans le fichier d'approbation créé par ce portail. Le
+paper et le testnet sont incompatibles au niveau systemd, le watchdog testnet
+s'exécute toutes les deux minutes, et l'arrêt d'urgence retire l'autorisation :
+
+```bash
+sudo bash /opt/btcquant/current/deploy/stop-hyperliquid-testnet.sh
+```
+
+Les secrets attendus sont `HYPERLIQUID_WALLET_ADDRESS` (adresse publique du
+compte) et `HYPERLIQUID_PRIVATE_KEY` (clé privée d'un **API wallet testnet
+dédié**, jamais celle du portefeuille principal). Les alertes Telegram sont
+obligatoires pour le portail VPS. L'argent réel reste verrouillé
+inconditionnellement.
 
 Diagnostic local :
 
@@ -362,7 +394,7 @@ installer des versions non testées. Passer par `pyproject.toml` :
 ```bash
 uv add <paquet>          # ou éditer [project.dependencies] puis : uv lock
 uv export --no-default-groups --group exchange --group dashboard \
-  --no-emit-project -o requirements.txt
+  --no-header --no-emit-project -o requirements.txt
 ```
 
 ## Qualité

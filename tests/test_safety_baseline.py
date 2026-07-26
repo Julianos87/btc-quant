@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import threading
 
 import pandas as pd
 import pytest
@@ -61,7 +62,15 @@ class RecordingBroker(Broker):
     def market_sell(self, qty: float, ref_price: float) -> Fill:
         return self.fills.pop(0)
 
-    def place_stop(self, qty: float, stop_price: float, direction: int = 1) -> str:
+    def place_stop(
+        self,
+        qty: float,
+        stop_price: float,
+        direction: int = 1,
+        *,
+        client_order_id: str | None = None,
+    ) -> str:
+        del client_order_id
         self.placed.append((qty, stop_price, direction))
         return f"stop-{len(self.placed)}"
 
@@ -215,6 +224,33 @@ def test_full_exchange_stop_is_materialized_atomically(tmp_path):
     trade = runner.store.read_trades()[0]
     assert trade["qty"] == pytest.approx(2.0)
     assert trade["pnl"] == pytest.approx(-22.3)
+
+
+def test_stop_filled_while_offline_is_materialized_before_reconciliation(tmp_path):
+    broker = RecordingBroker(
+        [],
+        {
+            "id": "existing-stop",
+            "status": "closed",
+            "amount": 2.0,
+            "filled": 2.0,
+            "remaining": 0.0,
+            "average": 89.0,
+        },
+    )
+    broker.supports_position_reconciliation = True
+    broker.net_position = lambda _symbol: 0.0
+    runner, slot = _runner(tmp_path, broker)
+    runner.notifier = lambda _message: None
+    slot.position = _position()
+    slot.stop_order_id = "existing-stop"
+    stop_event = threading.Event()
+    stop_event.set()
+
+    runner.run_forever(stop_event)
+
+    assert slot.position is None
+    assert runner.store.read_trades()[0]["reason"] == "stop_exchange"
 
 
 def test_reconciliation_errors_fail_closed():

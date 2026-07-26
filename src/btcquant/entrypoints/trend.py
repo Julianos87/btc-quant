@@ -18,7 +18,8 @@ from btcquant.config import (
     risk_from_config,
 )
 from btcquant.domain import ExecutionSimulator
-from btcquant.execution import PaperBroker
+from btcquant.execution import CcxtBroker, PaperBroker
+from btcquant.execution.broker import Broker
 from btcquant.execution.clock import SystemClock
 from btcquant.execution.runner import LiveRunner, StrategySlot
 from btcquant.execution.venue import Venue
@@ -56,13 +57,26 @@ def main() -> None:
         )
     market = markets.pop()
 
-    if exec_cfg["mode"] != "paper":
-        raise SystemExit(
-            "SÉCURITÉ : l'exécution live/testnet est temporairement désactivée. "
-            "Utiliser execution.mode: paper."
+    mode = exec_cfg["mode"]
+    broker: Broker
+    if mode == "paper":
+        fee = cfg["costs"]["perp_fee_rate"] if market == "perp" else cfg["costs"]["fee_rate"]
+        broker = PaperBroker(simulator=ExecutionSimulator(execution_config_from_config(cfg, fee)))
+    elif mode == "testnet":
+        live_exchange = exec_cfg.get("live_exchange")
+        if live_exchange != "hyperliquid" or market != "perp":
+            raise SystemExit("SÉCURITÉ : seul Hyperliquid testnet perp est autorisé pour trend.")
+        broker = CcxtBroker(
+            "hyperliquid",
+            exec_cfg.get("live_symbol", "BTC/USDC:USDC"),
+            testnet=True,
+            market="perp",
+            leverage=1,
+            qualification_state_path=ROOT
+            / exec_cfg.get("qualification_state_file", "state/btcquant.db"),
         )
-    fee = cfg["costs"]["perp_fee_rate"] if market == "perp" else cfg["costs"]["fee_rate"]
-    broker = PaperBroker(simulator=ExecutionSimulator(execution_config_from_config(cfg, fee)))
+    else:  # protégé aussi par load_config, défense en profondeur
+        raise SystemExit("SÉCURITÉ : l'argent réel reste désactivé.")
 
     slots = [
         StrategySlot(strategy, fraction, risk.initial_capital * fraction)
@@ -88,6 +102,7 @@ def main() -> None:
         venue=Venue(
             exec_cfg.get("live_exchange", cfg["exchange"]),
             exec_cfg.get("live_symbol", cfg["symbol"]),
+            testnet=mode == "testnet",
         ),
         clock=SystemClock(),
     )

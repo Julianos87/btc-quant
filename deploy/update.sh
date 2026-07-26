@@ -7,6 +7,15 @@ CLONE=/home/btcquant/btc-quant
 CURRENT="${ROOT}/current"
 PREVIOUS="${ROOT}/previous"
 RESTART_ENGINES=false
+TESTNET_APPROVAL="${ROOT}/state/HYPERLIQUID_TESTNET_APPROVED"
+
+restart_selected_engines() {
+  if [ -f "${TESTNET_APPROVAL}" ]; then
+    systemctl restart btcquant-hyperliquid-testnet
+  else
+    systemctl restart btcquant-trend btcquant-carry
+  fi
+}
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "Ce script doit être exécuté par root." >&2
@@ -96,7 +105,7 @@ rollback_on_error() {
   systemctl daemon-reload || true
   systemctl restart btcquant-dashboard || true
   if ${RESTART_ENGINES}; then
-    systemctl restart btcquant-trend btcquant-carry || true
+    restart_selected_engines || true
   fi
   exit "${code}"
 }
@@ -113,15 +122,19 @@ install -o root -g root -m 0755 "${CURRENT}/deploy/rebalance-root.sh" \
 systemctl daemon-reload
 systemctl restart btcquant-dashboard
 if ${RESTART_ENGINES}; then
-  systemctl restart btcquant-trend btcquant-carry
+  restart_selected_engines
 fi
 
 systemctl is-active --quiet btcquant-dashboard
 curl --fail --silent --show-error --max-time 10 \
   http://127.0.0.1:8666/healthz >/dev/null
 if ${RESTART_ENGINES}; then
-  systemctl is-active --quiet btcquant-trend
-  systemctl is-active --quiet btcquant-carry
+  if [ -f "${TESTNET_APPROVAL}" ]; then
+    systemctl is-active --quiet btcquant-hyperliquid-testnet
+  else
+    systemctl is-active --quiet btcquant-trend
+    systemctl is-active --quiet btcquant-carry
+  fi
 fi
 
 trap - ERR

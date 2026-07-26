@@ -19,22 +19,28 @@ ROOT = Path(os.environ.get("BTCQUANT_ROOT", Path.cwd())).resolve()
 STATE = ROOT / "state"
 
 # (moteur, âge max en secondes, nom du service systemd)
-CHECKS = [
-    ("trend", 600, "btcquant-trend"),
-    ("carry", 1200, "btcquant-carry"),  # tick carry = 5 min
-]
+CHECKS = [("trend", 600, "btcquant-trend")]
 
 
 def main(argv: list[str] | None = None) -> None:
-    argparse.ArgumentParser(description=__doc__).parse_args(argv)
-    database = STATE / "btcquant.db"
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--database", default=str(STATE / "btcquant.db"))
+    parser.add_argument("--service", default="btcquant-trend")
+    parser.add_argument("--max-age", type=int, default=600)
+    args = parser.parse_args(argv)
+    database = Path(args.database)
     if not database.exists():
         notify("⚠ Watchdog : base btcquant.db introuvable — moteurs jamais démarrés ?")
         return
     # Le watchdog écrit/actualise les incidents ; il peut donc aussi appliquer
     # la migration de schéma avant les premiers runners après un déploiement.
     store = StateStore(database)
-    for engine, max_age, service in CHECKS:
+    checks = (
+        [("trend", args.max_age, args.service)]
+        if args.database != str(STATE / "btcquant.db") or args.service != "btcquant-trend"
+        else CHECKS
+    )
+    for engine, max_age, service in checks:
         age = store.engine_age_seconds(engine)
         fingerprint = f"engine:{engine}:stale"
         if age is None:

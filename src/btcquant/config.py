@@ -40,8 +40,17 @@ def _validate_config(cfg: dict[str, Any]) -> None:
     for key in ("fee_rate", "perp_fee_rate", "funding_rate_8h", "slippage_bps"):
         if key in cfg["costs"]:
             _finite_non_negative(f"costs.{key}", cfg["costs"][key])
-    if cfg["execution"].get("mode", "paper") != "paper":
-        raise ValueError("Safety Baseline : execution.mode doit rester 'paper'")
+    mode = cfg["execution"].get("mode", "paper")
+    if mode not in {"paper", "testnet"}:
+        raise ValueError("Safety Baseline : execution.mode doit valoir 'paper' ou 'testnet'")
+    if mode == "testnet":
+        if cfg["execution"].get("testnet") is not True:
+            raise ValueError("Safety Baseline : le mode testnet exige execution.testnet: true")
+        if cfg["execution"].get("live_exchange") != "hyperliquid":
+            raise ValueError("Safety Baseline : seul le testnet Hyperliquid est autorisé")
+        live_symbol = cfg["execution"].get("live_symbol")
+        if not isinstance(live_symbol, str) or not live_symbol.endswith(":USDC"):
+            raise ValueError("Le testnet Hyperliquid exige un perpétuel coté en USDC")
     strategies = cfg["strategies"]
     if not strategies:
         raise ValueError("strategies ne peut pas être vide")

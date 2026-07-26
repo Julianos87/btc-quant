@@ -13,6 +13,7 @@ from btcquant.execution.readiness import (
     finalize_campaign,
     require_passed_qualification,
     start_campaign,
+    testnet_p1_policy as p1_policy,
 )
 from btcquant.execution.state_store import StateStore
 from btcquant.execution.safety import require_live_execution_enabled
@@ -23,20 +24,20 @@ def _seed_healthy_campaign(store: StateStore, now: datetime) -> None:
         ReadinessPolicy(),
         min_observation_days=2,
         min_closed_trades=1,
-        min_terminal_orders=2,
+        min_terminal_orders=1,
         min_terminal_orders_per_engine=1,
     )
+    started = now - timedelta(days=2)
     start_campaign(
         store,
         policy,
-        started_at=(now - timedelta(days=2)).isoformat(),
+        started_at=started.isoformat(),
     )
-    for offset in (2, 1, 0):
-        ts = (now - timedelta(days=offset)).isoformat()
-        store.append_equity("trend", 6000.0 + offset, ts)
-        store.append_equity("carry", 4000.0, ts)
+    sample = started
+    while sample <= now:
+        store.append_equity("trend", 6000.0, sample.isoformat())
+        sample += timedelta(minutes=5)
     store.save_engine_state("trend", {"slots": {}, "halted": False})
-    store.save_engine_state("carry", {"equity": 4000.0, "halted": False})
     order_id = store.begin_order(
         "trend",
         "strategy",
@@ -48,22 +49,6 @@ def _seed_healthy_campaign(store: StateStore, now: datetime) -> None:
         reference_price=100.0,
     )
     store.complete_order(order_id, status="FILLED", filled_qty=1.0, price=100.05)
-    carry_order_id = store.begin_order(
-        "carry",
-        "carry",
-        "qualification-carry-order",
-        "MARKET",
-        "SELL",
-        1.0,
-        "qualification",
-        reference_price=100.0,
-    )
-    store.complete_order(
-        carry_order_id,
-        status="FILLED",
-        filled_qty=1.0,
-        price=99.95,
-    )
     store.record_trade(
         {
             "exit_ts": now.isoformat(),
@@ -149,11 +134,11 @@ def test_unresolved_order_blocks_campaign(tmp_path):
     now = datetime.now(UTC)
     _seed_healthy_campaign(store, now)
     store.begin_order(
-        "carry",
-        "carry",
+        "trend",
+        "strategy",
         "pending-order",
         "MARKET",
-        "SELL",
+        "BUY",
         1.0,
         "qualification",
         reference_price=100.0,
@@ -171,5 +156,123 @@ def test_campaign_policy_is_snapshotted(tmp_path):
     campaign = start_campaign(store, policy)
 
     assert campaign["policy"]["min_observation_days"] == 12
+    assert campaign["policy"]["required_engines"] == ["trend"]
     with pytest.raises(RuntimeError, match="déjà active"):
         start_campaign(store, ReadinessPolicy())
+
+
+def test_uptime_uses_elapsed_time_not_daily_presence(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    now = datetime.now(UTC)
+    policy = replace(
+        ReadinessPolicy(),
+        min_observation_days=1,
+        min_closed_trades=0,
+        min_terminal_orders=0,
+        min_terminal_orders_per_engine=0,
+    )
+    started = now - timedelta(days=1)
+    start_campaign(store, policy, started_at=started.isoformat())
+    # Un seul point par date aurait satisfait l'ancien calcul.
+    store.append_equity("trend", 1000.0, started.isoformat())
+    store.append_equity("trend", 1000.0, now.isoformat())
+    store.save_engine_state("trend", {"slots": {}, "halted": False})
+
+    report = evaluate_readiness(store, now=now)
+    uptime = next(item for item in report["checks"] if item["key"] == "trend_uptime")
+
+    assert not uptime["passed"]
+    assert float(uptime["value"].rstrip("%")) < 2.0
+
+
+def test_intraday_drawdown_is_not_hidden_by_daily_close(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    now = datetime.now(UTC)
+    policy = replace(
+        ReadinessPolicy(),
+        min_observation_days=0,
+        min_engine_uptime=0.0,
+        min_daily_sample_coverage=0.0,
+        min_equity_coverage=0.0,
+        min_closed_trades=0,
+        min_terminal_orders=0,
+        min_terminal_orders_per_engine=0,
+        max_drawdown=-0.20,
+    )
+    started = now - timedelta(minutes=10)
+    start_campaign(store, policy, started_at=started.isoformat())
+    store.append_equity("trend", 1000.0, started.isoformat())
+    store.append_equity("trend", 700.0, (started + timedelta(minutes=5)).isoformat())
+    store.append_equity("trend", 1000.0, now.isoformat())
+    store.save_engine_state("trend", {"slots": {}, "halted": False})
+
+    report = evaluate_readiness(store, now=now)
+    drawdown = next(item for item in report["checks"] if item["key"] == "drawdown")
+
+    assert not drawdown["passed"]
+    assert drawdown["value"] == "-30.0%"
+
+
+def test_previous_protocol_pass_is_reported_as_expired(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    now = datetime.now(UTC)
+    campaign = store.start_qualification_campaign(
+        protocol_version=1,
+        policy=ReadinessPolicy().to_dict(),
+        started_at=(now - timedelta(days=1)).isoformat(),
+    )
+    store.finish_qualification_campaign(
+        int(campaign["id"]),
+        status="PASSED",
+        ended_at=now.isoformat(),
+        final_report={
+            "status": "PASS",
+            "ready": True,
+            "checks": [],
+            "n_ok": 0,
+            "n_total": 0,
+        },
+    )
+
+    report = evaluate_readiness(store, now=now)
+
+    assert report["status"] == "FAIL"
+    assert report["ready"] is False
+    assert report["checks"][-1]["key"] == "protocol_version"
+
+
+def test_active_previous_protocol_cannot_be_finalized(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    now = datetime.now(UTC)
+    store.start_qualification_campaign(
+        protocol_version=1,
+        policy=replace(
+            ReadinessPolicy(),
+            min_observation_days=0,
+            min_engine_uptime=0.0,
+            min_daily_sample_coverage=0.0,
+            min_equity_coverage=0.0,
+            min_closed_trades=0,
+            min_terminal_orders=0,
+            min_terminal_orders_per_engine=0,
+        ).to_dict(),
+        started_at=now.isoformat(),
+    )
+
+    report = evaluate_readiness(store, now=now + timedelta(seconds=1))
+
+    campaign = next(item for item in report["checks"] if item["key"] == "campaign")
+    assert not campaign["passed"]
+    with pytest.raises(RuntimeError, match="Qualification refusée"):
+        finalize_campaign(store, now=now + timedelta(seconds=1))
+
+
+def test_testnet_p1_profile_requires_30_days_and_two_smoke_orders():
+    policy = p1_policy()
+
+    assert policy.required_engines == ("trend",)
+    assert policy.min_observation_days == 30
+    assert policy.min_engine_uptime == pytest.approx(0.995)
+    assert policy.min_terminal_orders == 2
+    assert policy.min_terminal_orders_per_engine == 2
+    assert policy.min_closed_trades == 0

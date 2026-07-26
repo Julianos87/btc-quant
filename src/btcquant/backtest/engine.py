@@ -162,6 +162,10 @@ class BacktestEngine:
         available_volume: float,
     ) -> None:
         pending = state.pending_entry
+        # Une demande d'entrée vaut exclusivement pour cette ouverture, comme
+        # dans le runner live qui marque ensuite la barre comme traitée. Un
+        # rejet est terminal : rejouer plus tard un signal devenu ancien
+        # créerait une divergence temporelle plus grave qu'un trade manqué.
         state.pending_entry = None
         if state.position is not None or pending is None or not kill.can_trade:
             return
@@ -229,8 +233,11 @@ class BacktestEngine:
             stop_price=position.stop_price,
         )
         intrabar_cost = funding_amount(position, funding_rate, float(close_price))
-        if stop_reference is None or intrabar_cost > 0:
-            state.cash -= intrabar_cost
+        # Convention déterministe : le paiement associé à cette barre est
+        # appliqué avant une éventuelle sortie intrabar, quel que soit son
+        # signe. Ne débiter que les coûts tout en ignorant les crédits sur les
+        # barres stoppées introduisait un biais asymétrique.
+        state.cash -= intrabar_cost
         if stop_reference is not None and not self._fill_exit(
             state,
             execution,
@@ -305,6 +312,7 @@ class BacktestEngine:
         kill = KillSwitch(self.risk)
         equity_index: list[pd.Timestamp] = []
         equity_values: list[float] = []
+        exposure_bars = 0
 
         opens = data["open"].to_numpy()
         highs = data["high"].to_numpy()
@@ -316,6 +324,7 @@ class BacktestEngine:
         for i in range(start, len(data)):
             ts = index[i]
             row = data.iloc[i]
+            exposed_during_bar = state.position is not None
 
             # Un snapshot de funding à l'instant t précède les ordres exécutés
             # à l'ouverture t : une nouvelle position ne doit jamais recevoir
@@ -348,6 +357,7 @@ class BacktestEngine:
                 float(opens[i]),
                 float(volumes[i]),
             )
+            exposed_during_bar = exposed_during_bar or state.position is not None
 
             # ── intrabar : stop touché ? ─────────────────────────────────────
             intrabar_rate = (
@@ -368,11 +378,14 @@ class BacktestEngine:
                 intrabar_rate,
             )
 
-            # ── clôture : funding, gestion de la position, signaux pour t+1 ─
-            self._decide_close(state, strategy, row, ts, kill, no_trade_before)
-
+            # Le risque est mis à jour AVANT les décisions de clôture. Ainsi,
+            # un kill switch déclenché à t programme la liquidation à
+            # l'ouverture t+1, et non à t+2.
             equity = state.cash + (state.position.unrealized(closes[i]) if state.position else 0.0)
             kill.update(equity, ts.date())
+            # ── clôture : gestion de la position, signaux pour t+1 ─────────
+            self._decide_close(state, strategy, row, ts, kill, no_trade_before)
+            exposure_bars += int(exposed_during_bar)
             equity_index.append(ts)
             equity_values.append(equity)
 
@@ -399,6 +412,7 @@ class BacktestEngine:
             state.trades,
             bpy,
             buy_hold=data["close"].iloc[start:],
+            exposure_bars=exposure_bars,
         )
         return BacktestResult(
             equity=equity_series,

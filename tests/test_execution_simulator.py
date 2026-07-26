@@ -283,6 +283,8 @@ def test_backtest_handles_partial_entries_and_exits():
     assert len(result.trades) > 1
     assert sum(trade.qty for trade in result.trades) == pytest.approx(10.0)
     assert all(trade.qty <= 2.0 for trade in result.trades)
+    assert result.metrics["exposure"] == pytest.approx(9 / 15)
+    assert 0.0 <= result.metrics["exposure"] <= 1.0
 
 
 def test_backtest_rejected_entry_does_not_create_a_position():

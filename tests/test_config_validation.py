@@ -23,6 +23,14 @@ def test_repository_configs_are_valid(filename):
     assert config["execution"]["mode"] == "paper"
 
 
+def test_hyperliquid_testnet_config_is_valid_and_isolated():
+    config = load_config(ROOT / "config_testnet.yaml")
+
+    assert config["execution"]["mode"] == "testnet"
+    assert config["execution"]["live_exchange"] == "hyperliquid"
+    assert config["execution"]["state_file"] == "state/btcquant-testnet.db"
+
+
 def _base_config():
     return {
         "symbol": "BTC/USDT",
@@ -86,3 +94,16 @@ def test_invalid_configs_fail_at_load_time(tmp_path, mutate, message):
 def test_risk_config_rejects_impossible_values(kwargs):
     with pytest.raises(ValueError):
         RiskConfig(**kwargs)
+
+
+def test_testnet_rejects_any_exchange_other_than_hyperliquid(tmp_path):
+    config = deepcopy(_base_config())
+    config["execution"].update(
+        mode="testnet",
+        testnet=True,
+        live_exchange="binance",
+        live_symbol="BTC/USDT:USDT",
+    )
+
+    with pytest.raises(ValueError, match="Hyperliquid"):
+        load_config(_write(tmp_path, config))

@@ -156,6 +156,38 @@ def test_opening_funding_is_not_charged_to_a_new_position():
     assert result.equity.iloc[-1] == pytest.approx(10_000.0)
 
 
+def test_funding_on_stop_bar_is_applied_symmetrically():
+    """Un stop ne doit pas conserver un débit tout en supprimant un crédit."""
+
+    class WithFunding(MockStrategy):
+        def prepare(self, d):
+            out = super().prepare(d)
+            out["funding_rate"] = d["funding_rate"]
+            return out
+
+    def run(rate: float) -> float:
+        df = make_df(n=10)
+        df["funding_rate"] = 0.0
+        df.iloc[7, df.columns.get_loc("low")] = 80.0
+        df.iloc[7, df.columns.get_loc("funding_rate")] = rate
+        result = BacktestEngine(
+            fee_rate=0.0,
+            slippage_bps=0.0,
+            risk=risk_simple(),
+        ).run(
+            WithFunding(enter_bar=5, direction=1, stop_dist=10.0, exit_after=0),
+            df,
+        )
+        return float(result.equity.iloc[-1])
+
+    neutral = run(0.0)
+    debit = neutral - run(0.01)
+    credit = run(-0.01) - neutral
+
+    assert debit == pytest.approx(credit)
+    assert debit > 0
+
+
 def test_short_size_mult():
     """short_size_mult réduit les shorts, n'affecte pas les longs."""
     df = make_df()

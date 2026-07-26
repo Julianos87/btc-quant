@@ -1073,11 +1073,20 @@ class StateStore:
                 """
                 SELECT * FROM orders
                 WHERE engine = ? AND status IN ('PENDING', 'OPEN', 'UNBALANCED')
+                  AND NOT (order_type = 'STOP' AND status = 'OPEN')
                 ORDER BY id
                 """,
                 (engine,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def read_order_by_intent(self, intent_id: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM orders WHERE intent_id = ?",
+                (intent_id,),
+            ).fetchone()
+        return dict(row) if row is not None else None
 
     def read_orders(self, engine: str | None = None) -> list[dict[str, Any]]:
         query = "SELECT * FROM orders"

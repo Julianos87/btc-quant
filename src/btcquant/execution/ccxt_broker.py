@@ -1,4 +1,4 @@
-"""Broker réel via ccxt — spot Binance ou futures perpétuels USDT-M.
+"""Broker externe via ccxt — Hyperliquid ou Binance.
 
 Sécurité et fiabilité :
 - clés API lues dans les variables d'environnement, jamais dans le code/config ;
@@ -6,8 +6,8 @@ Sécurité et fiabilité :
 - retries avec backoff exponentiel sur les erreurs réseau ;
 - clientOrderId déterministe → un retry ne peut pas doubler un ordre (idempotence) ;
 - arrondi aux précisions de l'exchange et respect du notionnel minimal ;
-- vrais ordres stop côté exchange (STOP_LOSS market en spot Binance, STOP_MARKET
-  reduceOnly en futures) pour protéger la position même si le bot tombe ;
+- vrais ordres stop côté exchange, ``reduceOnly``, pour protéger la position
+  même si le bot tombe ;
 - en futures : levier verrouillé à 1x — le système est conçu sans levier.
 """
 
@@ -16,7 +16,9 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import time
+from pathlib import Path
 
 import ccxt
 
@@ -40,27 +42,55 @@ class CcxtBroker(Broker):
         testnet: bool = True,
         market: str = "spot",  # "spot" | "perp"
         leverage: int = 1,
+        qualification_state_path: str | Path = "state/btcquant.db",
     ) -> None:
-        require_live_execution_enabled(testnet=testnet)
-        api_key = os.environ.get("BINANCE_API_KEY")
-        api_secret = os.environ.get("BINANCE_API_SECRET")
-        if not api_key or not api_secret:
-            raise RuntimeError(
-                "Clés API manquantes : définir BINANCE_API_KEY et BINANCE_API_SECRET "
-                "dans l'environnement (jamais dans config.yaml)."
-            )
+        require_live_execution_enabled(
+            testnet=testnet,
+            state_path=qualification_state_path,
+        )
         self.market_kind = market
-        if market == "perp":
-            # binanceusdm = futures perpétuels USDT-M
-            klass = ccxt.binanceusdm if exchange_id == "binance" else getattr(ccxt, exchange_id)
+        self.exchange_id = exchange_id
+        if exchange_id == "hyperliquid":
+            if market != "perp":
+                raise ValueError("Le broker Hyperliquid qualifié ne prend en charge que les perps")
+            wallet_address = os.environ.get("HYPERLIQUID_WALLET_ADDRESS", "")
+            private_key = os.environ.get("HYPERLIQUID_PRIVATE_KEY", "")
+            if not re.fullmatch(r"0x[0-9a-fA-F]{40}", wallet_address):
+                raise RuntimeError(
+                    "HYPERLIQUID_WALLET_ADDRESS doit être l'adresse publique du compte "
+                    "principal ou sous-compte (42 caractères hexadécimaux)."
+                )
+            if not re.fullmatch(r"0x[0-9a-fA-F]{64}", private_key):
+                raise RuntimeError(
+                    "HYPERLIQUID_PRIVATE_KEY doit être la clé privée d'un API wallet dédié "
+                    "(jamais la clé du portefeuille principal)."
+                )
+            klass = ccxt.hyperliquid
+            credentials = {
+                "walletAddress": wallet_address,
+                "privateKey": private_key,
+            }
         else:
-            klass = getattr(ccxt, exchange_id)
+            api_key = os.environ.get("BINANCE_API_KEY")
+            api_secret = os.environ.get("BINANCE_API_SECRET")
+            if not api_key or not api_secret:
+                raise RuntimeError(
+                    "Clés API manquantes : définir BINANCE_API_KEY et BINANCE_API_SECRET "
+                    "dans l'environnement (jamais dans config.yaml)."
+                )
+            credentials = {"apiKey": api_key, "secret": api_secret}
+            if market == "perp":
+                # binanceusdm = futures perpétuels USDT-M
+                klass = ccxt.binanceusdm if exchange_id == "binance" else getattr(ccxt, exchange_id)
+            else:
+                klass = getattr(ccxt, exchange_id)
         self.exchange: ccxt.Exchange = klass(
             {
-                "apiKey": api_key,
-                "secret": api_secret,
+                **credentials,
                 "enableRateLimit": True,
                 "timeout": 30_000,
+                # 1 % maximum pour les IOC simulant les marchés Hyperliquid.
+                "options": {"defaultSlippage": 0.01},
             }
         )
         if testnet:
@@ -128,10 +158,14 @@ class CcxtBroker(Broker):
         )
 
     @staticmethod
-    def _external_client_order_id(intent_id: str) -> str:
+    def _external_client_order_id(intent_id: str, exchange_id: str = "binance") -> str:
         """Identifiant stable respectant la limite courte des exchanges."""
 
-        return f"btq-{hashlib.sha256(intent_id.encode()).hexdigest()[:28]}"
+        digest = hashlib.sha256(intent_id.encode()).hexdigest()
+        if exchange_id == "hyperliquid":
+            # Hyperliquid exige exactement un entier hexadécimal 128 bits.
+            return f"0x{digest[:32]}"
+        return f"btq-{digest[:28]}"
 
     def _market_order(
         self,
@@ -139,18 +173,22 @@ class CcxtBroker(Broker):
         qty: float,
         ref_price: float,
         client_order_id: str | None = None,
+        *,
+        reduce_only: bool = False,
     ) -> Fill:
         qty = self._round_qty(qty)
         self._check_min_notional(qty, ref_price)
-        external_client_id = (
-            self._external_client_order_id(client_order_id)
-            if client_order_id is not None
-            else self._client_order_id(side)
-        )
-        params = {"newClientOrderId": external_client_id}
+        exchange_id = getattr(self, "exchange_id", "binance")
+        local_intent = client_order_id or self._client_order_id(side)
+        external_client_id = self._external_client_order_id(local_intent, exchange_id)
+        client_key = "clientOrderId" if exchange_id == "hyperliquid" else "newClientOrderId"
+        params: dict[str, object] = {client_key: external_client_id}
+        if reduce_only:
+            params["reduceOnly"] = True
         # Ne jamais rejouer create_order après un timeout ambigu : le runner
         # garde l'intention PENDING et la rapproche via clientOrderId.
-        order = self.exchange.create_order(self.symbol, "market", side, qty, None, params)
+        price = ref_price if exchange_id == "hyperliquid" else None
+        order = self.exchange.create_order(self.symbol, "market", side, qty, price, params)
         order = self._wait_closed(order)
         fill = self._fill_from_order(order, ref_price)
         log.info("[LIVE] %s %.6f @ %.2f (frais %.4f)", side.upper(), fill.qty, fill.price, fill.fee)
@@ -170,6 +208,7 @@ class CcxtBroker(Broker):
         ref_price: float,
         *,
         client_order_id: str | None = None,
+        reduce_only: bool = False,
         available_volume: float | None = None,
         delayed_price: float | None = None,
     ) -> Fill:
@@ -177,17 +216,24 @@ class CcxtBroker(Broker):
         normalized_side = side.lower()
         if normalized_side not in ("buy", "sell"):
             raise ValueError(f"Côté d'ordre invalide : {side!r}")
-        return self._market_order(normalized_side, qty, ref_price, client_order_id)
+        return self._market_order(
+            normalized_side,
+            qty,
+            ref_price,
+            client_order_id,
+            reduce_only=reduce_only,
+        )
 
     def lookup_order(self, client_order_id: str) -> BrokerOrderSnapshot | None:
-        external_id = self._external_client_order_id(client_order_id)
+        exchange_id = getattr(self, "exchange_id", "binance")
+        external_id = self._external_client_order_id(client_order_id, exchange_id)
         try:
-            order = self._with_retries(
-                self.exchange.fetch_order,
-                external_id,
-                self.symbol,
-                {"origClientOrderId": external_id},
+            params = (
+                {"clientOrderId": external_id}
+                if exchange_id == "hyperliquid"
+                else {"origClientOrderId": external_id}
             )
+            order = self._with_retries(self.exchange.fetch_order, external_id, self.symbol, params)
         except ccxt.OrderNotFound:
             return None
         fill = self._fill_from_order(order, float(order.get("price") or 0.0))
@@ -210,7 +256,14 @@ class CcxtBroker(Broker):
             fee=fill.fee,
         )
 
-    def place_stop(self, qty: float, stop_price: float, direction: int = 1) -> str | None:
+    def place_stop(
+        self,
+        qty: float,
+        stop_price: float,
+        direction: int = 1,
+        *,
+        client_order_id: str | None = None,
+    ) -> str | None:
         """Stop de protection côté exchange.
 
         Long (direction=1)  : vend si le prix descend au stop.
@@ -223,11 +276,31 @@ class CcxtBroker(Broker):
             name="prix stop normalisé",
             positive=True,
         )
-        if self.market_kind == "perp":
+        exchange_id = getattr(self, "exchange_id", "binance")
+        local_intent = client_order_id or self._client_order_id("stop")
+        external_client_id = self._external_client_order_id(local_intent, exchange_id)
+        if exchange_id == "hyperliquid":
+            params = {
+                "stopLossPrice": stop_price,
+                "reduceOnly": True,
+                "clientOrderId": external_client_id,
+            }
+            # CCXT transforme le market trigger en ordre stop-market natif.
+            # Le prix sert uniquement à calculer la limite de slippage du market
+            # déclenché ; le trigger reste stopLossPrice.
+            order = self.exchange.create_order(
+                self.symbol,
+                "market",
+                side,
+                qty,
+                stop_price,
+                params,
+            )
+        elif self.market_kind == "perp":
             params = {
                 "stopPrice": stop_price,
                 "reduceOnly": True,
-                "newClientOrderId": self._client_order_id("stop"),
+                "newClientOrderId": external_client_id,
             }
             order = self.exchange.create_order(
                 self.symbol,
@@ -253,7 +326,7 @@ class CcxtBroker(Broker):
                 )
             params = {
                 "stopPrice": stop_price,
-                "newClientOrderId": self._client_order_id("stop"),
+                "newClientOrderId": external_client_id,
             }
             order = self.exchange.create_order(
                 self.symbol,
@@ -264,7 +337,19 @@ class CcxtBroker(Broker):
                 params,
             )
         log.info("[LIVE] STOP %s posé : %.6f @ trigger %.2f", side.upper(), qty, stop_price)
-        return order["id"]
+        order_id = order.get("id")
+        if order_id is None and client_order_id is not None:
+            # Hyperliquid peut répondre ``waitingForTrigger`` sans oid. Le
+            # cloid est immédiatement durable, mais son index info peut avoir
+            # un léger retard. Attendre l'index sans jamais recréer l'ordre.
+            for attempt in range(10):
+                snapshot = self.lookup_order(client_order_id)
+                if snapshot is not None and snapshot.broker_order_id is not None:
+                    order_id = snapshot.broker_order_id
+                    break
+                if attempt < 9:
+                    time.sleep(0.25)
+        return str(order_id) if order_id is not None else None
 
     def cancel_stop(self, order_id: str) -> None:
         try:
@@ -277,7 +362,7 @@ class CcxtBroker(Broker):
 
     def free_quote_balance(self) -> float | None:
         balance = self._with_retries(self.exchange.fetch_balance)
-        quote = self.symbol.split("/")[1]
+        quote = self.symbol.split("/")[1].split(":")[0]
         return float(balance.get("free", {}).get(quote, 0.0))
 
     def net_position(self, symbol: str) -> float:

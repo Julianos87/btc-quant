@@ -73,6 +73,17 @@ def test_execution_metrics_cover_fills_rejections_slippage_and_stale_orders(tmp_
         "test",
         reference_price=100.0,
     )
+    stop_id = store.begin_order(
+        "trend",
+        "strategy",
+        "protective-stop",
+        "STOP",
+        "SELL",
+        1.0,
+        "ratchet",
+        reference_price=95.0,
+    )
+    store.complete_order(stop_id, status="CANCELED", broker_order_id="remote-stop")
 
     health = execution_health(
         store,
@@ -156,3 +167,55 @@ def test_nominal_paper_soak_window_remains_stable(tmp_path):
     assert health.average_slippage_bps == pytest.approx(5.0)
     assert notifications == []
     assert store.read_incidents(open_only=True) == []
+
+
+def test_position_without_confirmed_stop_is_a_critical_incident(tmp_path):
+    store = StateStore(tmp_path / "btcquant.db")
+    store.save_engine_state(
+        "trend",
+        {
+            "slots": {
+                "trend_ls_55": {
+                    "position": {"qty": 0.01},
+                    "stop_order_id": None,
+                    "stop_transition": None,
+                }
+            }
+        },
+    )
+
+    health = execution_health(store, "trend")
+    notifications = sync_execution_incidents(store, health)
+
+    assert health.unprotected_slots == ("trend_ls_55",)
+    assert any(item["kind"] == "unprotected_position" for item in notifications)
+    assert any(
+        item["severity"] == "CRITICAL" and item["kind"] == "unprotected_position"
+        for item in store.read_incidents(open_only=True)
+    )
+
+
+def test_replacement_keeps_old_stop_protection_but_alerts_pending_transition(tmp_path):
+    store = StateStore(tmp_path / "btcquant.db")
+    store.save_engine_state(
+        "trend",
+        {
+            "slots": {
+                "trend_ls_55": {
+                    "position": {"qty": 0.01},
+                    "stop_order_id": "old-stop",
+                    "stop_transition": {
+                        "phase": "PLACING",
+                        "previous_stop_id": "old-stop",
+                    },
+                }
+            }
+        },
+    )
+
+    health = execution_health(store, "trend")
+    notifications = sync_execution_incidents(store, health)
+
+    assert health.unprotected_slots == ()
+    assert health.stop_transition_slots == ("trend_ls_55",)
+    assert any(item["kind"] == "stop_transition_pending" for item in notifications)

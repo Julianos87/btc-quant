@@ -11,6 +11,8 @@ def compute_metrics(
     trades: list,
     bars_per_year: float,
     buy_hold: pd.Series | None = None,
+    *,
+    exposure_bars: int | None = None,
 ) -> dict:
     returns = equity.pct_change().dropna()
     n_bars = len(equity)
@@ -41,8 +43,15 @@ def compute_metrics(
     gross_loss = -sum(t.pnl for t in losses)
 
     exposure = np.nan
-    if trades:
-        bars_in_pos = sum(t.bars_held for t in trades)
+    if exposure_bars is not None:
+        if exposure_bars < 0 or exposure_bars > n_bars:
+            raise ValueError("exposure_bars doit être compris entre 0 et le nombre de barres")
+        exposure = exposure_bars / n_bars if n_bars else np.nan
+    elif trades:
+        # Compatibilité pour les appelants historiques. Le moteur fournit le
+        # compte exact afin que plusieurs fills partiels d'une même position
+        # ne puissent plus compter les mêmes barres plusieurs fois.
+        bars_in_pos = min(n_bars, sum(t.bars_held for t in trades))
         exposure = bars_in_pos / n_bars
 
     out = {

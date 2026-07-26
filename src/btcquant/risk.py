@@ -71,7 +71,11 @@ def position_size(
     """Quantité (positive, en BTC) à ouvrir, long ou short selon `direction`."""
     if equity <= 0 or entry_price <= 0:
         return 0.0
-    stop_distance = direction * (entry_price - stop_price)
+    raw_stop_distance = direction * (entry_price - stop_price)
+    # Une même distance construite par ``entry ± distance`` peut différer de
+    # quelques ULP entre long et short. Normaliser à 12 chiffres significatifs
+    # (bien au-delà des précisions exchange) évite un biais de sizing par côté.
+    stop_distance = float(f"{raw_stop_distance:.12g}")
     if stop_distance <= 0:
         return 0.0
 

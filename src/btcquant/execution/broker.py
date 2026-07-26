@@ -67,12 +67,13 @@ class Broker(ABC):
         ref_price: float,
         *,
         client_order_id: str | None = None,
+        reduce_only: bool = False,
         available_volume: float | None = None,
         delayed_price: float | None = None,
     ) -> Fill:
         """Point d'entrée commun ; les brokers réels gardent leur implémentation."""
 
-        del client_order_id, available_volume, delayed_price
+        del client_order_id, reduce_only, available_volume, delayed_price
         order_side = OrderSide(side)
         if order_side == OrderSide.BUY:
             return self.market_buy(qty, ref_price)
@@ -80,8 +81,21 @@ class Broker(ABC):
             return self.market_sell(qty, ref_price)
         raise AssertionError("OrderSide contient une valeur non gérée")
 
-    def place_stop(self, qty: float, stop_price: float, direction: int = 1) -> str | None:
-        """Pose un stop de protection côté exchange. Retourne l'id d'ordre."""
+    def place_stop(
+        self,
+        qty: float,
+        stop_price: float,
+        direction: int = 1,
+        *,
+        client_order_id: str | None = None,
+    ) -> str | None:
+        """Pose un stop de protection côté exchange.
+
+        ``client_order_id`` doit être stable pendant toute reprise d'une même
+        intention. Un broker externe peut ainsi retrouver un ordre dont la
+        réponse s'est perdue sans en créer un second.
+        """
+        del qty, stop_price, direction, client_order_id
         return None
 
     def cancel_stop(self, order_id: str) -> None:
@@ -175,9 +189,11 @@ class PaperBroker(Broker):
         ref_price: float,
         *,
         client_order_id: str | None = None,
+        reduce_only: bool = False,
         available_volume: float | None = None,
         delayed_price: float | None = None,
     ) -> Fill:
+        del reduce_only
         order_side = OrderSide(side)
         if client_order_id is None:
             self._sequence += 1
