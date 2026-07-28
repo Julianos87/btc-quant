@@ -104,16 +104,6 @@ sudo -u btcquant env BACKUP_ENCRYPTION_KEY="${BACKUP_ENCRYPTION_KEY}" \
   "${CURRENT}/scripts/backup_state.sh"
 
 TARGET="$(bash "${CLONE}/deploy/create-release.sh" "${CLONE}" "${RELEASE_ID}")"
-# Lors de la toute première installation d'un nouvel entrypoint, son unité
-# pointe vers /opt/btcquant/current qui désigne encore l'ancienne release.
-# Elle est donc vérifiée juste après la bascule, sous la protection du rollback.
-PRE_SWITCH_UNITS=()
-for unit in "${TARGET}/deploy/"*.service "${TARGET}/deploy/"*.timer; do
-  if [ "$(basename "${unit}")" != "btcquant-shadow.service" ]; then
-    PRE_SWITCH_UNITS+=("${unit}")
-  fi
-done
-systemd-analyze verify "${PRE_SWITCH_UNITS[@]}"
 
 rollback_on_error() {
   code=$?
@@ -142,6 +132,8 @@ cp "${CURRENT}/deploy/"btcquant-*.service "${CURRENT}/deploy/"btcquant-*.timer \
 install -o root -g root -m 0755 "${CURRENT}/deploy/rebalance-root.sh" \
   /usr/local/libexec/btcquant-rebalance
 systemctl daemon-reload
+# Vérification après bascule : les ExecStart pointent sur la nouvelle release.
+# Toute erreur déclenche le rollback avant le redémarrage des moteurs.
 systemd-analyze verify "${CURRENT}/deploy/"*.service "${CURRENT}/deploy/"*.timer
 systemctl enable --now btcquant-compact.timer
 configure_shadow_service
