@@ -1,0 +1,422 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-07-28T17:20:48.643315+00:00",
+  "purpose": "Test isolé du sizing continu basé sur le funding BTC",
+  "protocol": {
+    "thresholds": [
+      0.0004,
+      0.0008,
+      0.0012
+    ],
+    "floors": [
+      0.25,
+      0.5,
+      0.75
+    ],
+    "development_end": "2022-12-31T23:59:59+00:00",
+    "validation_end": "2024-12-31T23:59:59+00:00",
+    "sealed_test_used_for_selection": false
+  },
+  "provenance": {
+    "script_sha256": "39eb7d1279e67a9358d1484831871175c37bf2c75894a009455acd459bd22e63",
+    "config": {
+      "path": "environments/paper/config.yaml",
+      "sha256": "51dea6b4a5680fe2954dcd109ee02762745842b60d7179f371cab16b75557bcc"
+    },
+    "data": [
+      {
+        "path": "data/binance_BTC-USDT_1h.csv",
+        "sha256": "14e3a38bfc99044b649085044a5a03c7a76ba7e9c2b108f69d0cb5044840268d"
+      },
+      {
+        "path": "data/binanceusdm_BTCUSDT_USDT_funding.csv",
+        "sha256": "a5c3bfab9c3526a46cc3907d3a9a8f65b9368f14fb0ffccbacadd91717c54621"
+      }
+    ]
+  },
+  "baseline": {
+    "funding_sizing_threshold": null,
+    "funding_sizing_floor": 1.0,
+    "trades": 478,
+    "development": {
+      "cagr": 0.7590501269367336,
+      "sharpe": 1.3787662602624904,
+      "max_drawdown": -0.3418586886758437,
+      "total_return": 8.048676055001419
+    },
+    "validation": {
+      "cagr": 1.2576902756787374,
+      "sharpe": 1.9973895725684456,
+      "max_drawdown": -0.25400319218951606,
+      "total_return": 4.108550233448438
+    },
+    "sealed_test": {
+      "cagr": -0.28452536052658617,
+      "sharpe": -0.7718667524752378,
+      "max_drawdown": -0.5527922396877066,
+      "total_return": -0.40907318679757887
+    },
+    "full": {
+      "cagr": 0.5567917503619095,
+      "sharpe": 1.1824474955534656,
+      "max_drawdown": -0.5527922396877066,
+      "total_return": 26.335413730275455
+    },
+    "selection_score": 0.8969267529629826
+  },
+  "selected": {
+    "funding_sizing_threshold": 0.0004,
+    "funding_sizing_floor": 0.25,
+    "trades": 479,
+    "development": {
+      "cagr": 0.7906546202321116,
+      "sharpe": 1.4815965573141259,
+      "max_drawdown": -0.31026349073466375,
+      "total_return": 8.69942809248856
+    },
+    "validation": {
+      "cagr": 1.1444318826035964,
+      "sharpe": 2.041732145742473,
+      "max_drawdown": -0.1861239848832037,
+      "total_return": 3.60820951014807
+    },
+    "sealed_test": {
+      "cagr": -0.27358676404389004,
+      "sharpe": -0.7666670104920265,
+      "max_drawdown": -0.5449796385063435,
+      "total_return": -0.3948161325831019
+    },
+    "full": {
+      "cagr": 0.5547612392776109,
+      "sharpe": 1.235795100724787,
+      "max_drawdown": -0.5449796385063435,
+      "total_return": 26.070063841699362
+    },
+    "selection_score": 0.9388142759635243,
+    "stress_full": {
+      "cagr": 0.519772840094316,
+      "sharpe": 1.1809126386701072,
+      "max_drawdown": -0.5521505442494534,
+      "total_return": 21.835412769914274,
+      "trades": 477
+    }
+  },
+  "adoption_checks": {
+    "continuous_sizing_selected": true,
+    "full_cagr_above_baseline": false,
+    "full_sharpe_above_baseline": true,
+    "full_drawdown_no_worse": true,
+    "sealed_test_cagr_no_worse": true,
+    "sealed_test_sharpe_no_worse": true
+  },
+  "adopted": false,
+  "candidates_ranked_pre_test": [
+    {
+      "funding_sizing_threshold": 0.0004,
+      "funding_sizing_floor": 0.25,
+      "trades": 479,
+      "development": {
+        "cagr": 0.7906546202321116,
+        "sharpe": 1.4815965573141259,
+        "max_drawdown": -0.31026349073466375,
+        "total_return": 8.69942809248856
+      },
+      "validation": {
+        "cagr": 1.1444318826035964,
+        "sharpe": 2.041732145742473,
+        "max_drawdown": -0.1861239848832037,
+        "total_return": 3.60820951014807
+      },
+      "sealed_test": {
+        "cagr": -0.27358676404389004,
+        "sharpe": -0.7666670104920265,
+        "max_drawdown": -0.5449796385063435,
+        "total_return": -0.3948161325831019
+      },
+      "full": {
+        "cagr": 0.5547612392776109,
+        "sharpe": 1.235795100724787,
+        "max_drawdown": -0.5449796385063435,
+        "total_return": 26.070063841699362
+      },
+      "selection_score": 0.9388142759635243,
+      "stress_full": {
+        "cagr": 0.519772840094316,
+        "sharpe": 1.1809126386701072,
+        "max_drawdown": -0.5521505442494534,
+        "total_return": 21.835412769914274,
+        "trades": 477
+      }
+    },
+    {
+      "funding_sizing_threshold": 0.0008,
+      "funding_sizing_floor": 0.25,
+      "trades": 479,
+      "development": {
+        "cagr": 0.7873361996743542,
+        "sharpe": 1.44762004001521,
+        "max_drawdown": -0.325840551046503,
+        "total_return": 8.629514256476035
+      },
+      "validation": {
+        "cagr": 1.2326239601958102,
+        "sharpe": 2.0616796113249536,
+        "max_drawdown": -0.21410570978396692,
+        "total_return": 3.9955903908406922
+      },
+      "sealed_test": {
+        "cagr": -0.27893292009599024,
+        "sharpe": -0.7704396741374928,
+        "max_drawdown": -0.5488047980767944,
+        "total_return": -0.40179959744930394
+      },
+      "full": {
+        "cagr": 0.5676835135950398,
+        "sharpe": 1.2289460748746768,
+        "max_drawdown": -0.5488047980767944,
+        "total_return": 27.79757154289306
+      },
+      "selection_score": 0.9320982036758751
+    },
+    {
+      "funding_sizing_threshold": 0.0004,
+      "funding_sizing_floor": 0.5,
+      "trades": 479,
+      "development": {
+        "cagr": 0.7808638207397549,
+        "sharpe": 1.4488495425993297,
+        "max_drawdown": -0.320864128016239,
+        "total_return": 8.494230540942825
+      },
+      "validation": {
+        "cagr": 1.183953801991648,
+        "sharpe": 2.034467447321291,
+        "max_drawdown": -0.21035548388031244,
+        "total_return": 3.779872681877955
+      },
+      "sealed_test": {
+        "cagr": -0.2771129960774741,
+        "sharpe": -0.7692402035158833,
+        "max_drawdown": -0.5475002371377218,
+        "total_return": -0.3994256139607715
+      },
+      "full": {
+        "cagr": 0.5563294936150447,
+        "sharpe": 1.2203579871518064,
+        "max_drawdown": -0.5475002371377218,
+        "total_return": 26.274808167113893
+      },
+      "selection_score": 0.9257487749996879
+    },
+    {
+      "funding_sizing_threshold": 0.0008,
+      "funding_sizing_floor": 0.5,
+      "trades": 479,
+      "development": {
+        "cagr": 0.7781227751926887,
+        "sharpe": 1.425076825791963,
+        "max_drawdown": -0.3311944281681982,
+        "total_return": 8.437366131907126
+      },
+      "validation": {
+        "cagr": 1.2417196305775793,
+        "sharpe": 2.042236010679826,
+        "max_drawdown": -0.22781432738324459,
+        "total_return": 4.036433297576111
+      },
+      "sealed_test": {
+        "cagr": -0.2791163443726763,
+        "sharpe": -0.7656748295779121,
+        "max_drawdown": -0.548352166577529,
+        "total_return": -0.40203867392744697
+      },
+      "full": {
+        "cagr": 0.5650806093767162,
+        "sharpe": 1.2152382988787442,
+        "max_drawdown": -0.548352166577529,
+        "total_return": 27.4421253759335
+      },
+      "selection_score": 0.920630457771885
+    },
+    {
+      "funding_sizing_threshold": 0.0012,
+      "funding_sizing_floor": 0.25,
+      "trades": 479,
+      "development": {
+        "cagr": 0.7781227751926887,
+        "sharpe": 1.425076825791963,
+        "max_drawdown": -0.3311944281681982,
+        "total_return": 8.437366131907126
+      },
+      "validation": {
+        "cagr": 1.2417196305775797,
+        "sharpe": 2.0422360106798263,
+        "max_drawdown": -0.22781432738324447,
+        "total_return": 4.036433297576113
+      },
+      "sealed_test": {
+        "cagr": -0.27911634437267596,
+        "sharpe": -0.7656748295779102,
+        "max_drawdown": -0.5483521665775289,
+        "total_return": -0.40203867392744663
+      },
+      "full": {
+        "cagr": 0.5650806093767164,
+        "sharpe": 1.2152382988787447,
+        "max_drawdown": -0.5483521665775289,
+        "total_return": 27.442125375933518
+      },
+      "selection_score": 0.920630457771885
+    },
+    {
+      "funding_sizing_threshold": 0.0012,
+      "funding_sizing_floor": 0.5,
+      "trades": 478,
+      "development": {
+        "cagr": 0.7718600736443211,
+        "sharpe": 1.4097908912225052,
+        "max_drawdown": -0.3347556239261473,
+        "total_return": 8.30839375149538
+      },
+      "validation": {
+        "cagr": 1.2473726675193277,
+        "sharpe": 2.028062708008598,
+        "max_drawdown": -0.23671910295334642,
+        "total_return": 4.061901416637346
+      },
+      "sealed_test": {
+        "cagr": -0.2800644973647243,
+        "sharpe": -0.7649953894698198,
+        "max_drawdown": -0.5489263277348069,
+        "total_return": -0.4032739490239491
+      },
+      "full": {
+        "cagr": 0.5628230293820333,
+        "sharpe": 1.2051324551384583,
+        "max_drawdown": -0.5489263277348069,
+        "total_return": 27.13691959206694
+      },
+      "selection_score": 0.9128391627665716
+    },
+    {
+      "funding_sizing_threshold": 0.0004,
+      "funding_sizing_floor": 0.75,
+      "trades": 479,
+      "development": {
+        "cagr": 0.7703228426252011,
+        "sharpe": 1.4143648701770763,
+        "max_drawdown": -0.3313958716357981,
+        "total_return": 8.27693781002512
+      },
+      "validation": {
+        "cagr": 1.221709963871429,
+        "sharpe": 2.018882542047261,
+        "max_drawdown": -0.2329062002439347,
+        "total_return": 3.946802298196565
+      },
+      "sealed_test": {
+        "cagr": -0.27901769447480995,
+        "sharpe": -0.7652389109099159,
+        "max_drawdown": -0.5482444891942387,
+        "total_return": -0.40191009728256044
+      },
+      "full": {
+        "cagr": 0.5577916093882098,
+        "sharpe": 1.2036108068828304,
+        "max_drawdown": -0.5482444891942387,
+        "total_return": 26.46690242357456
+      },
+      "selection_score": 0.9117593296429087
+    },
+    {
+      "funding_sizing_threshold": 0.0008,
+      "funding_sizing_floor": 0.75,
+      "trades": 478,
+      "development": {
+        "cagr": 0.7686929692009681,
+        "sharpe": 1.4020847595600971,
+        "max_drawdown": -0.33653380567109814,
+        "total_return": 8.2436725562178
+      },
+      "validation": {
+        "cagr": 1.2500757432683995,
+        "sharpe": 2.020662335469017,
+        "max_drawdown": -0.24110434551118065,
+        "total_return": 4.074102071231803
+      },
+      "sealed_test": {
+        "cagr": -0.2814650137666862,
+        "sharpe": -0.7677395666570251,
+        "max_drawdown": -0.5502000755310092,
+        "total_return": -0.4050968737157373
+      },
+      "full": {
+        "cagr": 0.5612280459607966,
+        "sharpe": 1.1993345077224105,
+        "max_drawdown": -0.5502000755310092,
+        "total_return": 26.923005207288114
+      },
+      "selection_score": 0.9089014451569778
+    },
+    {
+      "funding_sizing_threshold": 0.0012,
+      "funding_sizing_floor": 0.75,
+      "trades": 478,
+      "development": {
+        "cagr": 0.7655021941061657,
+        "sharpe": 1.394342442211939,
+        "max_drawdown": -0.338310376915281,
+        "total_return": 8.17880662308907
+      },
+      "validation": {
+        "cagr": 1.252696422282956,
+        "sharpe": 2.013073556544179,
+        "max_drawdown": -0.2454461451504818,
+        "total_return": 4.085944858744762
+      },
+      "sealed_test": {
+        "cagr": -0.28173479485174324,
+        "sharpe": -0.7664967679491992,
+        "max_drawdown": -0.5502658282977402,
+        "total_return": -0.4054477902319228
+      },
+      "full": {
+        "cagr": 0.5601206814657598,
+        "sharpe": 1.1942685321835953,
+        "max_drawdown": -0.5502658282977402,
+        "total_return": 26.775318662278675
+      },
+      "selection_score": 0.9049364383273596
+    },
+    {
+      "funding_sizing_threshold": null,
+      "funding_sizing_floor": 1.0,
+      "trades": 478,
+      "development": {
+        "cagr": 0.7590501269367336,
+        "sharpe": 1.3787662602624904,
+        "max_drawdown": -0.3418586886758437,
+        "total_return": 8.048676055001419
+      },
+      "validation": {
+        "cagr": 1.2576902756787374,
+        "sharpe": 1.9973895725684456,
+        "max_drawdown": -0.25400319218951606,
+        "total_return": 4.108550233448438
+      },
+      "sealed_test": {
+        "cagr": -0.28452536052658617,
+        "sharpe": -0.7718667524752378,
+        "max_drawdown": -0.5527922396877066,
+        "total_return": -0.40907318679757887
+      },
+      "full": {
+        "cagr": 0.5567917503619095,
+        "sharpe": 1.1824474955534656,
+        "max_drawdown": -0.5527922396877066,
+        "total_return": 26.335413730275455
+      },
+      "selection_score": 0.8969267529629826
+    }
+  ]
+}

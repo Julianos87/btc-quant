@@ -1,6 +1,6 @@
 """Lance le bot en continu en paper trading.
 
-Paper  : python scripts/run_live.py
+Paper  : btcquant-trend --config environments/paper/config.yaml
 Live   : désactivé tant que le moteur d'exécution transactionnel n'est pas livré.
 """
 
@@ -29,7 +29,7 @@ ROOT = Path(os.environ.get("BTCQUANT_ROOT", Path.cwd())).resolve()
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default=ROOT / "config.yaml")
+    parser.add_argument("--config", default=ROOT / "environments" / "dev" / "config.yaml")
     args = parser.parse_args()
 
     from logging.handlers import RotatingFileHandler

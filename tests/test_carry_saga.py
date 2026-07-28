@@ -5,12 +5,21 @@ from __future__ import annotations
 import pytest
 import pandas as pd
 
+from dataclasses import replace
+
+from btcquant.carry import PAPER_CARRY_POLICY
 from btcquant.execution.carry_broker import (
     CarryBroker,
     CarrySagaResult,
     CarrySagaStatus,
 )
 from btcquant.execution.carry_runner import CarryRunner
+
+
+def _fast_policy():
+    """Lissage d'un jour : les scénarios de saga tiennent en quelques paiements."""
+
+    return replace(PAPER_CARRY_POLICY, smooth_days=1)
 
 
 class FakeExchange:
@@ -145,7 +154,7 @@ def positive_funding():
 def test_runner_persists_opening_before_calling_external_broker(tmp_path, monkeypatch):
     database = tmp_path / "btcquant.db"
     live = RunnerBrokerStub(error=TimeoutError("response lost"))
-    runner = CarryRunner(state_file=database, live_broker=live, smooth_days=1)
+    runner = CarryRunner(state_file=database, live_broker=live, policy=_fast_policy())
     monkeypatch.setattr(runner, "_recent_funding", positive_funding)
 
     with pytest.raises(TimeoutError, match="response lost"):
@@ -155,7 +164,7 @@ def test_runner_persists_opening_before_calling_external_broker(tmp_path, monkey
     assert state is not None and state["execution_state"] == "OPENING"
     assert runner.store.pending_orders("carry")
     with pytest.raises(RuntimeError, match="indéterminé"):
-        CarryRunner(state_file=database, live_broker=live, smooth_days=1)
+        CarryRunner(state_file=database, live_broker=live, policy=_fast_policy())
 
 
 def test_runner_accepts_only_a_balanced_partial_open(tmp_path, monkeypatch):
@@ -167,7 +176,7 @@ def test_runner_accepts_only_a_balanced_partial_open(tmp_path, monkeypatch):
     runner = CarryRunner(
         state_file=tmp_path / "btcquant.db",
         live_broker=RunnerBrokerStub(result=result),
-        smooth_days=1,
+        policy=_fast_policy(),
     )
     monkeypatch.setattr(runner, "_recent_funding", positive_funding)
 

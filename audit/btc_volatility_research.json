@@ -1,0 +1,322 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-07-28T17:21:09.674037+00:00",
+  "purpose": "Test isolé du ciblage de volatilité BTC",
+  "protocol": {
+    "vol_targets": [
+      0.8,
+      1.0,
+      1.2,
+      1.4,
+      1.6,
+      1.8,
+      2.0
+    ],
+    "development_end": "2022-12-31T23:59:59+00:00",
+    "validation_end": "2024-12-31T23:59:59+00:00",
+    "sealed_test_used_for_selection": false
+  },
+  "provenance": {
+    "script_sha256": "02a20b0d3c228b3757d48907937dbfe420d8c0340abc928df4d824a5b951c113",
+    "config": {
+      "path": "environments/paper/config.yaml",
+      "sha256": "51dea6b4a5680fe2954dcd109ee02762745842b60d7179f371cab16b75557bcc"
+    },
+    "data": [
+      {
+        "path": "data/binance_BTC-USDT_1h.csv",
+        "sha256": "14e3a38bfc99044b649085044a5a03c7a76ba7e9c2b108f69d0cb5044840268d"
+      },
+      {
+        "path": "data/binanceusdm_BTCUSDT_USDT_funding.csv",
+        "sha256": "a5c3bfab9c3526a46cc3907d3a9a8f65b9368f14fb0ffccbacadd91717c54621"
+      }
+    ]
+  },
+  "baseline": {
+    "vol_target_annual": 1.6,
+    "trades": 478,
+    "development": {
+      "cagr": 0.7590501269367336,
+      "sharpe": 1.3787662602624904,
+      "max_drawdown": -0.3418586886758437,
+      "total_return": 8.048676055001419
+    },
+    "validation": {
+      "cagr": 1.2576902756787374,
+      "sharpe": 1.9973895725684456,
+      "max_drawdown": -0.25400319218951606,
+      "total_return": 4.108550233448438
+    },
+    "sealed_test": {
+      "cagr": -0.28452536052658617,
+      "sharpe": -0.7718667524752378,
+      "max_drawdown": -0.5527922396877066,
+      "total_return": -0.40907318679757887
+    },
+    "full": {
+      "cagr": 0.5567917503619095,
+      "sharpe": 1.1824474955534656,
+      "max_drawdown": -0.5527922396877066,
+      "total_return": 26.335413730275455
+    },
+    "selection_score": 0.8969267529629826
+  },
+  "selected": {
+    "vol_target_annual": 1.0,
+    "trades": 478,
+    "development": {
+      "cagr": 0.7590501269367336,
+      "sharpe": 1.3787662602624904,
+      "max_drawdown": -0.3418586886758437,
+      "total_return": 8.048676055001419
+    },
+    "validation": {
+      "cagr": 1.2576902756787374,
+      "sharpe": 1.9973895725684456,
+      "max_drawdown": -0.25400319218951606,
+      "total_return": 4.108550233448438
+    },
+    "sealed_test": {
+      "cagr": -0.28452536052658617,
+      "sharpe": -0.7718667524752378,
+      "max_drawdown": -0.5527922396877066,
+      "total_return": -0.40907318679757887
+    },
+    "full": {
+      "cagr": 0.5567917503619095,
+      "sharpe": 1.1824474955534656,
+      "max_drawdown": -0.5527922396877066,
+      "total_return": 26.335413730275455
+    },
+    "selection_score": 0.8969267529629826,
+    "stress_full": {
+      "cagr": 0.5138691768364196,
+      "sharpe": 1.1195005042763353,
+      "max_drawdown": -0.5676234104857143,
+      "total_return": 21.18070616505133,
+      "trades": 476
+    }
+  },
+  "adoption_checks": {
+    "different_target_selected": true,
+    "full_cagr_above_baseline": false,
+    "full_sharpe_no_worse": true,
+    "full_drawdown_no_worse": true,
+    "sealed_test_cagr_no_worse": true,
+    "sealed_test_sharpe_no_worse": true
+  },
+  "adopted": false,
+  "candidates_ranked_pre_test": [
+    {
+      "vol_target_annual": 1.0,
+      "trades": 478,
+      "development": {
+        "cagr": 0.7590501269367336,
+        "sharpe": 1.3787662602624904,
+        "max_drawdown": -0.3418586886758437,
+        "total_return": 8.048676055001419
+      },
+      "validation": {
+        "cagr": 1.2576902756787374,
+        "sharpe": 1.9973895725684456,
+        "max_drawdown": -0.25400319218951606,
+        "total_return": 4.108550233448438
+      },
+      "sealed_test": {
+        "cagr": -0.28452536052658617,
+        "sharpe": -0.7718667524752378,
+        "max_drawdown": -0.5527922396877066,
+        "total_return": -0.40907318679757887
+      },
+      "full": {
+        "cagr": 0.5567917503619095,
+        "sharpe": 1.1824474955534656,
+        "max_drawdown": -0.5527922396877066,
+        "total_return": 26.335413730275455
+      },
+      "selection_score": 0.8969267529629826,
+      "stress_full": {
+        "cagr": 0.5138691768364196,
+        "sharpe": 1.1195005042763353,
+        "max_drawdown": -0.5676234104857143,
+        "total_return": 21.18070616505133,
+        "trades": 476
+      }
+    },
+    {
+      "vol_target_annual": 1.2,
+      "trades": 478,
+      "development": {
+        "cagr": 0.7590501269367336,
+        "sharpe": 1.3787662602624904,
+        "max_drawdown": -0.3418586886758437,
+        "total_return": 8.048676055001419
+      },
+      "validation": {
+        "cagr": 1.2576902756787374,
+        "sharpe": 1.9973895725684456,
+        "max_drawdown": -0.25400319218951606,
+        "total_return": 4.108550233448438
+      },
+      "sealed_test": {
+        "cagr": -0.28452536052658617,
+        "sharpe": -0.7718667524752378,
+        "max_drawdown": -0.5527922396877066,
+        "total_return": -0.40907318679757887
+      },
+      "full": {
+        "cagr": 0.5567917503619095,
+        "sharpe": 1.1824474955534656,
+        "max_drawdown": -0.5527922396877066,
+        "total_return": 26.335413730275455
+      },
+      "selection_score": 0.8969267529629826
+    },
+    {
+      "vol_target_annual": 1.4,
+      "trades": 478,
+      "development": {
+        "cagr": 0.7590501269367336,
+        "sharpe": 1.3787662602624904,
+        "max_drawdown": -0.3418586886758437,
+        "total_return": 8.048676055001419
+      },
+      "validation": {
+        "cagr": 1.2576902756787374,
+        "sharpe": 1.9973895725684456,
+        "max_drawdown": -0.25400319218951606,
+        "total_return": 4.108550233448438
+      },
+      "sealed_test": {
+        "cagr": -0.28452536052658617,
+        "sharpe": -0.7718667524752378,
+        "max_drawdown": -0.5527922396877066,
+        "total_return": -0.40907318679757887
+      },
+      "full": {
+        "cagr": 0.5567917503619095,
+        "sharpe": 1.1824474955534656,
+        "max_drawdown": -0.5527922396877066,
+        "total_return": 26.335413730275455
+      },
+      "selection_score": 0.8969267529629826
+    },
+    {
+      "vol_target_annual": 1.6,
+      "trades": 478,
+      "development": {
+        "cagr": 0.7590501269367336,
+        "sharpe": 1.3787662602624904,
+        "max_drawdown": -0.3418586886758437,
+        "total_return": 8.048676055001419
+      },
+      "validation": {
+        "cagr": 1.2576902756787374,
+        "sharpe": 1.9973895725684456,
+        "max_drawdown": -0.25400319218951606,
+        "total_return": 4.108550233448438
+      },
+      "sealed_test": {
+        "cagr": -0.28452536052658617,
+        "sharpe": -0.7718667524752378,
+        "max_drawdown": -0.5527922396877066,
+        "total_return": -0.40907318679757887
+      },
+      "full": {
+        "cagr": 0.5567917503619095,
+        "sharpe": 1.1824474955534656,
+        "max_drawdown": -0.5527922396877066,
+        "total_return": 26.335413730275455
+      },
+      "selection_score": 0.8969267529629826
+    },
+    {
+      "vol_target_annual": 1.8,
+      "trades": 478,
+      "development": {
+        "cagr": 0.7590501269367336,
+        "sharpe": 1.3787662602624904,
+        "max_drawdown": -0.3418586886758437,
+        "total_return": 8.048676055001419
+      },
+      "validation": {
+        "cagr": 1.2576902756787374,
+        "sharpe": 1.9973895725684456,
+        "max_drawdown": -0.25400319218951606,
+        "total_return": 4.108550233448438
+      },
+      "sealed_test": {
+        "cagr": -0.28452536052658617,
+        "sharpe": -0.7718667524752378,
+        "max_drawdown": -0.5527922396877066,
+        "total_return": -0.40907318679757887
+      },
+      "full": {
+        "cagr": 0.5567917503619095,
+        "sharpe": 1.1824474955534656,
+        "max_drawdown": -0.5527922396877066,
+        "total_return": 26.335413730275455
+      },
+      "selection_score": 0.8969267529629826
+    },
+    {
+      "vol_target_annual": 2.0,
+      "trades": 478,
+      "development": {
+        "cagr": 0.7590501269367336,
+        "sharpe": 1.3787662602624904,
+        "max_drawdown": -0.3418586886758437,
+        "total_return": 8.048676055001419
+      },
+      "validation": {
+        "cagr": 1.2576902756787374,
+        "sharpe": 1.9973895725684456,
+        "max_drawdown": -0.25400319218951606,
+        "total_return": 4.108550233448438
+      },
+      "sealed_test": {
+        "cagr": -0.28452536052658617,
+        "sharpe": -0.7718667524752378,
+        "max_drawdown": -0.5527922396877066,
+        "total_return": -0.40907318679757887
+      },
+      "full": {
+        "cagr": 0.5567917503619095,
+        "sharpe": 1.1824474955534656,
+        "max_drawdown": -0.5527922396877066,
+        "total_return": 26.335413730275455
+      },
+      "selection_score": 0.8969267529629826
+    },
+    {
+      "vol_target_annual": 0.8,
+      "trades": 478,
+      "development": {
+        "cagr": 0.7526257972255799,
+        "sharpe": 1.3732833957576256,
+        "max_drawdown": -0.3402773756670501,
+        "total_return": 7.920472926420134
+      },
+      "validation": {
+        "cagr": 1.2656872116915152,
+        "sharpe": 2.007597935264644,
+        "max_drawdown": -0.2539492450833929,
+        "total_return": 4.144854027898911
+      },
+      "sealed_test": {
+        "cagr": -0.2836917658160196,
+        "sharpe": -0.7688662301419813,
+        "max_drawdown": -0.5519294386826447,
+        "total_return": -0.4079910568105557
+      },
+      "full": {
+        "cagr": 0.5556749062339768,
+        "sharpe": 1.1822281917629496,
+        "max_drawdown": -0.5519294386826447,
+        "total_return": 26.189185636132912
+      },
+      "selection_score": 0.8899541368013424
+    }
+  ]
+}

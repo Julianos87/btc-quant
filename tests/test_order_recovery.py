@@ -74,8 +74,17 @@ class LookupBroker(Broker):
         reduce_only: bool = False,
         available_volume: float | None = None,
         delayed_price: float | None = None,
+        volatility_annual: float | None = None,
     ) -> Fill:
-        del side, qty, ref_price, reduce_only, available_volume, delayed_price
+        del (
+            side,
+            qty,
+            ref_price,
+            reduce_only,
+            available_volume,
+            delayed_price,
+            volatility_annual,
+        )
         self.last_client_order_id = client_order_id
         if self.crash_before_send:
             raise PowerLoss("crash before broker send")

@@ -59,6 +59,49 @@ def test_volume_limit_produces_a_partial_fill():
     assert fill.requested_qty == 10.0
 
 
+def test_volatility_and_participation_increase_slippage_with_a_cap():
+    simulator = ExecutionSimulator(
+        ExecutionConfig(
+            slippage_bps=5.0,
+            market_impact_bps=20.0,
+            volatility_impact_bps=4.0,
+            volatility_reference_annual=0.40,
+            volatility_multiplier_cap=2.0,
+        )
+    )
+
+    normal = simulator.quote_price(
+        OrderSide.BUY,
+        100.0,
+        participation=0.25,
+        volatility_annual=0.40,
+    )
+    stressed = simulator.quote_price(
+        OrderSide.BUY,
+        100.0,
+        participation=0.25,
+        volatility_annual=4.0,
+    )
+
+    # normal : 5 bps fixes + 4 bps de vol + 5 bps de participation
+    assert normal == pytest.approx(100.14)
+    # stress : multiplicateur de vol borné à 2, donc 5 + 8 + 5 = 18 bps
+    assert stressed == pytest.approx(100.18)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"volatility_impact_bps": -1.0}, "impacts"),
+        ({"volatility_reference_annual": 0.0}, "reference"),
+        ({"volatility_multiplier_cap": 0.0}, "cap"),
+    ],
+)
+def test_volatility_model_rejects_invalid_parameters(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        ExecutionConfig(**kwargs)
+
+
 def test_rejection_and_replay_are_deterministic_across_restarts():
     config = ExecutionConfig(rejection_rate=0.5, seed=42)
     first_process = ExecutionSimulator(config)
@@ -184,13 +227,13 @@ def test_runner_passes_bar_volume_to_paper_execution(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "_fetch_frame", lambda _strategy: frame)
     monkeypatch.setattr(runner.venue, "funding_rate_8h", lambda: 0.0)
 
-    runner._process_bar(slot)
+    runner._process_bar(slot, 105.0)
 
     assert slot.position is not None
     assert slot.position.qty == pytest.approx(2.0)
     orders = runner.store.read_orders("trend")
     assert orders[0]["status"] == FillStatus.PARTIAL
-    assert orders[0]["reference_price"] == pytest.approx(100.0)
+    assert orders[0]["reference_price"] == pytest.approx(105.0)
 
 
 def test_yaml_simulation_config_keeps_costs_as_single_source_of_truth():
@@ -219,6 +262,39 @@ def test_yaml_simulation_config_keeps_costs_as_single_source_of_truth():
             },
             fee_rate=0.002,
         )
+
+
+def test_yaml_selects_explicit_normal_and_stress_profiles():
+    cfg = {
+        "costs": {"slippage_bps": 5.0},
+        "execution": {
+            "simulation": {
+                "profile": "stress",
+                "profiles": {
+                    "normal": {
+                        "market_impact_bps": 15.0,
+                        "volatility_impact_bps": 1.5,
+                    },
+                    "stress": {
+                        "market_impact_bps": 75.0,
+                        "volatility_impact_bps": 6.0,
+                        "max_volume_participation": 0.01,
+                    },
+                },
+            }
+        },
+    }
+
+    config = execution_config_from_config(cfg, fee_rate=0.002)
+
+    assert config.slippage_bps == 5.0
+    assert config.market_impact_bps == 75.0
+    assert config.volatility_impact_bps == 6.0
+    assert config.max_volume_participation == 0.01
+
+    cfg["execution"]["simulation"]["profile"] = "missing"
+    with pytest.raises(ValueError, match="inconnu"):
+        execution_config_from_config(cfg, fee_rate=0.002)
 
 
 class OneTradeStrategy(Strategy):

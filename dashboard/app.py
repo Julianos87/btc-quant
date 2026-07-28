@@ -20,6 +20,7 @@ import pandas as pd
 from flask import Flask, Response, jsonify, make_response, redirect, request
 from dashboard.auth import DashboardAuthenticator
 from dashboard.web import web
+from btcquant.config import carry_policy_from_config, load_config, portfolio_from_config
 from btcquant.reporting.analytics import (
     best_and_worst_day,
     carry_funding_curve,
@@ -30,6 +31,7 @@ from btcquant.reporting.analytics import (
     trade_analytics,
 )
 from btcquant.reporting.repository import ReportingReadError, ReportingRepository
+from btcquant.reporting.prometheus import render_prometheus
 from btcquant.execution.health import execution_health
 from btcquant.execution.readiness import evaluate_readiness
 from btcquant.execution.state_store import StateStore
@@ -81,6 +83,10 @@ def _reporting_unavailable(error: ReportingReadError):
 def _guard():
     if request.path in ("/login", "/healthz"):
         return None
+    if request.path == "/metrics/prometheus":
+        if request.remote_addr not in ("127.0.0.1", "::1"):
+            return Response("Accès refusé : métriques disponibles uniquement en local.", 403)
+        return None
     if not authenticator.configured:
         if request.remote_addr not in ("127.0.0.1", "::1"):
             return Response("Accès refusé : définir DASHBOARD_TOKEN pour l'accès distant.", 403)
@@ -95,6 +101,30 @@ def healthz():
     """Sonde minimale sans donnée métier ni accès exchange."""
 
     return jsonify({"status": "ok"})
+
+
+@app.get("/metrics/prometheus")
+def prometheus_metrics():
+    """Métriques locales destinées au scraper Prometheus du serveur."""
+
+    combined = _combined_equity(net_of_flows=True)
+    metrics: dict[str, int | float | None] = {
+        "btcquant_dashboard_up": 1,
+        "btcquant_dashboard_uptime_seconds": max(0.0, time.time() - START_TIME),
+        "btcquant_portfolio_equity": float(combined.iloc[-1]) if len(combined) else None,
+        "btcquant_trend_state_age_seconds": _engine_age_seconds(
+            "trend", "live_state_4x.json"
+        ),
+        "btcquant_carry_state_age_seconds": _engine_age_seconds(
+            "carry", "carry_state.json"
+        ),
+    }
+    for key, value in _live_metrics().items():
+        metrics[f"btcquant_portfolio_{key}"] = value
+    return Response(
+        render_prometheus(metrics),
+        content_type="text/plain; version=0.0.4; charset=utf-8",
+    )
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -139,8 +169,8 @@ def _security_headers(resp: Response) -> Response:
     resp.headers["Cache-Control"] = "no-store"
     resp.headers.setdefault(
         "Content-Security-Policy",
-        "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-        "font-src https://fonts.gstatic.com; img-src 'self' data:; "
+        "default-src 'self'; style-src 'self' 'unsafe-inline'; "
+        "font-src 'self'; img-src 'self' data:; "
         "connect-src 'self'; script-src 'self'",
     )
     return resp
@@ -196,9 +226,10 @@ _ex_lock = threading.Lock()
 # on ne l'appelle JAMAIS — prix via la dernière bougie 1m (~0,5 s), variation
 # 24 h via les bougies 1h, funding via l'historique des paiements (horaires).
 SYMBOL = "BTC/USDC:USDC"
-#: capital initial du portefeuille 60/40 (6 000 trend + 4 000 carry) — base des
-#: métriques de performance ; les apports ultérieurs passent par le journal SQLite
-INITIAL_CAPITAL = 10_000.0
+PROFILE_CONFIG = load_config(ROOT / "environments" / "paper" / "config.yaml")
+PORTFOLIO = portfolio_from_config(PROFILE_CONFIG)
+CARRY_POLICY = carry_policy_from_config(PROFILE_CONFIG)
+INITIAL_CAPITAL = PORTFOLIO.total_capital
 
 
 def _hl():
@@ -301,12 +332,18 @@ def _repository() -> ReportingRepository:
     return repository
 
 
+def _engine_state(engine: str, legacy_name: str) -> dict | None:
+    return _repository().read_engine_state(engine, STATE / legacy_name)
+
+
 def _read_json(path: Path) -> dict | None:
+    """Lecture JSON générique, sans déduction implicite d'un moteur."""
+
     return _repository().read_json(path)
 
 
-def _age_seconds(path: Path) -> float | None:
-    return _repository().age_seconds(path)
+def _engine_age_seconds(engine: str, legacy_name: str) -> float | None:
+    return _repository().engine_age_seconds(engine, STATE / legacy_name)
 
 
 # ── cache de parsing des CSV d'état ──────────────────────────────────────────
@@ -324,8 +361,8 @@ def _database_key() -> tuple:
     return _repository().database_key()
 
 
-def _read_equity(name: str) -> pd.Series:
-    return _repository().read_equity(name)
+def _read_equity(engine: str, legacy_name: str) -> pd.Series:
+    return _repository().read_engine_equity(engine, STATE / legacy_name)
 
 
 def _read_trades() -> pd.DataFrame:
@@ -373,8 +410,8 @@ def _combined_equity(net_of_flows: bool = False) -> pd.Series:
     hit = _parse_cache.get(f"combined_{net_of_flows}")
     if hit is not None and hit[0] == key:
         return hit[1]
-    trend = _read_equity("equity_trend.csv")
-    carry = _read_equity("equity_carry.csv")
+    trend = _read_equity("trend", "equity_trend.csv")
+    carry = _read_equity("carry", "equity_carry.csv")
     if not len(trend) or not len(carry):
         combined = pd.Series(dtype=float)
     else:
@@ -406,13 +443,13 @@ def summary():
         if ref > 0:
             change_24h = price / ref - 1.0
 
-    trend_state = _read_json(STATE / "live_state_4x.json") or {}
-    carry_state = _read_json(STATE / "carry_state.json") or {}
-    trend_eq = _read_equity("equity_trend.csv")
-    carry_eq = _read_equity("equity_carry.csv")
+    trend_state = _engine_state("trend", "live_state_4x.json") or {}
+    carry_state = _engine_state("carry", "carry_state.json") or {}
+    trend_eq = _read_equity("trend", "equity_trend.csv")
+    carry_eq = _read_equity("carry", "equity_carry.csv")
 
-    trend_age = _age_seconds(STATE / "live_state_4x.json")
-    carry_age = _age_seconds(STATE / "carry_state.json")
+    trend_age = _engine_age_seconds("trend", "live_state_4x.json")
+    carry_age = _engine_age_seconds("carry", "carry_state.json")
 
     trend_equity = (
         float(trend_eq.iloc[-1])
@@ -475,7 +512,7 @@ def summary():
     for sl in slots:
         if sl.get("qty") and price:
             trend_notional += abs(sl["qty"]) * price
-    carry_notional = carry_equity * 3.0 if carry_state.get("in_position") else 0.0
+    carry_notional = carry_equity * CARRY_POLICY.leverage if carry_state.get("in_position") else 0.0
     gross_notional = trend_notional + carry_notional
     leverage = gross_notional / total if total else 0.0
 
@@ -508,7 +545,7 @@ def summary():
                 "alive": trend_age is not None and trend_age < 240,
                 "age_s": trend_age,
                 "equity": trend_equity,
-                "initial": 6000.0,
+                "initial": PORTFOLIO.trend_capital,
                 "halted": trend_state.get("halted", False),
                 "daily_lockout": trend_state.get("daily_lockout", False),
                 "peak_equity": trend_state.get("peak_equity"),
@@ -518,9 +555,15 @@ def summary():
                 "alive": carry_age is not None and carry_age < 900,
                 "age_s": carry_age,
                 "equity": carry_equity,
-                "initial": 4000.0,
+                "initial": PORTFOLIO.carry_capital,
                 "in_position": carry_state.get("in_position", False),
                 "last_funding_ts": carry_state.get("last_funding_ts"),
+                # Le carry a des coupe-circuits depuis le 27/07/2026 ; les
+                # exposer permet à la bannière d'alerte de les signaler comme
+                # ceux du trend. Les états antérieurs n'ont pas ces clés.
+                "halted": carry_state.get("halted", False),
+                "daily_lockout": carry_state.get("daily_lockout", False),
+                "peak_equity": carry_state.get("peak_equity"),
             },
             "totals": {
                 "equity": total,
@@ -565,8 +608,8 @@ def operations():
 
 @app.route("/api/equity")
 def equity():
-    trend = _read_equity("equity_trend.csv")
-    carry = _read_equity("equity_carry.csv")
+    trend = _read_equity("trend", "equity_trend.csv")
+    carry = _read_equity("carry", "equity_carry.csv")
 
     def pack(s: pd.Series, max_points: int = 1500):
         if len(s) > max_points:
@@ -601,7 +644,7 @@ def _get_buyhold() -> list[list]:
     return [[r[0], round(r[4], 2)] for r in raw]
 
 
-#: horizons Donchian de l'ensemble trend (cf. config_4x.yaml)
+#: horizons Donchian de l'ensemble trend (cf. environments/paper/config.yaml)
 DONCHIAN_PERIODS = (20, 55, 100)
 
 
@@ -650,7 +693,7 @@ def price_chart():
     channels, regime_up = _donchian_channels(
         candles, _cached("ohlcv4h", 300, _get_candles_4h) or []
     )
-    trend_state = _read_json(STATE / "live_state_4x.json") or {}
+    trend_state = _engine_state("trend", "live_state_4x.json") or {}
     positions = []
     for name, s in trend_state.get("slots", {}).items():
         pos = s.get("position")
@@ -770,7 +813,7 @@ def trades():
 @app.route("/api/strategy/<name>")
 def strategy_detail(name: str):
     """Drill-down d'un sous-système : sa position courante + ses trades + stats."""
-    trend_state = _read_json(STATE / "live_state_4x.json") or {}
+    trend_state = _engine_state("trend", "live_state_4x.json") or {}
     slot = trend_state.get("slots", {}).get(name, {})
     out = {
         "name": name,
@@ -823,9 +866,9 @@ def analytics():
     # PnL cumulé du carry = équity − capital initial (4000) − flux reçus par
     # la poche carry (apports 40 % et transferts de rééquilibrage : sans cette
     # soustraction, chaque apport apparaîtrait comme du funding gagné)
-    carry = _read_equity("equity_carry.csv")
+    carry = _read_equity("carry", "equity_carry.csv")
     flows = _read_flows()
-    funding_total, funding_curve = carry_funding_curve(carry, flows, 4000.0)
+    funding_total, funding_curve = carry_funding_curve(carry, flows, PORTFOLIO.carry_capital)
     if funding_total is not None:
         out["records"]["funding_total"] = funding_total
         out["funding_cum"] = funding_curve

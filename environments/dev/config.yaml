@@ -1,4 +1,6 @@
 # ── Configuration générale ────────────────────────────────────────────────
+# Profil local de recherche : aucune base d'état de production.
+environment: dev
 exchange: binance
 symbol: BTC/USDT          # plus tard : ETH/USDT, SOL/USDT
 quote_currency: USDT
@@ -36,48 +38,29 @@ strategies:
     market: perp
     timeframe: 4h
     capital_fraction: 0.3333
-    params: { donchian: 20, adx_min: 20, funding_long_max: 0.0008, funding_short_min: -0.0008 }
+    params: { donchian: 20, adx_min: 20, funding_long_max: 0.0008, funding_short_min: -0.0008, pyramid_atr_step: 0.5, pyramid_add_fraction: 0.30, pyramid_max_adds: 1 }
   trend_ls_55:
     enabled: true
     type: trend_ls
     market: perp
     timeframe: 4h
     capital_fraction: 0.3333
-    params: { donchian: 55, adx_min: 20, funding_long_max: 0.0008, funding_short_min: -0.0008 }
+    params: { donchian: 55, adx_min: 20, funding_long_max: 0.0008, funding_short_min: -0.0008, pyramid_atr_step: 0.5, pyramid_add_fraction: 0.30, pyramid_max_adds: 1 }
   trend_ls_100:
     enabled: true
     type: trend_ls
     market: perp
     timeframe: 4h
     capital_fraction: 0.3334
-    params: { donchian: 100, adx_min: 20, funding_long_max: 0.0008, funding_short_min: -0.0008 }
+    params: { donchian: 100, adx_min: 20, funding_long_max: 0.0008, funding_short_min: -0.0008, pyramid_atr_step: 0.5, pyramid_add_fraction: 0.30, pyramid_max_adds: 1 }
 
-  # ── Version spot long/flat historique (désactivée, remplacée par
-  #    l'ensemble long-short ci-dessus) ──────────────────────────────────
-  trend_swing:            # swing trend-following sur 4h
-    enabled: false
-    timeframe: 4h
-    capital_fraction: 1.0
-    params:
-      ema_fast: 50
-      ema_slow: 200
-      donchian: 55
-      atr_period: 14
-      atr_mult: 3.0
-  # Désactivé : perdant out-of-sample en walk-forward (Sharpe OOS -0.27,
-  # efficacité -0.60) — les frais mangent l'edge intraday. Base de travail
-  # pour itérer (filtres saisonnalité, frais maker), pas pour trader tel quel.
-  intraday_breakout:      # breakout momentum sur 1h
-    enabled: false
-    timeframe: 1h
-    capital_fraction: 0.4
-    params:
-      lookback_high: 24
-      ema_trend: 200
-      atr_period: 24
-      atr_mult: 2.0
-      volume_mult: 1.3
-      max_bars_held: 48
+  # `trend_swing` (spot long/flat) et `intraday_breakout` ont été retirés d'ici :
+  # ils vivent dans `btcquant.research.strategies`, hors du registre runtime.
+  # Les déclarer ici était trompeur — passer `enabled: true` ne les aurait pas
+  # activés, cela aurait fait échouer le chargement. Pour les rejouer :
+  #   python scripts/run_walkforward.py --strategy trend_swing
+  # (intraday_breakout : perdant out-of-sample, Sharpe OOS -0.27, efficacité
+  # -0.60 — les frais mangent l'edge ; conservé comme base de travail.)
 
 execution:
   mode: paper             # seule valeur autorisée par la Safety Baseline
@@ -85,6 +68,22 @@ execution:
   state_file: state/btcquant_1x.db
   legacy_state_file: state/live_state.json
   poll_buffer_seconds: 20 # marge après la clôture de bougie avant de lire les données
+  simulation:
+    profile: normal
+    profiles:
+      normal:
+        max_volume_participation: 0.05
+        market_impact_bps: 15.0
+        volatility_impact_bps: 1.5
+        volatility_reference_annual: 0.40
+        volatility_multiplier_cap: 3.0
+      stress:
+        rejection_rate: 0.01
+        max_volume_participation: 0.01
+        market_impact_bps: 75.0
+        volatility_impact_bps: 6.0
+        volatility_reference_annual: 0.40
+        volatility_multiplier_cap: 5.0
   live_exchange: hyperliquid          # venue des runners (backtest : exchange: ci-dessus)
   live_symbol: "BTC/USDC:USDC"
   # Clés API : variables d'environnement BINANCE_API_KEY / BINANCE_API_SECRET.

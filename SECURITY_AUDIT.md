@@ -49,7 +49,7 @@ Or `deploy/install.sh` servait ce dashboard en clair, Flask écoutant directemen
 
 ### ✅ Activation sur le VPS de production — faite et vérifiée (23/07/2026)
 
-Une tentative initiale prévoyait Caddy (`deploy/Caddyfile` + sections dédiées dans `install.sh`/`update.sh`), écrite par une session sans accès SSH au VPS. Une fois l'accès SSH disponible (session Claude Code locale), il s'est avéré que **le VPS de production est partagé avec d'autres projets** (smc-spot, neobank, pumpbot, picsou, btc-sprint...) dont **nginx tient déjà les ports 80/443** en name-based virtual hosting, y compris un autre domaine déjà en TLS (`bank2.duckdns.org` via certbot). Installer Caddy aurait échoué à bind ces ports, ou cassé les autres sites si ça avait réussi — le scaffolding Caddy a donc été retiré du dépôt (non applicable à cette machine) plutôt qu'exécuté.
+Une tentative initiale prévoyait Caddy (`deploy/Caddyfile` + sections dédiées dans `install.sh`/`update.sh`), écrite par une session sans accès SSH au VPS. Une fois l'accès SSH disponible (session Claude Code locale), il s'est avéré que **le VPS de production est partagé avec d'autres projets** dont **nginx tient déjà les ports 80/443** en name-based virtual hosting, y compris un autre domaine déjà en TLS (`bank2.duckdns.org` via certbot). Installer Caddy aurait échoué à bind ces ports, ou cassé les autres sites si ça avait réussi — le scaffolding Caddy a donc été retiré du dépôt (non applicable à cette machine) plutôt qu'exécuté.
 
 Ce qui a réellement été fait sur le VPS, en reproduisant le patron déjà en place pour `bank2.duckdns.org` :
 1. Nouveau vhost nginx `/etc/nginx/sites-available/tandemalgo` (proxy vers `127.0.0.1:8666`), activé dans `sites-enabled` ;

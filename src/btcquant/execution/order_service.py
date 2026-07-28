@@ -41,6 +41,7 @@ class OrderExecutionService:
         reason: str,
         reduce_only: bool = False,
         available_volume: float | None = None,
+        volatility_annual: float | None = None,
     ) -> SubmittedOrder:
         intent_id = f"{engine}-{slot}-{self.intent_factory()}"
         order_id = self.store.begin_order(
@@ -61,6 +62,7 @@ class OrderExecutionService:
                 client_order_id=intent_id,
                 reduce_only=reduce_only,
                 available_volume=available_volume,
+                volatility_annual=volatility_annual,
             )
         except Exception as error:
             status = "PENDING" if self.broker.supports_order_lookup else "FAILED"

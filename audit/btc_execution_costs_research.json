@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-07-28T17:22:54.398629+00:00",
+  "purpose": "Sensibilité BTC aux coûts; aucun fill maker n'est prétendu",
+  "methodology": {
+    "scenarios_are_hypothetical": true,
+    "requires_orderbook_or_live_shadow_validation": true,
+    "infrastructure_worth_testing": true
+  },
+  "provenance": {
+    "script_sha256": "80d507b549060fc03c09d45caae3d220b03480a0703591a85192f98cc48b817c",
+    "config": {
+      "path": "environments/paper/config.yaml",
+      "sha256": "51dea6b4a5680fe2954dcd109ee02762745842b60d7179f371cab16b75557bcc"
+    },
+    "data": [
+      {
+        "path": "data/binance_BTC-USDT_1h.csv",
+        "sha256": "14e3a38bfc99044b649085044a5a03c7a76ba7e9c2b108f69d0cb5044840268d"
+      },
+      {
+        "path": "data/binanceusdm_BTCUSDT_USDT_funding.csv",
+        "sha256": "a5c3bfab9c3526a46cc3907d3a9a8f65b9368f14fb0ffccbacadd91717c54621"
+      }
+    ]
+  },
+  "results": {
+    "current": {
+      "assumptions": {
+        "fee_rate": 0.0005,
+        "slippage_bps": 5.0
+      },
+      "trades": 478,
+      "development": {
+        "cagr": 0.7590501269367336,
+        "sharpe": 1.3787662602624904,
+        "max_drawdown": -0.3418586886758437,
+        "total_return": 8.048676055001419
+      },
+      "validation": {
+        "cagr": 1.2576902756787374,
+        "sharpe": 1.9973895725684456,
+        "max_drawdown": -0.25400319218951606,
+        "total_return": 4.108550233448438
+      },
+      "sealed_test": {
+        "cagr": -0.28452536052658617,
+        "sharpe": -0.7718667524752378,
+        "max_drawdown": -0.5527922396877066,
+        "total_return": -0.40907318679757887
+      },
+      "full": {
+        "cagr": 0.5567917503619095,
+        "sharpe": 1.1824474955534656,
+        "max_drawdown": -0.5527922396877066,
+        "total_return": 26.335413730275455
+      }
+    },
+    "half_slippage": {
+      "assumptions": {
+        "fee_rate": 0.0005,
+        "slippage_bps": 2.5
+      },
+      "trades": 479,
+      "development": {
+        "cagr": 0.7781445118265675,
+        "sharpe": 1.4016776716654256,
+        "max_drawdown": -0.33822769057867264,
+        "total_return": 8.437816070924033
+      },
+      "validation": {
+        "cagr": 1.2961663602580704,
+        "sharpe": 2.033985644984331,
+        "max_drawdown": -0.2511066762989792,
+        "total_return": 4.2844008094495205
+      },
+      "sealed_test": {
+        "cagr": -0.20855022082201347,
+        "sharpe": -0.4323446184884231,
+        "max_drawdown": -0.5240317343963552,
+        "total_return": -0.30753241697924305
+      },
+      "full": {
+        "cagr": 0.6064173320351842,
+        "sharpe": 1.2445302148554012,
+        "max_drawdown": -0.5240317343963552,
+        "total_return": 33.560490783581415
+      }
+    },
+    "maker_proxy": {
+      "assumptions": {
+        "fee_rate": 0.0002,
+        "slippage_bps": 1.0
+      },
+      "trades": 479,
+      "development": {
+        "cagr": 0.813981202182859,
+        "sharpe": 1.4441589917821622,
+        "max_drawdown": -0.33084611955891274,
+        "total_return": 9.201589659549677
+      },
+      "validation": {
+        "cagr": 1.368113001002631,
+        "sharpe": 2.1011865905775955,
+        "max_drawdown": -0.24540390305541038,
+        "total_return": 4.621220277854133
+      },
+      "sealed_test": {
+        "cagr": -0.175775594011519,
+        "sharpe": -0.32762805675142453,
+        "max_drawdown": -0.5027229794213227,
+        "total_return": -0.2619464344790515
+      },
+      "full": {
+        "cagr": 0.6507304401856107,
+        "sharpe": 1.3049650462710425,
+        "max_drawdown": -0.5027229794213227,
+        "total_return": 41.35509455888053
+      }
+    },
+    "dynamic_costs_only": {
+      "assumptions": {
+        "fee_rate": 0.0,
+        "slippage_bps": 0.0
+      },
+      "trades": 479,
+      "development": {
+        "cagr": 0.8383253890083455,
+        "sharpe": 1.47258871522641,
+        "max_drawdown": -0.3258353474372093,
+        "total_return": 9.74601153714408
+      },
+      "validation": {
+        "cagr": 1.417513371364822,
+        "sharpe": 2.1460511564916587,
+        "max_drawdown": -0.24155158378078823,
+        "total_return": 4.858522408826728
+      },
+      "sealed_test": {
+        "cagr": -0.1530544075326591,
+        "sharpe": -0.25699613959816225,
+        "max_drawdown": -0.4878906697880243,
+        "total_return": -0.22972782650418266
+      },
+      "full": {
+        "cagr": 0.6810601314028182,
+        "sharpe": 1.3454521557149757,
+        "max_drawdown": -0.4878906697880243,
+        "total_return": 47.52918727447314
+      }
+    }
+  }
+}

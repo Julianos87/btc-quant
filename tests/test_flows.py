@@ -172,7 +172,7 @@ def test_digest_tolerates_torn_last_line(tmp_path, monkeypatch):
     (tmp_path / "flows.csv").write_text(
         "ts,kind,trend_flow,carry_flow\n2026-06-01T04:00"
     )  # ligne coupée
-    s = digest._equity("equity_trend.csv")
+    s = digest._equity("trend", "equity_trend.csv")
     assert len(s) == 1 and float(s.iloc[0]) == 6000.0
     assert len(digest._flows()) == 0
 

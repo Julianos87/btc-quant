@@ -45,39 +45,44 @@ class ReportingRepository:
         self._cache[str(path)] = (key, value)
         return value
 
-    @staticmethod
-    def _engine_for(path: Path) -> str | None:
-        return {
-            "live_state_4x.json": "trend",
-            "live_state.json": "trend",
-            "carry_state.json": "carry",
-        }.get(path.name)
-
     def read_json(self, path: Path) -> dict | None:
-        engine = self._engine_for(path)
-        if engine and self.database.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
+    def read_engine_state(self, engine: str, legacy_path: Path | None = None) -> dict | None:
+        """Lit explicitement un moteur SQLite, puis son éventuel fallback JSON."""
+
+        if self.database.exists():
             try:
                 state = StateStore(self.database, initialize=False).load_engine_state(engine)
                 if state is not None:
                     return state
             except Exception as exc:
                 raise ReportingReadError(f"état SQLite illisible pour {engine}") from exc
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            return None
+        return self.read_json(legacy_path) if legacy_path is not None else None
 
     def age_seconds(self, path: Path) -> float | None:
-        engine = self._engine_for(path)
-        if engine and self.database.exists():
+        return time.time() - path.stat().st_mtime if path.exists() else None
+
+    def engine_age_seconds(self, engine: str, legacy_path: Path | None = None) -> float | None:
+        """Âge explicite d'un moteur, avec fallback fichier pour la migration."""
+
+        if self.database.exists():
             try:
                 return StateStore(self.database, initialize=False).engine_age_seconds(engine)
             except Exception as exc:
                 raise ReportingReadError(f"horodatage SQLite illisible pour {engine}") from exc
-        return time.time() - path.stat().st_mtime if path.exists() else None
+        return self.age_seconds(legacy_path) if legacy_path is not None else None
 
-    def read_equity(self, name: str) -> pd.Series:
-        engine = "trend" if "trend" in name else "carry"
+    def read_engine_equity(
+        self,
+        engine: str,
+        legacy_path: Path | None = None,
+    ) -> pd.Series:
+        """Lit une courbe par identifiant moteur, jamais par convention de nom."""
+
         if self.database.exists():
             try:
                 rows = StateStore(self.database, initialize=False).read_equity(engine)
@@ -87,7 +92,9 @@ class ReportingRepository:
                     return pd.Series(frame["equity"].values, index=index).sort_index()
             except Exception as exc:
                 raise ReportingReadError(f"equity SQLite illisible pour {engine}") from exc
-        return self._parsed(self.state_dir / name, self._parse_equity)
+        if legacy_path is None:
+            return pd.Series(dtype=float)
+        return self._parsed(legacy_path, self._parse_equity)
 
     @staticmethod
     def _parse_equity(path: Path) -> pd.Series:

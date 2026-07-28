@@ -2,9 +2,12 @@
 
 systemd relance les crashs, mais pas un processus bloqué (réseau gelé,
 exception avalée dans une boucle). Ce script — appelé par un timer systemd
-toutes les 10 min — vérifie la fraîcheur des fichiers d'état et notifie si
-un moteur n'a pas écrit depuis trop longtemps. Il tente aussi un restart
-systemd du service concerné (si les droits le permettent).
+toutes les 10 min — lit l'horodatage du dernier checkpoint SQLite de chaque
+moteur et ouvre un incident si l'un d'eux n'a pas écrit depuis trop longtemps.
+
+Il **ne redémarre rien** : il tourne sous l'utilisateur `btcquant`, sans droit
+systemd, et un redémarrage automatique masquerait la cause plutôt que de la
+traiter. La reprise reste une décision humaine, guidée par l'incident ouvert.
 """
 
 import argparse
@@ -19,7 +22,14 @@ ROOT = Path(os.environ.get("BTCQUANT_ROOT", Path.cwd())).resolve()
 STATE = ROOT / "state"
 
 # (moteur, âge max en secondes, nom du service systemd)
-CHECKS = [("trend", 600, "btcquant-trend")]
+# Les seuils reprennent ceux des SLO (docs/RELIABILITY_SLO.md) et de la
+# politique de qualification : 10 min pour le trend (tick 60 s), 20 min pour le
+# carry (tick 300 s). Le carry était absent de cette liste : un moteur carry
+# figé n'était donc jamais détecté, alors qu'il porte 40 % du portefeuille.
+CHECKS = [
+    ("trend", 600, "btcquant-trend"),
+    ("carry", 1200, "btcquant-carry"),
+]
 
 
 def main(argv: list[str] | None = None) -> None:

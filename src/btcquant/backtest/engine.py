@@ -24,7 +24,13 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-from ..domain import EntryRequested, ExitRequested, decide_bar_close, funding_amount
+from ..domain import (
+    EntryRequested,
+    ExitRequested,
+    PyramidRequested,
+    decide_bar_close,
+    funding_amount,
+)
 from ..domain.execution import ExecutionConfig, ExecutionSimulator, MarketOrder, OrderSide
 from ..indicators import bars_per_year, realized_vol
 from ..risk import KillSwitch, RiskConfig, position_size
@@ -68,7 +74,9 @@ class _BacktestState:
     position: Position | None = None
     entry_fee_pending: float = 0.0
     pending_entry: tuple[pd.Series, int] | None = None
+    pending_pyramid: tuple[pd.Series, float] | None = None
     pending_exit_reason: str | None = None
+    pending_exit_volatility: float | None = None
     trades: list[Trade] = field(default_factory=list)
 
 
@@ -104,6 +112,7 @@ class BacktestEngine:
         ts: pd.Timestamp,
         reason: str,
         available_volume: float,
+        volatility_annual: float | None = None,
     ) -> bool:
         position = state.position
         assert position is not None
@@ -119,6 +128,7 @@ class BacktestEngine:
                 qty=requested_qty,
                 reference_price=float(raw_price),
                 available_volume=float(available_volume),
+                volatility_annual=volatility_annual,
             )
         )
         if fill.qty <= 0:
@@ -171,9 +181,14 @@ class BacktestEngine:
             return
         signal_row, direction = pending
         side = OrderSide.BUY if direction == 1 else OrderSide.SELL
-        quoted_price = execution.quote_price(side, float(open_price))
-        stop = strategy.initial_stop(signal_row, quoted_price, direction)
         realized_volatility = signal_row["_rvol"]
+        volatility_annual = float(realized_volatility) if pd.notna(realized_volatility) else None
+        quoted_price = execution.quote_price(
+            side,
+            float(open_price),
+            volatility_annual=volatility_annual,
+        )
+        stop = strategy.initial_stop(signal_row, quoted_price, direction)
         qty = position_size(
             state.cash,
             quoted_price,
@@ -182,6 +197,7 @@ class BacktestEngine:
             self.risk,
             direction=Direction(direction),
         )
+        qty *= strategy.position_size_multiplier(signal_row, direction)
         if direction == -1:
             qty *= self.short_size_mult
         if qty <= 0:
@@ -193,6 +209,7 @@ class BacktestEngine:
                 qty=qty,
                 reference_price=float(open_price),
                 available_volume=float(available_volume),
+                volatility_annual=volatility_annual,
             )
         )
         if fill.qty <= 0:
@@ -209,6 +226,62 @@ class BacktestEngine:
             best_close=fill.price,
         )
 
+    def _add_pending_pyramid(
+        self,
+        state: _BacktestState,
+        execution: ExecutionSimulator,
+        strategy: Strategy,
+        ts: pd.Timestamp,
+        open_price: float,
+        available_volume: float,
+    ) -> None:
+        pending = state.pending_pyramid
+        state.pending_pyramid = None
+        position = state.position
+        if pending is None or position is None:
+            return
+        signal_row, fraction = pending
+        requested_qty = position.initial_qty * fraction
+        equity = state.cash + position.unrealized(open_price)
+        max_total_qty = (
+            equity * self.risk.max_position_pct * self.risk.max_leverage / open_price
+        )
+        requested_qty = min(requested_qty, max_total_qty - position.qty)
+        if requested_qty <= 0:
+            return
+        side = OrderSide.BUY if position.direction == 1 else OrderSide.SELL
+        realized_volatility = signal_row.get("_rvol")
+        volatility_annual = (
+            float(realized_volatility)
+            if realized_volatility is not None and pd.notna(realized_volatility)
+            else None
+        )
+        fill = execution.execute_market(
+            MarketOrder(
+                order_id=(
+                    f"backtest:{strategy.name}:{ts.isoformat()}:pyramid:"
+                    f"{position.direction}:{position.pyramid_adds + 1}"
+                ),
+                side=side,
+                qty=requested_qty,
+                reference_price=open_price,
+                available_volume=available_volume,
+                volatility_annual=volatility_annual,
+            )
+        )
+        if fill.qty <= 0:
+            return
+        previous_qty = position.qty
+        total_qty = previous_qty + fill.qty
+        position.entry_price = (
+            previous_qty * position.entry_price + fill.qty * fill.price
+        ) / total_qty
+        position.qty = total_qty
+        position.last_add_price = fill.price
+        position.pyramid_adds += 1
+        state.cash -= fill.fee
+        state.entry_fee_pending += fill.fee
+
     def _process_intrabar(
         self,
         state: _BacktestState,
@@ -221,6 +294,7 @@ class BacktestEngine:
         close_price: float,
         available_volume: float,
         funding_rate: float,
+        volatility_annual: float | None,
     ) -> None:
         position = state.position
         if position is None:
@@ -246,8 +320,10 @@ class BacktestEngine:
             ts,
             "stop",
             available_volume,
+            volatility_annual,
         ):
             state.pending_exit_reason = "stop"
+            state.pending_exit_volatility = volatility_annual
 
     def _decide_close(
         self,
@@ -264,6 +340,14 @@ class BacktestEngine:
             for event in decision.events:
                 if isinstance(event, ExitRequested):
                     state.pending_exit_reason = event.reason
+                    realized_volatility = row.get("_rvol")
+                    state.pending_exit_volatility = (
+                        float(realized_volatility)
+                        if realized_volatility is not None and pd.notna(realized_volatility)
+                        else None
+                    )
+                elif isinstance(event, PyramidRequested):
+                    state.pending_pyramid = (row, event.fraction)
             return
         allowed = no_trade_before is None or ts >= no_trade_before
         decision = decide_bar_close(
@@ -319,6 +403,7 @@ class BacktestEngine:
         lows = data["low"].to_numpy()
         closes = data["close"].to_numpy()
         volumes = data["volume"].to_numpy()
+        realized_volatilities = data["_rvol"].to_numpy()
         index = data.index
 
         for i in range(start, len(data)):
@@ -339,13 +424,24 @@ class BacktestEngine:
             # ── ouverture : sortie décidée à la clôture précédente ──────────
             if state.position is not None and state.pending_exit_reason is not None:
                 exit_reason = state.pending_exit_reason
+                exit_volatility = state.pending_exit_volatility
                 state.pending_exit_reason = None
+                state.pending_exit_volatility = None
                 if not self._fill_exit(
-                    state, execution, strategy.name, opens[i], ts, exit_reason, volumes[i]
+                    state,
+                    execution,
+                    strategy.name,
+                    opens[i],
+                    ts,
+                    exit_reason,
+                    volumes[i],
+                    exit_volatility,
                 ):
                     state.pending_exit_reason = exit_reason
+                    state.pending_exit_volatility = exit_volatility
             else:
                 state.pending_exit_reason = None
+                state.pending_exit_volatility = None
 
             # ── ouverture : entrée décidée à la clôture précédente ──────────
             self._open_pending(
@@ -353,6 +449,14 @@ class BacktestEngine:
                 execution,
                 strategy,
                 kill,
+                ts,
+                float(opens[i]),
+                float(volumes[i]),
+            )
+            self._add_pending_pyramid(
+                state,
+                execution,
+                strategy,
                 ts,
                 float(opens[i]),
                 float(volumes[i]),
@@ -376,6 +480,11 @@ class BacktestEngine:
                 float(closes[i]),
                 float(volumes[i]),
                 intrabar_rate,
+                (
+                    float(realized_volatilities[i - 1])
+                    if i > 0 and pd.notna(realized_volatilities[i - 1])
+                    else None
+                ),
             )
 
             # Le risque est mis à jour AVANT les décisions de clôture. Ainsi,
@@ -399,6 +508,7 @@ class BacktestEngine:
                 index[-1],
                 "end_of_data",
                 volumes[-1],
+                (float(realized_volatilities[-1]) if pd.notna(realized_volatilities[-1]) else None),
             )
             equity_values[-1] = state.cash + (
                 state.position.unrealized(closes[-1]) if state.position is not None else 0.0

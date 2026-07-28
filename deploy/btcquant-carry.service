@@ -2,6 +2,8 @@
 Description=btcquant - moteur carry 3x (paper trading)
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -9,7 +11,7 @@ User=btcquant
 WorkingDirectory=/opt/btcquant/current
 Environment=PYTHONIOENCODING=utf-8
 EnvironmentFile=-/opt/btcquant/.env
-ExecStart=/opt/btcquant/current/venv/bin/btcquant-carry --capital 4000 --leverage 3
+ExecStart=/opt/btcquant/current/venv/bin/btcquant-carry --config /opt/btcquant/current/environments/paper/config.yaml
 Restart=always
 RestartSec=30
 TimeoutStopSec=30

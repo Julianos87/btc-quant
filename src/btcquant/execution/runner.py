@@ -28,6 +28,7 @@ from ..domain import (
     BarDecision,
     EntryRequested,
     ExitRequested,
+    PyramidRequested,
     StopTightened,
     decide_bar_close,
     funding_amount,
@@ -47,6 +48,12 @@ from .ports import ClockPort, MarketDataPort, Notifier
 from .protective_stops import ProtectiveStopService, StopDecision, StopDecisionKind
 from .risk_service import PortfolioRiskService, PortfolioRiskState
 from .recovery import recover_interrupted_orders
+from .state_contract import (
+    PositionState,
+    TrendSlotState,
+    TrendStatePayload,
+    validate_trend_state,
+)
 from .state_store import StateStore, database_path
 from .venue import Venue
 
@@ -56,6 +63,9 @@ TIMEFRAME_SECONDS = {"1h": 3600, "2h": 7200, "4h": 14400, "6h": 21600, "12h": 43
 TICK_SECONDS = 60
 VOL_LOOKBACK = 30
 FUNDING_POLL_SECONDS = 300
+#: Une erreur isolée (réseau, bougie en retard) est normale ; trois échecs
+#: consécutifs signalent une panne durable qui doit remonter en incident.
+LOOP_FAILURES_BEFORE_INCIDENT = 3
 
 
 class StrategySlot:
@@ -174,7 +184,8 @@ class LiveRunner:
     # ── persistance ──────────────────────────────────────────────────────────
     def _load_state(self) -> None:
         self.store.migrate_legacy_json("trend", self.legacy_state_path)
-        raw = self.store.load_engine_state("trend")
+        stored = self.store.load_engine_state("trend")
+        raw = validate_trend_state(stored) if stored is not None else None
         if raw is None:
             return
         for slot in self.slots:
@@ -187,9 +198,10 @@ class LiveRunner:
             slot.stop_intent_id = s.get("stop_intent_id")
             slot.stop_transition = s.get("stop_transition")
             slot.entry_fee = s.get("entry_fee", 0.0)
-            slot.last_bar_ts = pd.Timestamp(s["last_bar_ts"]) if s.get("last_bar_ts") else None
-            if s.get("position"):
-                p = s["position"]
+            last_bar_ts = s.get("last_bar_ts")
+            slot.last_bar_ts = pd.Timestamp(last_bar_ts) if last_bar_ts else None
+            p = s.get("position")
+            if p is not None:
                 slot.position = Position(
                     entry_time=pd.Timestamp(p["entry_time"]),
                     entry_price=p["entry_price"],
@@ -198,6 +210,9 @@ class LiveRunner:
                     direction=Direction(p.get("direction", 1)),
                     bars_held=p["bars_held"],
                     best_close=p["best_close"],
+                    initial_qty=p.get("initial_qty", p["qty"]),
+                    last_add_price=p.get("last_add_price", p["entry_price"]),
+                    pyramid_adds=p.get("pyramid_adds", 0),
                 )
         self.peak_equity = raw.get("peak_equity", self.peak_equity)
         self.halted = raw.get("halted", False)
@@ -205,12 +220,13 @@ class LiveRunner:
         self.day_start_equity = raw.get("day_start_equity", self.day_start_equity)
         self.daily_lockout = raw.get("daily_lockout", False)
         self.reconciliation_required = raw.get("reconciliation_required", False)
-        if raw.get("last_funding_ts"):
-            self.last_funding_ts = pd.Timestamp(raw["last_funding_ts"])
+        last_funding_ts = raw.get("last_funding_ts")
+        if last_funding_ts:
+            self.last_funding_ts = pd.Timestamp(last_funding_ts)
         log.info("État trend rechargé depuis %s", self.store.path)
 
-    def _state_payload(self) -> dict[str, Any]:
-        raw: dict[str, Any] = {
+    def _state_payload(self) -> TrendStatePayload:
+        raw: TrendStatePayload = {
             "slots": {},
             "peak_equity": self.peak_equity,
             "halted": self.halted,
@@ -223,18 +239,21 @@ class LiveRunner:
             ),
         }
         for slot in self.slots:
-            pos = None
+            pos: PositionState | None = None
             if slot.position:
                 pos = {
                     "entry_time": str(slot.position.entry_time),
                     "entry_price": slot.position.entry_price,
                     "qty": slot.position.qty,
                     "stop_price": slot.position.stop_price,
-                    "direction": slot.position.direction,
+                    "direction": int(slot.position.direction),
                     "bars_held": slot.position.bars_held,
                     "best_close": slot.position.best_close,
+                    "initial_qty": slot.position.initial_qty,
+                    "last_add_price": slot.position.last_add_price,
+                    "pyramid_adds": slot.position.pyramid_adds,
                 }
-            raw["slots"][slot.strategy.name] = {
+            slot_state: TrendSlotState = {
                 "cash": slot.cash,
                 "position": pos,
                 "stop_order_id": slot.stop_order_id,
@@ -244,6 +263,7 @@ class LiveRunner:
                 "entry_fee": slot.entry_fee,
                 "last_bar_ts": str(slot.last_bar_ts) if slot.last_bar_ts is not None else None,
             }
+            raw["slots"][slot.strategy.name] = slot_state
         return raw
 
     def _save_state(self) -> None:
@@ -369,57 +389,143 @@ class LiveRunner:
             return None
         return self.broker.lookup_order(intent_id)
 
+    def _resume_stop_cancellation(
+        self, slot: StrategySlot, transition: dict[str, Any]
+    ) -> None:
+        previous_id = str(transition["previous_stop_id"])
+        try:
+            self.broker.cancel_stop(previous_id)
+        except Exception as error:
+            self._stop_transition_pending(
+                slot,
+                f"Annulation du stop {previous_id} non confirmée",
+                error,
+            )
+        previous_local = transition.get("previous_local_order_id")
+        try:
+            if previous_local is not None:
+                self.store.complete_order(
+                    int(previous_local),
+                    status="CANCELED",
+                    broker_order_id=previous_id,
+                )
+        except Exception as error:
+            raise ReconciliationRequired(
+                "Stop annulé côté exchange, mais journal SQLite non actualisé"
+            ) from error
+        previous_intent = slot.stop_intent_id
+        slot.stop_order_id = None
+        slot.stop_order_local_id = None
+        slot.stop_intent_id = None
+        slot.stop_transition = None
+        try:
+            self.store.save_engine_state(
+                "trend",
+                self._state_payload(),
+                event_type="protective_order_canceled",
+                event_payload={"slot": slot.strategy.name, "stop_order_id": previous_id},
+            )
+        except Exception as error:
+            slot.stop_order_id = previous_id
+            slot.stop_order_local_id = int(previous_local) if previous_local is not None else None
+            slot.stop_intent_id = previous_intent
+            slot.stop_transition = transition
+            raise ReconciliationRequired(
+                "Stop annulé, mais checkpoint final non enregistré"
+            ) from error
+        self.store.resolve_incident(
+            f"execution:trend:protective_stop_transition:{slot.strategy.name}"
+        )
+
+    def _place_replacement_stop(
+        self,
+        slot: StrategySlot,
+        transition: dict[str, Any],
+        intent_id: str,
+        order_id: int,
+    ) -> str:
+        replacement_id = transition.get("replacement_stop_id")
+        if transition["phase"] != "PLACING":
+            return str(replacement_id)
+        try:
+            snapshot = self._lookup_stop_placement(intent_id)
+        except Exception as error:
+            self._stop_transition_pending(
+                slot,
+                "Recherche du stop protecteur interrompue",
+                error,
+            )
+        if snapshot is not None:
+            if snapshot.filled_qty > 0 or snapshot.status not in ("OPEN",):
+                self._require_manual_reconciliation(
+                    "Ordre stop retrouvé dans un état non protecteur",
+                    slot=slot,
+                    context={
+                        "intent_id": intent_id,
+                        "status": snapshot.status,
+                        "filled_qty": snapshot.filled_qty,
+                    },
+                )
+            replacement_id = snapshot.broker_order_id
+        if replacement_id is None:
+            try:
+                replacement_id = self.broker.place_stop(
+                    float(transition["qty"]),
+                    float(transition["stop_price"]),
+                    int(transition["direction"]),
+                    client_order_id=intent_id,
+                )
+            except Exception as placement_error:
+                try:
+                    snapshot = self._lookup_stop_placement(intent_id)
+                except Exception as lookup_error:
+                    self._stop_transition_pending(
+                        slot,
+                        "Création du stop ambiguë et lookup indisponible",
+                        lookup_error,
+                    )
+                if (
+                    snapshot is None
+                    or snapshot.broker_order_id is None
+                    or snapshot.status != "OPEN"
+                    or snapshot.filled_qty > 0
+                ):
+                    self._stop_transition_pending(
+                        slot,
+                        "Création du stop non confirmée",
+                        placement_error,
+                    )
+                replacement_id = snapshot.broker_order_id
+        if replacement_id is None:
+            self._stop_transition_pending(
+                slot,
+                "Le broker n'a pas confirmé l'identifiant du stop protecteur",
+            )
+        replacement_id = str(replacement_id)
+        transition["replacement_stop_id"] = replacement_id
+        transition["phase"] = "CANCELING"
+        try:
+            self.store.complete_order_and_checkpoint(
+                order_id,
+                engine="trend",
+                state=self._state_payload(),
+                status="OPEN",
+                broker_order_id=replacement_id,
+            )
+        except Exception as error:
+            transition["replacement_stop_id"] = None
+            transition["phase"] = "PLACING"
+            raise ReconciliationRequired(
+                "Stop créé, mais confirmation SQLite non enregistrée"
+            ) from error
+        return replacement_id
+
     def _resume_stop_transition(self, slot: StrategySlot) -> None:
         transition = slot.stop_transition
         if transition is None:
             return
         if transition["kind"] == "CANCEL":
-            previous_id = str(transition["previous_stop_id"])
-            try:
-                self.broker.cancel_stop(previous_id)
-            except Exception as error:
-                self._stop_transition_pending(
-                    slot,
-                    f"Annulation du stop {previous_id} non confirmée",
-                    error,
-                )
-            previous_local = transition.get("previous_local_order_id")
-            try:
-                if previous_local is not None:
-                    self.store.complete_order(
-                        int(previous_local),
-                        status="CANCELED",
-                        broker_order_id=previous_id,
-                    )
-            except Exception as error:
-                raise ReconciliationRequired(
-                    "Stop annulé côté exchange, mais journal SQLite non actualisé"
-                ) from error
-            previous_intent = slot.stop_intent_id
-            slot.stop_order_id = None
-            slot.stop_order_local_id = None
-            slot.stop_intent_id = None
-            slot.stop_transition = None
-            try:
-                self.store.save_engine_state(
-                    "trend",
-                    self._state_payload(),
-                    event_type="protective_order_canceled",
-                    event_payload={"slot": slot.strategy.name, "stop_order_id": previous_id},
-                )
-            except Exception as error:
-                slot.stop_order_id = previous_id
-                slot.stop_order_local_id = (
-                    int(previous_local) if previous_local is not None else None
-                )
-                slot.stop_intent_id = previous_intent
-                slot.stop_transition = transition
-                raise ReconciliationRequired(
-                    "Stop annulé, mais checkpoint final non enregistré"
-                ) from error
-            self.store.resolve_incident(
-                f"execution:trend:protective_stop_transition:{slot.strategy.name}"
-            )
+            self._resume_stop_cancellation(slot, transition)
             return
 
         intent_id = str(transition["intent_id"])
@@ -431,85 +537,9 @@ class LiveRunner:
                 context={"intent_id": intent_id},
             )
         order_id = int(order["id"])
-        replacement_id = transition.get("replacement_stop_id")
-        if transition["phase"] == "PLACING":
-            try:
-                snapshot = self._lookup_stop_placement(intent_id)
-            except Exception as error:
-                self._stop_transition_pending(
-                    slot,
-                    "Recherche du stop protecteur interrompue",
-                    error,
-                )
-            if snapshot is not None:
-                if snapshot.filled_qty > 0 or snapshot.status not in ("OPEN",):
-                    self._require_manual_reconciliation(
-                        "Ordre stop retrouvé dans un état non protecteur",
-                        slot=slot,
-                        context={
-                            "intent_id": intent_id,
-                            "status": snapshot.status,
-                            "filled_qty": snapshot.filled_qty,
-                        },
-                    )
-                replacement_id = snapshot.broker_order_id
-            if replacement_id is None:
-                try:
-                    replacement_id = self.broker.place_stop(
-                        float(transition["qty"]),
-                        float(transition["stop_price"]),
-                        int(transition["direction"]),
-                        client_order_id=intent_id,
-                    )
-                except Exception as placement_error:
-                    # Une réponse perdue n'autorise jamais un second identifiant.
-                    # Le lookup avec le même clientOrderId tranche avant reprise.
-                    try:
-                        snapshot = self._lookup_stop_placement(intent_id)
-                    except Exception as lookup_error:
-                        self._stop_transition_pending(
-                            slot,
-                            "Création du stop ambiguë et lookup indisponible",
-                            lookup_error,
-                        )
-                    if (
-                        snapshot is None
-                        or snapshot.broker_order_id is None
-                        or snapshot.status != "OPEN"
-                        or snapshot.filled_qty > 0
-                    ):
-                        self._stop_transition_pending(
-                            slot,
-                            "Création du stop non confirmée",
-                            placement_error,
-                        )
-                    replacement_id = snapshot.broker_order_id
-            if replacement_id is None:
-                self._stop_transition_pending(
-                    slot,
-                    "Le broker n'a pas confirmé l'identifiant du stop protecteur",
-                )
-            transition["replacement_stop_id"] = str(replacement_id)
-            transition["phase"] = "CANCELING"
-            try:
-                self.store.complete_order_and_checkpoint(
-                    order_id,
-                    engine="trend",
-                    state=self._state_payload(),
-                    status="OPEN",
-                    broker_order_id=str(replacement_id),
-                )
-            except Exception as error:
-                # La base contient encore PLACING/PENDING. Revenir au même
-                # état en mémoire garantit que le lookup récupérera l'ordre
-                # distant au prochain démarrage.
-                transition["replacement_stop_id"] = None
-                transition["phase"] = "PLACING"
-                raise ReconciliationRequired(
-                    "Stop créé, mais confirmation SQLite non enregistrée"
-                ) from error
-
-        replacement_id = str(transition["replacement_stop_id"])
+        replacement_id = self._place_replacement_stop(
+            slot, transition, intent_id, order_id
+        )
         previous_stop_id = transition.get("previous_stop_id")
         if previous_stop_id is not None and str(previous_stop_id) != replacement_id:
             try:
@@ -759,6 +789,7 @@ class LiveRunner:
         available_volume: float | None = None,
         *,
         reduce_only: bool = False,
+        volatility_annual: float | None = None,
     ) -> tuple[Fill, int, str]:
         submitted = self.order_service.submit_market(
             engine="trend",
@@ -769,6 +800,7 @@ class LiveRunner:
             reason=reason,
             reduce_only=reduce_only,
             available_volume=available_volume,
+            volatility_annual=volatility_annual,
         )
         return submitted.fill, submitted.order_id, submitted.status
 
@@ -799,6 +831,7 @@ class LiveRunner:
         ref_price: float,
         reason: str,
         available_volume: float | None = None,
+        volatility_annual: float | None = None,
     ) -> None:
         assert slot.position is not None
         pos = slot.position
@@ -812,6 +845,7 @@ class LiveRunner:
             reason,
             available_volume,
             reduce_only=True,
+            volatility_annual=volatility_annual,
         )
         if fill.qty <= 0:
             self.store.complete_order_and_checkpoint(
@@ -909,12 +943,14 @@ class LiveRunner:
             self.risk,
             direction=direction,
         )
+        qty *= slot.strategy.position_size_multiplier(row, direction)
         live_balance = self.broker.free_quote_balance()
         if live_balance is not None:
             qty = min(qty, live_balance * 0.99 / ref_price)
         if qty <= 0:
             return
         side = "BUY" if direction == 1 else "SELL"
+        volatility_annual = float(rvol) if pd.notna(rvol) else None
         fill, order_id, order_status = self._execute_market_order(
             slot,
             side,
@@ -922,6 +958,7 @@ class LiveRunner:
             ref_price,
             "entry",
             float(row["volume"]) if pd.notna(row.get("volume")) else None,
+            volatility_annual=volatility_annual,
         )
         if fill.qty <= 0:
             self.store.complete_order_and_checkpoint(
@@ -980,7 +1017,76 @@ class LiveRunner:
             f"stop {stop:,.0f} $"
         )
 
-    def _process_bar(self, slot: StrategySlot) -> BarDecision | None:
+    def _pyramid_position(
+        self,
+        slot: StrategySlot,
+        row: pd.Series,
+        ref_price: float,
+        fraction: float,
+    ) -> None:
+        position = slot.position
+        if position is None:
+            return
+        if self.broker.supports_stop_orders:
+            log.warning(
+                "[%s] Renfort ignoré hors paper : saga de redimensionnement du stop "
+                "exchange non encore qualifiée",
+                slot.strategy.name,
+            )
+            return
+        qty = position.initial_qty * fraction
+        max_total_qty = (
+            slot.equity(ref_price)
+            * self.risk.max_position_pct
+            * self.risk.max_leverage
+            / ref_price
+        )
+        qty = min(qty, max_total_qty - position.qty)
+        if qty <= 0:
+            return
+        side = "BUY" if position.direction == 1 else "SELL"
+        rvol = row.get("_rvol")
+        fill, order_id, order_status = self._execute_market_order(
+            slot,
+            side,
+            qty,
+            ref_price,
+            "pyramid",
+            float(row["volume"]) if pd.notna(row.get("volume")) else None,
+            volatility_annual=(float(rvol) if pd.notna(rvol) else None),
+        )
+        if fill.qty > 0:
+            previous_qty = position.qty
+            total_qty = previous_qty + fill.qty
+            position.entry_price = (
+                previous_qty * position.entry_price + fill.qty * fill.price
+            ) / total_qty
+            position.qty = total_qty
+            position.last_add_price = fill.price
+            position.pyramid_adds += 1
+            slot.cash -= fill.fee
+            slot.entry_fee += fill.fee
+        self.store.complete_order_and_checkpoint(
+            order_id,
+            engine="trend",
+            state=self._state_payload(),
+            status=order_status,
+            filled_qty=fill.qty,
+            price=fill.price,
+            fee=fill.fee,
+            broker_order_id=fill.broker_order_id,
+        )
+
+    def _process_bar(self, slot: StrategySlot, execution_price: float) -> BarDecision | None:
+        """Décide sur la dernière clôture et exécute au prix de marché courant.
+
+        Le backtest remplit les décisions de clôture à l'ouverture de ``t+1``.
+        Le runner traite cette clôture après le début de ``t+1`` : son
+        équivalent observable est donc le prix courant, jamais ``row["close"]``.
+        """
+
+        if execution_price <= 0:
+            raise ValueError("execution_price doit être strictement positif")
         df = self._fetch_frame(slot.strategy)
         if df.empty:
             return None
@@ -1022,13 +1128,19 @@ class LiveRunner:
                 (event for event in decision.events if isinstance(event, ExitRequested)),
                 None,
             )
+            pyramid_event = next(
+                (event for event in decision.events if isinstance(event, PyramidRequested)),
+                None,
+            )
             # 2. barre marquée traitée + mutations locales (jamais rejouées)
             slot.last_bar_ts = last_ts
             pos.best_close = next_position.best_close
             pos.bars_held = next_position.bars_held
             # 3. appels externes, at-most-once (un échec ici ne rejoue pas la
             # barre ; l'ancien stop exchange continue de protéger en attendant)
-            if stop_event and slot.stop_order_id and self.broker.supports_stop_orders:
+            if stop_event and pyramid_event:
+                pos.stop_price = stop_event.new_price
+            elif stop_event and slot.stop_order_id and self.broker.supports_stop_orders:
                 self._begin_stop_replacement(
                     slot,
                     qty=pos.qty,
@@ -1041,9 +1153,17 @@ class LiveRunner:
             if exit_event:
                 self._exit_position(
                     slot,
-                    row["close"],
+                    execution_price,
                     exit_event.reason,
                     float(row["volume"]) if pd.notna(row.get("volume")) else None,
+                    (float(row["_rvol"]) if pd.notna(row.get("_rvol")) else None),
+                )
+            elif pyramid_event:
+                self._pyramid_position(
+                    slot,
+                    row,
+                    execution_price,
+                    pyramid_event.fraction,
                 )
             return decision
         else:
@@ -1057,7 +1177,7 @@ class LiveRunner:
             )
             for event in decision.events:
                 if isinstance(event, EntryRequested):
-                    self._enter_position(slot, row, row["close"], event.direction)
+                    self._enter_position(slot, row, execution_price, event.direction)
             return decision
 
     def _check_soft_stops(self, price: float) -> None:
@@ -1148,9 +1268,34 @@ class LiveRunner:
         self.store.append_equity("trend", total)
 
     # ── boucle principale ────────────────────────────────────────────────────
+    def _record_loop_failure(self, error: BaseException, consecutive: int) -> None:
+        """Ouvre un incident quand la boucle échoue de façon répétée.
+
+        Le catch-all de la boucle principale protège le moteur d'une erreur
+        transitoire, mais il masquait aussi les pannes durables : un checkpoint
+        non sérialisable, par exemple, échouait à chaque tick sans jamais rien
+        signaler d'autre qu'une ligne de log. Le watchdog finissait par voir
+        l'état périmé, mais sans la cause. On la publie ici.
+        """
+
+        if consecutive < LOOP_FAILURES_BEFORE_INCIDENT:
+            return
+        message = f"{type(error).__name__}: {error}"
+        incident = self.store.record_incident(
+            "execution:trend:loop_failure",
+            engine="trend",
+            severity="CRITICAL",
+            kind="loop_failure",
+            message=f"Boucle trend en échec {consecutive} fois de suite — {message}",
+            context={"consecutive": consecutive, "error": message},
+        )
+        if incident["is_new_or_reopened"]:
+            self.notifier(f"⛔ TREND : boucle en échec répété — {message}")
+
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
         stop_event = stop_event or threading.Event()
         last_price: float | None = None
+        consecutive_failures = 0
         log.info(
             "Runner démarré : %s, stratégies %s",
             self.symbol,
@@ -1191,7 +1336,7 @@ class LiveRunner:
                                 slot.last_bar_ts is None
                                 or slot.last_bar_ts < current_bar_start - pd.Timedelta(seconds=tf_s)
                             ):
-                                self._process_bar(slot)
+                                self._process_bar(slot, price)
                     if self.halted and all(s.position is None for s in self.slots):
                         # on reste vivant en veille (state maintenu frais pour le
                         # watchdog) au lieu de sortir : avec Restart=always, un
@@ -1211,8 +1356,14 @@ class LiveRunner:
                 except ReconciliationRequired:
                     log.critical("Arrêt fail-closed : réconciliation manuelle requise")
                     raise
-                except Exception:
+                except Exception as error:
                     log.exception("Erreur dans la boucle principale (on continue)")
+                    consecutive_failures += 1
+                    self._record_loop_failure(error, consecutive_failures)
+                else:
+                    if consecutive_failures:
+                        consecutive_failures = 0
+                        self.store.resolve_incident("execution:trend:loop_failure")
                 stop_event.wait(TICK_SECONDS)
         finally:
             self._save_state()

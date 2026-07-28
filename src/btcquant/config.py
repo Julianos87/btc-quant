@@ -1,13 +1,15 @@
-"""Chargement de config.yaml vers les objets du système."""
+"""Chargement des profils YAML d'environnement vers les objets du système."""
 
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from .carry import CarryPolicy
 from .domain import ExecutionConfig
 from .risk import RiskConfig
 from .strategies import STRATEGY_REGISTRY, Strategy
@@ -17,7 +19,32 @@ TIMEFRAMES = {"1h", "2h", "4h", "6h", "12h", "1d"}
 MARKETS = {"spot", "perp"}
 
 
-def load_config(path: str | Path = "config.yaml") -> dict[str, Any]:
+@dataclass(frozen=True)
+class PortfolioConfig:
+    total_capital: float
+    trend_fraction: float
+    carry_fraction: float
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.total_capital) or self.total_capital <= 0:
+            raise ValueError("portfolio.total_capital doit être strictement positif")
+        for name in ("trend_fraction", "carry_fraction"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or not 0 < value < 1:
+                raise ValueError(f"portfolio.{name} doit être dans ]0, 1[")
+        if not math.isclose(self.trend_fraction + self.carry_fraction, 1.0):
+            raise ValueError("portfolio : trend_fraction + carry_fraction doit valoir 1")
+
+    @property
+    def trend_capital(self) -> float:
+        return self.total_capital * self.trend_fraction
+
+    @property
+    def carry_capital(self) -> float:
+        return self.total_capital * self.carry_fraction
+
+
+def load_config(path: str | Path = "environments/dev/config.yaml") -> dict[str, Any]:
     with open(path, encoding="utf-8") as fh:
         payload = yaml.safe_load(fh)
     if not isinstance(payload, dict):
@@ -32,6 +59,9 @@ def _finite_non_negative(name: str, value: Any) -> None:
 
 
 def _validate_config(cfg: dict[str, Any]) -> None:
+    environment = cfg.get("environment")
+    if environment not in {"dev", "paper", "testnet"}:
+        raise ValueError("environment doit valoir dev, paper ou testnet")
     for section in ("data", "costs", "risk", "strategies", "execution"):
         if not isinstance(cfg.get(section), dict):
             raise ValueError(f"Section obligatoire absente ou invalide : {section}")
@@ -44,6 +74,8 @@ def _validate_config(cfg: dict[str, Any]) -> None:
     if mode not in {"paper", "testnet"}:
         raise ValueError("Safety Baseline : execution.mode doit valoir 'paper' ou 'testnet'")
     if mode == "testnet":
+        if environment != "testnet":
+            raise ValueError("execution.mode testnet exige environment: testnet")
         if cfg["execution"].get("testnet") is not True:
             raise ValueError("Safety Baseline : le mode testnet exige execution.testnet: true")
         if cfg["execution"].get("live_exchange") != "hyperliquid":
@@ -51,6 +83,8 @@ def _validate_config(cfg: dict[str, Any]) -> None:
         live_symbol = cfg["execution"].get("live_symbol")
         if not isinstance(live_symbol, str) or not live_symbol.endswith(":USDC"):
             raise ValueError("Le testnet Hyperliquid exige un perpétuel coté en USDC")
+    elif environment == "testnet":
+        raise ValueError("environment: testnet exige execution.mode: testnet")
     strategies = cfg["strategies"]
     if not strategies:
         raise ValueError("strategies ne peut pas être vide")
@@ -66,7 +100,41 @@ def _validate_config(cfg: dict[str, Any]) -> None:
         fraction = spec.get("capital_fraction", 1.0)
         if not isinstance(fraction, (int, float)) or not 0 < float(fraction) <= 1:
             raise ValueError(f"capital_fraction invalide pour {name}")
+        if spec.get("enabled", False):
+            _validate_strategy_params(name, spec)
     risk_from_config(cfg)
+    execution_config_from_config(cfg, float(cfg["costs"].get("fee_rate", 0.0)))
+    if "portfolio" in cfg or "carry" in cfg:
+        portfolio = portfolio_from_config(cfg)
+        carry_policy_from_config(cfg)
+        if not math.isclose(risk_from_config(cfg).initial_capital, portfolio.trend_capital):
+            raise ValueError(
+                "risk.initial_capital doit égaler "
+                "portfolio.total_capital × portfolio.trend_fraction"
+            )
+
+
+def _validate_strategy_params(name: str, spec: dict[str, Any]) -> None:
+    """Refuse au chargement une stratégie inconnue ou un paramètre mal orthographié.
+
+    La validation se fait par instanciation réelle : c'est la seule façon de
+    garantir que le contrôle suit la stratégie quand ses paramètres évoluent.
+    """
+
+    klass_name = spec.get("type", name)
+    klass = STRATEGY_REGISTRY.get(klass_name)
+    if klass is None:
+        raise KeyError(
+            f"strategies.{name} : stratégie inconnue {klass_name!r} ; "
+            f"disponibles : {sorted(STRATEGY_REGISTRY)}"
+        )
+    params = spec.get("params") or {}
+    if not isinstance(params, dict):
+        raise TypeError(f"strategies.{name}.params doit être un mapping YAML")
+    try:
+        klass(**params)
+    except ValueError as error:
+        raise ValueError(f"strategies.{name} : {error}") from error
 
 
 def risk_from_config(cfg: dict[str, Any]) -> RiskConfig:
@@ -82,6 +150,40 @@ def risk_from_config(cfg: dict[str, Any]) -> RiskConfig:
     )
 
 
+def portfolio_from_config(cfg: dict[str, Any]) -> PortfolioConfig:
+    raw = cfg.get("portfolio")
+    if not isinstance(raw, dict):
+        raise ValueError("Section portfolio obligatoire pour le profil TANDEM")
+    allowed = {"total_capital", "trend_fraction", "carry_fraction"}
+    unknown = sorted(set(raw) - allowed)
+    if unknown:
+        raise ValueError(f"portfolio : clé(s) inconnue(s) {unknown}")
+    try:
+        return PortfolioConfig(**raw)
+    except TypeError as error:
+        raise ValueError(f"portfolio incomplet : {error}") from error
+
+
+def carry_policy_from_config(cfg: dict[str, Any]) -> CarryPolicy:
+    portfolio = portfolio_from_config(cfg)
+    raw = cfg.get("carry")
+    if not isinstance(raw, dict):
+        raise ValueError("Section carry obligatoire pour le profil TANDEM")
+    allowed = {"leverage", "enter_ann", "exit_ann", "smooth_days", "borrow_rate_ann"}
+    unknown = sorted(set(raw) - allowed)
+    if unknown:
+        raise ValueError(f"carry : clé(s) inconnue(s) {unknown}")
+    try:
+        return CarryPolicy(
+            capital=portfolio.carry_capital,
+            fee_rate=float(cfg["costs"]["perp_fee_rate"]),
+            slippage_bps=float(cfg["costs"]["slippage_bps"]),
+            **raw,
+        )
+    except TypeError as error:
+        raise ValueError(f"carry incomplet : {error}") from error
+
+
 def execution_config_from_config(
     cfg: dict[str, Any],
     fee_rate: float,
@@ -92,17 +194,30 @@ def execution_config_from_config(
     unique ; les autres paramètres sont optionnels et désactivés par défaut.
     """
 
-    simulation = cfg.get("execution", {}).get("simulation") or {}
-    if not isinstance(simulation, dict):
+    raw_simulation = cfg.get("execution", {}).get("simulation") or {}
+    if not isinstance(raw_simulation, dict):
         raise TypeError("execution.simulation doit être un mapping YAML")
+    simulation = dict(raw_simulation)
+    profile = simulation.pop("profile", None)
+    profiles = simulation.pop("profiles", None)
+    if profile is not None or profiles is not None:
+        if not isinstance(profile, str) or not isinstance(profiles, dict):
+            raise ValueError("execution.simulation exige profile et profiles")
+        selected = profiles.get(profile)
+        if not isinstance(selected, dict):
+            raise ValueError(f"Profil de simulation inconnu : {profile!r}")
+        simulation.update(selected)
     forbidden = {"fee_rate", "slippage_bps"} & simulation.keys()
     if forbidden:
         raise ValueError("Configurer fee_rate/slippage_bps dans costs, pas execution.simulation")
-    return ExecutionConfig(
-        fee_rate=fee_rate,
-        slippage_bps=cfg["costs"]["slippage_bps"],
-        **simulation,
-    )
+    try:
+        return ExecutionConfig(
+            fee_rate=fee_rate,
+            slippage_bps=cfg["costs"]["slippage_bps"],
+            **simulation,
+        )
+    except TypeError as error:
+        raise ValueError(f"execution.simulation invalide : {error}") from error
 
 
 def build_strategies(cfg: dict[str, Any]) -> list[tuple[Strategy, float, str]]:
@@ -119,13 +234,13 @@ def build_strategies(cfg: dict[str, Any]) -> list[tuple[Strategy, float, str]]:
             continue
         klass_name = spec.get("type", name)
         if klass_name not in STRATEGY_REGISTRY:
-            raise KeyError(f"Stratégie inconnue dans config.yaml : {klass_name!r}")
+            raise KeyError(f"Stratégie inconnue dans la configuration : {klass_name!r}")
         strategy = STRATEGY_REGISTRY[klass_name](**(spec.get("params") or {}))
         strategy.name = name
         strategy.timeframe = spec.get("timeframe", strategy.timeframe)
         out.append((strategy, float(spec.get("capital_fraction", 1.0)), spec.get("market", "spot")))
     if not out:
-        raise ValueError("Aucune stratégie activée dans config.yaml")
+        raise ValueError("Aucune stratégie activée dans la configuration")
     total = sum(f for _, f, _ in out)
     if total > 1.0 + 1e-9:
         raise ValueError(f"Somme des capital_fraction = {total} > 1")

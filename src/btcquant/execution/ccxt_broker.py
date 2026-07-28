@@ -8,7 +8,11 @@ Sécurité et fiabilité :
 - arrondi aux précisions de l'exchange et respect du notionnel minimal ;
 - vrais ordres stop côté exchange, ``reduceOnly``, pour protéger la position
   même si le bot tombe ;
-- en futures : levier verrouillé à 1x — le système est conçu sans levier.
+- en futures, le levier est un PARAMÈTRE (``leverage``), transmis tel quel à
+  l'exchange. Il n'est pas verrouillé ici : c'est l'appelant qui le fixe, et
+  ``entrypoints.trend`` impose 1x sur le seul chemin externe autorisé
+  (Hyperliquid testnet). Ne pas confondre avec ``RiskConfig.max_leverage``,
+  qui plafonne le notionnel côté sizing.
 """
 
 from __future__ import annotations
@@ -211,8 +215,9 @@ class CcxtBroker(Broker):
         reduce_only: bool = False,
         available_volume: float | None = None,
         delayed_price: float | None = None,
+        volatility_annual: float | None = None,
     ) -> Fill:
-        del available_volume, delayed_price
+        del available_volume, delayed_price, volatility_annual
         normalized_side = side.lower()
         if normalized_side not in ("buy", "sell"):
             raise ValueError(f"Côté d'ordre invalide : {side!r}")

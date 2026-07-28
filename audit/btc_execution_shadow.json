@@ -1,0 +1,167 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-07-28T14:40:16.339967+00:00",
+  "venue": "hyperliquid",
+  "symbol": "BTC/USDC:USDC",
+  "provenance": {
+    "script_sha256": "a7af9f0940c86a5ec263a08d79d92d74e2edf4bdb31af019c72c4be69953f825",
+    "policy_sha256": "ec0cda009a86c155724ccd767356a777c5a6f9693281b0bfe82831cad3b01073"
+  },
+  "policy": {
+    "max_entry_spread_bps": 2.0,
+    "min_adjustment_notional": 50.0,
+    "maker_timeout_seconds": 30.0,
+    "funding_avoidance_window_seconds": 300.0,
+    "adverse_funding_threshold_8h": 0.0001
+  },
+  "sample": {
+    "count": 8,
+    "interval_seconds": 1.0,
+    "spread_bps_min": 0.15813651925707464,
+    "spread_bps_mean": 0.15815746830517025,
+    "spread_bps_max": 0.15817904285861165,
+    "observations": [
+      {
+        "observed_at": "2026-07-28T14:40:07.682990+00:00",
+        "bid": 63236.0,
+        "ask": 63237.0,
+        "bid_qty": 8.55661,
+        "ask_qty": 2.39889,
+        "spread_bps": 0.15813651925707464,
+        "funding_rate_8h": 0.0001,
+        "seconds_to_funding": 1192.31701
+      },
+      {
+        "observed_at": "2026-07-28T14:40:08.916604+00:00",
+        "bid": 63236.0,
+        "ask": 63237.0,
+        "bid_qty": 7.17038,
+        "ask_qty": 3.54295,
+        "spread_bps": 0.15813651925707464,
+        "funding_rate_8h": 0.0001,
+        "seconds_to_funding": 1191.083396
+      },
+      {
+        "observed_at": "2026-07-28T14:40:10.149314+00:00",
+        "bid": 63236.0,
+        "ask": 63237.0,
+        "bid_qty": 8.31559,
+        "ask_qty": 3.69515,
+        "spread_bps": 0.15813651925707464,
+        "funding_rate_8h": 0.0001,
+        "seconds_to_funding": 1189.850686
+      },
+      {
+        "observed_at": "2026-07-28T14:40:11.382778+00:00",
+        "bid": 63236.0,
+        "ask": 63237.0,
+        "bid_qty": 8.22759,
+        "ask_qty": 3.52434,
+        "spread_bps": 0.15813651925707464,
+        "funding_rate_8h": 0.0001,
+        "seconds_to_funding": 1188.617222
+      },
+      {
+        "observed_at": "2026-07-28T14:40:12.618341+00:00",
+        "bid": 63219.0,
+        "ask": 63220.0,
+        "bid_qty": 11.85564,
+        "ask_qty": 2.87839,
+        "spread_bps": 0.15817904285861165,
+        "funding_rate_8h": 0.0001,
+        "seconds_to_funding": 1187.381659
+      },
+      {
+        "observed_at": "2026-07-28T14:40:13.847772+00:00",
+        "bid": 63219.0,
+        "ask": 63220.0,
+        "bid_qty": 1.9744,
+        "ask_qty": 2.91989,
+        "spread_bps": 0.15817904285861165,
+        "funding_rate_8h": 0.0001,
+        "seconds_to_funding": 1186.152228
+      },
+      {
+        "observed_at": "2026-07-28T14:40:15.099951+00:00",
+        "bid": 63219.0,
+        "ask": 63220.0,
+        "bid_qty": 5.59447,
+        "ask_qty": 2.39977,
+        "spread_bps": 0.15817904285861165,
+        "funding_rate_8h": 0.0001,
+        "seconds_to_funding": 1184.900049
+      },
+      {
+        "observed_at": "2026-07-28T14:40:16.330597+00:00",
+        "bid": 63220.0,
+        "ask": 63221.0,
+        "bid_qty": 0.01885,
+        "ask_qty": 4.86519,
+        "spread_bps": 0.15817654083722843,
+        "funding_rate_8h": 0.0001,
+        "seconds_to_funding": 1183.669403
+      }
+    ]
+  },
+  "decisions_at_last_snapshot": {
+    "BUY": {
+      "action": "POST_ONLY",
+      "reason": "entrée non urgente au meilleur prix passif",
+      "limit_price": 63220.0,
+      "timeout_seconds": 30.0
+    },
+    "SELL": {
+      "action": "POST_ONLY",
+      "reason": "entrée non urgente au meilleur prix passif",
+      "limit_price": 63221.0,
+      "timeout_seconds": 30.0
+    }
+  },
+  "maker_touch_proxy": {
+    "buy_quotes": 7,
+    "sell_quotes": 7,
+    "buy_market_through": 4,
+    "sell_market_through": 3,
+    "interpretation": "market-through est une borne conservatrice de touche, jamais une preuve de fill ni de priorité dans la file"
+  },
+  "real_order_evidence": {
+    "non_stop_orders_in_state_db": 0,
+    "can_estimate_real_fill_rate": false
+  },
+  "qualification": {
+    "policy": {
+      "min_observation_days": 30.0,
+      "min_eligible_intents": 50,
+      "min_post_only_fill_rate": 0.7,
+      "max_fallback_rate": 0.3,
+      "max_p95_fill_seconds": 30.0,
+      "max_mean_all_in_cost_bps": 7.5,
+      "max_p95_slippage_bps": 5.0
+    },
+    "evidence": {
+      "observation_days": 0.0,
+      "eligible_intents": 0,
+      "post_only_fills": 0,
+      "fallback_orders": 0,
+      "p95_fill_seconds": null,
+      "mean_all_in_cost_bps": null,
+      "p95_slippage_bps": null
+    },
+    "result": {
+      "passed": false,
+      "checks": {
+        "observation_days": false,
+        "eligible_intents": false,
+        "post_only_fill_rate": false,
+        "fallback_rate": false,
+        "p95_fill_seconds": false,
+        "mean_all_in_cost_bps": false,
+        "p95_slippage_bps": false
+      },
+      "post_only_fill_rate": null,
+      "fallback_rate": null
+    }
+  },
+  "activation_status": "SHADOW_ONLY",
+  "activation_blocker": "Un taux de fill maker exige des intentions shadow sur plusieurs signaux et, ensuite, des ordres testnet; le carnet public seul ne prouve pas un fill."
+}

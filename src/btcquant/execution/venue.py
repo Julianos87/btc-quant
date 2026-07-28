@@ -24,6 +24,7 @@ import pandas as pd
 from .resilience import RetryPolicy
 
 NETWORK_ERRORS = (ccxt.NetworkError, ccxt.ExchangeNotAvailable, ccxt.RequestTimeout)
+FUNDING_HISTORY_PAGE_LIMIT = 1000
 
 
 class Venue:
@@ -104,18 +105,43 @@ class Venue:
         return self.funding_history_since(since)
 
     def funding_history_since(self, since: pd.Timestamp) -> pd.Series:
-        """Paiements natifs strictement horodatés depuis ``since``."""
+        """Paiements natifs depuis ``since``, toutes les pages dédupliquées.
 
+        Une seule réponse CCXT peut être plus courte que l'arriéré demandé,
+        notamment après plusieurs semaines d'arrêt sur une venue horaire.
+        Le curseur avance jusqu'à une page vide ou non progressive.
+        """
+
+        since = pd.Timestamp(since)
+        since = since.tz_localize("UTC") if since.tzinfo is None else since.tz_convert("UTC")
         since_ms = int(since.timestamp() * 1000)
-        rows = self._retry.call(
-            self.funding_exchange.fetch_funding_rate_history,
-            self.symbol,
-            since=since_ms,
-            retry_on=NETWORK_ERRORS,
-        )
+        cursor_ms = since_ms
+        payments: dict[int, float] = {}
+        while True:
+            rows = self._retry.call(
+                self.funding_exchange.fetch_funding_rate_history,
+                self.symbol,
+                since=cursor_ms,
+                limit=FUNDING_HISTORY_PAGE_LIMIT,
+                retry_on=NETWORK_ERRORS,
+            )
+            if not rows:
+                break
+            latest_ms = max(int(row["timestamp"]) for row in rows)
+            for row in rows:
+                timestamp_ms = int(row["timestamp"])
+                if timestamp_ms >= since_ms:
+                    payments[timestamp_ms] = float(row["fundingRate"])
+            next_cursor_ms = latest_ms + 1
+            if next_cursor_ms <= cursor_ms:
+                break
+            cursor_ms = next_cursor_ms
+
+        timestamps = sorted(payments)
         return pd.Series(
-            [float(r["fundingRate"]) for r in rows],
+            [payments[timestamp] for timestamp in timestamps],
             index=pd.DatetimeIndex(
-                [pd.Timestamp(r["timestamp"], unit="ms", tz="UTC") for r in rows]
+                [pd.Timestamp(timestamp, unit="ms", tz="UTC") for timestamp in timestamps]
             ),
-        ).sort_index()
+            dtype=float,
+        )

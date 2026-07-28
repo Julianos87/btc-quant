@@ -8,6 +8,7 @@ import os
 import sys
 from pathlib import Path
 
+from btcquant.console import enable_utf8_output
 from btcquant.execution.readiness import (
     evaluate_readiness,
     finalize_campaign,
@@ -17,17 +18,6 @@ from btcquant.execution.readiness import (
 from btcquant.execution.state_store import StateStore
 
 ROOT = Path(os.environ.get("BTCQUANT_ROOT", Path.cwd())).resolve()
-_CONSOLE_TRANSLATION: dict[int, str | int | None] = {
-    ord("≥"): ">=",
-    ord("≤"): "<=",
-    ord("→"): "->",
-}
-
-
-def _console_text(value: object) -> str:
-    """Garde la CLI lisible sur les consoles Windows CP1252."""
-
-    return str(value).translate(_CONSOLE_TRANSLATION)
 
 
 def _print_report(report: dict) -> None:
@@ -38,13 +28,11 @@ def _print_report(report: dict) -> None:
     )
     for check in report["checks"]:
         marker = "PASS" if check["passed"] else "FAIL"
-        print(
-            f"  [{marker}] {_console_text(check['label'])}: "
-            f"{_console_text(check['value'])} ({_console_text(check['target'])})"
-        )
+        print(f"  [{marker}] {check['label']}: {check['value']} ({check['target']})")
 
 
 def main() -> None:
+    enable_utf8_output()
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=("start", "status", "finalize", "cancel"))
     parser.add_argument("--database", default="state/btcquant.db")

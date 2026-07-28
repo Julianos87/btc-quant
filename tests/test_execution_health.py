@@ -219,3 +219,66 @@ def test_replacement_keeps_old_stop_protection_but_alerts_pending_transition(tmp
     assert health.unprotected_slots == ()
     assert health.stop_transition_slots == ("trend_ls_55",)
     assert any(item["kind"] == "stop_transition_pending" for item in notifications)
+
+
+# ── échecs répétés de la boucle principale ──────────────────────────────────
+# Le catch-all de `run_forever` protège d'une erreur transitoire, mais masquait
+# les pannes durables : un checkpoint non sérialisable échouait à chaque tick
+# sans jamais produire autre chose qu'une ligne de log. Le watchdog voyait
+# l'état périmé 10 min plus tard, sans la cause.
+
+
+def _idle_runner(tmp_path):
+    from btcquant.execution.broker import PaperBroker
+    from btcquant.execution.runner import LiveRunner
+    from btcquant.risk import RiskConfig
+
+    return LiveRunner(
+        [],
+        PaperBroker(),
+        RiskConfig(initial_capital=10_000.0),
+        "binance",
+        "BTC/USDT",
+        tmp_path / "btcquant.db",
+        notifier=lambda _message: True,
+    )
+
+
+def test_isolated_loop_failure_does_not_raise_an_incident(tmp_path):
+    from btcquant.execution.runner import LOOP_FAILURES_BEFORE_INCIDENT
+
+    runner = _idle_runner(tmp_path)
+
+    runner._record_loop_failure(RuntimeError("réseau"), LOOP_FAILURES_BEFORE_INCIDENT - 1)
+
+    assert not runner.store.read_incidents(open_only=True)
+
+
+def test_repeated_loop_failures_open_an_incident_naming_the_cause(tmp_path):
+    from btcquant.execution.runner import LOOP_FAILURES_BEFORE_INCIDENT
+
+    messages: list[str] = []
+    runner = _idle_runner(tmp_path)
+    runner.notifier = messages.append
+
+    runner._record_loop_failure(
+        TypeError("checkpoint non sérialisable"), LOOP_FAILURES_BEFORE_INCIDENT
+    )
+
+    incidents = runner.store.read_incidents(open_only=True)
+    assert [item["fingerprint"] for item in incidents] == ["execution:trend:loop_failure"]
+    assert "checkpoint non sérialisable" in incidents[0]["message"]
+    assert messages and "checkpoint non sérialisable" in messages[0]
+
+
+def test_loop_failure_incident_is_notified_once(tmp_path):
+    from btcquant.execution.runner import LOOP_FAILURES_BEFORE_INCIDENT
+
+    messages: list[str] = []
+    runner = _idle_runner(tmp_path)
+    runner.notifier = messages.append
+
+    for attempt in range(LOOP_FAILURES_BEFORE_INCIDENT, LOOP_FAILURES_BEFORE_INCIDENT + 4):
+        runner._record_loop_failure(RuntimeError("panne durable"), attempt)
+
+    assert len(messages) == 1

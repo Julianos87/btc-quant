@@ -80,7 +80,7 @@ fi
 (
   cd "${STAGING}"
   "${STAGING}/venv/bin/python" -c \
-    "import dashboard.app; from btcquant.config import load_config; load_config('config_4x.yaml')"
+    "import dashboard.app; from btcquant.config import load_config; load_config('environments/paper/config.yaml')"
 )
 
 # Le code reste détenu par root (release immuable), mais les services systemd

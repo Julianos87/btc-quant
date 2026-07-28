@@ -17,6 +17,7 @@ pytest-*/
 .uv-cache/
 .pytest-tmp/
 .dashboard-local.*.log
+.research-*.log
 
 # uv.lock est VOLONTAIREMENT versionné (versions figées = installs
 # reproductibles VPS / CI / poste local). Ne pas l'ajouter ici.

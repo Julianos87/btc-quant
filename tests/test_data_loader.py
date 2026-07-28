@@ -142,3 +142,46 @@ def test_missing_cache_and_resampling_edge_cases(tmp_path: Path):
     assert result["open"].tolist() == [1.0, 3.0]
     assert result["high"].tolist() == [3.0, 5.0]
     assert result["volume"].tolist() == [3.0, 7.0]
+
+
+# ── agrégat de fin d'historique ─────────────────────────────────────────────
+# `load_ohlcv` écarte la bougie de base en cours, mais `resample` construisait
+# encore une fenêtre 4 h « close » à partir de 1 à 3 barres horaires seulement.
+# Le moteur décidait donc sur une bougie non close en fin d'historique —
+# exactement ce que `validate_closed_ohlcv` refuse côté live.
+
+
+def _hourly(n: int, start: str = "2030-01-01") -> pd.DataFrame:
+    index = pd.date_range(start, periods=n, freq="1h", tz="UTC")
+    values = [float(i) for i in range(n)]
+    return pd.DataFrame(
+        {
+            "open": values,
+            "high": [v + 1 for v in values],
+            "low": values,
+            "close": values,
+            "volume": [1.0] * n,
+        },
+        index=index,
+    )
+
+
+@pytest.mark.parametrize("hours,expected_bars", [(8, 2), (9, 2), (11, 2), (12, 3)])
+def test_resample_drops_the_incomplete_trailing_window(hours: int, expected_bars: int):
+    result = data.resample(_hourly(hours), "4h")
+    assert len(result) == expected_bars
+    covered_hours = expected_bars * 4
+    assert result.index[-1] == _hourly(hours).index[0] + pd.Timedelta(hours=covered_hours - 4)
+
+
+def test_resample_keeps_a_full_window_despite_a_gap_in_the_source():
+    """Le critère porte sur le temps couvert, pas sur le nombre de barres :
+    un trou dans l'historique ne doit pas faire passer une fenêtre pleine pour
+    incomplète."""
+    source = _hourly(12).drop(_hourly(12).index[5])
+    assert len(data.resample(source, "4h")) == 3
+
+
+def test_resample_to_daily_requires_a_full_day():
+    assert len(data.resample(_hourly(48), "1D")) == 2
+    assert len(data.resample(_hourly(47), "1D")) == 1

@@ -12,6 +12,8 @@ def test_dashboard_loads_external_versioned_assets(monkeypatch):
     assert b'<script src="/static/effects.js" defer></script>' in page.data
     assert b"<style>" not in page.data
     assert b"<script>" not in page.data
+    assert b"fonts.googleapis.com" not in page.data
+    assert b"fonts.gstatic.com" not in page.data
 
     assert client.get("/static/dashboard.css").status_code == 200
     assert client.get("/static/dashboard.js").status_code == 200
@@ -25,6 +27,8 @@ def test_content_security_policy_rejects_inline_scripts(monkeypatch):
     policy = response.headers["Content-Security-Policy"]
     assert "script-src 'self'" in policy
     assert "script-src 'self' 'unsafe-inline'" not in policy
+    assert "fonts.googleapis.com" not in policy
+    assert "fonts.gstatic.com" not in policy
 
 
 def test_frontend_escapes_remote_text_before_html_injection():

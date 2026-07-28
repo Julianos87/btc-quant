@@ -13,8 +13,9 @@ Boucle :
 
 Mode live : non implémenté volontairement — l'exécution double-jambe
 (spot + perp simultanés, gestion de marge) sera un jalon séparé, à valider
-sur testnet. Ce runner paper utilise les VRAIS taux de funding, donc ses
-résultats sont directement comparables au backtest.
+sur testnet. Ce runner paper utilise les vrais taux de funding et la même
+décision que le backtest, mais ne simule ni divergence de basis, ni marge, ni
+liquidation : sa courbe ne qualifie pas ces risques d'exécution réelle.
 """
 
 from __future__ import annotations
@@ -26,16 +27,30 @@ from pathlib import Path
 
 import pandas as pd
 
-from ..carry import DEFAULT_BORROW_RATE_ANN
+from ..carry import PAPER_CARRY_POLICY, CarryPolicy
+from ..domain.carry_decision import CarryAction, decide_carry_payment
 from ..notify import notify
+from ..risk import RiskConfig
 from .carry_broker import CarrySagaStatus
 from .ports import MarketDataPort, Notifier
+from .risk_service import PortfolioRiskService, PortfolioRiskState
+from .state_contract import CarryStatePayload, validate_carry_state
 from .state_store import StateStore, database_path
 from .venue import Venue
 
 log = logging.getLogger(__name__)
 
 TICK_SECONDS = 300
+#: Marge de rattrapage au premier tick d'une base neuve : sans checkpoint, on
+#: ne réclame que de quoi amorcer le lissage, jamais tout l'historique.
+BOOTSTRAP_MARGIN_DAYS = 1
+#: Coupe-circuits du carry. Le drawdown historique du profil x3 financé à 10 %/an
+#: est de -11,6 % : un halt à 25 % est une protection catastrophe, qui ne coupe
+#: pas un creux normal. La limite journalière est délibérément serrée — une
+#: structure delta-neutre qui perd 3 % en un jour ne se comporte plus comme le
+#: modèle (basis qui diverge, jambe orpheline, marge appelée).
+CARRY_MAX_DRAWDOWN_HALT = 0.25
+CARRY_DAILY_LOSS_LIMIT = 0.03
 
 
 class CarryRunner:
@@ -43,30 +58,41 @@ class CarryRunner:
         self,
         exchange_id: str = "hyperliquid",
         symbol_perp: str = "BTC/USDC:USDC",
-        initial_capital: float = 4000.0,
-        leverage: float = 3.0,
-        enter_ann: float = 0.03,
-        exit_ann: float = 0.0,
-        smooth_days: int = 14,
-        fee_rate: float = 0.0005,
-        slippage_bps: float = 5.0,
+        policy: CarryPolicy = PAPER_CARRY_POLICY,
         state_file: str | Path = "state/btcquant.db",
         legacy_state_file: str | Path | None = None,
         live_broker=None,
-        borrow_rate_ann: float = DEFAULT_BORROW_RATE_ANN,
         venue: MarketDataPort | None = None,
         notifier: Notifier = notify,
+        risk: RiskConfig | None = None,
+        risk_service: PortfolioRiskService | None = None,
     ) -> None:
         self.symbol = symbol_perp
-        self.leverage = leverage
-        self.enter_ann = enter_ann
-        self.exit_ann = exit_ann
-        self.smooth_days = smooth_days
+        #: règles partagées mot pour mot avec `carry.backtest_carry` : c'est la
+        #: condition pour que la référence publiée décrive ce moteur.
+        self.policy = policy
+        self.leverage = policy.leverage
+        self.enter_ann = policy.enter_ann
+        self.exit_ann = policy.exit_ann
+        self.smooth_days = policy.smooth_days
         #: coût annuel des (levier−1)×capital empruntés pour financer la jambe
         #: spot. Débité à chaque paiement de funding, au prorata, tant que la
         #: position est ouverte — même convention que `carry.backtest_carry`.
-        self.borrow_rate_ann = borrow_rate_ann
-        self.switch_cost = 2 * (fee_rate + slippage_bps / 10_000.0) * leverage
+        self.borrow_rate_ann = policy.borrow_rate_ann
+        self.switch_cost = policy.switch_cost
+        initial_capital = policy.capital
+        self.risk = risk or RiskConfig(
+            initial_capital=initial_capital,
+            max_drawdown_halt=CARRY_MAX_DRAWDOWN_HALT,
+            daily_loss_limit=CARRY_DAILY_LOSS_LIMIT,
+        )
+        self.risk_service = risk_service or PortfolioRiskService(self.risk)
+        self.peak_equity = initial_capital
+        self.day: str | None = None
+        self.day_start_equity = initial_capital
+        self.halted = False
+        self.daily_lockout = False
+        self._halt_notified = False
         self.state_path = Path(state_file)
         self.legacy_state_path = (
             Path(legacy_state_file) if legacy_state_file is not None else self.state_path
@@ -110,7 +136,8 @@ class CarryRunner:
 
     def _load_state(self) -> None:
         self.store.migrate_legacy_json("carry", self.legacy_state_path)
-        raw = self.store.load_engine_state("carry")
+        stored = self.store.load_engine_state("carry")
+        raw = validate_carry_state(stored) if stored is not None else None
         if raw is None:
             return
         self.equity = raw["equity"]
@@ -119,12 +146,16 @@ class CarryRunner:
         self.qty = raw.get("qty", 0.0)
         self.spot_qty = raw.get("spot_qty", self.qty)
         self.perp_qty = raw.get("perp_qty", self.qty)
-        self.last_funding_ts = (
-            pd.Timestamp(raw["last_funding_ts"]) if raw.get("last_funding_ts") else None
-        )
+        last_funding_ts = raw.get("last_funding_ts")
+        self.last_funding_ts = pd.Timestamp(last_funding_ts) if last_funding_ts else None
+        self.peak_equity = raw.get("peak_equity", self.equity)
+        self.day = raw.get("day")
+        self.day_start_equity = raw.get("day_start_equity", self.equity)
+        self.halted = raw.get("halted", False)
+        self.daily_lockout = raw.get("daily_lockout", False)
         log.info("État carry rechargé : équity %.2f, position %s", self.equity, self.in_position)
 
-    def _state_payload(self) -> dict:
+    def _state_payload(self) -> CarryStatePayload:
         return {
             "equity": self.equity,
             "in_position": self.in_position,
@@ -135,40 +166,106 @@ class CarryRunner:
             "last_funding_ts": (
                 str(self.last_funding_ts) if self.last_funding_ts is not None else None
             ),
+            "peak_equity": self.peak_equity,
+            "day": self.day,
+            "day_start_equity": self.day_start_equity,
+            "halted": self.halted,
+            "daily_lockout": self.daily_lockout,
         }
 
     def _save_state(self) -> None:
         self.store.save_engine_state("carry", self._state_payload())
 
     def _recent_funding(self) -> pd.Series:
+        """Historique couvrant À LA FOIS le lissage et tout l'arriéré non comptabilisé.
+
+        Une fenêtre fixe de ``smooth_days`` perdait DÉFINITIVEMENT, et sans
+        alerte, les paiements antérieurs après un arrêt plus long que cette
+        fenêtre. On repart donc toujours du checkpoint quand il est plus ancien
+        que le besoin de lissage — même invariant que le moteur trend.
+        """
+
         # +1 jour de marge : le lissage a besoin de smooth_days complets même
         # si le premier paiement de la fenêtre tombe juste avant la borne
-        return self.venue.funding_history(self.smooth_days + 1)
+        smoothing_start = pd.Timestamp.now(tz="UTC") - pd.Timedelta(
+            days=self.smooth_days + BOOTSTRAP_MARGIN_DAYS
+        )
+        if self.last_funding_ts is None:
+            return self.venue.funding_history_since(smoothing_start)
+        checkpoint = pd.Timestamp(self.last_funding_ts)
+        if checkpoint.tzinfo is None:
+            checkpoint = checkpoint.tz_localize("UTC")
+        return self.venue.funding_history_since(min(smoothing_start, checkpoint))
 
     def _apply_funding(self, funding: pd.Series) -> None:
-        """Comptabilise exactement une fois les paiements depuis le checkpoint."""
+        """Comptabilise et persiste chaque paiement exactement une fois.
 
-        if self.in_position:
-            payments = (
-                funding
-                if self.last_funding_ts is None
-                else funding[funding.index > self.last_funding_ts]
+        Equity et curseur sont checkpointés ensemble après chaque paiement.
+        Si l'écriture échoue, l'état mémoire est restauré : le tick suivant
+        peut rejouer ce paiement sans doubler ceux déjà validés.
+        """
+
+        if funding.empty:
+            return
+        funding = funding.copy()
+        funding.index = pd.to_datetime(funding.index, utc=True)
+        funding = funding[~funding.index.duplicated(keep="last")].sort_index()
+
+        if self.last_funding_ts is None:
+            # Une base neuve ne permet pas de savoir depuis quand une éventuelle
+            # position legacy était réellement ouverte. Initialiser au dernier
+            # paiement est conservateur et évite de créditer un historique fictif.
+            self.last_funding_ts = funding.index[-1]
+            self.store.save_engine_state(
+                "carry",
+                self._state_payload(),
+                event_type="funding_checkpoint_initialized",
+                event_payload={"last_funding_ts": self.last_funding_ts.isoformat()},
             )
-            borrow = (self.leverage - 1.0) * self.borrow_rate_ann / self.venue.payments_per_year
-            for ts, rate in payments.items():
-                carry_cost = self.equity * borrow
-                gain = self.equity * (rate * self.leverage - borrow)
-                self.equity += gain
+            return
+
+        checkpoint = pd.Timestamp(self.last_funding_ts)
+        checkpoint = (
+            checkpoint.tz_localize("UTC")
+            if checkpoint.tzinfo is None
+            else checkpoint.tz_convert("UTC")
+        )
+        payments = funding[funding.index > checkpoint]
+        borrow = (self.leverage - 1.0) * self.borrow_rate_ann / self.venue.payments_per_year
+        for timestamp, raw_rate in payments.items():
+            rate = float(raw_rate)
+            payment_ts = pd.Timestamp(str(timestamp))
+            previous_equity = self.equity
+            previous_checkpoint = self.last_funding_ts
+            carry_cost = self.equity * borrow if self.in_position else 0.0
+            gain = self.equity * (rate * self.leverage - borrow) if self.in_position else 0.0
+            self.equity += gain
+            self.last_funding_ts = payment_ts
+            try:
+                self.store.save_engine_state(
+                    "carry",
+                    self._state_payload(),
+                    event_payload={
+                        "reason": "funding_payment",
+                        "payment_ts": self.last_funding_ts.isoformat(),
+                        "rate": rate,
+                        "gain": gain,
+                    },
+                )
+            except Exception:
+                self.equity = previous_equity
+                self.last_funding_ts = previous_checkpoint
+                raise
+            if self.in_position:
                 log.info(
                     "[CARRY] Funding %s : %+.4f%% -> %+.2f USDT "
                     "(dont portage -%.2f USDT, équity %.2f)",
-                    ts,
+                    timestamp,
                     rate * 100,
                     gain,
                     carry_cost,
                     self.equity,
                 )
-        self.last_funding_ts = funding.index[-1]
 
     def _open_position(self, smooth_ann: float) -> None:
         order_id = None
@@ -249,7 +346,7 @@ class CarryRunner:
             f"équity {self.equity:,.2f} $"
         )
 
-    def _close_position(self, smooth_ann: float) -> None:
+    def _close_position(self, smooth_ann: float, reason: str = "funding_exit") -> None:
         if self.live_broker is not None:
             intent_id = f"carry-close-{uuid.uuid4().hex}"
             previous_qty = self.qty
@@ -261,7 +358,7 @@ class CarryRunner:
                 "CARRY_PAIR",
                 "CLOSE",
                 self.qty,
-                "funding_exit",
+                reason,
                 self._state_payload(),
             )
             result = self.live_broker.close_position(self.qty, intent_id=intent_id)
@@ -312,14 +409,69 @@ class CarryRunner:
                 filled_qty=closed_qty,
             )
         log.info(
-            "[CARRY] SORTIE (funding lissé %.1f%%/an) — équity %.2f",
+            "[CARRY] SORTIE (%s, funding lissé %.1f%%/an) — équity %.2f",
+            reason,
             smooth_ann * 100,
             self.equity,
         )
-        self.notifier(
-            f"⚪ Carry — position FERMÉE (funding lissé {smooth_ann:.1%}/an devenu "
-            f"défavorable), équity {self.equity:,.2f} $"
+        motive = (
+            f"funding lissé {smooth_ann:.1%}/an devenu défavorable"
+            if reason == "funding_exit"
+            else reason
         )
+        self.notifier(f"⚪ Carry — position FERMÉE ({motive}), équity {self.equity:,.2f} $")
+
+    def _update_kill_switches(self) -> None:
+        """Coupe-circuits portefeuille du carry, mêmes règles que le trend.
+
+        Le carry a longtemps tourné sans aucun filet : 40 % du portefeuille
+        dépendaient du seul signal de funding. La politique de risque est
+        désormais celle du moteur trend (`PortfolioRiskService`), appliquée à
+        l'équity carry.
+        """
+
+        today = str(pd.Timestamp.now(tz="UTC").date())
+        transition = self.risk_service.evaluate(
+            PortfolioRiskState(
+                peak_equity=self.peak_equity,
+                day=self.day,
+                day_start_equity=self.day_start_equity,
+                halted=self.halted,
+                daily_lockout=self.daily_lockout,
+            ),
+            equity=self.equity,
+            day=today,
+        )
+        state = transition.state
+        self.peak_equity = state.peak_equity
+        self.day = state.day
+        self.day_start_equity = state.day_start_equity
+        self.halted = state.halted
+        self.daily_lockout = state.daily_lockout
+        if transition.halt_triggered:
+            log.error(
+                "KILL SWITCH carry : équity %.2f < %.2f",
+                self.equity,
+                self.peak_equity * (1.0 - self.risk.max_drawdown_halt),
+            )
+            self.store.record_incident(
+                "execution:carry:kill_switch",
+                engine="carry",
+                severity="CRITICAL",
+                kind="kill_switch",
+                message=f"Kill-switch carry : drawdown maximal atteint (équity {self.equity:,.0f})",
+                context={"equity": self.equity, "peak_equity": self.peak_equity},
+            )
+            self.notifier(
+                f"⛔ KILL-SWITCH carry : drawdown maximal atteint "
+                f"(équity {self.equity:,.0f} $). Fermeture et arrêt du moteur carry."
+            )
+        if transition.lockout_triggered:
+            log.warning("Limite de perte journalière carry atteinte : plus d'entrées aujourd'hui")
+            self.notifier(
+                f"🔒 Lockout journalier carry : perte du jour > "
+                f"{self.risk.daily_loss_limit:.0%} (équity {self.equity:,.0f} $)."
+            )
 
     def _tick(self) -> None:
         funding = self._recent_funding()
@@ -327,12 +479,26 @@ class CarryRunner:
             return
 
         self._apply_funding(funding)
+        # Le risque est évalué AVANT toute décision de position, comme dans le
+        # runner trend : un kill-switch ferme au tick courant.
+        self._update_kill_switches()
         window = self.smooth_days * self.venue.payments_per_day
         smooth_ann = float(funding.tail(window).mean() * self.venue.payments_per_year)
-        if not self.in_position and smooth_ann > self.enter_ann:
+        decision = decide_carry_payment(
+            in_position=self.in_position,
+            smooth_ann=smooth_ann,
+            enter_ann=self.enter_ann,
+            exit_ann=self.exit_ann,
+            halted=self.halted,
+            entry_blocked=self.daily_lockout,
+        )
+        if decision.action is CarryAction.OPEN:
             self._open_position(smooth_ann)
-        elif self.in_position and smooth_ann < self.exit_ann:
-            self._close_position(smooth_ann)
+        elif decision.action is CarryAction.CLOSE:
+            self._close_position(smooth_ann, reason=decision.reason or "funding_exit")
+        elif self.halted and not self._halt_notified:
+            log.error("Kill-switch carry actif et position fermée : moteur en veille")
+            self._halt_notified = True
 
         self._save_state()
         self._append_equity()

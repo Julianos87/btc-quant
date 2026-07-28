@@ -1,0 +1,111 @@
+# ═══ ENVIRONNEMENT PAPER — profil 4x trend + carry x3 ═══
+environment: paper
+#
+# Historique 2019-2026 (frais + slippage + funding inclus, filtres ADX/funding actifs).
+# Ces chiffres proviennent de audit/baseline_reference.json et sont vérifiés en CI
+# par scripts/check_reference_provenance.py — ne pas les éditer à la main :
+#   +68.4 %/an (+4 811 % total) | Sharpe 1.18 | MAX DRAWDOWN -55.7 % | 477 trades
+#   Années perdantes du trend seul : 2021 (-4,1 %), 2025 (-25,3 %),
+#   2026 en cours (-19,1 %). Source : dashboard/yearly_reference.json.
+#
+# CONTRAT ACCEPTÉ EN LANÇANT CE PROFIL :
+# - un creux de -56 % s'est produit dans le passé et se reproduira ; le futur
+#   fera pire au moins une fois ;
+# - ~14 mois consécutifs sous le sommet précédent, à tenir sans rien modifier ;
+# - le risque par trade reste borné (~6 % par stop) et la liquidation (~25 %)
+#   reste au-delà des stops (~8-10 %), mais la marge d'erreur est réduite ;
+# - toute modification de règle en cours de route annule la validité du backtest.
+#
+# Usage : python scripts/run_backtest.py --config environments/paper/config.yaml
+#         btcquant-trend --config environments/paper/config.yaml
+
+exchange: binance
+symbol: BTC/USDT
+quote_currency: USDT
+
+portfolio:
+  total_capital: 10000
+  trend_fraction: 0.60
+  carry_fraction: 0.40
+
+carry:
+  leverage: 3.0
+  enter_ann: 0.03
+  exit_ann: 0.0
+  smooth_days: 14
+  borrow_rate_ann: 0.10
+
+data:
+  dir: data
+  base_timeframe: 1h
+  since: "2019-01-01"
+
+costs:
+  fee_rate: 0.001
+  perp_fee_rate: 0.0005
+  funding_rate_8h: 0.0001
+  slippage_bps: 5.0
+
+risk:
+  initial_capital: 6000   # 60 % d'un portefeuille de 10 000 (les 40 % restants : carry, btcquant-carry)
+  risk_per_trade: 0.06    # 4 × 1.5 % — perte typique par trade stoppé ~6 %
+  max_position_pct: 0.95
+  vol_target_annual: 1.60 # 4 × 0.40
+  max_leverage: 4.0       # transmis à Binance Futures
+  max_drawdown_halt: 0.60 # DD historique -55,3 % : halt à 60 % = protection
+                          # catastrophe uniquement, ne coupe pas un creux "normal"
+  daily_loss_limit: 0.12  # bloque les nouvelles entrées du jour au-delà de -12 %
+
+strategies:
+  trend_ls_20:
+    enabled: true
+    type: trend_ls
+    market: perp
+    timeframe: 4h
+    capital_fraction: 0.3333
+    params: { donchian: 20, adx_min: 20, funding_long_max: 0.0008, funding_short_min: -0.0008, pyramid_atr_step: 0.5, pyramid_add_fraction: 0.30, pyramid_max_adds: 1 }
+  trend_ls_55:
+    enabled: true
+    type: trend_ls
+    market: perp
+    timeframe: 4h
+    capital_fraction: 0.3333
+    params: { donchian: 55, adx_min: 20, funding_long_max: 0.0008, funding_short_min: -0.0008, pyramid_atr_step: 0.5, pyramid_add_fraction: 0.30, pyramid_max_adds: 1 }
+  trend_ls_100:
+    enabled: true
+    type: trend_ls
+    market: perp
+    timeframe: 4h
+    capital_fraction: 0.3334
+    params: { donchian: 100, adx_min: 20, funding_long_max: 0.0008, funding_short_min: -0.0008, pyramid_atr_step: 0.5, pyramid_add_fraction: 0.30, pyramid_max_adds: 1 }
+
+execution:
+  # Le code rejette toute autre valeur tant que le moteur transactionnel
+  # (journal d'ordres, reprise et réconciliation stricte) n'est pas livré.
+  mode: paper
+  testnet: true
+  state_file: state/btcquant.db
+  legacy_state_file: state/live_state_4x.json
+  poll_buffer_seconds: 20
+  simulation:
+    profile: normal
+    profiles:
+      normal:
+        max_volume_participation: 0.05
+        market_impact_bps: 15.0
+        volatility_impact_bps: 1.5
+        volatility_reference_annual: 0.40
+        volatility_multiplier_cap: 3.0
+      stress:
+        rejection_rate: 0.01
+        max_volume_participation: 0.01
+        market_impact_bps: 75.0
+        volatility_impact_bps: 6.0
+        volatility_reference_annual: 0.40
+        volatility_multiplier_cap: 5.0
+  # Venue LIVE depuis le 17/07/2026 : Hyperliquid (funding horaire, converti en
+  # équivalent 8 h par venue.py). La référence backtest reste Binance 2019-2026
+  # (exchange: ci-dessus) — écart documenté au protocole : la comparaison
+  # paper-vs-backtest du funding est indicative, pas exacte.
+  live_exchange: hyperliquid
+  live_symbol: "BTC/USDC:USDC"

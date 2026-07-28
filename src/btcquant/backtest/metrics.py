@@ -5,6 +5,13 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from ..performance import (
+    annualized_volatility,
+    daily_returns,
+    sharpe_ratio,
+    sortino_ratio,
+)
+
 
 def compute_metrics(
     equity: pd.Series,
@@ -14,23 +21,16 @@ def compute_metrics(
     *,
     exposure_bars: int | None = None,
 ) -> dict:
-    returns = equity.pct_change().dropna()
+    performance_returns = daily_returns(equity)
     n_bars = len(equity)
     years = n_bars / bars_per_year if bars_per_year else np.nan
 
     total_return = equity.iloc[-1] / equity.iloc[0] - 1.0
     cagr = (equity.iloc[-1] / equity.iloc[0]) ** (1.0 / years) - 1.0 if years > 0 else np.nan
 
-    vol = returns.std() * np.sqrt(bars_per_year)
-    sharpe = (
-        returns.mean() / returns.std() * np.sqrt(bars_per_year) if returns.std() > 0 else np.nan
-    )
-    downside = returns[returns < 0]
-    sortino = (
-        returns.mean() / downside.std() * np.sqrt(bars_per_year)
-        if len(downside) > 1 and downside.std() > 0
-        else np.nan
-    )
+    vol = annualized_volatility(performance_returns)
+    sharpe = sharpe_ratio(performance_returns)
+    sortino = sortino_ratio(performance_returns)
 
     running_max = equity.cummax()
     drawdown = equity / running_max - 1.0
@@ -79,10 +79,7 @@ def compute_metrics(
     }
     if buy_hold is not None and len(buy_hold) > 1:
         out["buy_hold_return"] = buy_hold.iloc[-1] / buy_hold.iloc[0] - 1.0
-        bh_ret = buy_hold.pct_change().dropna()
-        out["buy_hold_sharpe"] = (
-            bh_ret.mean() / bh_ret.std() * np.sqrt(bars_per_year) if bh_ret.std() > 0 else np.nan
-        )
+        out["buy_hold_sharpe"] = sharpe_ratio(daily_returns(buy_hold))
         bh_dd = (buy_hold / buy_hold.cummax() - 1.0).min()
         out["buy_hold_max_dd"] = bh_dd
     return out

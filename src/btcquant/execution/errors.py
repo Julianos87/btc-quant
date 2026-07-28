@@ -7,7 +7,3 @@ class ExecutionError(RuntimeError):
 
 class ReconciliationRequired(ExecutionError):
     """État externe ambigu nécessitant une intervention humaine."""
-
-
-class RemotePositionUnavailable(ExecutionError):
-    """La position distante ne peut pas être établie avec certitude."""

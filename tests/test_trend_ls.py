@@ -64,6 +64,22 @@ def test_breakout_must_be_strict():
     assert s.entry_signal(_row(close=110.0)) == 0
 
 
+def test_cost_buffer_requires_breakout_large_enough_in_both_directions():
+    strategy = TrendLS(entry_buffer_bps=20)
+
+    assert strategy.entry_signal(_row(close=110.10)) == 0
+    assert strategy.entry_signal(_row(close=110.30)) == 1
+    assert strategy.entry_signal(_row(close=89.90, regime_up=False)) == 0
+    assert strategy.entry_signal(_row(close=89.70, regime_up=False)) == -1
+
+
+def test_zero_cost_buffer_preserves_historical_entry_rule():
+    strategy = TrendLS(entry_buffer_bps=0)
+
+    assert strategy.entry_signal(_row(close=110.0001)) == 1
+    assert strategy.entry_signal(_row(close=89.9999, regime_up=False)) == -1
+
+
 def test_regime_blocks_counter_trend_entry():
     """Cassure haussière mais régime baissier : pas de long.
 
@@ -129,6 +145,37 @@ def test_funding_filter_is_neutral_when_value_missing():
     s = TrendLS(funding_long_max=0.0008)
     assert s.entry_signal(_row(close=111.0, funding=np.nan)) == 1
     assert s.entry_signal(_row(close=111.0)) == 1  # colonne absente
+
+
+def test_continuous_funding_sizing_reduces_only_the_crowded_side():
+    strategy = TrendLS(
+        funding_sizing_threshold=0.001,
+        funding_sizing_floor=0.25,
+    )
+
+    assert strategy.position_size_multiplier(_row(funding=0.0005), 1) == pytest.approx(0.625)
+    assert strategy.position_size_multiplier(_row(funding=0.0015), 1) == pytest.approx(0.25)
+    assert strategy.position_size_multiplier(_row(funding=-0.0005), 1) == 1.0
+    assert strategy.position_size_multiplier(_row(funding=-0.0005), -1) == pytest.approx(0.625)
+
+
+def test_continuous_funding_sizing_is_neutral_when_disabled_or_missing():
+    assert TrendLS().position_size_multiplier(_row(funding=0.001), 1) == 1.0
+    strategy = TrendLS(funding_sizing_threshold=0.001)
+    assert strategy.position_size_multiplier(_row(funding=np.nan), 1) == 1.0
+
+
+@pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        ({"funding_sizing_threshold": 0}, "threshold"),
+        ({"funding_sizing_floor": -0.1}, "floor"),
+        ({"funding_sizing_floor": 1.1}, "floor"),
+    ],
+)
+def test_continuous_funding_sizing_rejects_invalid_parameters(params, message):
+    with pytest.raises(ValueError, match=message):
+        TrendLS(**params)
 
 
 def test_funding_filter_ignored_when_disabled():
@@ -265,3 +312,48 @@ def test_warmup_covers_slowest_indicator():
     assert s.warmup_bars() >= 200
     s2 = TrendLS(ema_slow=50, donchian=300)
     assert s2.warmup_bars() >= 300
+
+
+def test_strong_trend_loosens_only_the_trailing_stop():
+    strategy = TrendLS(
+        atr_mult=3.0,
+        strong_trend_adx=30.0,
+        strong_trend_atr_mult=4.5,
+    )
+    position = Position(
+        entry_time=pd.Timestamp("2025-01-01", tz="UTC"),
+        entry_price=100.0,
+        qty=1.0,
+        stop_price=94.0,
+        direction=1,
+        best_close=120.0,
+    )
+
+    assert strategy.initial_stop(pd.Series({"atr": 2.0}), 100.0, 1) == 94.0
+    assert strategy.trailing_stop(
+        pd.Series({"atr": 2.0, "adx": 35.0}),
+        position,
+    ) == 111.0
+    assert strategy.trailing_stop(
+        pd.Series({"atr": 2.0, "adx": 25.0}),
+        position,
+    ) == 114.0
+
+
+def test_strong_trend_parameters_must_be_enabled_together():
+    with pytest.raises(ValueError, match="activés ensemble"):
+        TrendLS(strong_trend_adx=30.0)
+
+
+def test_atr_entry_buffer_requires_a_stronger_breakout():
+    strategy = TrendLS(entry_buffer_atr=1.0)
+    base = {
+        "atr": 2.0,
+        "donchian_high": 100.0,
+        "donchian_low": 90.0,
+        "ema_slow": 95.0,
+        "regime_up": True,
+    }
+
+    assert strategy.entry_signal(pd.Series({**base, "close": 101.9})) == 0
+    assert strategy.entry_signal(pd.Series({**base, "close": 102.1})) == 1

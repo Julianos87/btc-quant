@@ -6,10 +6,11 @@ Flask. Les entrées sont des séries/dataframes déjà chargés par un repositor
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
 import pandas as pd
+
+from ..performance import annualized_volatility, daily_returns, sharpe_ratio, sortino_ratio
 
 
 def deposits_total(flows: pd.DataFrame) -> float:
@@ -64,7 +65,6 @@ def live_metrics(combined: pd.Series, initial_capital: float) -> dict[str, float
     if len(combined) < 3 or initial_capital <= 0:
         return result
 
-    daily = combined.resample("1D").last().dropna()
     elapsed_seconds = (combined.index[-1] - combined.index[0]).total_seconds()
     result["days"] = int(elapsed_seconds // 86400)
 
@@ -81,14 +81,14 @@ def live_metrics(combined: pd.Series, initial_capital: float) -> dict[str, float
         if max_drawdown < 0:
             result["calmar"] = float(cagr / abs(max_drawdown))
 
-    returns = daily.pct_change().dropna()
-    if len(returns) >= 14 and returns.std() > 0:
-        annualizer = math.sqrt(365)
-        result["sharpe"] = float(returns.mean() / returns.std() * annualizer)
-        result["vol_annual"] = float(returns.std() * annualizer)
-        downside = returns[returns < 0]
-        if len(downside) > 1 and downside.std() > 0:
-            result["sortino"] = float(returns.mean() / downside.std() * annualizer)
+    returns = daily_returns(combined)
+    if len(returns) >= 14:
+        sharpe = sharpe_ratio(returns)
+        volatility = annualized_volatility(returns)
+        sortino = sortino_ratio(returns)
+        result["sharpe"] = sharpe if pd.notna(sharpe) else None
+        result["vol_annual"] = volatility if pd.notna(volatility) else None
+        result["sortino"] = sortino if pd.notna(sortino) else None
     return result
 
 

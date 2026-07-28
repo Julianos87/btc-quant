@@ -27,6 +27,9 @@ class ExecutionConfig:
     rejection_rate: float = 0.0
     max_volume_participation: float | None = None
     market_impact_bps: float = 0.0
+    volatility_impact_bps: float = 0.0
+    volatility_reference_annual: float = 0.40
+    volatility_multiplier_cap: float = 3.0
     latency_ms: int = 0
     min_qty: float = 0.0
     seed: int = 0
@@ -37,10 +40,19 @@ class ExecutionConfig:
         if (
             not math.isfinite(self.slippage_bps)
             or not math.isfinite(self.market_impact_bps)
+            or not math.isfinite(self.volatility_impact_bps)
             or self.slippage_bps < 0
             or self.market_impact_bps < 0
+            or self.volatility_impact_bps < 0
         ):
-            raise ValueError("slippage et impact doivent être positifs ou nuls")
+            raise ValueError("slippage et impacts doivent être positifs ou nuls")
+        if (
+            not math.isfinite(self.volatility_reference_annual)
+            or self.volatility_reference_annual <= 0
+        ):
+            raise ValueError("volatility_reference_annual doit être strictement positive")
+        if not math.isfinite(self.volatility_multiplier_cap) or self.volatility_multiplier_cap <= 0:
+            raise ValueError("volatility_multiplier_cap doit être strictement positif")
         if not math.isfinite(self.rejection_rate) or not 0.0 <= self.rejection_rate <= 1.0:
             raise ValueError("rejection_rate doit être compris entre 0 et 1")
         if self.max_volume_participation is not None and not (
@@ -63,6 +75,7 @@ class MarketOrder:
     reference_price: float
     available_volume: float | None = None
     delayed_price: float | None = None
+    volatility_annual: float | None = None
 
 
 @dataclass(frozen=True)
@@ -98,6 +111,7 @@ class ExecutionSimulator:
         *,
         delayed_price: float | None = None,
         participation: float = 0.0,
+        volatility_annual: float | None = None,
     ) -> float:
         """Calcule le prix défavorable d'un fill sans modifier l'état."""
 
@@ -107,12 +121,26 @@ class ExecutionSimulator:
             self._validate_positive_finite("delayed_price", delayed_price)
         if not 0.0 <= participation <= 1.0:
             raise ValueError("participation doit être comprise entre 0 et 1")
+        if volatility_annual is not None:
+            self._validate_non_negative_finite("volatility_annual", volatility_annual)
         base_price = (
             delayed_price
             if self.config.latency_ms > 0 and delayed_price is not None
             else reference_price
         )
-        adverse_bps = self.config.slippage_bps + self.config.market_impact_bps * participation
+        volatility_multiplier = (
+            min(
+                volatility_annual / self.config.volatility_reference_annual,
+                self.config.volatility_multiplier_cap,
+            )
+            if volatility_annual is not None
+            else 0.0
+        )
+        adverse_bps = (
+            self.config.slippage_bps
+            + self.config.volatility_impact_bps * volatility_multiplier
+            + self.config.market_impact_bps * participation
+        )
         direction = 1.0 if side == OrderSide.BUY else -1.0
         return base_price * (1.0 + direction * adverse_bps / 10_000.0)
 
@@ -153,6 +181,7 @@ class ExecutionSimulator:
                 order.reference_price,
                 delayed_price=order.delayed_price,
                 participation=participation,
+                volatility_annual=order.volatility_annual,
             )
             status = FillStatus.PARTIAL if fill_qty < order.qty else FillStatus.FILLED
             result = SimulatedFill(
@@ -207,6 +236,8 @@ class ExecutionSimulator:
             self._validate_non_negative_finite("available_volume", order.available_volume)
         if order.delayed_price is not None:
             self._validate_positive_finite("delayed_price", order.delayed_price)
+        if order.volatility_annual is not None:
+            self._validate_non_negative_finite("volatility_annual", order.volatility_annual)
 
     def _empty_fill(self, order: MarketOrder, status: FillStatus) -> SimulatedFill:
         return SimulatedFill(

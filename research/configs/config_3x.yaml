@@ -1,11 +1,17 @@
 # ═══ PROFIL AGRESSIF 3x — ensemble trend long-short sur futures ═══
+environment: dev
 #
-# Historique 2019-2026 (frais + slippage + funding inclus) :
-#   +1 493 % total (~+45 %/an) | Sharpe 1.31 | MAX DRAWDOWN -39 % | pire mois -12 %
+# Historique 2019-2026 (frais + slippage + funding inclus), remesuré le
+# 27/07/2026 sur les mêmes données que la baseline du profil actif :
+#   +1 567 % total (+45,8 %/an) | Sharpe 1.36 | MAX DRAWDOWN -42,1 %
+#
+# Contrairement à environments/paper/config.yaml, ces chiffres ne sont PAS vérifiés en CI : ce
+# profil est archivé et n'a pas de référence hashée. Les remesurer avant de les
+# citer (python scripts/run_backtest.py --config research/configs/config_3x.yaml).
 #
 # À SAVOIR AVANT DE LANCER :
 # - le levier ne crée pas d'edge (Sharpe identique au 1x) : il multiplie
-#   gains ET pertes par ~3. Un -39 % de creux S'EST produit dans le passé
+#   gains ET pertes par ~3. Un -42 % de creux S'EST produit dans le passé
 #   et se reproduira. Le futur fait toujours pire au moins une fois.
 # - le risque par trade reste borné (~4.5 % de l'équity par stop) : le levier
 #   sert à ouvrir des positions plus grandes quand la volatilité est basse,
@@ -71,5 +77,21 @@ execution:
   state_file: state/btcquant_3x.db
   legacy_state_file: state/live_state_3x.json
   poll_buffer_seconds: 20
+  simulation:
+    profile: normal
+    profiles:
+      normal:
+        max_volume_participation: 0.05
+        market_impact_bps: 15.0
+        volatility_impact_bps: 1.5
+        volatility_reference_annual: 0.40
+        volatility_multiplier_cap: 3.0
+      stress:
+        rejection_rate: 0.01
+        max_volume_participation: 0.01
+        market_impact_bps: 75.0
+        volatility_impact_bps: 6.0
+        volatility_reference_annual: 0.40
+        volatility_multiplier_cap: 5.0
   live_exchange: hyperliquid          # venue des runners (backtest : exchange: ci-dessus)
   live_symbol: "BTC/USDC:USDC"

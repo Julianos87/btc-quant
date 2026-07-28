@@ -70,10 +70,11 @@ class Broker(ABC):
         reduce_only: bool = False,
         available_volume: float | None = None,
         delayed_price: float | None = None,
+        volatility_annual: float | None = None,
     ) -> Fill:
         """Point d'entrée commun ; les brokers réels gardent leur implémentation."""
 
-        del client_order_id, reduce_only, available_volume, delayed_price
+        del client_order_id, reduce_only, available_volume, delayed_price, volatility_annual
         order_side = OrderSide(side)
         if order_side == OrderSide.BUY:
             return self.market_buy(qty, ref_price)
@@ -192,6 +193,7 @@ class PaperBroker(Broker):
         reduce_only: bool = False,
         available_volume: float | None = None,
         delayed_price: float | None = None,
+        volatility_annual: float | None = None,
     ) -> Fill:
         del reduce_only
         order_side = OrderSide(side)
@@ -206,6 +208,7 @@ class PaperBroker(Broker):
                 reference_price=ref_price,
                 available_volume=available_volume,
                 delayed_price=delayed_price,
+                volatility_annual=volatility_annual,
             )
         )
         log.info(

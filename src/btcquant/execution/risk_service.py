@@ -35,19 +35,27 @@ class PortfolioRiskService:
         equity: float,
         day: str,
     ) -> PortfolioRiskTransition:
-        peak = max(state.peak_equity, equity)
+        # L'équity arrive souvent en `numpy.float64` : elle est calculée depuis
+        # un prix lu dans une Series pandas. `np.float64` hérite de `float` et
+        # traverse donc JSON et SQLite sans bruit — mais `np.bool_` n'hérite PAS
+        # de `bool`, si bien qu'un simple `equity < seuil` produisait un drapeau
+        # que `json.dumps` refusait de sérialiser. Le checkpoint échouait alors
+        # à chaque tick dès la première position ouverte, et l'exception était
+        # avalée par la boucle principale. On normalise ici, à la frontière.
+        equity = float(equity)
+        peak = max(float(state.peak_equity), equity)
         new_day = day != state.day
-        day_start = equity if new_day else state.day_start_equity
-        previous_lockout = False if new_day else state.daily_lockout
+        day_start = equity if new_day else float(state.day_start_equity)
+        previous_lockout = False if new_day else bool(state.daily_lockout)
 
         drawdown_breached = equity < peak * (1.0 - self.config.max_drawdown_halt)
-        halted = state.halted or drawdown_breached
-        halt_triggered = halted and not state.halted
+        halted = bool(state.halted) or bool(drawdown_breached)
+        halt_triggered = halted and not bool(state.halted)
 
         daily_breached = self.config.daily_loss_limit is not None and equity < day_start * (
             1.0 - self.config.daily_loss_limit
         )
-        lockout = previous_lockout or daily_breached
+        lockout = previous_lockout or bool(daily_breached)
         lockout_triggered = lockout and not previous_lockout
 
         return PortfolioRiskTransition(

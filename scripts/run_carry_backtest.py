@@ -10,6 +10,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from btcquant.console import enable_utf8_output
+
+enable_utf8_output()
+
 from btcquant.carry import backtest_carry, load_funding
 
 

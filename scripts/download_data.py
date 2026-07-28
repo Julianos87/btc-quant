@@ -1,4 +1,4 @@
-"""Télécharge/actualise l'historique OHLCV défini dans config.yaml."""
+"""Télécharge/actualise l'historique OHLCV défini dans le profil dev."""
 
 import argparse
 import logging
@@ -8,13 +8,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from btcquant.console import enable_utf8_output
+
+enable_utf8_output()
+
 from btcquant.config import load_config
 from btcquant.data import load_ohlcv
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default=ROOT / "config.yaml")
+    parser.add_argument(
+        "--config",
+        default=ROOT / "environments" / "dev" / "config.yaml",
+    )
     parser.add_argument("--symbol", default=None, help="ex: ETH/USDT (défaut: config)")
     args = parser.parse_args()
 

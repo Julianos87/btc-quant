@@ -12,6 +12,7 @@ from btcquant.domain import (
     EntryRequested,
     ExitRequested,
     FundingAccrued,
+    PyramidRequested,
     StopTightened,
     decide_bar_close,
 )
@@ -48,6 +49,11 @@ class KernelStrategy(Strategy):
 
     def warmup_bars(self) -> int:
         return 1
+
+
+class PyramidKernelStrategy(KernelStrategy):
+    def pyramid_fraction(self, row: pd.Series, position: Position) -> float:
+        return 0.30
 
 
 def make_position(**changes) -> Position:
@@ -91,6 +97,24 @@ def test_exit_uses_advanced_position_and_kill_switch_has_priority():
     assert ExitRequested("signal") in signal_decision.events
     assert ExitRequested("kill_switch") in halted_decision.events
     assert ExitRequested("signal") not in halted_decision.events
+
+
+def test_pyramid_is_requested_only_when_no_exit_has_priority():
+    row = pd.Series({"close": 110.0, "signal": 0.0})
+
+    held = decide_bar_close(
+        PyramidKernelStrategy(exit_after=99),
+        row,
+        make_position(),
+    )
+    exiting = decide_bar_close(
+        PyramidKernelStrategy(exit_after=1),
+        row,
+        make_position(),
+    )
+
+    assert PyramidRequested(0.30) in held.events
+    assert not any(isinstance(event, PyramidRequested) for event in exiting.events)
 
 
 def test_entry_policy_is_centralized_and_rejects_invalid_directions():
@@ -139,7 +163,7 @@ def test_paper_runner_applies_exactly_the_kernel_decision(tmp_path, monkeypatch)
         expected_row,
         make_position(),
     )
-    actual = runner._process_bar(slot)
+    actual = runner._process_bar(slot, float(frame["close"].iloc[-1]))
 
     assert actual == expected
     assert slot.position == expected.position

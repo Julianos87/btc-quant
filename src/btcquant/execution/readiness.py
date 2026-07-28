@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
+from .quality_metrics import percentile, slippages_bps
 from .state_store import StateStore
 
 PROTOCOL_VERSION = 2
@@ -87,151 +88,92 @@ def start_campaign(
     )
 
 
-def evaluate_readiness(
+def _inactive_campaign_report(
     store: StateStore,
+    current: datetime,
     *,
-    now: datetime | None = None,
-    persist: bool = False,
+    persist: bool,
 ) -> dict[str, Any]:
-    current = now or datetime.now(UTC)
-    if current.tzinfo is None:
-        current = current.replace(tzinfo=UTC)
-    campaign = store.active_qualification_campaign()
-    if campaign is None:
-        passed_campaign = store.latest_passed_qualification()
-        if passed_campaign is not None and isinstance(passed_campaign.get("final_report"), dict):
-            final_report = dict(passed_campaign["final_report"])
-            final_report["campaign_status"] = "PASSED"
-            policy = ReadinessPolicy(**passed_campaign["policy"])
-            ended = _parse_datetime(passed_campaign["ended_at"])
-            age_days = max(0.0, (current - ended).total_seconds() / 86400)
-            checks = list(final_report["checks"])
-            if int(passed_campaign["protocol_version"]) != PROTOCOL_VERSION:
-                checks.append(
-                    ReadinessCheck(
-                        "protocol_version",
-                        "Version du protocole",
-                        False,
-                        f"v{passed_campaign['protocol_version']}",
-                        f"v{PROTOCOL_VERSION}",
-                        "Une nouvelle campagne complète est requise.",
-                    ).to_dict()
-                )
-            if age_days > policy.qualification_valid_days:
-                checks.append(
-                    ReadinessCheck(
-                        "qualification_age",
-                        "Validité de la qualification",
-                        False,
-                        f"{age_days:.1f} j",
-                        f"≤ {policy.qualification_valid_days} j",
-                    ).to_dict()
-                )
-            if len(checks) != len(final_report["checks"]):
-                final_report.update(
-                    status="FAIL",
-                    ready=False,
-                    n_total=len(checks),
-                    n_ok=sum(bool(item["passed"]) for item in checks),
-                    checks=checks,
-                )
-            return final_report
-        report = _report(
-            current,
-            None,
-            [
+    passed_campaign = store.latest_passed_qualification()
+    if passed_campaign is not None and isinstance(passed_campaign.get("final_report"), dict):
+        final_report = dict(passed_campaign["final_report"])
+        final_report["campaign_status"] = "PASSED"
+        policy = ReadinessPolicy(**passed_campaign["policy"])
+        ended = _parse_datetime(passed_campaign["ended_at"])
+        age_days = max(0.0, (current - ended).total_seconds() / 86400)
+        checks = list(final_report["checks"])
+        if int(passed_campaign["protocol_version"]) != PROTOCOL_VERSION:
+            checks.append(
                 ReadinessCheck(
-                    "campaign",
-                    "Campagne de qualification",
+                    "protocol_version",
+                    "Version du protocole",
                     False,
-                    "non démarrée",
-                    "RUNNING",
-                    "Lancer scripts/readiness.py start.",
-                )
-            ],
-            ReadinessPolicy(),
-        )
-        if persist:
-            store.save_readiness_report(report, campaign_id=None)
-        return report
-
-    policy = ReadinessPolicy(**campaign["policy"])
-    started = _parse_datetime(campaign["started_at"])
-    required_engines = tuple(policy.required_engines)
-    if not required_engines:
-        raise ValueError("La qualification doit exiger au moins un moteur")
-    orders = [
-        item for item in store.read_orders() if _parse_datetime(item["created_at"]) >= started
-    ]
-    scoped_orders = [item for item in orders if item["engine"] in required_engines]
-    terminal = [
-        item
-        for item in scoped_orders
-        if item["order_type"] != "STOP" and item["status"] in TERMINAL_STATUSES
-    ]
-    unresolved = [
-        item
-        for item in scoped_orders
-        if item["status"] in ("PENDING", "UNBALANCED")
-        or (item["status"] == "OPEN" and item["order_type"] != "STOP")
-    ]
-    trades = [item for item in store.read_trades() if _parse_datetime(item["exit_ts"]) >= started]
-    incidents = [
-        item
-        for item in store.read_incidents(open_only=True)
-        if item.get("engine") is None or item.get("engine") in required_engines
-    ]
-
-    elapsed_days = max(0.0, (current - started).total_seconds() / 86400)
-    equity_timestamps = {
-        engine: _equity_timestamps(
-            store,
-            engine,
-            started,
-            current,
-            _freshness_limit(policy, engine),
-        )
-        for engine in required_engines
-    }
-    coverage_by_engine = {
-        engine: _availability_from_timestamps(
-            equity_timestamps[engine],
-            started,
-            current,
-            _freshness_limit(policy, engine),
-        )
-        for engine in required_engines
-    }
-    covered_days = _covered_equity_days(
-        started,
+                    f"v{passed_campaign['protocol_version']}",
+                    f"v{PROTOCOL_VERSION}",
+                    "Une nouvelle campagne complète est requise.",
+                ).to_dict()
+            )
+        if age_days > policy.qualification_valid_days:
+            checks.append(
+                ReadinessCheck(
+                    "qualification_age",
+                    "Validité de la qualification",
+                    False,
+                    f"{age_days:.1f} j",
+                    f"≤ {policy.qualification_valid_days} j",
+                ).to_dict()
+            )
+        if len(checks) != len(final_report["checks"]):
+            final_report.update(
+                status="FAIL",
+                ready=False,
+                n_total=len(checks),
+                n_ok=sum(bool(item["passed"]) for item in checks),
+                checks=checks,
+            )
+        return final_report
+    report = _report(
         current,
-        required_engines,
-        policy,
-        equity_timestamps,
+        None,
+        [
+            ReadinessCheck(
+                "campaign",
+                "Campagne de qualification",
+                False,
+                "non démarrée",
+                "RUNNING",
+                "Lancer scripts/readiness.py start.",
+            )
+        ],
+        ReadinessPolicy(),
     )
-    expected_days = max(1, (current.date() - started.date()).days + 1)
-    coverage = len(covered_days) / expected_days
+    if persist:
+        store.save_readiness_report(report, campaign_id=None)
+    return report
 
-    rejection_count = sum(item["status"] in ("REJECTED", "FAILED") for item in terminal)
-    partial_count = sum(item["status"] == "PARTIAL" for item in terminal)
-    rejection_rate = rejection_count / len(terminal) if terminal else None
-    partial_rate = partial_count / len(terminal) if terminal else None
-    slippages = _slippages(terminal)
-    p95_slippage = _percentile(slippages, 0.95)
-    max_drawdown = _max_portfolio_drawdown(
-        store,
-        started,
-        current,
-        required_engines,
-        policy,
-    )
 
-    halted = any(
-        bool((store.load_engine_state(engine) or {}).get("halted")) for engine in required_engines
-    )
-
-    integrity_ok = store.integrity_check()
-    checks = [
+def _build_active_checks(
+    store: StateStore,
+    current: datetime,
+    campaign: dict[str, Any],
+    policy: ReadinessPolicy,
+    required_engines: tuple[str, ...],
+    *,
+    integrity_ok: bool,
+    elapsed_days: float,
+    coverage: float,
+    coverage_by_engine: dict[str, float],
+    trades: list[dict[str, Any]],
+    terminal: list[dict[str, Any]],
+    unresolved: list[dict[str, Any]],
+    incidents: list[dict[str, Any]],
+    rejection_rate: float | None,
+    partial_rate: float | None,
+    p95_slippage: float | None,
+    max_drawdown: float | None,
+    halted: bool,
+) -> list[ReadinessCheck]:
+    return [
         ReadinessCheck(
             "campaign",
             "Campagne de qualification",
@@ -357,6 +299,116 @@ def evaluate_readiness(
             "non",
         ),
     ]
+
+
+def evaluate_readiness(
+    store: StateStore,
+    *,
+    now: datetime | None = None,
+    persist: bool = False,
+) -> dict[str, Any]:
+    current = now or datetime.now(UTC)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=UTC)
+    campaign = store.active_qualification_campaign()
+    if campaign is None:
+        return _inactive_campaign_report(store, current, persist=persist)
+
+    policy = ReadinessPolicy(**campaign["policy"])
+    started = _parse_datetime(campaign["started_at"])
+    required_engines = tuple(policy.required_engines)
+    if not required_engines:
+        raise ValueError("La qualification doit exiger au moins un moteur")
+    orders = [
+        item for item in store.read_orders() if _parse_datetime(item["created_at"]) >= started
+    ]
+    scoped_orders = [item for item in orders if item["engine"] in required_engines]
+    terminal = [
+        item
+        for item in scoped_orders
+        if item["order_type"] != "STOP" and item["status"] in TERMINAL_STATUSES
+    ]
+    unresolved = [
+        item
+        for item in scoped_orders
+        if item["status"] in ("PENDING", "UNBALANCED")
+        or (item["status"] == "OPEN" and item["order_type"] != "STOP")
+    ]
+    trades = [item for item in store.read_trades() if _parse_datetime(item["exit_ts"]) >= started]
+    incidents = [
+        item
+        for item in store.read_incidents(open_only=True)
+        if item.get("engine") is None or item.get("engine") in required_engines
+    ]
+
+    elapsed_days = max(0.0, (current - started).total_seconds() / 86400)
+    equity_timestamps = {
+        engine: _equity_timestamps(
+            store,
+            engine,
+            started,
+            current,
+            _freshness_limit(policy, engine),
+        )
+        for engine in required_engines
+    }
+    coverage_by_engine = {
+        engine: _availability_from_timestamps(
+            equity_timestamps[engine],
+            started,
+            current,
+            _freshness_limit(policy, engine),
+        )
+        for engine in required_engines
+    }
+    covered_days = _covered_equity_days(
+        started,
+        current,
+        required_engines,
+        policy,
+        equity_timestamps,
+    )
+    expected_days = max(1, (current.date() - started.date()).days + 1)
+    coverage = len(covered_days) / expected_days
+
+    rejection_count = sum(item["status"] in ("REJECTED", "FAILED") for item in terminal)
+    partial_count = sum(item["status"] == "PARTIAL" for item in terminal)
+    rejection_rate = rejection_count / len(terminal) if terminal else None
+    partial_rate = partial_count / len(terminal) if terminal else None
+    p95_slippage = percentile(slippages_bps(terminal), 0.95)
+    max_drawdown = _max_portfolio_drawdown(
+        store,
+        started,
+        current,
+        required_engines,
+        policy,
+    )
+
+    halted = any(
+        bool((store.load_engine_state(engine) or {}).get("halted")) for engine in required_engines
+    )
+
+    integrity_ok = store.integrity_check()
+    checks = _build_active_checks(
+        store,
+        current,
+        campaign,
+        policy,
+        required_engines,
+        integrity_ok=integrity_ok,
+        elapsed_days=elapsed_days,
+        coverage=coverage,
+        coverage_by_engine=coverage_by_engine,
+        trades=trades,
+        terminal=terminal,
+        unresolved=unresolved,
+        incidents=incidents,
+        rejection_rate=rejection_rate,
+        partial_rate=partial_rate,
+        p95_slippage=p95_slippage,
+        max_drawdown=max_drawdown,
+        halted=halted,
+    )
     report = _report(current, campaign, checks, policy)
     if persist:
         store.save_readiness_report(report, campaign_id=int(campaign["id"]))
@@ -505,28 +557,6 @@ def _covered_equity_days(
             covered.add(day)
         day += timedelta(days=1)
     return covered
-
-
-def _slippages(orders: list[dict[str, Any]]) -> list[float]:
-    values = []
-    for order in orders:
-        reference = order.get("reference_price")
-        price = order.get("price")
-        if reference is None or price is None or float(reference) <= 0:
-            continue
-        if float(order["filled_qty"]) <= 0:
-            continue
-        ratio = float(price) / float(reference)
-        values.append((ratio - 1.0 if order["side"].upper() == "BUY" else 1.0 - ratio) * 10_000)
-    return values
-
-
-def _percentile(values: list[float], fraction: float) -> float | None:
-    if not values:
-        return None
-    ordered = sorted(values)
-    index = max(0, min(len(ordered) - 1, int((len(ordered) - 1) * fraction + 0.5)))
-    return ordered[index]
 
 
 def _max_portfolio_drawdown(

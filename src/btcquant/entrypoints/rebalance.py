@@ -26,12 +26,16 @@ import os
 import sys
 from pathlib import Path
 
+from btcquant.config import load_config, portfolio_from_config
 from btcquant.execution.state_store import StateStore
 from btcquant.notify import notify
 
 ROOT = Path(os.environ.get("BTCQUANT_ROOT", Path.cwd())).resolve()
 STATE = ROOT / "state"
-TARGET_TREND = 0.60
+PORTFOLIO = portfolio_from_config(
+    load_config(ROOT / "environments" / "paper" / "config.yaml")
+)
+TARGET_TREND = PORTFOLIO.trend_fraction
 
 
 def main() -> None:

@@ -1,6 +1,6 @@
 """Lance le carry en paper trading (funding réels, exécution simulée).
 
-Usage : python scripts/run_carry.py [--capital 4000] [--leverage 3]
+Usage : btcquant-carry [--config environments/paper/config.yaml]
 """
 
 import argparse
@@ -8,9 +8,10 @@ import logging
 import os
 import signal
 import threading
+from dataclasses import replace
 from pathlib import Path
 
-from btcquant.carry import DEFAULT_BORROW_RATE_ANN
+from btcquant.config import carry_policy_from_config, load_config
 from btcquant.execution.carry_runner import CarryRunner
 from btcquant.execution.venue import Venue
 
@@ -19,14 +20,26 @@ ROOT = Path(os.environ.get("BTCQUANT_ROOT", Path.cwd())).resolve()
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--capital", type=float, default=4000.0, help="40 %% d'un compte de 10 000")
-    parser.add_argument("--leverage", type=float, default=3.0)
+    parser.add_argument(
+        "--config",
+        default=ROOT / "environments" / "paper" / "config.yaml",
+    )
+    cfg = load_config(parser.parse_known_args()[0].config)
+    configured_policy = carry_policy_from_config(cfg)
+    parser.add_argument(
+        "--capital",
+        type=float,
+        default=None,
+        help="surcharge exceptionnelle du capital configuré",
+    )
+    parser.add_argument("--leverage", type=float, default=None)
     parser.add_argument(
         "--borrow-rate",
         type=float,
-        default=DEFAULT_BORROW_RATE_ANN,
+        default=None,
         help="coût annuel des fonds empruntés pour financer la jambe spot "
-        f"(défaut {DEFAULT_BORROW_RATE_ANN * 100:.0f} %%). Sans effet à --leverage 1.",
+        f"(configuré à {configured_policy.borrow_rate_ann * 100:.0f} %%). "
+        "Sans effet à --leverage 1.",
     )
     parser.add_argument(
         "--live",
@@ -54,14 +67,21 @@ def main() -> None:
             "Le runner paper reste disponible."
         )
 
+    policy = replace(
+        configured_policy,
+        capital=args.capital if args.capital is not None else configured_policy.capital,
+        leverage=args.leverage if args.leverage is not None else configured_policy.leverage,
+        borrow_rate_ann=(
+            args.borrow_rate if args.borrow_rate is not None else configured_policy.borrow_rate_ann
+        ),
+    )
+    execution = cfg["execution"]
     runner = CarryRunner(
-        initial_capital=args.capital,
-        leverage=args.leverage,
-        borrow_rate_ann=args.borrow_rate,
-        state_file=ROOT / "state" / "btcquant.db",
+        policy=policy,
+        state_file=ROOT / execution["state_file"],
         legacy_state_file=ROOT / "state" / "carry_state.json",
         live_broker=None,
-        venue=Venue("hyperliquid", "BTC/USDC:USDC"),
+        venue=Venue(execution["live_exchange"], execution["live_symbol"]),
     )
     stop_event = threading.Event()
 

@@ -112,11 +112,29 @@ def load_ohlcv(
 
 
 def resample(df: pd.DataFrame, rule: str) -> pd.DataFrame:
-    """Rééchantillonne des bougies 1h vers 4h/1d, etc. (`rule` façon pandas : '4h', '1D')."""
+    """Rééchantillonne des bougies 1h vers 4h/1d, etc. (`rule` façon pandas : '4h', '1D').
+
+    Le dernier agrégat est écarté s'il ne contient pas toutes ses barres
+    sources. `load_ohlcv` retire déjà la bougie de base en cours, mais une
+    fenêtre 4 h ouverte à 12:00 et alimentée jusqu'à 14:00 produirait sinon
+    une bougie « close » construite sur la moitié de sa durée : exactement la
+    donnée non close que `validate_closed_ohlcv` interdit côté live.
+    """
     out = df.resample(rule, label="left", closed="left").agg(
         {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
     )
-    return out.dropna(subset=["open", "close"])
+    out = out.dropna(subset=["open", "close"])
+    if out.empty or len(df) < 2:
+        return out
+    # Le critère porte sur le TEMPS couvert, pas sur le nombre de barres : un
+    # trou dans l'historique source ne doit pas faire passer une fenêtre pleine
+    # pour incomplète. La dernière fenêtre est close si la barre source
+    # suivante tomberait déjà au-delà d'elle.
+    source_step = pd.DatetimeIndex(df.index).to_series().diff().min()
+    window_end = out.index[-1] + pd.tseries.frequencies.to_offset(rule)
+    if df.index[-1] + source_step < window_end:
+        return out.iloc[:-1]
+    return out
 
 
 TIMEFRAME_TO_PANDAS = {"1h": "1h", "2h": "2h", "4h": "4h", "6h": "6h", "12h": "12h", "1d": "1D"}

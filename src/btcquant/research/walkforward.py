@@ -48,9 +48,11 @@ def walk_forward(
     test_bars: int,
     objective: str = "sharpe",
     bars_per_year_value: float | None = None,
+    fixed_params: dict | None = None,
 ) -> WalkForwardResult:
+    fixed = dict(fixed_params or {})
     combos = _param_combos(param_grid)
-    warmup = strategy_cls().warmup_bars()
+    warmup = strategy_cls(**fixed).warmup_bars()
     folds: list[dict] = []
     oos_curves: list[pd.Series] = []
     is_sharpes: list[float] = []
@@ -69,7 +71,7 @@ def walk_forward(
         best_score, best_params, best_is_sharpe = -np.inf, None, np.nan
         for params in combos:
             try:
-                res = engine.run(strategy_cls(**params), train)
+                res = engine.run(strategy_cls(**{**fixed, **params}), train)
             except ValueError:
                 continue
             score = res.metrics.get(objective)
@@ -82,7 +84,11 @@ def walk_forward(
             fold_start += test_bars
             continue
 
-        oos_res = engine.run(strategy_cls(**best_params), test_ctx, no_trade_before=oos_start_ts)
+        oos_res = engine.run(
+            strategy_cls(**{**fixed, **best_params}),
+            test_ctx,
+            no_trade_before=oos_start_ts,
+        )
         oos_equity = oos_res.equity[oos_res.equity.index >= oos_start_ts]
         folds.append(
             {

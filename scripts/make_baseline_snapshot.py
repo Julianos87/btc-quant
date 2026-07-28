@@ -17,6 +17,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from btcquant.console import enable_utf8_output
+
+enable_utf8_output()
+
 import pandas as pd
 
 from btcquant.backtest import BacktestEngine
@@ -33,7 +37,7 @@ from btcquant.domain import ExecutionSimulator
 from btcquant.indicators import bars_per_year
 from btcquant.risk import RiskConfig
 
-CONFIG = ROOT / "config_4x.yaml"
+CONFIG = ROOT / "environments" / "paper" / "config.yaml"
 DESTINATION = ROOT / "audit" / "baseline_reference.json"
 
 

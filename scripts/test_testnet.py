@@ -21,6 +21,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from btcquant.console import enable_utf8_output
+
+enable_utf8_output()
+
 from btcquant.execution.ccxt_broker import CcxtBroker
 from btcquant.execution.order_service import OrderExecutionService
 from btcquant.execution.state_store import StateStore

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from btcquant.config import load_config, portfolio_from_config
 from btcquant.execution.health import execution_health
 from btcquant.execution.state_store import StateStore
 from btcquant.notify import notify
@@ -21,6 +22,9 @@ from btcquant.reporting.repository import ReportingRepository
 ROOT = Path(os.environ.get("BTCQUANT_ROOT", Path.cwd())).resolve()
 STATE = ROOT / "state"
 repository = ReportingRepository(STATE)
+PORTFOLIO = portfolio_from_config(
+    load_config(ROOT / "environments" / "paper" / "config.yaml")
+)
 
 
 def _repository() -> ReportingRepository:
@@ -31,12 +35,12 @@ def _repository() -> ReportingRepository:
     return repository
 
 
-def _read_json(p: Path) -> dict:
-    return _repository().read_json(p) or {}
+def _engine_state(engine: str, legacy_name: str) -> dict:
+    return _repository().read_engine_state(engine, STATE / legacy_name) or {}
 
 
-def _equity(name: str) -> pd.Series:
-    return _repository().read_equity(name)
+def _equity(engine: str, legacy_name: str) -> pd.Series:
+    return _repository().read_engine_equity(engine, STATE / legacy_name)
 
 
 def _flows() -> pd.DataFrame:
@@ -49,10 +53,10 @@ def main() -> None:
     args = parser.parse_args()
     days = 7 if args.weekly else 1
 
-    trend_state = _read_json(STATE / "live_state_4x.json")
-    carry_state = _read_json(STATE / "carry_state.json")
-    trend_eq = _equity("equity_trend.csv")
-    carry_eq = _equity("equity_carry.csv")
+    trend_state = _engine_state("trend", "live_state_4x.json")
+    carry_state = _engine_state("carry", "carry_state.json")
+    trend_eq = _equity("trend", "equity_trend.csv")
+    carry_eq = _equity("carry", "equity_carry.csv")
 
     trend_val = (
         float(trend_eq.iloc[-1])
@@ -64,7 +68,7 @@ def main() -> None:
 
     flows = _flows()
     deposits = deposits_total(flows)
-    invested = 10_000.0 + deposits
+    invested = PORTFOLIO.total_capital + deposits
 
     # PnL sur la période, net des apports de la période
     since = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)

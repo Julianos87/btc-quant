@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-07-28T12:46:44.032805+00:00",
+  "purpose": "Validation hors BTC du même ensemble trend gelé",
+  "method": {
+    "symbols": [
+      "BTC/USDT",
+      "ETH/USDT",
+      "SOL/USDT"
+    ],
+    "timeframe": "4h",
+    "horizons": [
+      20,
+      55,
+      100
+    ],
+    "common_window": [
+      "2020-08-11T04:00:00+00:00",
+      "2026-07-12T08:00:00+00:00"
+    ],
+    "bootstrap": {
+      "block_days": 30,
+      "samples": 3000,
+      "seed": 0
+    }
+  },
+  "provenance": {
+    "script_sha256": "1407406d82baae5ed2e07a5f143b81ad1d29582c0e2ee94e674c6a204866cf3e",
+    "data": [
+      {
+        "path": "data/binance_BTC-USDT_1h.csv",
+        "sha256": "14e3a38bfc99044b649085044a5a03c7a76ba7e9c2b108f69d0cb5044840268d",
+        "bytes": 4813703
+      },
+      {
+        "path": "data/binance_ETH-USDT_1h.csv",
+        "sha256": "209e9909f4fcea1c10664dbcb0524ce99ded32a62f0646e12978f6e363e9a2b1",
+        "bytes": 4495915
+      },
+      {
+        "path": "data/binance_SOL-USDT_1h.csv",
+        "sha256": "5dfb5df1b8a761d9d9b7aeb6f7781a271d4c997ec6f6cc20a1a81dd9fdef4ea2",
+        "bytes": 3259197
+      }
+    ]
+  },
+  "per_asset": {
+    "BTC/USDT": {
+      "cagr": 0.08150870109414932,
+      "sharpe": 1.2790583434480682,
+      "max_drawdown": -0.07932067942757237,
+      "total_return": 0.7961368412760683
+    },
+    "ETH/USDT": {
+      "cagr": 0.04831288200044592,
+      "sharpe": 0.900202573072274,
+      "max_drawdown": -0.06338769716043335,
+      "total_return": 0.41987581464331925
+    },
+    "SOL/USDT": {
+      "cagr": 0.02302435623706023,
+      "sharpe": 0.5136847719254882,
+      "max_drawdown": -0.10219898397415794,
+      "total_return": 0.14168500538222517
+    }
+  },
+  "common_window": {
+    "btc_only": {
+      "cagr": 0.05231277218841068,
+      "sharpe": 0.9697408025013478,
+      "max_drawdown": -0.07932067942757237,
+      "total_return": 0.3555032170950425
+    },
+    "btc_eth_sol": {
+      "cagr": 0.03210591931946882,
+      "sharpe": 0.8358290759928322,
+      "max_drawdown": -0.04601018001727042,
+      "total_return": 0.2036234577633509
+    },
+    "sharpe_difference": -0.14272337504324428,
+    "bootstrap_p_value": 0.768,
+    "return_correlations": {
+      "BTC/USDT": {
+        "BTC/USDT": 1.0,
+        "ETH/USDT": 0.5268882564388924,
+        "SOL/USDT": 0.3157640688464177
+      },
+      "ETH/USDT": {
+        "BTC/USDT": 0.5268882564388924,
+        "ETH/USDT": 1.0,
+        "SOL/USDT": 0.33400022794327505
+      },
+      "SOL/USDT": {
+        "BTC/USDT": 0.3157640688464177,
+        "ETH/USDT": 0.33400022794327505,
+        "SOL/USDT": 1.0
+      }
+    }
+  }
+}

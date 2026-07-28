@@ -22,11 +22,15 @@ visibles dans le résultat et ne peuvent pas servir à qualifier le carry réel.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 import ccxt
 import numpy as np
 import pandas as pd
+
+from .domain.carry_decision import decide_carry_payment
+from .performance import daily_returns, sharpe_ratio
 
 log = logging.getLogger(__name__)
 
@@ -128,16 +132,61 @@ def add_funding_columns(df: pd.DataFrame, funding_8h: pd.Series, pandas_freq: st
 DEFAULT_BORROW_RATE_ANN = 0.10
 
 
+@dataclass(frozen=True)
+class CarryPolicy:
+    """Règles du carry — SOURCE UNIQUE du backtest, du runner et des références.
+
+    Ces valeurs étaient auparavant recopiées à trois endroits (défauts de
+    ``backtest_carry``, défauts de ``CarryRunner``, constantes de
+    ``make_yearly_reference``) avec des chiffres différents : le backtest
+    publié n'était donc pas celui du moteur paper. Toute modification doit se
+    faire ici, et invalide les références (leur provenance est hashée).
+    """
+
+    capital: float = 4000.0
+    leverage: float = 3.0
+    enter_ann: float = 0.03
+    exit_ann: float = 0.0
+    smooth_days: int = 14
+    fee_rate: float = 0.0005
+    slippage_bps: float = 5.0
+    borrow_rate_ann: float = DEFAULT_BORROW_RATE_ANN
+
+    def __post_init__(self) -> None:
+        if self.leverage < 1.0:
+            raise ValueError("leverage < 1 non modélisé (sous-emploi du capital)")
+        if self.capital <= 0:
+            raise ValueError("capital doit être strictement positif")
+        if self.smooth_days < 1:
+            raise ValueError("smooth_days doit valoir au moins 1 jour")
+        if self.enter_ann < self.exit_ann:
+            raise ValueError("enter_ann doit être supérieur ou égal à exit_ann")
+        for name in ("fee_rate", "slippage_bps", "borrow_rate_ann"):
+            value = getattr(self, name)
+            if not np.isfinite(value) or value < 0:
+                raise ValueError(f"{name} doit être fini et positif ou nul")
+
+    @property
+    def switch_cost(self) -> float:
+        """Coût d'une bascule ON/OFF : 2 jambes, proportionnel au levier."""
+
+        return 2 * (self.fee_rate + self.slippage_bps / 10_000.0) * self.leverage
+
+
+#: Profil exécuté en paper sur le VPS (cf. deploy/btcquant-carry.service).
+PAPER_CARRY_POLICY = CarryPolicy()
+
+
 def backtest_carry(
     funding: pd.Series,
-    leverage: float = 3.0,
-    fee_rate: float = 0.0005,
-    slippage_bps: float = 5.0,
-    enter_ann: float = 0.05,
-    exit_ann: float = 0.0,
-    smooth_days: int = 7,
+    leverage: float = PAPER_CARRY_POLICY.leverage,
+    fee_rate: float = PAPER_CARRY_POLICY.fee_rate,
+    slippage_bps: float = PAPER_CARRY_POLICY.slippage_bps,
+    enter_ann: float = PAPER_CARRY_POLICY.enter_ann,
+    exit_ann: float = PAPER_CARRY_POLICY.exit_ann,
+    smooth_days: int = PAPER_CARRY_POLICY.smooth_days,
     initial_capital: float = 10_000.0,
-    borrow_rate_ann: float = DEFAULT_BORROW_RATE_ANN,
+    borrow_rate_ann: float = PAPER_CARRY_POLICY.borrow_rate_ann,
     borrow_rate_ann_series: pd.Series | None = None,
     spot_price: pd.Series | None = None,
     perp_price: pd.Series | None = None,
@@ -211,12 +260,14 @@ def backtest_carry(
     in_pos = pd.Series(False, index=funding.index)
     state = False
     for i, v in enumerate(smooth_ann):
-        if not np.isnan(v):
-            if not state and v > enter_ann:
-                state = True
-            elif state and v < exit_ann:
-                state = False
-        in_pos.iloc[i] = state
+        decision = decide_carry_payment(
+            in_position=state,
+            smooth_ann=float(v),
+            enter_ann=enter_ann,
+            exit_ann=exit_ann,
+        )
+        state = decision.in_position
+        in_pos.iloc[i] = decision.in_position
     applied = in_pos.shift(1, fill_value=False)
 
     cost_per_switch = 2 * (fee_rate + slippage_bps / 10_000.0) * leverage  # 2 jambes
@@ -261,13 +312,12 @@ def backtest_carry(
     years = len(funding) / PAYMENTS_PER_YEAR
     dd = (equity / equity.cummax() - 1.0).min()
     ann_all = pnl.mean() * PAYMENTS_PER_YEAR
-    vol = pnl.std() * np.sqrt(PAYMENTS_PER_YEAR)
     n_cycles = int(switches.sum()) // 2
     return {
         "equity": equity,
         "cagr": (equity.iloc[-1] / initial_capital) ** (1 / years) - 1,
         "ann_return_simple": ann_all,
-        "sharpe": ann_all / vol if vol > 0 else np.nan,
+        "sharpe": sharpe_ratio(daily_returns(equity)),
         "max_drawdown": dd,
         "exposure": applied.mean(),
         "cycles": n_cycles,

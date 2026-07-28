@@ -109,6 +109,18 @@ def test_production_requirements_are_pinned_with_hashes():
     assert "--no-hashes" not in requirements.splitlines()[1]
 
 
+def test_long_running_services_have_restart_rate_limits():
+    for name in (
+        "btcquant-trend.service",
+        "btcquant-carry.service",
+        "btcquant-dashboard.service",
+        "btcquant-hyperliquid-testnet.service",
+    ):
+        service = (ROOT / "deploy" / name).read_text(encoding="utf-8")
+        assert "StartLimitIntervalSec=600" in service
+        assert "StartLimitBurst=5" in service
+
+
 def test_update_has_atomic_activation_backup_healthcheck_and_rollback():
     script = (ROOT / "deploy" / "update.sh").read_text(encoding="utf-8")
 

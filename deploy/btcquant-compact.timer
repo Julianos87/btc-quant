@@ -1,0 +1,11 @@
+[Unit]
+Description=btcquant - compaction hebdomadaire le lundi à 04:00 UTC
+
+[Timer]
+# Après la sauvegarde nocturne et hors des heures de bascule de funding, pour
+# qu'une purge ne coïncide jamais avec une écriture de checkpoint chargée.
+OnCalendar=Mon *-*-* 04:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

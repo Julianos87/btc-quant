@@ -1,5 +1,6 @@
-# Configuration dédiée à la campagne P1 Hyperliquid testnet.
+# Environnement dédié à la campagne P1 Hyperliquid testnet.
 # Ne jamais remplacer ce fichier par une configuration mainnet.
+environment: testnet
 exchange: hyperliquid
 symbol: "BTC/USDC:USDC"
 quote_currency: USDC

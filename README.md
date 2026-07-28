@@ -24,7 +24,7 @@ Le VPS exécute actuellement les deux moteurs en **paper trading**. Aucun ordre 
 Le service `btcquant-trend` lance :
 
 ```bash
-btcquant-trend --config config_4x.yaml
+btcquant-trend --config environments/paper/config.yaml
 ```
 
 Le capital initial de la poche est de 6 000 USDT. Il est réparti entre trois horizons :
@@ -37,7 +37,8 @@ Le capital initial de la poche est de 6 000 USDT. Il est réparti entre trois ho
 
 Chaque stratégie utilise également un régime EMA 50/200, un filtre ADX, un stop ATR et un dimensionnement par risque et volatilité.
 
-Le profil `config.yaml` à x1 reste disponible comme profil de recherche prudent, mais ce n’est pas celui lancé par le service VPS principal.
+Le profil `environments/dev/config.yaml` à x1 reste disponible comme profil de
+recherche prudent, mais ce n’est pas celui lancé par le service VPS principal.
 
 ### Carry — 40 %
 
@@ -48,6 +49,12 @@ btcquant-carry --capital 4000 --leverage 3
 ```
 
 Le modèle paper simule une position spot longue et une position perpétuelle courte. Il entre lorsque le funding annualisé lissé dépasse 3 % et sort lorsqu’il devient négatif.
+
+Le dernier paiement comptabilisé est persisté avec l’equity. Après une
+interruption, le runner pagine tout l’historique depuis ce checkpoint, même si
+l’arrêt dépasse la fenêtre de lissage de 14 jours. Chaque paiement et son
+nouveau checkpoint sont enregistrés atomiquement ; un crash pendant le
+rattrapage reprend au premier paiement non validé, sans perte ni double crédit.
 
 ### Coût de financement du levier — chiffré depuis le 18 juillet 2026
 
@@ -70,11 +77,11 @@ chiffres du carry sont donc conditionnels à cette hypothèse :
 
 | Taux d’emprunt | CAGR x3 | Sharpe | Max DD |
 |---:|---:|---:|---:|
-| 0 % (ancien modèle) | +36,1 % | 12,00 | -3,8 % |
-| 5 % | +25,6 % | 8,99 | -5,9 % |
-| **10 % (défaut)** | **+16,0 %** | **5,89** | **-11,6 %** |
-| 15 % | +7,1 % | 2,74 | -29,9 % |
-| 20 % | -1,1 % | -0,45 | -51,1 % |
+| 0 % (ancien modèle) | +39,4 % | 9,56 | -3,2 % |
+| 5 % | +27,7 % | 7,11 | -3,3 % |
+| **10 % (défaut)** | **+16,9 %** | **4,59** | **-9,9 %** |
+| 15 % | +7,1 % | 2,03 | -32,0 % |
+| 20 % | -1,9 % | -0,55 | -54,7 % |
 
 À levier 1, la position est intégralement financée par le capital : aucun
 emprunt, donc aucune dépendance à ce taux. C’est le seul profil réalisable sans
@@ -82,10 +89,10 @@ compte sur marge, et il présente le meilleur couple rendement/risque :
 
 | Levier | CAGR | Sharpe | Max DD |
 |---:|---:|---:|---:|
-| **x1** | +10,8 % | **12,00** | **-1,3 %** |
-| x2 | +13,4 % | 7,45 | -5,8 % |
-| x3 (profil actif) | +16,0 % | 5,89 | -11,6 % |
-| x4 | +18,6 % | 5,11 | -18,8 % |
+| **x1** | +11,7 % | **9,56** | **-1,1 %** |
+| x2 | +14,3 % | 5,86 | -3,4 % |
+| x3 (profil actif) | +16,9 % | 4,59 | -9,9 % |
+| x4 | +19,6 % | 3,96 | -17,7 % |
 
 Passer de x1 à x3 gagne 5 points de CAGR mais multiplie le drawdown par 9 et
 divise le Sharpe par deux, tout en introduisant une dépendance à un taux
@@ -94,20 +101,20 @@ d’être rediscuté avant tout passage en réel**.
 
 ## Résultats historiques de référence
 
-Le fichier `dashboard/yearly_reference.json`, régénéré le 26 juillet 2026,
+Le fichier `dashboard/yearly_reference.json`, régénéré le 28 juillet 2026,
 rejoue le profil paper 60/40 sur la période du 10 septembre 2019 au
 26 juillet 2026 avec funding historique :
 
 | Année | Portefeuille 60/40 | Trend | Carry | BTC |
 |---|---:|---:|---:|---:|
-| 2019, partielle | +26,7 % | +34,3 % | -1,1 % | -28,7 % |
-| 2020 | +156,6 % | +179,8 % | +41,3 % | +302,0 % |
-| 2021 | +11,6 % | +1,9 % | +107,2 % | +59,8 % |
-| 2022 | -1,2 % | +0,3 % | -8,3 % | -64,2 % |
-| 2023 | +196,3 % | +232,7 % | +3,7 % | +155,6 % |
-| 2024 | +54,6 % | +56,7 % | +17,8 % | +121,3 % |
-| 2025 | -20,6 % | -21,3 % | -6,4 % | -6,3 % |
-| 2026, partielle | -12,8 % | -13,3 % | -3,3 % | -26,4 % |
+| 2019, partielle | +33,4 % | +41,4 % | -1,1 % | -28,7 % |
+| 2020 | +208,3 % | +235,3 % | +41,3 % | +302,0 % |
+| 2021 | +3,0 % | -4,1 % | +107,2 % | +59,8 % |
+| 2022 | +0,1 % | +1,4 % | -8,3 % | -64,2 % |
+| 2023 | +244,6 % | +276,6 % | +3,7 % | +155,6 % |
+| 2024 | +60,5 % | +62,0 % | +17,8 % | +121,3 % |
+| 2025 | -24,8 % | -25,3 % | -6,4 % | -6,3 % |
+| 2026, partielle | -18,6 % | -19,1 % | -3,3 % | -27,6 % |
 
 La colonne carry intègre le coût de financement du levier x3 (voir plus bas).
 Une fois ce coût chiffré, **le carry devient négatif 4 années sur 8** — dont
@@ -119,12 +126,12 @@ La référence du moteur trend à x4 indique également :
 
 | Indicateur trend | Valeur |
 |---|---:|
-| Trades | 479 |
-| Trades par an | 64,2 |
-| Win rate | 37,4 % |
-| Perte moyenne | -3,06 % |
-| Gain moyen | +9,37 % |
-| Drawdown maximal historique | -52,9 % |
+| Trades | 477 |
+| Trades par an | 63,8 |
+| Win rate | 35,6 % |
+| Perte moyenne | -3,27 % |
+| Gain moyen | +9,28 % |
+| Drawdown maximal historique | -55,7 % |
 | Plus longue série de pertes | 21 trades |
 
 Ces chiffres sont régénérés depuis les caches locaux et liés par hash au code,
@@ -133,6 +140,8 @@ Ces chiffres sont régénérés depuis les caches locaux et liés par hash au co
 Ces chiffres sont des résultats de simulation. Ils ne constituent pas une garantie de performance future.
 
 ## Parité backtest / paper
+
+### Trend
 
 Le moteur de backtest et le runner partagent :
 
@@ -144,7 +153,7 @@ Le moteur de backtest et le runner partagent :
 - les mêmes frais et hypothèses de slippage ;
 - le même principe de décision à la clôture d’une bougie ;
 - une comptabilité du funding sur les positions perpétuelles ;
-- des coupe-circuits de drawdown et de perte journalière.
+- des coupe-circuits de drawdown et de perte journalière (`PortfolioRiskService`).
 
 Le noyau métier ne passe aucun ordre et n'effectue aucun I/O : il reçoit une
 barre et un état de position, puis renvoie un nouvel état indépendant accompagné
@@ -152,6 +161,41 @@ d'événements typés. Le backtest exécute toujours les demandes à l'ouverture
 suivante ; le runner les transmet à son broker dès la clôture observée. Cette
 différence d'adaptateur est explicite et n'est plus mélangée aux règles de
 stratégie.
+
+### Carry — parité partielle, à ne pas surestimer
+
+Le backtest et le runner partagent désormais leur politique
+(`carry.CarryPolicy`) et leur transition pure
+(`domain.carry_decision.decide_carry_payment`). La décision observée au paiement
+`t` détermine dans les deux cas l'exposition au paiement `t+1` : le backtest
+décale explicitement l'état d'une période, tandis que le runner comptabilise le
+paiement courant avant de décider.
+
+Auparavant, les paramètres divergeaient (entrée 3 % contre 5 %, lissage 14 j
+contre 7 j), si bien qu'aucune référence publiée ne décrivait le moteur
+réellement exécuté.
+
+Deux écarts de simulation subsistent et sont assumés :
+
+| | `backtest_carry()` | `CarryRunner` |
+|---|---|---|
+| Basis spot/perp | modélisé quand les prix sont fournis | non modélisé |
+| Marge, haircut, liquidation | modélisés | non modélisés |
+
+Le paper carry ne peut donc pas perdre par divergence de basis ni être liquidé,
+alors que le backtest le peut. Le noyau de décision est unifié, mais la courbe
+paper ne qualifie toujours pas les risques de marché et de marge d'une
+exécution réelle.
+
+Le carry dispose en revanche désormais de ses propres coupe-circuits — arrêt à
+-25 % de drawdown, blocage des entrées à -3 % sur la journée UTC — appliqués par
+le même `PortfolioRiskService` que le trend.
+
+Le capital total, l'allocation trend/carry, le levier et les seuils carry sont
+déclarés une seule fois dans `environments/paper/config.yaml` (`portfolio:` et `carry:`).
+Runner, dashboard, digest, rééquilibrage et références utilisent les mêmes
+objets de configuration immuables ; le chargement refuse toute divergence avec
+`risk.initial_capital`.
 
 ### Simulateur d'exécution commun
 
@@ -161,29 +205,60 @@ Le backtest et `PaperBroker` utilisent également le même
 - frais et slippage défavorable ;
 - limite de participation au volume et fills partiels ;
 - impact de marché proportionnel à la participation ;
+- prime de spread proportionnelle à la volatilité annualisée, avec plafond ;
 - rejets déterministes à partir de l'identifiant d'ordre et d'une seed ;
 - prix retardé pour les scénarios de latence ;
 - déclenchement conservateur des stops, gaps inclus ;
 - rejeu idempotent d'un même ordre.
 
-Sans configuration supplémentaire, le modèle reproduit exactement l'ancien
-comportement (fill complet, sans rejet ni impact additionnel). Les scénarios de
-stress optionnels se configurent sous `execution.simulation` :
+Sans configuration supplémentaire, le modèle conserve le comportement
+historique. Les configurations livrées activent un profil `normal` et gardent
+un profil `stress` sélectionnable sans modifier le code :
 
 ```yaml
 execution:
   mode: paper
   simulation:
-    rejection_rate: 0.01
-    max_volume_participation: 0.05
-    market_impact_bps: 10.0
-    min_qty: 0.0001
-    seed: 42
+    profile: normal
+    profiles:
+      normal:
+        max_volume_participation: 0.05
+        market_impact_bps: 15.0
+        volatility_impact_bps: 1.5
+        volatility_reference_annual: 0.40
+        volatility_multiplier_cap: 3.0
+      stress:
+        rejection_rate: 0.01
+        max_volume_participation: 0.01
+        market_impact_bps: 75.0
+        volatility_impact_bps: 6.0
+        volatility_reference_annual: 0.40
+        volatility_multiplier_cap: 5.0
 ```
 
 `fee_rate` et `slippage_bps` restent exclusivement dans `costs`. Une latence
 non nulle exige une vraie observation de prix retardée : le simulateur refuse
 explicitement de l'inventer à partir d'une seule bougie.
+
+Le coût défavorable simulé, en points de base, vaut :
+`slippage_bps + prime_volatilité bornée + market_impact_bps × participation`.
+La volatilité utilisée est celle déjà observée à la clôture de décision ; une
+sortie intrabar utilise la dernière volatilité connue et n’introduit donc aucun
+look-ahead.
+
+Les deux scénarios se comparent sans éditer le YAML :
+
+```bash
+python scripts/run_backtest.py --config environments/paper/config.yaml --no-refresh \
+  --execution-profile stress --no-reports
+```
+
+La chronologie d'exécution est identique entre les moteurs Trend : le signal
+est calculé sur la clôture de la barre `t`, puis le backtest exécute à
+l'ouverture `t+1` tandis que le runner paper utilise le prix de marché observé
+au premier tick de `t+1`. Le runner n'utilise plus la clôture déjà passée comme
+prix de fill. Les gaps sont ainsi imputés aux deux chemins et le slippage paper
+est mesuré contre une référence réellement observable au moment de l'ordre.
 
 ### Écart funding — corrigé le 18 juillet 2026
 
@@ -207,8 +282,87 @@ La distinction n’est pas cosmétique : les paiements tombent à 00/08/16 UTC, 
 taux d’un facteur deux sur les autres. La colonne `funding` est l’équivalent
 backtest de `Venue.funding_rate_8h()` côté live.
 
-Effet mesuré sur le profil x4 : 488 → 479 trades, Sharpe combiné 1,34 → 1,41,
-drawdown maximal inchangé. `tests/test_funding_parity.py` fige la correction.
+Effet mesuré à l'époque sur le profil x4 à coûts fixes : 488 → 479 trades,
+drawdown maximal inchangé.
+`tests/test_funding_parity.py` fige la correction.
+
+Tous les Sharpe, Sortino et volatilités publiés utilisent désormais une seule
+convention : rendements de clôture journaliers, 365 périodes par an et
+écart-type d'échantillon (`ddof=1`). Cette convention commune rend directement
+comparables le backtest, le carry et le reporting live, indépendamment du
+timeframe d'exécution.
+
+Référence reproductible du profil x4 : **Sharpe 1,18**, 477 trades et drawdown
+maximal de -55,7 %. Elle intègre la convention journalière et le profil
+d'exécution normal dépendant de la volatilité et du volume.
+
+Chaque horizon peut désormais ajouter une seule tranche égale à 30 % de sa
+quantité initiale après une progression favorable de 0,5 ATR. Le renfort est
+borné par le plafond de levier global, exécuté à la barre suivante avec frais
+et slippage, et son prix est intégré au prix d'entrée moyen.
+
+> Ces chiffres, comme tous ceux cités ci-dessus, sont vérifiés en CI contre
+> `audit/baseline_reference.json` par `scripts/check_reference_provenance.py`.
+> Le dépôt a annoncé trois Sharpe différents pour ce même profil jusqu'au
+> 27 juillet 2026 ; le contrôle existe pour que cela ne se reproduise pas.
+
+### Validation walk-forward de recherche
+
+La sélection glissante `trend_ls` peut être rejouée sans réseau et publier un
+artefact de provenance :
+
+```bash
+python scripts/run_walkforward.py trend_ls --config environments/paper/config.yaml --no-refresh \
+  --output audit/walkforward_trend_ls_reference.json
+```
+
+Cette expérience mesure la stabilité hors échantillon d'une sélection
+d'horizon Donchian et de multiple ATR. Elle **ne valide pas** à elle seule
+l'ensemble fixe 20/55/100 déployé : cette limite méthodologique est inscrite
+dans l'artefact et contrôlée par `check_reference_provenance.py`.
+
+La validation multi-actifs gelée est reproductible avec
+`python scripts/multiasset_experiments.py`. Sur la fenêtre commune
+BTC/ETH/SOL, elle réduit le drawdown mais n'améliore pas le Sharpe
+(ΔSharpe -0,14 ; p≈0,77) : la diversification n'est donc pas adoptée dans le
+profil paper. Les résultats et les hashes des trois caches sont conservés dans
+`audit/multiasset_reference.json` et vérifiés en CI.
+
+La recherche BTC-only orientée rendement se rejoue avec
+`python scripts/research_btc_return.py`. Parmi 108 candidats, la sélection
+effectuée sans consulter 2025+ retient Donchian 10/20/40, pondéré
+50/30/20, avec un stop à 3,5 ATR. Son historique complet est meilleur
+(CAGR 65,1 %, Sharpe 1,29), mais il échoue au test scellé 2025+ et porte le
+drawdown à -55,7 %. Il reste donc un candidat de recherche et ne remplace pas
+le profil paper. Le protocole et le résultat sont figés dans
+`audit/btc_return_research.json`.
+
+Premier chantier d'amélioration isolé : un filtre impose une cassure minimale
+de 0 à 60 bps au-delà du canal avant de payer les coûts d'entrée. Le seuil de
+30 bps, sélectionné sans consulter 2025+, réduit les trades de 478 à 442 et le
+drawdown de -55,3 % à -53,4 %, mais dégrade le CAGR à 49,3 %, le Sharpe à 1,12
+et la période scellée 2025+ à -32,7 %/an. Il est donc rejeté et reste désactivé
+(`entry_buffer_bps: 0`). L'expérience est reproductible avec
+`scripts/research_btc_cost_filter.py` et figée dans
+`audit/btc_cost_filter_research.json`.
+
+Les autres pistes BTC ont été testées isolément avant combinaison :
+
+| Piste | Résultat | Décision |
+|---|---|---|
+| Cible de volatilité 0,8–2,0 | non contraignante à partir de 1,0 | rejet |
+| Réduction des shorts | la taille symétrique 1,0 reste sélectionnée | rejet |
+| Funding continu | Sharpe 1,24, DD -54,5 %, CAGR 55,5 % | brique candidate |
+| Retour à la moyenne | la sélection retient une poche de 0 % | rejet |
+| Slippage divisé par deux | CAGR 60,6 %, Sharpe 1,24 | à prouver en shadow |
+
+La combinaison la plus prometteuse sous coûts réduits utilise Donchian
+10/20/40 pondéré 50/30/20, stop 3,5 ATR et sizing funding désactivé. Avec un
+slippage de base réellement ramené de 5 à 2,5 bps, elle obtient 67,6 % de CAGR,
+un Sharpe de 1,32 et un drawdown de -54,6 % ; en stress : 61,4 %, 1,24 et
+-56,6 %. Sous les coûts actuels, elle échoue encore au portail d'adoption.
+`audit/btc_combined_research.json` sépare explicitement résultat immédiatement
+déployable et scénarios d'exécution hypothétiques.
 
 ## État du projet
 
@@ -234,6 +388,11 @@ transactions `BEGIN IMMEDIATE`, contraintes d'intégrité et sauvegarde en ligne
 Chaque checkpoint est également inclus dans le journal avec un SHA-256
 canonique ; `StateStore.replay_engine_state()` reconstruit l'état depuis les
 événements et refuse un journal altéré.
+
+Les payloads `trend` et `carry` suivent des `TypedDict` partagés entre runners
+et persistance. Leur structure critique est validée au rechargement : un état
+incomplet ou d'un type incompatible bloque la reprise au lieu de propager une
+valeur ambiguë vers le health check ou le dashboard.
 
 Au premier démarrage, les anciens `*_state.json`, `equity_*.csv`, `trades.csv`
 et `flows.csv` sont importés une seule fois puis conservés uniquement comme
@@ -431,13 +590,13 @@ python scripts/download_data.py
 Rejouer le profil trend actif :
 
 ```bash
-python scripts/run_backtest.py --config config_4x.yaml
+python scripts/run_backtest.py --config environments/paper/config.yaml
 ```
 
 Lancer le paper runner trend actif :
 
 ```bash
-btcquant-trend --config config_4x.yaml
+btcquant-trend --config environments/paper/config.yaml
 ```
 
 Lancer le paper runner carry :
@@ -461,8 +620,10 @@ python -m dashboard.app
 ## Structure du dépôt
 
 ```text
-config.yaml                  profil de recherche à x1
-config_4x.yaml               profil trend actif en paper
+environments/
+  dev/config.yaml            profil local de recherche à x1
+  paper/config.yaml          profil actif paper, état btcquant.db
+  testnet/config.yaml        profil P1 Hyperliquid, état btcquant-testnet.db
 src/btcquant/
   data.py                    données et cache
   indicators.py              indicateurs techniques

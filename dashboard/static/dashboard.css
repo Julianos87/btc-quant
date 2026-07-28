@@ -64,7 +64,7 @@
   @media (prefers-reduced-motion: reduce) { html { scroll-behavior:auto; } }
   body {
     background:var(--page); color:var(--ink); min-height:100vh;
-    font:14px/1.5 "Inter",system-ui,sans-serif; font-feature-settings:"cv11","ss01";
+    font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;
     -webkit-font-smoothing:antialiased; padding:0 clamp(16px,3.5vw,44px) 56px;
   }
   body::before {
@@ -92,8 +92,8 @@
   }
   #fx.ready { opacity:1; }
   html.no-webgl #fx, html.fx-off #fx { display:none; }
-  .num { font-variant-numeric:tabular-nums; font-feature-settings:"tnum"; font-family:"JetBrains Mono","Inter",monospace; }
-  .display { font-family:"Space Grotesk","Inter",sans-serif; }
+  .num { font-variant-numeric:tabular-nums; font-feature-settings:"tnum"; font-family:ui-monospace,"Cascadia Code","SFMono-Regular",monospace; }
+  .display { font-family:system-ui,-apple-system,"Segoe UI",sans-serif; }
   :focus-visible { outline:2px solid color-mix(in oklch, var(--s1) 70%, white); outline-offset:2px; border-radius:4px; }
   ::selection { background:color-mix(in oklch, var(--s1) 55%, transparent); color:var(--ink); }
   * { scrollbar-color:var(--axis) transparent; scrollbar-width:thin; }
@@ -125,7 +125,7 @@
   }
   .logo {
     width:44px; height:44px; border-radius:13px; display:grid; place-items:center; color:#fff;
-    font-size:23px; font-weight:700; font-family:"Space Grotesk"; position:relative;
+    font-size:23px; font-weight:700; font-family:system-ui,-apple-system,"Segoe UI",sans-serif; position:relative;
     background:linear-gradient(var(--logo-angle),#3d8bec 0%,#2a78d6 45%,#6b4de0 130%);
     box-shadow:0 6px 18px -6px rgba(42,120,214,.55), inset 0 1px 0 rgba(255,255,255,.28), 0 0 26px -4px var(--glow-1);
     animation:logo-turn 26s linear infinite;
@@ -133,7 +133,7 @@
   @keyframes logo-turn { to { --logo-angle:495deg; } }
   @media (prefers-reduced-motion: reduce) { .logo { animation:none; } }
   .brand h1 {
-    font-family:"Space Grotesk"; font-size:18.5px; font-weight:700; letter-spacing:.4px;
+    font-family:system-ui,-apple-system,"Segoe UI",sans-serif; font-size:18.5px; font-weight:700; letter-spacing:.4px;
     background:linear-gradient(100deg, var(--ink) 55%, var(--s1) 130%);
     -webkit-background-clip:text; background-clip:text; color:transparent;
   }
@@ -234,7 +234,7 @@
      commentaire de code — cohérent avec un produit pensé par/pour des devs */
   .eyebrow {
     font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:1.6px;
-    font-weight:700; margin-bottom:10px; font-family:"JetBrains Mono",monospace;
+    font-weight:700; margin-bottom:10px; font-family:ui-monospace,"Cascadia Code","SFMono-Regular",monospace;
   }
   .eyebrow::before { content:"// "; color:color-mix(in oklch, var(--s1) 65%, var(--muted)); }
   /* entrée en cascade au chargement : basée sur le temps (pas le défilement),
@@ -269,7 +269,7 @@
   @keyframes hero-pulse { 0%,100% { opacity:.45; transform:scale(1); } 50% { opacity:.75; transform:scale(1.08); } }
   @media (prefers-reduced-motion: reduce) { .tile.hero::after { animation:none; } }
   .tile.hero .val {
-    font-size:clamp(46px, 4.6vw, 72px); font-family:"Space Grotesk"; font-weight:700; letter-spacing:-.8px;
+    font-size:clamp(46px, 4.6vw, 72px); font-family:system-ui,-apple-system,"Segoe UI",sans-serif; font-weight:700; letter-spacing:-.8px;
     background:linear-gradient(105deg, var(--ink) 30%, var(--s1) 96%);
     -webkit-background-clip:text; background-clip:text; color:transparent;
     display:inline-block; line-height:1.05;
@@ -334,7 +334,7 @@
   .estate.on  { color:var(--good-text); background:var(--good-bg); }
   .estate.off { color:var(--crit); background:var(--crit-bg); }
   .estate .dot { width:6px; height:6px; border-radius:99px; background:currentColor; box-shadow:0 0 8px currentColor; }
-  .eequity { font-size:26px; font-weight:700; margin:14px 0 3px; font-family:"Space Grotesk"; letter-spacing:-.3px; }
+  .eequity { font-size:26px; font-weight:700; margin:14px 0 3px; font-family:system-ui,-apple-system,"Segoe UI",sans-serif; letter-spacing:-.3px; }
   .esub { font-size:12px; color:var(--muted); margin-bottom:14px; }
   table { width:100%; border-collapse:collapse; font-size:12.5px; }
   th { text-align:left; color:var(--muted); font-weight:600; font-size:10px; text-transform:uppercase;
@@ -424,7 +424,7 @@
   .focus-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; position:relative; z-index:1; }
   .focus-metric { min-width:0; padding:13px 14px; border:1px solid var(--ring); border-radius:13px; background:color-mix(in srgb,var(--surface-2) 76%,transparent); }
   .focus-metric .fl { color:var(--muted); font-size:10px; font-weight:700; letter-spacing:.75px; text-transform:uppercase; }
-  .focus-metric .fv { font-family:"Space Grotesk"; font-size:21px; font-weight:700; letter-spacing:-.45px; margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .focus-metric .fv { font-family:system-ui,-apple-system,"Segoe UI",sans-serif; font-size:21px; font-weight:700; letter-spacing:-.45px; margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .focus-metric .fs { min-height:15px; margin-top:3px; color:var(--muted); font-size:10.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .focus-metric.warn { border-color:color-mix(in srgb,var(--warn) 38%,var(--ring)); }
   .focus-metric.crit { border-color:color-mix(in srgb,var(--crit) 44%,var(--ring)); background:color-mix(in srgb,var(--crit-bg) 56%,var(--surface-2)); }
@@ -458,7 +458,7 @@
     background:var(--surface-solid); border-left:1px solid var(--ring); box-shadow:-20px 0 60px -20px rgba(0,0,0,.5);
     transform:translateX(100%); transition:transform .3s cubic-bezier(.2,.8,.2,1); overflow-y:auto; padding:24px; }
   .drawer.open { transform:translateX(0); }
-  .drawer h3 { font-family:"Space Grotesk"; font-size:16px; margin-bottom:2px; }
+  .drawer h3 { font-family:system-ui,-apple-system,"Segoe UI",sans-serif; font-size:16px; margin-bottom:2px; }
   .drawer .dh { display:flex; align-items:center; margin-bottom:18px; }
   .setgrp { margin:18px 0; }
   .setgrp .gl { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:1px; font-weight:700; margin-bottom:10px; }

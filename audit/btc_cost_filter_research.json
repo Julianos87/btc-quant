@@ -1,0 +1,292 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-07-28T17:20:11.071739+00:00",
+  "purpose": "Test isolé d'un filtre de cassure couvrant les coûts",
+  "protocol": {
+    "thresholds_bps": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      60
+    ],
+    "development_end": "2022-12-31T23:59:59+00:00",
+    "validation_end": "2024-12-31T23:59:59+00:00",
+    "sealed_test_used_for_selection": false
+  },
+  "provenance": {
+    "script_sha256": "97ff7aa385dd5ed5ebd931260c56fffb1c4b2238a18e77081891c07cca55beeb",
+    "config": {
+      "path": "environments/paper/config.yaml",
+      "sha256": "51dea6b4a5680fe2954dcd109ee02762745842b60d7179f371cab16b75557bcc"
+    },
+    "data": [
+      {
+        "path": "data/binance_BTC-USDT_1h.csv",
+        "sha256": "14e3a38bfc99044b649085044a5a03c7a76ba7e9c2b108f69d0cb5044840268d"
+      },
+      {
+        "path": "data/binanceusdm_BTCUSDT_USDT_funding.csv",
+        "sha256": "a5c3bfab9c3526a46cc3907d3a9a8f65b9368f14fb0ffccbacadd91717c54621"
+      }
+    ]
+  },
+  "baseline": {
+    "threshold_bps": 0,
+    "trades": 478,
+    "development": {
+      "cagr": 0.7590501269367336,
+      "sharpe": 1.3787662602624904,
+      "max_drawdown": -0.3418586886758437,
+      "total_return": 8.048676055001419
+    },
+    "validation": {
+      "cagr": 1.2576902756787374,
+      "sharpe": 1.9973895725684456,
+      "max_drawdown": -0.25400319218951606,
+      "total_return": 4.108550233448438
+    },
+    "sealed_test": {
+      "cagr": -0.28452536052658617,
+      "sharpe": -0.7718667524752378,
+      "max_drawdown": -0.5527922396877066,
+      "total_return": -0.40907318679757887
+    },
+    "full": {
+      "cagr": 0.5567917503619095,
+      "sharpe": 1.1824474955534656,
+      "max_drawdown": -0.5527922396877066,
+      "total_return": 26.335413730275455
+    },
+    "selection_score": 0.8969267529629826
+  },
+  "selected": {
+    "threshold_bps": 30,
+    "trades": 442,
+    "development": {
+      "cagr": 0.76124043218495,
+      "sharpe": 1.4016812357085071,
+      "max_drawdown": -0.3488669853586207,
+      "total_return": 8.092697074818892
+    },
+    "validation": {
+      "cagr": 1.022109081912562,
+      "sharpe": 1.867960800358743,
+      "max_drawdown": -0.24407559166233905,
+      "total_return": 3.0968209174714234
+    },
+    "sealed_test": {
+      "cagr": -0.3272040986196083,
+      "sharpe": -1.033329220369039,
+      "max_drawdown": -0.5288502710826686,
+      "total_return": -0.46350628247225
+    },
+    "full": {
+      "cagr": 0.49290162124015646,
+      "sharpe": 1.1204453304246098,
+      "max_drawdown": -0.5338029881336634,
+      "total_return": 18.98500878923934
+    },
+    "selection_score": 0.9014085557558007,
+    "stress_full": {
+      "cagr": 0.4525945418007389,
+      "sharpe": 1.0568034776374182,
+      "max_drawdown": -0.5516849590757129,
+      "total_return": 15.28781630424313,
+      "trades": 440
+    }
+  },
+  "adoption_checks": {
+    "non_zero_filter_selected": true,
+    "full_cagr_above_baseline": false,
+    "full_sharpe_above_baseline": false,
+    "full_drawdown_no_worse": true,
+    "sealed_test_cagr_no_worse": false,
+    "sealed_test_sharpe_no_worse": false
+  },
+  "adopted": false,
+  "candidates_ranked_pre_test": [
+    {
+      "threshold_bps": 30,
+      "trades": 442,
+      "development": {
+        "cagr": 0.76124043218495,
+        "sharpe": 1.4016812357085071,
+        "max_drawdown": -0.3488669853586207,
+        "total_return": 8.092697074818892
+      },
+      "validation": {
+        "cagr": 1.022109081912562,
+        "sharpe": 1.867960800358743,
+        "max_drawdown": -0.24407559166233905,
+        "total_return": 3.0968209174714234
+      },
+      "sealed_test": {
+        "cagr": -0.3272040986196083,
+        "sharpe": -1.033329220369039,
+        "max_drawdown": -0.5288502710826686,
+        "total_return": -0.46350628247225
+      },
+      "full": {
+        "cagr": 0.49290162124015646,
+        "sharpe": 1.1204453304246098,
+        "max_drawdown": -0.5338029881336634,
+        "total_return": 18.98500878923934
+      },
+      "selection_score": 0.9014085557558007,
+      "stress_full": {
+        "cagr": 0.4525945418007389,
+        "sharpe": 1.0568034776374182,
+        "max_drawdown": -0.5516849590757129,
+        "total_return": 15.28781630424313,
+        "trades": 440
+      }
+    },
+    {
+      "threshold_bps": 0,
+      "trades": 478,
+      "development": {
+        "cagr": 0.7590501269367336,
+        "sharpe": 1.3787662602624904,
+        "max_drawdown": -0.3418586886758437,
+        "total_return": 8.048676055001419
+      },
+      "validation": {
+        "cagr": 1.2576902756787374,
+        "sharpe": 1.9973895725684456,
+        "max_drawdown": -0.25400319218951606,
+        "total_return": 4.108550233448438
+      },
+      "sealed_test": {
+        "cagr": -0.28452536052658617,
+        "sharpe": -0.7718667524752378,
+        "max_drawdown": -0.5527922396877066,
+        "total_return": -0.40907318679757887
+      },
+      "full": {
+        "cagr": 0.5567917503619095,
+        "sharpe": 1.1824474955534656,
+        "max_drawdown": -0.5527922396877066,
+        "total_return": 26.335413730275455
+      },
+      "selection_score": 0.8969267529629826
+    },
+    {
+      "threshold_bps": 40,
+      "trades": 420,
+      "development": {
+        "cagr": 0.738900094919954,
+        "sharpe": 1.3805183914291108,
+        "max_drawdown": -0.3082826463726964,
+        "total_return": 7.6510946110621525
+      },
+      "validation": {
+        "cagr": 1.0215762230052312,
+        "sharpe": 1.8765367481655095,
+        "max_drawdown": -0.2575756854861745,
+        "total_return": 3.094659086370437
+      },
+      "sealed_test": {
+        "cagr": -0.19012446005967043,
+        "sharpe": -0.46363313261976985,
+        "max_drawdown": -0.42247455804272116,
+        "total_return": -0.2820341384158468
+      },
+      "full": {
+        "cagr": 0.5418361837895096,
+        "sharpe": 1.1976529693564968,
+        "max_drawdown": -0.4305729002501144,
+        "total_return": 24.432708011406373
+      },
+      "selection_score": 0.8769519340628651
+    },
+    {
+      "threshold_bps": 10,
+      "trades": 471,
+      "development": {
+        "cagr": 0.7366515675635354,
+        "sharpe": 1.3586990582491594,
+        "max_drawdown": -0.3448733653141358,
+        "total_return": 7.607548955521118
+      },
+      "validation": {
+        "cagr": 1.1554153640948597,
+        "sharpe": 1.9088030684171355,
+        "max_drawdown": -0.2775638841840151,
+        "total_return": 3.655600776759103
+      },
+      "sealed_test": {
+        "cagr": -0.32534614008484897,
+        "sharpe": -0.9558613454474427,
+        "max_drawdown": -0.5655555392400565,
+        "total_return": -0.4611765816353861
+      },
+      "full": {
+        "cagr": 0.5084344300387802,
+        "sharpe": 1.119450142964337,
+        "max_drawdown": -0.5655555392400565,
+        "total_return": 20.592438743289144
+      },
+      "selection_score": 0.8725214733884514
+    },
+    {
+      "threshold_bps": 60,
+      "trades": 382,
+      "development": {
+        "cagr": 0.7248355592334119,
+        "sharpe": 1.3902370965265256,
+        "max_drawdown": -0.28891210005637347,
+        "total_return": 7.381389398034177
+      },
+      "validation": {
+        "cagr": 0.9671817160805358,
+        "sharpe": 1.8294120803059508,
+        "max_drawdown": -0.293864012782606,
+        "total_return": 2.876984027462322
+      },
+      "sealed_test": {
+        "cagr": -0.11858383909590664,
+        "sharpe": -0.22463289917105855,
+        "max_drawdown": -0.31731116451391406,
+        "total_return": -0.1799004015750455
+      },
+      "full": {
+        "cagr": 0.5515014589868772,
+        "sharpe": 1.2318119352364547,
+        "max_drawdown": -0.3507428136323405,
+        "total_return": 25.648736918075794
+      },
+      "selection_score": 0.8638592688860645
+    },
+    {
+      "threshold_bps": 20,
+      "trades": 458,
+      "development": {
+        "cagr": 0.7212175754224135,
+        "sharpe": 1.3513218836523042,
+        "max_drawdown": -0.3534837262102134,
+        "total_return": 7.313033122744063
+      },
+      "validation": {
+        "cagr": 1.096642940262028,
+        "sharpe": 1.8791568386773174,
+        "max_drawdown": -0.2665168114090354,
+        "total_return": 3.4048369911269374
+      },
+      "sealed_test": {
+        "cagr": -0.3077449643560155,
+        "sharpe": -0.8818030522307194,
+        "max_drawdown": -0.5419023733068833,
+        "total_return": -0.43892504684312605
+      },
+      "full": {
+        "cagr": 0.49843376145571683,
+        "sharpe": 1.1139969354114672,
+        "max_drawdown": -0.5419023733068833,
+        "total_return": 19.54519340942716
+      },
+      "selection_score": 0.8563497637876439
+    }
+  ]
+}

@@ -17,6 +17,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from btcquant.console import enable_utf8_output
+
+enable_utf8_output()
+
 import ccxt
 
 from btcquant.config import load_config, risk_from_config
@@ -45,7 +49,10 @@ def market_limits(symbol: str, futures: bool) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--capital", type=float, nargs="+", default=[1000, 2200, 3400, 5000, 10000])
-    parser.add_argument("--config", default=ROOT / "config_4x.yaml")
+    parser.add_argument(
+        "--config",
+        default=ROOT / "environments" / "paper" / "config.yaml",
+    )
     parser.add_argument("--no-refresh", action="store_true")
     args = parser.parse_args()
 

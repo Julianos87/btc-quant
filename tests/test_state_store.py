@@ -284,3 +284,109 @@ def test_schema_v1_is_migrated_with_execution_observability(tmp_path):
     assert "reference_price" in columns
     assert version == "3"
     assert store.read_incidents() == []
+
+
+# ── rétention du journal ────────────────────────────────────────────────────
+# Le journal grossit d'un checkpoint complet par tick et par moteur (~1 440/jour
+# pour le trend), chacun portant l'état sérialisé et son SHA-256. Sans purge,
+# une campagne de 90 jours dépasse la centaine de milliers de lignes que
+# `read_events` chargeait intégralement en mémoire.
+
+
+def _seed_journal(store, checkpoints: int = 40) -> None:
+    for index in range(checkpoints):
+        store.save_engine_state("trend", {"slots": {}, "tick": index})
+    order_id = store.begin_order(
+        "trend", "slot", "retention-intent", "MARKET", "BUY", 1.0, "entry", reference_price=100.0
+    )
+    store.complete_order(order_id, status="FILLED", filled_qty=1.0, price=100.0)
+
+
+def test_compact_events_removes_old_routine_checkpoints(tmp_path):
+    store = StateStore(tmp_path / "btcquant.db")
+    _seed_journal(store)
+    future = "2099-01-01T00:00:00+00:00"
+
+    before, after = store.compact_events(future, keep_per_engine=5)
+
+    assert after < before
+    kinds = [event["event_type"] for event in store.read_events()]
+    assert kinds.count("checkpoint") == 5
+
+
+def test_compact_events_never_touches_the_audit_trail(tmp_path):
+    """Ordres, fills et flux gardent leur valeur après coup : ils ne sont
+    jamais purgés, quel que soit le seuil."""
+    store = StateStore(tmp_path / "btcquant.db")
+    _seed_journal(store)
+    audit_before = [event for event in store.read_events() if event["event_type"] != "checkpoint"]
+
+    store.compact_events("2099-01-01T00:00:00+00:00", keep_per_engine=1)
+
+    audit_after = [event for event in store.read_events() if event["event_type"] != "checkpoint"]
+    assert [event["id"] for event in audit_after] == [event["id"] for event in audit_before]
+
+
+def test_compact_events_spares_recent_checkpoints(tmp_path):
+    """Un cutoff dans le passé ne doit rien supprimer : la purge est datée."""
+    store = StateStore(tmp_path / "btcquant.db")
+    _seed_journal(store)
+    before = len(store.read_events())
+
+    _, after = store.compact_events("2000-01-01T00:00:00+00:00", keep_per_engine=1)
+
+    assert after == before
+
+
+def test_replay_still_works_on_the_retained_window(tmp_path):
+    """La reconstruction d'état reste possible après compaction : c'est le
+    dernier checkpoint qui compte, et il est conservé."""
+    store = StateStore(tmp_path / "btcquant.db")
+    _seed_journal(store)
+    store.compact_events("2099-01-01T00:00:00+00:00", keep_per_engine=3)
+
+    assert store.replay_engine_state("trend") == store.load_engine_state("trend")
+
+
+def test_read_events_limit_returns_the_most_recent_in_order(tmp_path):
+    store = StateStore(tmp_path / "btcquant.db")
+    _seed_journal(store, checkpoints=10)
+    everything = store.read_events()
+
+    recent = store.read_events(limit=3)
+
+    assert [event["id"] for event in recent] == [event["id"] for event in everything[-3:]]
+
+
+def test_read_events_since_id_paginates(tmp_path):
+    store = StateStore(tmp_path / "btcquant.db")
+    _seed_journal(store, checkpoints=6)
+    everything = store.read_events()
+    pivot = everything[2]["id"]
+
+    assert [event["id"] for event in store.read_events(since_id=pivot)] == [
+        event["id"] for event in everything[3:]
+    ]
+
+
+def test_json_error_names_the_offending_field(tmp_path):
+    """Un checkpoint non sérialisable doit être diagnosticable du premier coup :
+    `TypeError: Object of type bool is not JSON serializable` ne dit ni la clé
+    ni le moteur concernés, alors qu'il fait échouer toute la transaction."""
+    import numpy as np
+    import pytest
+
+    store = StateStore(tmp_path / "btcquant.db")
+
+    with pytest.raises(TypeError, match=r"halted \(numpy\.bool"):
+        store.save_engine_state("trend", {"slots": {}, "halted": np.bool_(False)})
+
+
+def test_json_error_reports_nested_fields(tmp_path):
+    import numpy as np
+    import pytest
+
+    store = StateStore(tmp_path / "btcquant.db")
+
+    with pytest.raises(TypeError, match=r"slots\.d20\.flag"):
+        store.save_engine_state("trend", {"slots": {"d20": {"flag": np.bool_(True)}}})

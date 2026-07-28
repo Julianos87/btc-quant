@@ -1,0 +1,307 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-07-28T18:50:07.530704+00:00",
+  "purpose": "Référence walk-forward de recherche; aucune promesse de performance",
+  "provenance": {
+    "base_git_commit": "d7cc78f990188e25b1fd6c567fe8928989b59287",
+    "source_tree_sha256": "1622780aa1ae3b5d2ce1a60cbf66aa1c3935c0c12b8c8e4dfe810b53ab4bd061",
+    "script": {
+      "path": "scripts/run_walkforward.py",
+      "sha256": "0fcdc899f43088d35c3a6f316f9fe59658f348358464f9a981113bec8a2986ee"
+    },
+    "config": {
+      "path": "environments/paper/config.yaml",
+      "sha256": "51dea6b4a5680fe2954dcd109ee02762745842b60d7179f371cab16b75557bcc"
+    },
+    "data": [
+      {
+        "path": "data/binance_BTC-USDT_1h.csv",
+        "bytes": 4813703,
+        "sha256": "14e3a38bfc99044b649085044a5a03c7a76ba7e9c2b108f69d0cb5044840268d"
+      },
+      {
+        "path": "data/binanceusdm_BTCUSDT_USDT_funding.csv",
+        "bytes": 294987,
+        "sha256": "a5c3bfab9c3526a46cc3907d3a9a8f65b9368f14fb0ffccbacadd91717c54621"
+      }
+    ]
+  },
+  "experiment": {
+    "strategy": "trend_ls",
+    "fixed_params": {
+      "adx_min": 20,
+      "funding_long_max": 0.0008,
+      "funding_short_min": -0.0008,
+      "pyramid_atr_step": 0.5,
+      "pyramid_add_fraction": 0.3,
+      "pyramid_max_adds": 1
+    },
+    "symbol": "BTC/USDT",
+    "timeframe": "4h",
+    "market": "perp",
+    "grid": {
+      "donchian": [
+        20,
+        55,
+        100
+      ],
+      "atr_mult": [
+        2.5,
+        3.0,
+        3.5
+      ]
+    },
+    "train_bars": 4380,
+    "test_bars": 1095,
+    "objective": "sharpe"
+  },
+  "methodology": {
+    "validates": "stabilité hors échantillon d'une sélection glissante d'un horizon et d'un multiple ATR",
+    "does_not_validate": "parité ou performance hors échantillon de l'ensemble fixe déployé Donchian 20/55/100"
+  },
+  "results": {
+    "folds": [
+      {
+        "fold": 0,
+        "train": [
+          "2019-01-01 00:00:00+00:00",
+          "2020-12-31 16:00:00+00:00"
+        ],
+        "test": [
+          "2020-12-31 20:00:00+00:00",
+          "2021-07-02 04:00:00+00:00"
+        ],
+        "best_params": {
+          "donchian": 100,
+          "atr_mult": 3.5
+        },
+        "is_sharpe": 2.2301513652419125,
+        "oos_sharpe": 1.0245193245697155,
+        "oos_return": 0.17788072224025187,
+        "oos_max_dd": -0.1794139446580063,
+        "oos_trades": 5
+      },
+      {
+        "fold": 1,
+        "train": [
+          "2019-07-03 00:00:00+00:00",
+          "2021-07-02 04:00:00+00:00"
+        ],
+        "test": [
+          "2021-07-02 08:00:00+00:00",
+          "2021-12-31 16:00:00+00:00"
+        ],
+        "best_params": {
+          "donchian": 100,
+          "atr_mult": 3.5
+        },
+        "is_sharpe": 1.7835519458765454,
+        "oos_sharpe": 0.5707183479407967,
+        "oos_return": 0.07177961113625497,
+        "oos_max_dd": -0.16656855712547936,
+        "oos_trades": 8
+      },
+      {
+        "fold": 2,
+        "train": [
+          "2020-01-01 16:00:00+00:00",
+          "2021-12-31 16:00:00+00:00"
+        ],
+        "test": [
+          "2021-12-31 20:00:00+00:00",
+          "2022-07-02 04:00:00+00:00"
+        ],
+        "best_params": {
+          "donchian": 100,
+          "atr_mult": 3.5
+        },
+        "is_sharpe": 1.5919587215115583,
+        "oos_sharpe": 1.0936578938441708,
+        "oos_return": 0.20328180829869713,
+        "oos_max_dd": -0.22247378595037426,
+        "oos_trades": 9
+      },
+      {
+        "fold": 3,
+        "train": [
+          "2020-07-02 08:00:00+00:00",
+          "2022-07-02 04:00:00+00:00"
+        ],
+        "test": [
+          "2022-07-02 08:00:00+00:00",
+          "2022-12-31 16:00:00+00:00"
+        ],
+        "best_params": {
+          "donchian": 55,
+          "atr_mult": 3.5
+        },
+        "is_sharpe": 1.5803621014425828,
+        "oos_sharpe": -2.7805553208007874,
+        "oos_return": -0.31920344516665633,
+        "oos_max_dd": -0.31920344516665633,
+        "oos_trades": 9
+      },
+      {
+        "fold": 4,
+        "train": [
+          "2020-12-31 20:00:00+00:00",
+          "2022-12-31 16:00:00+00:00"
+        ],
+        "test": [
+          "2022-12-31 20:00:00+00:00",
+          "2023-07-02 04:00:00+00:00"
+        ],
+        "best_params": {
+          "donchian": 20,
+          "atr_mult": 3.5
+        },
+        "is_sharpe": 0.3973604223841782,
+        "oos_sharpe": 2.9521548164959275,
+        "oos_return": 1.3793133688108816,
+        "oos_max_dd": -0.18248252063567194,
+        "oos_trades": 10
+      },
+      {
+        "fold": 5,
+        "train": [
+          "2021-07-02 08:00:00+00:00",
+          "2023-07-02 04:00:00+00:00"
+        ],
+        "test": [
+          "2023-07-02 08:00:00+00:00",
+          "2023-12-31 16:00:00+00:00"
+        ],
+        "best_params": {
+          "donchian": 20,
+          "atr_mult": 3.0
+        },
+        "is_sharpe": 1.3330763533306684,
+        "oos_sharpe": 2.3400534230277903,
+        "oos_return": 1.1853228547475,
+        "oos_max_dd": -0.2346327470602525,
+        "oos_trades": 10
+      },
+      {
+        "fold": 6,
+        "train": [
+          "2021-12-31 20:00:00+00:00",
+          "2023-12-31 16:00:00+00:00"
+        ],
+        "test": [
+          "2023-12-31 20:00:00+00:00",
+          "2024-07-01 04:00:00+00:00"
+        ],
+        "best_params": {
+          "donchian": 20,
+          "atr_mult": 3.0
+        },
+        "is_sharpe": 1.5651381651181353,
+        "oos_sharpe": 0.702371350206118,
+        "oos_return": 0.1297654658767733,
+        "oos_max_dd": -0.30940520678065153,
+        "oos_trades": 15
+      },
+      {
+        "fold": 7,
+        "train": [
+          "2022-07-02 08:00:00+00:00",
+          "2024-07-01 04:00:00+00:00"
+        ],
+        "test": [
+          "2024-07-01 08:00:00+00:00",
+          "2024-12-30 16:00:00+00:00"
+        ],
+        "best_params": {
+          "donchian": 20,
+          "atr_mult": 3.5
+        },
+        "is_sharpe": 1.7781535279686245,
+        "oos_sharpe": 1.3810122492795849,
+        "oos_return": 0.2799673145898647,
+        "oos_max_dd": -0.17768773945307803,
+        "oos_trades": 11
+      },
+      {
+        "fold": 8,
+        "train": [
+          "2022-12-31 20:00:00+00:00",
+          "2024-12-30 16:00:00+00:00"
+        ],
+        "test": [
+          "2024-12-30 20:00:00+00:00",
+          "2025-07-01 04:00:00+00:00"
+        ],
+        "best_params": {
+          "donchian": 20,
+          "atr_mult": 2.5
+        },
+        "is_sharpe": 1.7290823348637279,
+        "oos_sharpe": 0.30406603676255384,
+        "oos_return": 0.011265856122083973,
+        "oos_max_dd": -0.26655413402205985,
+        "oos_trades": 16
+      },
+      {
+        "fold": 9,
+        "train": [
+          "2023-07-02 08:00:00+00:00",
+          "2025-07-01 04:00:00+00:00"
+        ],
+        "test": [
+          "2025-07-01 08:00:00+00:00",
+          "2025-12-30 16:00:00+00:00"
+        ],
+        "best_params": {
+          "donchian": 20,
+          "atr_mult": 2.5
+        },
+        "is_sharpe": 1.6072760469481182,
+        "oos_sharpe": -1.6108439155753598,
+        "oos_return": -0.2881479671985797,
+        "oos_max_dd": -0.4071713682804906,
+        "oos_trades": 18
+      },
+      {
+        "fold": 10,
+        "train": [
+          "2023-12-31 20:00:00+00:00",
+          "2025-12-30 16:00:00+00:00"
+        ],
+        "test": [
+          "2025-12-30 20:00:00+00:00",
+          "2026-07-01 04:00:00+00:00"
+        ],
+        "best_params": {
+          "donchian": 20,
+          "atr_mult": 2.5
+        },
+        "is_sharpe": 0.8239148176822401,
+        "oos_sharpe": 0.3981687996818839,
+        "oos_return": 0.028936448860557906,
+        "oos_max_dd": -0.5028490344599454,
+        "oos_trades": 18
+      }
+    ],
+    "oos_metrics": {
+      "start": "2020-12-31 20:00:00+00:00",
+      "end": "2026-07-01 04:00:00+00:00",
+      "years": 5.5,
+      "total_return": 4.759563334532575,
+      "cagr": 0.37484154430724703,
+      "volatility": 0.5184740656133752,
+      "sharpe": 0.8585097425131204,
+      "sortino": 1.1661258481811767,
+      "max_drawdown": -0.6323051714169211,
+      "calmar": 0.5928174578538895,
+      "n_trades": 0,
+      "win_rate": NaN,
+      "profit_factor": NaN,
+      "avg_win_pct": NaN,
+      "avg_loss_pct": NaN,
+      "avg_bars_held": NaN,
+      "exposure": NaN
+    },
+    "oos_trades": 129,
+    "efficiency": 0.38826510275719966
+  }
+}

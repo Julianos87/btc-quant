@@ -1,6 +1,6 @@
 from .broker import Broker, BrokerOrderSnapshot, PaperBroker
 from .ccxt_broker import CcxtBroker
-from .errors import ExecutionError, ReconciliationRequired, RemotePositionUnavailable
+from .errors import ExecutionError, ReconciliationRequired
 
 __all__ = [
     "Broker",
@@ -9,5 +9,4 @@ __all__ = [
     "ExecutionError",
     "PaperBroker",
     "ReconciliationRequired",
-    "RemotePositionUnavailable",
 ]

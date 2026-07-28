@@ -11,7 +11,7 @@ import csv
 import hashlib
 import json
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,6 +22,27 @@ SCHEMA_VERSION = 3
 
 def utc_now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _unserializable_paths(payload: Any, prefix: str = "") -> list[str]:
+    """Chemins des valeurs que ``json`` refuse, pour un message exploitable."""
+
+    if isinstance(payload, dict):
+        found: list[str] = []
+        for key, value in payload.items():
+            found.extend(_unserializable_paths(value, f"{prefix}.{key}" if prefix else str(key)))
+        return found
+    if isinstance(payload, (list, tuple)):
+        found = []
+        for index, value in enumerate(payload):
+            found.extend(_unserializable_paths(value, f"{prefix}[{index}]"))
+        return found
+    if payload is None or isinstance(payload, (str, int, float, bool)):
+        return []
+    # Le module est indispensable : `numpy.bool` s'affiche « bool » comme le
+    # type natif, alors que c'est précisément lui qui casse la sérialisation.
+    kind = type(payload)
+    return [f"{prefix or '<racine>'} ({kind.__module__}.{kind.__qualname__})"]
 
 
 def database_path(state_path: str | Path) -> Path:
@@ -252,12 +273,26 @@ class StateStore:
 
     @staticmethod
     def _json(payload: Any) -> str:
-        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        """Sérialise un checkpoint, en nommant le champ fautif s'il échoue.
+
+        Un `TypeError: Object of type bool is not JSON serializable` — le
+        message que produit `numpy.bool_` — n'indique ni la clé ni le moteur
+        concernés. Comme cet échec fait échouer toute la transaction de
+        checkpoint, il faut qu'il soit diagnosticable du premier coup.
+        """
+
+        try:
+            return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        except TypeError as error:
+            culprits = sorted(_unserializable_paths(payload))
+            raise TypeError(
+                f"Checkpoint non sérialisable ({error}) ; champs en cause : {culprits}"
+            ) from error
 
     @classmethod
     def _state_event(
         cls,
-        state: dict[str, Any],
+        state: Mapping[str, Any],
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         canonical = json.dumps(
@@ -447,7 +482,7 @@ class StateStore:
     def save_engine_state(
         self,
         engine: str,
-        payload: dict[str, Any],
+        payload: Mapping[str, Any],
         *,
         event_type: str = "checkpoint",
         event_payload: dict[str, Any] | None = None,
@@ -471,25 +506,6 @@ class StateStore:
                 aggregate_type="engine",
                 aggregate_id=engine,
             )
-
-    def save_states_and_flow(
-        self,
-        states: dict[str, dict[str, Any]],
-        *,
-        kind: str,
-        trend_flow: float,
-        carry_flow: float,
-    ) -> None:
-        self.save_states_and_flows(
-            states,
-            [
-                {
-                    "kind": kind,
-                    "trend_flow": trend_flow,
-                    "carry_flow": carry_flow,
-                }
-            ],
-        )
 
     def save_states_and_flows(
         self,
@@ -542,7 +558,7 @@ class StateStore:
         self,
         connection: sqlite3.Connection,
         engine: str,
-        payload: dict[str, Any],
+        payload: Mapping[str, Any],
         now: str,
     ) -> None:
         connection.execute("DELETE FROM positions WHERE engine = ?", (engine,))
@@ -596,27 +612,6 @@ class StateStore:
                     payload.get("qty", 0.0),
                     now,
                 ),
-            )
-
-    def append_event(
-        self,
-        engine: str,
-        event_type: str,
-        payload: dict[str, Any],
-        *,
-        aggregate_type: str | None = None,
-        aggregate_id: str | None = None,
-        correlation_id: str | None = None,
-    ) -> None:
-        with self._transaction() as connection:
-            self._insert_event(
-                connection,
-                engine,
-                event_type,
-                payload,
-                aggregate_type,
-                aggregate_id,
-                correlation_id,
             )
 
     def _insert_event(
@@ -709,7 +704,7 @@ class StateStore:
         side: str,
         requested_qty: float,
         reason: str,
-        state: dict[str, Any],
+        state: Mapping[str, Any],
         reference_price: float | None = None,
     ) -> int:
         """Journalise l'intention et l'état transitoire dans une transaction."""
@@ -836,7 +831,7 @@ class StateStore:
         order_id: int,
         *,
         engine: str,
-        state: dict[str, Any],
+        state: Mapping[str, Any],
         status: str,
         filled_qty: float = 0.0,
         price: float | None = None,
@@ -951,7 +946,7 @@ class StateStore:
         price: float,
         fee: float,
         reason: str,
-        state: dict[str, Any],
+        state: Mapping[str, Any],
         trade: dict[str, Any],
     ) -> bool:
         """Matérialise atomiquement un fill externe observé hors processus.
@@ -1099,15 +1094,41 @@ class StateStore:
             rows = connection.execute(query, params).fetchall()
         return [dict(row) for row in rows]
 
-    def read_events(self, engine: str | None = None) -> list[dict[str, Any]]:
-        query = "SELECT * FROM events"
-        params: tuple[str, ...] = ()
+    def read_events(
+        self,
+        engine: str | None = None,
+        *,
+        limit: int | None = None,
+        since_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Journal, du plus ancien au plus récent.
+
+        ``limit`` retient les N ÉVÉNEMENTS LES PLUS RÉCENTS, tout en les
+        renvoyant dans l'ordre chronologique : un appelant qui veut afficher
+        l'activité récente n'a pas à charger l'intégralité du journal, dont la
+        taille croît d'un checkpoint par tick.
+        """
+
+        conditions: list[str] = []
+        params: list[Any] = []
         if engine is not None:
-            query += " WHERE engine = ?"
-            params = (engine,)
-        query += " ORDER BY id"
+            conditions.append("engine = ?")
+            params.append(engine)
+        if since_id is not None:
+            conditions.append("id > ?")
+            params.append(since_id)
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        if limit is None:
+            query = f"SELECT * FROM events{where} ORDER BY id"
+        else:
+            if limit <= 0:
+                raise ValueError("limit doit être strictement positif")
+            query = (
+                f"SELECT * FROM (SELECT * FROM events{where} ORDER BY id DESC LIMIT ?) ORDER BY id"
+            )
+            params.append(limit)
         with self._connect() as connection:
-            rows = connection.execute(query, params).fetchall()
+            rows = connection.execute(query, tuple(params)).fetchall()
         return [dict(row) for row in rows]
 
     def record_incident(
@@ -1404,6 +1425,64 @@ class StateStore:
             )
         if cursor.rowcount != 1:
             raise RuntimeError("La campagne n'est plus active")
+
+    #: Événements de simple checkpoint périodique. Ils portent l'état complet
+    #: du moteur et sont réémis à chaque tick : leur valeur d'audit décroît
+    #: immédiatement, contrairement aux ordres, fills, stops et flux.
+    ROUTINE_EVENT_TYPES = ("checkpoint", "state_checkpoint")
+
+    def compact_events(self, cutoff: str, *, keep_per_engine: int = 500) -> tuple[int, int]:
+        """Purge les checkpoints périodiques anciens, garde tout le reste.
+
+        Le journal grossit d'un événement par tick et par moteur — environ
+        1 440 par jour pour le trend — chacun portant l'état sérialisé complet
+        et son SHA-256. Sur une campagne de 90 jours la table dépasse la
+        centaine de milliers de lignes, que `read_events` chargeait
+        intégralement en mémoire.
+
+        Ce qui est SUPPRIMÉ : les checkpoints de routine antérieurs à
+        ``cutoff``, au-delà des ``keep_per_engine`` plus récents de chaque
+        moteur. Ce qui est CONSERVÉ inconditionnellement : tout événement
+        d'ordre, de fill, de stop protecteur, de funding, de flux de capital ou
+        de migration — c'est-à-dire toute la trace d'audit qui a une valeur
+        après coup. La reconstruction d'état par `replay_engine_state` reste
+        possible sur la fenêtre conservée.
+        """
+
+        placeholders = ",".join("?" for _ in self.ROUTINE_EVENT_TYPES)
+        with self._transaction() as connection:
+            before = int(connection.execute("SELECT COUNT(*) FROM events").fetchone()[0])
+            engines = [
+                row[0]
+                for row in connection.execute(
+                    f"SELECT DISTINCT engine FROM events WHERE event_type IN ({placeholders})",
+                    self.ROUTINE_EVENT_TYPES,
+                ).fetchall()
+            ]
+            for engine in engines:
+                connection.execute(
+                    f"""
+                    DELETE FROM events
+                    WHERE engine = ?
+                      AND event_type IN ({placeholders})
+                      AND ts < ?
+                      AND id NOT IN (
+                        SELECT id FROM events
+                        WHERE engine = ? AND event_type IN ({placeholders})
+                        ORDER BY id DESC LIMIT ?
+                      )
+                    """,
+                    (
+                        engine,
+                        *self.ROUTINE_EVENT_TYPES,
+                        cutoff,
+                        engine,
+                        *self.ROUTINE_EVENT_TYPES,
+                        keep_per_engine,
+                    ),
+                )
+            after = int(connection.execute("SELECT COUNT(*) FROM events").fetchone()[0])
+        return before, after
 
     def compact_equity(self, engine: str, cutoff: str) -> tuple[int, int]:
         """Conserve un point horaire avant ``cutoff`` et tous les points récents."""

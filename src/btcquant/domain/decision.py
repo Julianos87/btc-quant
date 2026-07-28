@@ -39,6 +39,13 @@ class StopTightened:
 
 
 @dataclass(frozen=True)
+class PyramidRequested:
+    """Ajout demandé, exprimé en fraction de la tranche initiale."""
+
+    fraction: float
+
+
+@dataclass(frozen=True)
 class FundingAccrued:
     """Coût signé du funding pour la barre (négatif = crédit)."""
 
@@ -46,7 +53,9 @@ class FundingAccrued:
     amount: float
 
 
-DecisionEvent: TypeAlias = EntryRequested | ExitRequested | StopTightened | FundingAccrued
+DecisionEvent: TypeAlias = (
+    EntryRequested | ExitRequested | StopTightened | PyramidRequested | FundingAccrued
+)
 
 
 def funding_amount(position: Position, rate: float, mark_price: float) -> float:
@@ -125,5 +134,11 @@ def decide_bar_close(
         mutable_events.append(ExitRequested(reason="kill_switch"))
     elif strategy.exit_signal(row, updated):
         mutable_events.append(ExitRequested(reason="signal"))
+    else:
+        pyramid_fraction = float(strategy.pyramid_fraction(row, updated))
+        if pyramid_fraction < 0 or pyramid_fraction > 1:
+            raise ValueError("Fraction de renfort invalide")
+        if pyramid_fraction:
+            mutable_events.append(PyramidRequested(fraction=pyramid_fraction))
 
     return BarDecision(position=updated, events=tuple(mutable_events))

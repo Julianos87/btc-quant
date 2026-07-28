@@ -1,7 +1,7 @@
 """Génère dashboard/yearly_reference.json : performances annuelles du backtest.
 
 Rejoue le portefeuille 60/40 tel qu'il tourne en paper (trend 4x via
-config_4x.yaml + carry 3x, entrée 3 % / sortie 0 % / lissage 14 j) et
+environments/paper/config.yaml + carry 3x, entrée 3 % / sortie 0 % / lissage 14 j) et
 extrait, par année civile : rendement portefeuille, trend, carry, BTC
 buy & hold et max drawdown intra-année. Le JSON est servi par le
 dashboard (/api/yearly) — à régénérer après tout changement de config.
@@ -21,12 +21,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from btcquant.console import enable_utf8_output
+
+enable_utf8_output()
+
 import pandas as pd
 
 from btcquant.backtest import BacktestEngine
 from btcquant.carry import add_funding_columns, backtest_carry, load_funding
 from btcquant.config import (
     build_strategies,
+    carry_policy_from_config,
     execution_config_from_config,
     load_config,
     risk_from_config,
@@ -36,13 +41,6 @@ from btcquant.domain import ExecutionSimulator
 from btcquant.risk import RiskConfig
 
 log = logging.getLogger(__name__)
-
-# paramètres du carry live (cf. deploy/*.service et CarryRunner)
-CARRY_CAPITAL = 4000.0
-CARRY_LEVERAGE = 3.0
-CARRY_ENTER_ANN = 0.03
-CARRY_EXIT_ANN = 0.0
-CARRY_SMOOTH_DAYS = 14
 
 
 def _portable_bytes(path: Path) -> bytes:
@@ -66,7 +64,7 @@ def _source_tree_sha256() -> str:
 
 
 def trend_equity(cfg: dict, base: pd.DataFrame, refresh: bool) -> pd.Series:
-    """Équity du moteur trend : somme des slots de config_4x.yaml (comme run_backtest)."""
+    """Équity du moteur trend : somme des slots du profil paper."""
     risk = risk_from_config(cfg)
     curves = []
     for strategy, fraction, market in build_strategies(cfg):
@@ -113,7 +111,10 @@ def yearly_stats(daily: pd.Series) -> dict[int, dict]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default=ROOT / "config_4x.yaml")
+    parser.add_argument(
+        "--config",
+        default=ROOT / "environments" / "paper" / "config.yaml",
+    )
     parser.add_argument(
         "--no-refresh", action="store_true", help="utilise uniquement le cache local"
     )
@@ -122,6 +123,7 @@ def main() -> None:
 
     logging.basicConfig(level=logging.WARNING)
     cfg = load_config(args.config)
+    carry_policy = carry_policy_from_config(cfg)
 
     base = load_ohlcv(
         cfg["exchange"],
@@ -138,11 +140,14 @@ def main() -> None:
     carry = (
         backtest_carry(
             funding,
-            initial_capital=CARRY_CAPITAL,
-            leverage=CARRY_LEVERAGE,
-            enter_ann=CARRY_ENTER_ANN,
-            exit_ann=CARRY_EXIT_ANN,
-            smooth_days=CARRY_SMOOTH_DAYS,
+            initial_capital=carry_policy.capital,
+            leverage=carry_policy.leverage,
+            enter_ann=carry_policy.enter_ann,
+            exit_ann=carry_policy.exit_ann,
+            smooth_days=carry_policy.smooth_days,
+            fee_rate=carry_policy.fee_rate,
+            slippage_bps=carry_policy.slippage_bps,
+            borrow_rate_ann=carry_policy.borrow_rate_ann,
         )["equity"]
         .resample("1D")
         .last()

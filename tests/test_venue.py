@@ -11,6 +11,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from dataclasses import replace
+
+from btcquant.carry import PAPER_CARRY_POLICY
 from btcquant.execution.carry_runner import CarryRunner
 from btcquant.execution.venue import Venue
 
@@ -87,12 +90,44 @@ def test_funding_history_sorted_series():
     assert len(s) == 5
 
 
+def test_funding_history_paginates_and_deduplicates_long_backlog():
+    start = pd.Timestamp("2030-01-01T00:00:00Z")
+    timestamps = [int((start + pd.Timedelta(hours=i)).timestamp() * 1000) for i in range(1205)]
+
+    class PagedExchange(_StubExchange):
+        def __init__(self):
+            super().__init__()
+            self.calls: list[int] = []
+
+        def fetch_funding_rate_history(self, symbol, since=None, limit=None):
+            del symbol
+            assert since is not None
+            assert limit == 1000
+            self.calls.append(since)
+            eligible = [timestamp for timestamp in timestamps if timestamp >= since]
+            page = eligible[:500]  # la venue impose une limite inférieure
+            return [{"fundingRate": 0.0001, "timestamp": timestamp} for timestamp in page]
+
+    venue = Venue("hyperliquid", "BTC/USDC:USDC")
+    exchange = PagedExchange()
+    venue.exchange = exchange
+    venue.funding_exchange = exchange
+
+    history = venue.funding_history_since(start)
+
+    assert len(history) == 1205
+    assert history.index.is_unique
+    assert history.index.is_monotonic_increasing
+    assert len(exchange.calls) == 4  # trois pages de données, puis la page vide
+
+
 def test_carry_annualizes_hourly_funding(tmp_path):
     """Funding horaire constant de 1.25e-5 → ~10,9 %/an : le carry doit entrer
     (seuil 3 %) et payer le coût de bascule, avec l'annualisation ×24×365
     (l'ancienne convention 8 h, ×3×365, n'aurait vu que ~1,4 % → jamais entré)."""
     runner = CarryRunner(
-        initial_capital=4000.0, leverage=3.0, state_file=tmp_path / "carry_state.json"
+        policy=replace(PAPER_CARRY_POLICY, capital=4000.0, leverage=3.0),
+        state_file=tmp_path / "carry_state.json",
     )
     _stub_venue(runner.venue, funding_rate=1.25e-5)
     assert not runner.in_position

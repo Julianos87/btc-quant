@@ -1,35 +1,35 @@
 {
   "schema_version": 1,
-  "generated_at_utc": "2026-07-26T20:07:47.263203+00:00",
+  "generated_at_utc": "2026-07-28T18:49:38.294201+00:00",
   "purpose": "Safety Baseline anti-régression; aucune promesse de performance",
   "provenance": {
-    "base_git_commit": "871afd4e2942d647e924542f4613700f804244db",
-    "source_tree_sha256": "53265af99c07938a7089eba4a60f9579f5fc4897a8e1cc7e2e09a62f4218f9c7",
+    "base_git_commit": "d7cc78f990188e25b1fd6c567fe8928989b59287",
+    "source_tree_sha256": "1622780aa1ae3b5d2ce1a60cbf66aa1c3935c0c12b8c8e4dfe810b53ab4bd061",
     "config": {
-      "path": "config_4x.yaml",
-      "sha256": "5df26dd937257d35ff897aec1e3e3eecb1fdc5ac205aead5f2e345a8ba74e6be"
+      "path": "environments\\paper\\config.yaml",
+      "sha256": "51dea6b4a5680fe2954dcd109ee02762745842b60d7179f371cab16b75557bcc"
     },
     "data": [
       {
         "path": "data/binance_BTC-USDT_1h.csv",
-        "bytes": 4810818,
-        "sha256": "b1e80ef00b091cbb6a66dd091eb49116bee24817c456ad7999a8e0cbe9e546fd"
+        "bytes": 4813703,
+        "sha256": "14e3a38bfc99044b649085044a5a03c7a76ba7e9c2b108f69d0cb5044840268d"
       },
       {
         "path": "data/binanceusdm_BTCUSDT_USDT_funding.csv",
-        "bytes": 294790,
-        "sha256": "2487f717fa04cdd170c879c92a5009e2105a17a9093a2b2a736af4433fd07594"
+        "bytes": 294987,
+        "sha256": "a5c3bfab9c3526a46cc3907d3a9a8f65b9368f14fb0ffccbacadd91717c54621"
       }
     ],
-    "base_rows": 66272,
+    "base_rows": 66312,
     "base_span": [
       "2019-01-01T00:00:00+00:00",
-      "2026-07-26T19:00:00+00:00"
+      "2026-07-28T11:00:00+00:00"
     ],
-    "funding_rows": 7535,
+    "funding_rows": 7540,
     "funding_span": [
       "2019-09-10T08:00:00+00:00",
-      "2026-07-26T16:00:00+00:00"
+      "2026-07-28T08:00:00+00:00"
     ]
   },
   "results": {
@@ -38,61 +38,61 @@
         "timeframe": "4h",
         "market": "perp",
         "capital_fraction": 0.3333,
-        "trades": 196,
-        "final_equity": 95923.76387188338,
-        "sharpe": 1.388499630236542,
-        "max_drawdown": -0.596597954790312
+        "trades": 192,
+        "final_equity": 130823.01620428718,
+        "sharpe": 1.200207123782206,
+        "max_drawdown": -0.6010533215386071
       },
       "trend_ls_55": {
         "timeframe": "4h",
         "market": "perp",
         "capital_fraction": 0.3333,
-        "trades": 154,
-        "final_equity": 46276.60274176708,
-        "sharpe": 1.231596601325414,
-        "max_drawdown": -0.49403400274235865
+        "trades": 155,
+        "final_equity": 74417.807978529,
+        "sharpe": 1.105185906774235,
+        "max_drawdown": -0.5485719988311755
       },
       "trend_ls_100": {
         "timeframe": "4h",
         "market": "perp",
         "capital_fraction": 0.3334,
-        "trades": 129,
-        "final_equity": 57967.79466984747,
-        "sharpe": 1.3573857532877822,
-        "max_drawdown": -0.4004996000236699
+        "trades": 130,
+        "final_equity": 89400.3290991735,
+        "sharpe": 1.1822521643821682,
+        "max_drawdown": -0.4603032030413283
       }
     },
     "combined": {
-      "trades": 479,
-      "final_equity": 200168.16128349793,
-      "cagr": 0.5993040291763008,
-      "sharpe": 1.3606832163943146,
-      "max_drawdown": -0.5287833278407402
+      "trades": 477,
+      "final_equity": 294641.1532819897,
+      "cagr": 0.6837238080005072,
+      "sharpe": 1.1825477450399053,
+      "max_drawdown": -0.557087610027692
     },
     "conformity": {
       "profile": "trend 4x — baseline reproductible",
-      "n_trades": 479,
-      "trades_per_year": 64.1564906490649,
-      "win_rate": 0.3736951983298539,
-      "avg_win_pct": 0.09369161945266313,
-      "avg_loss_pct": -0.03058650069945933,
+      "n_trades": 477,
+      "trades_per_year": 63.849590764720254,
+      "win_rate": 0.35639412997903563,
+      "avg_win_pct": 0.09281900222558338,
+      "avg_loss_pct": -0.03266647047480937,
       "worst_loss_streak": 21,
-      "max_drawdown": -0.5287833278407402,
+      "max_drawdown": -0.557087610027692,
       "dd_time_fraction": {
-        "5": 0.9056730651668908,
-        "10": 0.6482455067856706,
-        "15": 0.3705832008803032,
-        "20": 0.22062599339772587,
-        "25": 0.14830663895341728,
-        "30": 0.1388311529526837,
-        "35": 0.07598728450910869,
-        "40": 0.05165668174593471,
-        "45": 0.01901210416921384,
-        "50": 0.0036067978970534295
+        "5": 0.9306573802541545,
+        "10": 0.7862292277614858,
+        "15": 0.5486925708699902,
+        "20": 0.33357771260997066,
+        "25": 0.22653958944281524,
+        "30": 0.14986559139784947,
+        "35": 0.12781036168132942,
+        "40": 0.06512707722385142,
+        "45": 0.04612658846529814,
+        "50": 0.014907135874877811
       },
-      "monthly_return_p10": -0.0993527045399357,
-      "monthly_return_p90": 0.2789095604079198,
-      "worst_month": -0.17371966728988852
+      "monthly_return_p10": -0.1096024431989563,
+      "monthly_return_p90": 0.34078257903748327,
+      "worst_month": -0.17974082347408893
     }
   }
 }

@@ -224,9 +224,13 @@ async function refreshSummary() {
 
   // bannière d'alerte : l'anormal doit sauter aux yeux
   const issues = [];
-  if (!s.trend.alive) issues.push(["crit", "le moteur Trend ne répond plus — relancer : python scripts/run_live.py --config config_4x.yaml"]);
-  if (!s.carry.alive) issues.push(["crit", "le moteur Carry ne répond plus — relancer : python scripts/run_carry.py --capital 4000"]);
-  if (s.trend.halted) issues.push(["crit", "KILL-SWITCH déclenché : drawdown maximal atteint, positions liquidées"]);
+  // Les commandes affichées ici sont celles réellement exécutables sur le VPS :
+  // les moteurs tournent sous systemd, pas via un script Python.
+  if (!s.trend.alive) issues.push(["crit", "le moteur Trend ne répond plus — sur le VPS : sudo systemctl restart btcquant-trend"]);
+  if (!s.carry.alive) issues.push(["crit", "le moteur Carry ne répond plus — sur le VPS : sudo systemctl restart btcquant-carry"]);
+  if (s.trend.halted) issues.push(["crit", "KILL-SWITCH Trend déclenché : drawdown maximal atteint, positions liquidées"]);
+  if (s.carry.halted) issues.push(["crit", "KILL-SWITCH Carry déclenché : drawdown maximal atteint, position fermée"]);
+  if (s.carry.daily_lockout) issues.push(["warn", "Carry : limite de perte journalière atteinte — plus d'entrées avant demain (UTC)"]);
   if (s.trend.daily_lockout) issues.push(["warn", "limite de perte journalière atteinte — plus de nouvelles entrées avant demain (UTC)"]);
   const a = $("alert");
   if (issues.length) {

@@ -42,9 +42,18 @@ class Position:
     bars_held: int = 0
     #: plus haut close depuis l'entrée pour un long, plus bas pour un short
     best_close: float = field(default=0.0)
+    #: quantité de la tranche initiale, référence stable pour les renforts
+    initial_qty: float = field(default=0.0)
+    #: dernier prix d'ajout; l'étape ATR suivante repart de ce niveau
+    last_add_price: float = field(default=0.0)
+    pyramid_adds: int = 0
 
     def __post_init__(self) -> None:
         self.direction = Direction(self.direction)
+        if self.initial_qty <= 0:
+            self.initial_qty = self.qty
+        if self.last_add_price <= 0:
+            self.last_add_price = self.entry_price
 
     def unrealized(self, price: float) -> float:
         return self.direction * self.qty * (price - self.entry_price)
@@ -58,7 +67,19 @@ class Strategy(ABC):
     timeframe: str = "1h"
 
     def __init__(self, **params) -> None:
-        self.params = {**self.default_params(), **params}
+        # Un paramètre inconnu est TOUJOURS une erreur, jamais une extension
+        # silencieuse : `donchain=20` au lieu de `donchian=20` laisserait sinon
+        # tourner la stratégie sur sa valeur par défaut, et un ensemble de trois
+        # horizons deviendrait trois copies du même horizon sans le moindre
+        # signal. Le coût d'une faute de frappe se paie en argent, pas en trace.
+        defaults = self.default_params()
+        unknown = sorted(set(params) - set(defaults))
+        if unknown:
+            raise ValueError(
+                f"{type(self).__name__} : paramètre(s) inconnu(s) {unknown} ; "
+                f"attendus parmi {sorted(defaults)}"
+            )
+        self.params = {**defaults, **params}
 
     @staticmethod
     @abstractmethod
@@ -76,6 +97,16 @@ class Strategy(ABC):
     @abstractmethod
     def initial_stop(self, row: pd.Series, entry_price: float, direction: int = 1) -> float:
         """Stop initial pour une entrée exécutée à `entry_price`."""
+
+    def position_size_multiplier(self, row: pd.Series, direction: int) -> float:
+        """Multiplicateur de taille propre au signal, borné dans [0, 1]."""
+
+        return 1.0
+
+    def pyramid_fraction(self, row: pd.Series, position: Position) -> float:
+        """Fraction de la tranche initiale à ajouter; zéro désactive le renfort."""
+
+        return 0.0
 
     def trailing_stop(self, row: pd.Series, position: Position) -> float | None:
         """Nouveau stop suiveur. Le moteur ne fait que le resserrer :

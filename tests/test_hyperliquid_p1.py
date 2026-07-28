@@ -79,7 +79,7 @@ def test_testnet_deployment_is_opt_in_hardened_and_mainnet_free():
 
     assert "ConditionPathExists=/opt/btcquant/state/HYPERLIQUID_TESTNET_APPROVED" in service
     assert "Conflicts=btcquant-trend.service" in service
-    assert "config_testnet.yaml" in service
+    assert "environments/testnet/config.yaml" in service
     assert "Restart=on-failure" in service
     assert "NoNewPrivileges=true" in service
     assert "--i-accept-hyperliquid-testnet-orders" in start

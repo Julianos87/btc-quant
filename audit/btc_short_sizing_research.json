@@ -1,0 +1,269 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-07-28T17:21:25.908649+00:00",
+  "purpose": "Test isolé du sizing asymétrique long/short BTC",
+  "protocol": {
+    "short_multipliers": [
+      0.0,
+      0.25,
+      0.5,
+      0.75,
+      1.0
+    ],
+    "development_end": "2022-12-31T23:59:59+00:00",
+    "validation_end": "2024-12-31T23:59:59+00:00",
+    "sealed_test_used_for_selection": false
+  },
+  "provenance": {
+    "script_sha256": "46ca7c28ba140c1f821a19fd7d1dcf4698768857e5b690e0ba2e4c6778efa009",
+    "config": {
+      "path": "environments/paper/config.yaml",
+      "sha256": "51dea6b4a5680fe2954dcd109ee02762745842b60d7179f371cab16b75557bcc"
+    },
+    "data": [
+      {
+        "path": "data/binance_BTC-USDT_1h.csv",
+        "sha256": "14e3a38bfc99044b649085044a5a03c7a76ba7e9c2b108f69d0cb5044840268d"
+      },
+      {
+        "path": "data/binanceusdm_BTCUSDT_USDT_funding.csv",
+        "sha256": "a5c3bfab9c3526a46cc3907d3a9a8f65b9368f14fb0ffccbacadd91717c54621"
+      }
+    ]
+  },
+  "baseline": {
+    "short_size_mult": 1.0,
+    "trades": 478,
+    "development": {
+      "cagr": 0.7590501269367336,
+      "sharpe": 1.3787662602624904,
+      "max_drawdown": -0.3418586886758437,
+      "total_return": 8.048676055001419
+    },
+    "validation": {
+      "cagr": 1.2576902756787374,
+      "sharpe": 1.9973895725684456,
+      "max_drawdown": -0.25400319218951606,
+      "total_return": 4.108550233448438
+    },
+    "sealed_test": {
+      "cagr": -0.28452536052658617,
+      "sharpe": -0.7718667524752378,
+      "max_drawdown": -0.5527922396877066,
+      "total_return": -0.40907318679757887
+    },
+    "full": {
+      "cagr": 0.5567917503619095,
+      "sharpe": 1.1824474955534656,
+      "max_drawdown": -0.5527922396877066,
+      "total_return": 26.335413730275455
+    },
+    "selection_score": 0.8969267529629826,
+    "stress_full": {
+      "cagr": 0.5138691768364196,
+      "sharpe": 1.1195005042763353,
+      "max_drawdown": -0.5676234104857143,
+      "total_return": 21.18070616505133,
+      "trades": 476
+    }
+  },
+  "selected": {
+    "short_size_mult": 1.0,
+    "trades": 478,
+    "development": {
+      "cagr": 0.7590501269367336,
+      "sharpe": 1.3787662602624904,
+      "max_drawdown": -0.3418586886758437,
+      "total_return": 8.048676055001419
+    },
+    "validation": {
+      "cagr": 1.2576902756787374,
+      "sharpe": 1.9973895725684456,
+      "max_drawdown": -0.25400319218951606,
+      "total_return": 4.108550233448438
+    },
+    "sealed_test": {
+      "cagr": -0.28452536052658617,
+      "sharpe": -0.7718667524752378,
+      "max_drawdown": -0.5527922396877066,
+      "total_return": -0.40907318679757887
+    },
+    "full": {
+      "cagr": 0.5567917503619095,
+      "sharpe": 1.1824474955534656,
+      "max_drawdown": -0.5527922396877066,
+      "total_return": 26.335413730275455
+    },
+    "selection_score": 0.8969267529629826,
+    "stress_full": {
+      "cagr": 0.5138691768364196,
+      "sharpe": 1.1195005042763353,
+      "max_drawdown": -0.5676234104857143,
+      "total_return": 21.18070616505133,
+      "trades": 476
+    }
+  },
+  "adoption_checks": {
+    "asymmetry_selected": false,
+    "full_cagr_above_baseline": false,
+    "full_sharpe_above_baseline": false,
+    "full_drawdown_no_worse": true,
+    "sealed_test_cagr_no_worse": true,
+    "sealed_test_sharpe_no_worse": true
+  },
+  "adopted": false,
+  "candidates_ranked_pre_test": [
+    {
+      "short_size_mult": 1.0,
+      "trades": 478,
+      "development": {
+        "cagr": 0.7590501269367336,
+        "sharpe": 1.3787662602624904,
+        "max_drawdown": -0.3418586886758437,
+        "total_return": 8.048676055001419
+      },
+      "validation": {
+        "cagr": 1.2576902756787374,
+        "sharpe": 1.9973895725684456,
+        "max_drawdown": -0.25400319218951606,
+        "total_return": 4.108550233448438
+      },
+      "sealed_test": {
+        "cagr": -0.28452536052658617,
+        "sharpe": -0.7718667524752378,
+        "max_drawdown": -0.5527922396877066,
+        "total_return": -0.40907318679757887
+      },
+      "full": {
+        "cagr": 0.5567917503619095,
+        "sharpe": 1.1824474955534656,
+        "max_drawdown": -0.5527922396877066,
+        "total_return": 26.335413730275455
+      },
+      "selection_score": 0.8969267529629826,
+      "stress_full": {
+        "cagr": 0.5138691768364196,
+        "sharpe": 1.1195005042763353,
+        "max_drawdown": -0.5676234104857143,
+        "total_return": 21.18070616505133,
+        "trades": 476
+      }
+    },
+    {
+      "short_size_mult": 0.75,
+      "trades": 482,
+      "development": {
+        "cagr": 0.7150561565380817,
+        "sharpe": 1.415038270760871,
+        "max_drawdown": -0.28883260480893325,
+        "total_return": 7.197577757730576
+      },
+      "validation": {
+        "cagr": 1.2491939540110142,
+        "sharpe": 2.0551213293687467,
+        "max_drawdown": -0.2373177659402167,
+        "total_return": 4.070120394129762
+      },
+      "sealed_test": {
+        "cagr": -0.23924858490980938,
+        "sharpe": -0.6628711305498599,
+        "max_drawdown": -0.5268421280882665,
+        "total_return": -0.34926414882282286
+      },
+      "full": {
+        "cagr": 0.5546931092622414,
+        "sharpe": 1.2403883466721741,
+        "max_drawdown": -0.5268421280882665,
+        "total_return": 26.06119934747707
+      },
+      "selection_score": 0.8565599836141689
+    },
+    {
+      "short_size_mult": 0.5,
+      "trades": 482,
+      "development": {
+        "cagr": 0.664318400945541,
+        "sharpe": 1.4290782684030976,
+        "max_drawdown": -0.23035844143825268,
+        "total_return": 6.291586259053239
+      },
+      "validation": {
+        "cagr": 1.2358595411792335,
+        "sharpe": 2.094432294833277,
+        "max_drawdown": -0.2305616725333779,
+        "total_return": 4.0101002591544805
+      },
+      "sealed_test": {
+        "cagr": -0.2211630101121238,
+        "sharpe": -0.726618763230009,
+        "max_drawdown": -0.4838480411672039,
+        "total_return": -0.32479246325172517
+      },
+      "full": {
+        "cagr": 0.5356147586591915,
+        "sharpe": 1.2749752174215152,
+        "max_drawdown": -0.4838480411672039,
+        "total_return": 23.675652064086066
+      },
+      "selection_score": 0.8072262277858507
+    },
+    {
+      "short_size_mult": 0.25,
+      "trades": 482,
+      "development": {
+        "cagr": 0.6065324078066421,
+        "sharpe": 1.4016701378326328,
+        "max_drawdown": -0.21301965272096612,
+        "total_return": 5.352856040577966
+      },
+      "validation": {
+        "cagr": 1.217412555678873,
+        "sharpe": 2.1081516496951984,
+        "max_drawdown": -0.224494022625069,
+        "total_return": 3.927657670140867
+      },
+      "sealed_test": {
+        "cagr": -0.20672317966386344,
+        "sharpe": -0.7774964102800043,
+        "max_drawdown": -0.4386829523025405,
+        "total_return": -0.3050190776228696
+      },
+      "full": {
+        "cagr": 0.5099985184286269,
+        "sharpe": 1.278860256413085,
+        "max_drawdown": -0.4386829523025405,
+        "total_return": 20.760336942112886
+      },
+      "selection_score": 0.7466994215899054
+    },
+    {
+      "short_size_mult": 0.0,
+      "trades": 278,
+      "development": {
+        "cagr": 0.5414028485430822,
+        "sharpe": 1.3147274957197266,
+        "max_drawdown": -0.21277144976749918,
+        "total_return": 4.405962306475944
+      },
+      "validation": {
+        "cagr": 1.1935913445821837,
+        "sharpe": 2.090826836667892,
+        "max_drawdown": -0.21911308336732727,
+        "total_return": 3.8222100170060234
+      },
+      "sealed_test": {
+        "cagr": -0.19677159590121696,
+        "sharpe": -0.7774901926513047,
+        "max_drawdown": -0.41593743296768637,
+        "total_return": -0.29127133409663064
+      },
+      "full": {
+        "cagr": 0.47729760079533023,
+        "sharpe": 1.2365295000406944,
+        "max_drawdown": -0.41593743296768637,
+        "total_return": 17.475624757110523
+      },
+      "selection_score": 0.6728755981150548
+    }
+  ]
+}

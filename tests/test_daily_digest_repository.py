@@ -20,11 +20,9 @@ def test_digest_uses_shared_sqlite_first_repository(tmp_path, monkeypatch):
     store.save_engine_state("carry", {"equity": 4000.0, "in_position": False})
     store.append_equity("trend", 6000.0, "2030-01-01T00:00:00Z")
     store.append_equity("carry", 4000.0, "2030-01-01T00:00:00Z")
-    store.save_states_and_flow(
+    store.save_states_and_flows(
         {},
-        kind="deposit",
-        trend_flow=60.0,
-        carry_flow=40.0,
+        [{"kind": "deposit", "trend_flow": 60.0, "carry_flow": 40.0}],
     )
     store.record_trade(
         {
@@ -43,8 +41,8 @@ def test_digest_uses_shared_sqlite_first_repository(tmp_path, monkeypatch):
 
     monkeypatch.setattr(digest, "STATE", tmp_path)
 
-    assert digest._read_json(tmp_path / "live_state_4x.json")["source"] == "sqlite"
-    assert digest._equity("equity_trend.csv").tolist() == [6000.0]
+    assert digest._engine_state("trend", "live_state_4x.json")["source"] == "sqlite"
+    assert digest._equity("trend", "equity_trend.csv").tolist() == [6000.0]
     assert digest._flows().iloc[0]["trend_flow"] == 60.0
     assert digest._repository().read_trades().iloc[0]["pnl"] == 10.0
 

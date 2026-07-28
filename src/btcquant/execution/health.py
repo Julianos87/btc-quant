@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from .quality_metrics import percentile, slippages_bps
 from .state_store import StateStore
 
 
@@ -94,24 +95,7 @@ def execution_health(
     rejection_count = sum(order["status"] in ("REJECTED", "FAILED") for order in terminal)
     partial_count = sum(order["status"] == "PARTIAL" for order in terminal)
 
-    slippages: list[float] = []
-    for order in terminal:
-        reference = order.get("reference_price")
-        price = order.get("price")
-        if (
-            reference is None
-            or price is None
-            or float(reference) <= 0
-            or float(order["filled_qty"]) <= 0
-        ):
-            continue
-        reference_value = float(reference)
-        price_value = float(price)
-        if order["side"].upper() == "BUY":
-            slippage = (price_value / reference_value - 1.0) * 10_000.0
-        else:
-            slippage = (1.0 - price_value / reference_value) * 10_000.0
-        slippages.append(slippage)
+    slippages = slippages_bps(terminal)
 
     return ExecutionHealth(
         engine=engine,
@@ -126,7 +110,7 @@ def execution_health(
         rejection_rate=rejection_count / len(terminal) if terminal else None,
         partial_rate=partial_count / len(terminal) if terminal else None,
         average_slippage_bps=(sum(slippages) / len(slippages) if slippages else None),
-        p95_slippage_bps=_percentile(slippages, 0.95),
+        p95_slippage_bps=percentile(slippages, 0.95),
     )
 
 
@@ -216,11 +200,3 @@ def sync_execution_incidents(
         else:
             store.resolve_incident(fingerprint)
     return notifications
-
-
-def _percentile(values: list[float], percentile: float) -> float | None:
-    if not values:
-        return None
-    ordered = sorted(values)
-    index = max(0, min(len(ordered) - 1, int((len(ordered) - 1) * percentile + 0.5)))
-    return ordered[index]
