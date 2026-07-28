@@ -111,6 +111,25 @@ Le déploiement est refusé si l’un de ces points échoue :
 
 Ce feu vert ne vaut pas qualification testnet ou argent réel.
 
+## Observation maker mainnet sans ordre
+
+`btcquant-shadow.service` est activé automatiquement par `install.sh` et
+`update.sh` lorsque l'entrypoint est présent dans la release. Il ne charge
+aucun fichier de secrets et n'utilise que le carnet public Hyperliquid mainnet.
+La base distincte `/opt/btcquant/state/execution-shadow.db` peut être inspectée
+sans interrompre la collecte :
+
+```bash
+systemctl is-active btcquant-shadow
+journalctl -u btcquant-shadow --since today
+/opt/btcquant/current/venv/bin/btcquant-shadow \
+  --database /opt/btcquant/state/execution-shadow.db status
+```
+
+Le statut `SHADOW_PROXY_ONLY` est intentionnel : le market-through ne connaît
+pas la position dans la file et ne constitue donc pas un fill réel. Conserver
+au moins 30 jours de données avant d'interpréter la qualification proxy.
+
 ## Portail P1 Hyperliquid testnet
 
 Le testnet ne doit être activé qu'après le `PASS` final de la campagne paper.

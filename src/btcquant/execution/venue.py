@@ -75,6 +75,16 @@ class Venue:
             retry_on=NETWORK_ERRORS,
         )
 
+    def fetch_order_book(self, limit: int = 20) -> dict:
+        """Carnet public uniquement ; cette abstraction ne sait pas placer d'ordre."""
+
+        return self._retry.call(
+            self.exchange.fetch_order_book,
+            self.symbol,
+            limit=limit,
+            retry_on=NETWORK_ERRORS,
+        )
+
     # ── funding ──────────────────────────────────────────────────────────────
     def funding_rate_8h(self) -> float:
         """Taux de funding courant, ramené à une période de 8 h."""

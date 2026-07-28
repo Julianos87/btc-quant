@@ -22,6 +22,7 @@ btcquant-readiness = "btcquant.entrypoints.readiness:main"
 btcquant-watchdog = "btcquant.entrypoints.watchdog:main"
 btcquant-digest = "btcquant.entrypoints.digest:main"
 btcquant-rebalance = "btcquant.entrypoints.rebalance:main"
+btcquant-shadow = "btcquant.entrypoints.shadow:main"
 
 [tool.uv]
 # L'environnement standard couvre tests, exchanges et dashboard. Les outils

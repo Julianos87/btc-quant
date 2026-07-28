@@ -4,12 +4,20 @@ import sys
 
 import pytest
 
-from btcquant.entrypoints import carry, digest, readiness, rebalance, trend, watchdog
+from btcquant.entrypoints import carry, digest, readiness, rebalance, shadow, trend, watchdog
 
 
 @pytest.mark.parametrize(
     "entrypoint",
-    [trend.main, carry.main, readiness.main, digest.main, rebalance.main, watchdog.main],
+    [
+        trend.main,
+        carry.main,
+        readiness.main,
+        digest.main,
+        rebalance.main,
+        watchdog.main,
+        shadow.main,
+    ],
 )
 def test_installed_entrypoint_help_is_usable(entrypoint, monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["btcquant", "--help"])

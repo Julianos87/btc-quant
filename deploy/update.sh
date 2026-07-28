@@ -17,6 +17,15 @@ restart_selected_engines() {
   fi
 }
 
+configure_shadow_service() {
+  if [ -x "${CURRENT}/venv/bin/btcquant-shadow" ]; then
+    systemctl enable btcquant-shadow.service
+    systemctl restart btcquant-shadow.service
+  else
+    systemctl disable --now btcquant-shadow.service 2>/dev/null || true
+  fi
+}
+
 if [ "$(id -u)" -ne 0 ]; then
   echo "Ce script doit être exécuté par root." >&2
   exit 1
@@ -40,6 +49,7 @@ case "${1:-}" in
     install -o root -g root -m 0755 "${CURRENT}/deploy/rebalance-root.sh" \
       /usr/local/libexec/btcquant-rebalance
     systemctl daemon-reload
+    configure_shadow_service
     if ! systemctl restart btcquant-dashboard ||
       ! systemctl is-active --quiet btcquant-dashboard ||
       ! curl --fail --silent --show-error --max-time 10 \
@@ -50,6 +60,7 @@ case "${1:-}" in
       cp "${CURRENT}/deploy/"btcquant-*.service \
         "${CURRENT}/deploy/"btcquant-*.timer /etc/systemd/system/
       systemctl daemon-reload
+      configure_shadow_service
       systemctl restart btcquant-dashboard
       exit 1
     fi
@@ -104,6 +115,7 @@ rollback_on_error() {
   cp "${CURRENT}/deploy/"btcquant-*.service "${CURRENT}/deploy/"btcquant-*.timer \
     /etc/systemd/system/ || true
   systemctl daemon-reload || true
+  configure_shadow_service || true
   systemctl restart btcquant-dashboard || true
   if ${RESTART_ENGINES}; then
     restart_selected_engines || true
@@ -122,6 +134,7 @@ install -o root -g root -m 0755 "${CURRENT}/deploy/rebalance-root.sh" \
   /usr/local/libexec/btcquant-rebalance
 systemctl daemon-reload
 systemctl enable --now btcquant-compact.timer
+configure_shadow_service
 systemctl restart btcquant-dashboard
 if ${RESTART_ENGINES}; then
   restart_selected_engines

@@ -461,6 +461,33 @@ btcquant-readiness status
 btcquant-readiness finalize
 ```
 
+### Campagne maker shadow mainnet
+
+Le testnet ne reproduisant pas fidèlement la liquidité ni la file d'attente du
+mainnet, `btcquant-shadow` observe le carnet public Hyperliquid mainnet sans clé
+API et sans aucune primitive d'ordre. Chaque minute, il place virtuellement une
+cotation post-only au meilleur bid et au meilleur ask, puis mesure pendant
+30 secondes :
+
+- le market-through, qui reste un proxy conservateur de fill et non une preuve
+  de priorité dans la file ;
+- le fallback taker, le coût tout compris et le markout ;
+- la durée de la campagne et le nombre d'intentions observées.
+
+Les données sont isolées du track record paper dans
+`state/execution-shadow.db`. Le service VPS démarre automatiquement avec une
+release compatible. Son état est disponible via `/api/execution-shadow`,
+`/metrics/prometheus` ou :
+
+```bash
+btcquant-shadow --database state/execution-shadow.db status
+```
+
+Une éventuelle qualification n'est évaluée qu'après au moins 30 jours et
+50 intentions. Même en cas de `passed: true`, elle valide seulement le proxy
+d'exécution : elle ne transforme jamais un market-through en fill réel et
+n'autorise pas le trading mainnet.
+
 `finalize` refuse de terminer une campagne tant qu'un seul critère échoue.
 `scripts/test_testnet.py` et le broker Hyperliquid exigent ensuite la preuve
 d'une campagne paper `PASSED` récente, puis une confirmation explicite :

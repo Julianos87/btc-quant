@@ -54,7 +54,7 @@ cp "${ROOT}/current/deploy/"btcquant-*.service \
 install -o root -g root -m 0755 "${ROOT}/current/deploy/rebalance-root.sh" \
   /usr/local/libexec/btcquant-rebalance
 systemctl daemon-reload
-systemctl enable --now btcquant-trend btcquant-carry btcquant-dashboard
+systemctl enable --now btcquant-trend btcquant-carry btcquant-dashboard btcquant-shadow
 systemctl enable --now btcquant-digest.timer btcquant-weekly.timer \
   btcquant-watchdog.timer btcquant-backup.timer btcquant-rebalance.timer \
   btcquant-compact.timer

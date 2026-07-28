@@ -43,6 +43,7 @@ def test_unprivileged_services_drop_linux_capabilities():
         "btcquant-carry.service",
         "btcquant-dashboard.service",
         "btcquant-digest.service",
+        "btcquant-shadow.service",
         "btcquant-trend.service",
         "btcquant-watchdog.service",
         "btcquant-weekly.service",
@@ -81,6 +82,7 @@ def test_runtime_services_use_installed_entrypoints():
     assert scripts["btcquant-watchdog"] == "btcquant.entrypoints.watchdog:main"
     assert scripts["btcquant-digest"] == "btcquant.entrypoints.digest:main"
     assert scripts["btcquant-rebalance"] == "btcquant.entrypoints.rebalance:main"
+    assert scripts["btcquant-shadow"] == "btcquant.entrypoints.shadow:main"
 
     trend = (ROOT / "deploy" / "btcquant-trend.service").read_text(encoding="utf-8")
     carry = (ROOT / "deploy" / "btcquant-carry.service").read_text(encoding="utf-8")
@@ -88,6 +90,7 @@ def test_runtime_services_use_installed_entrypoints():
     digest = (ROOT / "deploy" / "btcquant-digest.service").read_text(encoding="utf-8")
     weekly = (ROOT / "deploy" / "btcquant-weekly.service").read_text(encoding="utf-8")
     rebalance = (ROOT / "deploy" / "rebalance-root.sh").read_text(encoding="utf-8")
+    shadow = (ROOT / "deploy" / "btcquant-shadow.service").read_text(encoding="utf-8")
     release = (ROOT / "deploy" / "create-release.sh").read_text(encoding="utf-8")
     assert "/venv/bin/btcquant-trend " in trend
     assert "/venv/bin/btcquant-carry " in carry
@@ -95,6 +98,9 @@ def test_runtime_services_use_installed_entrypoints():
     assert "/venv/bin/btcquant-digest" in digest
     assert "/venv/bin/btcquant-digest --weekly" in weekly
     assert "/venv/bin/btcquant-rebalance" in rebalance
+    assert "/venv/bin/btcquant-shadow " in shadow
+    assert "EnvironmentFile=" not in shadow
+    assert "HYPERLIQUID_PRIVATE_KEY" not in shadow
     assert 'pip" install --quiet --no-deps "${STAGING}"' in release
     assert 'chown -R root:btcquant "${STAGING}"' in release
     assert 'chown -R root:root "${STAGING}"' not in release
@@ -115,6 +121,7 @@ def test_long_running_services_have_restart_rate_limits():
         "btcquant-carry.service",
         "btcquant-dashboard.service",
         "btcquant-hyperliquid-testnet.service",
+        "btcquant-shadow.service",
     ):
         service = (ROOT / "deploy" / name).read_text(encoding="utf-8")
         assert "StartLimitIntervalSec=600" in service
@@ -131,6 +138,7 @@ def test_update_has_atomic_activation_backup_healthcheck_and_rollback():
     assert "rollback_on_error" in script
     assert "http://127.0.0.1:8666/healthz" in script
     assert "systemd-analyze verify" in script
+    assert "configure_shadow_service" in script
 
 
 def test_host_preflight_blocks_bad_clock_permissions_disk_and_database():

@@ -34,6 +34,7 @@ from btcquant.reporting.repository import ReportingReadError, ReportingRepositor
 from btcquant.reporting.prometheus import render_prometheus
 from btcquant.execution.health import execution_health
 from btcquant.execution.readiness import evaluate_readiness
+from btcquant.execution.shadow import ShadowStore
 from btcquant.execution.state_store import StateStore
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -136,6 +137,30 @@ def prometheus_metrics():
                     f"{prefix}_p95_slippage_bps": health.p95_slippage_bps,
                 }
             )
+    shadow_database = STATE / "execution-shadow.db"
+    if shadow_database.exists():
+        shadow = ShadowStore(shadow_database).summary()
+        evidence = shadow["evidence"]
+        metrics.update(
+            {
+                "btcquant_shadow_observation_days": evidence["observation_days"],
+                "btcquant_shadow_eligible_intents": evidence["eligible_intents"],
+                "btcquant_shadow_pending_quotes": shadow["pending_quotes"],
+                "btcquant_shadow_touch_proxy_rate": shadow["touch_proxy_rate"],
+                "btcquant_shadow_fallback_rate": shadow["fallback_rate"],
+                "btcquant_shadow_p95_touch_seconds": evidence["p95_fill_seconds"],
+                "btcquant_shadow_mean_all_in_cost_bps": evidence[
+                    "mean_all_in_cost_bps"
+                ],
+                "btcquant_shadow_p95_all_in_cost_bps": evidence[
+                    "p95_slippage_bps"
+                ],
+                "btcquant_shadow_mean_markout_bps": shadow["mean_markout_bps"],
+                "btcquant_shadow_proxy_qualified": int(
+                    shadow["proxy_qualification"]["passed"]
+                ),
+            }
+        )
     return Response(
         render_prometheus(metrics),
         content_type="text/plain; version=0.0.4; charset=utf-8",
@@ -619,6 +644,22 @@ def operations():
             "incidents": incidents,
         }
     )
+
+
+@app.route("/api/execution-shadow")
+def execution_shadow():
+    """Résultats du proxy maker mainnet, sans ordres ni données de compte."""
+
+    database = STATE / "execution-shadow.db"
+    if not database.exists():
+        return jsonify(
+            {
+                "schema_version": 1,
+                "status": "NOT_STARTED",
+                "warning": "aucune observation shadow disponible",
+            }
+        )
+    return jsonify(ShadowStore(database).summary())
 
 
 @app.route("/api/equity")
