@@ -43,11 +43,11 @@ from .data_quality import validate_closed_ohlcv
 from .errors import ReconciliationRequired
 from .funding_service import FundingService
 from .order_service import OrderExecutionService
-from .position_accounting import PositionAccountingService
 from .ports import ClockPort, MarketDataPort, Notifier
+from .position_accounting import PositionAccountingService
 from .protective_stops import ProtectiveStopService, StopDecision, StopDecisionKind
-from .risk_service import PortfolioRiskService, PortfolioRiskState
 from .recovery import recover_interrupted_orders
+from .risk_service import PortfolioRiskService, PortfolioRiskState
 from .state_contract import (
     PositionState,
     TrendSlotState,
@@ -389,9 +389,7 @@ class LiveRunner:
             return None
         return self.broker.lookup_order(intent_id)
 
-    def _resume_stop_cancellation(
-        self, slot: StrategySlot, transition: dict[str, Any]
-    ) -> None:
+    def _resume_stop_cancellation(self, slot: StrategySlot, transition: dict[str, Any]) -> None:
         previous_id = str(transition["previous_stop_id"])
         try:
             self.broker.cancel_stop(previous_id)
@@ -537,9 +535,7 @@ class LiveRunner:
                 context={"intent_id": intent_id},
             )
         order_id = int(order["id"])
-        replacement_id = self._place_replacement_stop(
-            slot, transition, intent_id, order_id
-        )
+        replacement_id = self._place_replacement_stop(slot, transition, intent_id, order_id)
         previous_stop_id = transition.get("previous_stop_id")
         if previous_stop_id is not None and str(previous_stop_id) != replacement_id:
             try:
@@ -1036,10 +1032,7 @@ class LiveRunner:
             return
         qty = position.initial_qty * fraction
         max_total_qty = (
-            slot.equity(ref_price)
-            * self.risk.max_position_pct
-            * self.risk.max_leverage
-            / ref_price
+            slot.equity(ref_price) * self.risk.max_position_pct * self.risk.max_leverage / ref_price
         )
         qty = min(qty, max_total_qty - position.qty)
         if qty <= 0:
@@ -1292,6 +1285,57 @@ class LiveRunner:
         if incident["is_new_or_reopened"]:
             self.notifier(f"⛔ TREND : boucle en échec répété — {message}")
 
+    def _prepare_external_execution(self) -> None:
+        if not self.broker.supports_stop_orders:
+            return
+        from .reconcile import reconcile
+
+        self._observe_exchange_stop_fills()
+        if not reconcile(self.broker, self.slots, self.symbol):
+            raise RuntimeError("Réconciliation live échouée : runner arrêté (fail-closed)")
+        # Aucune mutation d'ordre protecteur ne précède le rapprochement de
+        # position. Cela évite de poser un stop depuis un état local périmé.
+        self._recover_protective_stop_transitions()
+        self._monitor_exchange_stops()
+
+    def _process_due_bars(self, price: float) -> None:
+        for slot in self.slots:
+            timeframe_seconds = TIMEFRAME_SECONDS[slot.strategy.timeframe]
+            now = self.clock.time()
+            seconds_into_bar = now % timeframe_seconds
+            if seconds_into_bar < self.poll_buffer:
+                continue
+            current_bar_start = pd.Timestamp(
+                now - seconds_into_bar,
+                unit="s",
+                tz="UTC",
+            )
+            previous_bar_start = current_bar_start - pd.Timedelta(seconds=timeframe_seconds)
+            if slot.last_bar_ts is None or slot.last_bar_ts < previous_bar_start:
+                self._process_bar(slot, price)
+
+    def _run_cycle(self, price: float, stop_event: threading.Event) -> bool:
+        self._apply_funding_payments(price)
+        self._monitor_exchange_stops()
+        # Le risque est évalué avant toute stratégie : un kill switch liquide
+        # au tick courant, sans attendre la prochaine barre.
+        self._update_kill_switches(price)
+        self._liquidate_if_halted(price)
+        self._check_soft_stops(price)
+        self._process_due_bars(price)
+        self._save_state()
+        self._append_equity(price)
+        if not self.halted or any(slot.position is not None for slot in self.slots):
+            return False
+        if not self._halt_notified:
+            log.error(
+                "Kill switch actif et positions liquidées : moteur en veille "
+                "(intervention manuelle requise pour reprendre)."
+            )
+            self._halt_notified = True
+        stop_event.wait(TICK_SECONDS)
+        return True
+
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
         stop_event = stop_event or threading.Event()
         last_price: float | None = None
@@ -1301,58 +1345,14 @@ class LiveRunner:
             self.symbol,
             [s.strategy.name for s in self.slots],
         )
-        if self.broker.supports_stop_orders:  # live : vérifier la cohérence avant de trader
-            from .reconcile import reconcile
-
-            self._observe_exchange_stop_fills()
-            if not reconcile(self.broker, self.slots, self.symbol):
-                raise RuntimeError("Réconciliation live échouée : runner arrêté (fail-closed)")
-            # Aucune mutation d'ordre protecteur ne précède le rapprochement de
-            # position. Cela évite de poser un stop depuis un état local périmé.
-            self._recover_protective_stop_transitions()
-            self._monitor_exchange_stops()
+        self._prepare_external_execution()
         try:
             while not stop_event.is_set():
+                waited_while_halted = False
                 try:
                     price = self._last_price()
                     last_price = price
-                    self._apply_funding_payments(price)
-                    self._monitor_exchange_stops()
-                    # Le risque est évalué avant toute stratégie : un kill switch
-                    # liquide au tick courant, sans attendre la prochaine barre.
-                    self._update_kill_switches(price)
-                    self._liquidate_if_halted(price)
-                    self._check_soft_stops(price)
-                    for slot in self.slots:
-                        tf_s = TIMEFRAME_SECONDS[slot.strategy.timeframe]
-                        now = self.clock.time()
-                        seconds_into_bar = now % tf_s
-                        if seconds_into_bar >= self.poll_buffer:
-                            # une nouvelle barre a-t-elle été clôturée depuis le dernier passage ?
-                            current_bar_start = pd.Timestamp(
-                                now - seconds_into_bar, unit="s", tz="UTC"
-                            )
-                            if (
-                                slot.last_bar_ts is None
-                                or slot.last_bar_ts < current_bar_start - pd.Timedelta(seconds=tf_s)
-                            ):
-                                self._process_bar(slot, price)
-                    if self.halted and all(s.position is None for s in self.slots):
-                        # on reste vivant en veille (state maintenu frais pour le
-                        # watchdog) au lieu de sortir : avec Restart=always, un
-                        # return provoquerait une boucle de redémarrage infinie
-                        if not self._halt_notified:
-                            log.error(
-                                "Kill switch actif et positions liquidées : moteur en veille "
-                                "(intervention manuelle requise pour reprendre)."
-                            )
-                            self._halt_notified = True
-                        self._save_state()
-                        self._append_equity(price)
-                        stop_event.wait(TICK_SECONDS)
-                        continue
-                    self._save_state()
-                    self._append_equity(price)
+                    waited_while_halted = self._run_cycle(price, stop_event)
                 except ReconciliationRequired:
                     log.critical("Arrêt fail-closed : réconciliation manuelle requise")
                     raise
@@ -1364,7 +1364,8 @@ class LiveRunner:
                     if consecutive_failures:
                         consecutive_failures = 0
                         self.store.resolve_incident("execution:trend:loop_failure")
-                stop_event.wait(TICK_SECONDS)
+                if not waited_while_halted:
+                    stop_event.wait(TICK_SECONDS)
         finally:
             self._save_state()
             if last_price is not None:

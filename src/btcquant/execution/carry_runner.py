@@ -31,7 +31,7 @@ from ..carry import PAPER_CARRY_POLICY, CarryPolicy
 from ..domain.carry_decision import CarryAction, decide_carry_payment
 from ..notify import notify
 from ..risk import RiskConfig
-from .carry_broker import CarrySagaStatus
+from .carry_contract import CarrySagaStatus
 from .ports import MarketDataPort, Notifier
 from .risk_service import PortfolioRiskService, PortfolioRiskState
 from .state_contract import CarryStatePayload, validate_carry_state
@@ -102,7 +102,7 @@ class CarryRunner:
             self.store.migrate_legacy_journals(self.state_path.parent)
         self.venue: MarketDataPort = venue or Venue(exchange_id, symbol_perp)
         self.notifier = notifier
-        self.live_broker = live_broker  # CarryBroker en mode réel, None en paper
+        self.live_broker = live_broker  # adaptateur futur double-jambe, None en paper
         self.equity = initial_capital
         self.in_position = False
         self.execution_state = "FLAT"

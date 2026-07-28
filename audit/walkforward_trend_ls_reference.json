@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "generated_at_utc": "2026-07-28T18:50:07.530704+00:00",
+  "generated_at_utc": "2026-07-28T19:28:34.366019+00:00",
   "purpose": "Référence walk-forward de recherche; aucune promesse de performance",
   "provenance": {
-    "base_git_commit": "d7cc78f990188e25b1fd6c567fe8928989b59287",
-    "source_tree_sha256": "1622780aa1ae3b5d2ce1a60cbf66aa1c3935c0c12b8c8e4dfe810b53ab4bd061",
+    "base_git_commit": "709bc00dd20c91a8cf866e96ee3345d3c9fbbed6",
+    "source_tree_sha256": "b94b9329d5dd693eb88b46924c08dbea203bc35c6d64726768e6086c719aa6ec",
     "script": {
       "path": "scripts/run_walkforward.py",
       "sha256": "0fcdc899f43088d35c3a6f316f9fe59658f348358464f9a981113bec8a2986ee"

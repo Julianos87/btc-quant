@@ -72,6 +72,77 @@ class BarDecision:
     events: tuple[DecisionEvent, ...] = ()
 
 
+def _decide_entry(
+    strategy: Strategy,
+    row: pd.Series,
+    *,
+    halted: bool,
+    can_enter: bool,
+    allow_short: bool,
+) -> BarDecision:
+    if not can_enter or halted:
+        return BarDecision(position=None)
+    direction = int(strategy.entry_signal(row))
+    if direction not in (-1, 0, 1):
+        raise ValueError(f"Direction de signal invalide : {direction!r}")
+    if direction == -1 and not allow_short:
+        direction = 0
+    events: tuple[DecisionEvent, ...] = (EntryRequested(Direction(direction)),) if direction else ()
+    return BarDecision(position=None, events=events)
+
+
+def _advance_position(position: Position, close: float) -> Position:
+    if position.direction not in (-1, 1):
+        raise ValueError(f"Direction de position invalide : {position.direction!r}")
+    updated = replace(position)
+    updated.bars_held += 1
+    if updated.direction == 1:
+        updated.best_close = max(updated.best_close, close)
+    else:
+        updated.best_close = min(updated.best_close, close)
+    return updated
+
+
+def _append_tighter_stop(
+    strategy: Strategy,
+    row: pd.Series,
+    position: Position,
+    events: list[DecisionEvent],
+) -> None:
+    proposed = strategy.trailing_stop(row, position)
+    if proposed is None:
+        return
+    tighter = (position.direction == 1 and proposed > position.stop_price) or (
+        position.direction == -1 and proposed < position.stop_price
+    )
+    if not tighter:
+        return
+    previous = position.stop_price
+    position.stop_price = float(proposed)
+    events.append(StopTightened(previous_price=previous, new_price=position.stop_price))
+
+
+def _append_exit_or_pyramid(
+    strategy: Strategy,
+    row: pd.Series,
+    position: Position,
+    events: list[DecisionEvent],
+    *,
+    halted: bool,
+) -> None:
+    if halted:
+        events.append(ExitRequested(reason="kill_switch"))
+        return
+    if strategy.exit_signal(row, position):
+        events.append(ExitRequested(reason="signal"))
+        return
+    fraction = float(strategy.pyramid_fraction(row, position))
+    if fraction < 0 or fraction > 1:
+        raise ValueError("Fraction de renfort invalide")
+    if fraction:
+        events.append(PyramidRequested(fraction=fraction))
+
+
 def decide_bar_close(
     strategy: Strategy,
     row: pd.Series,
@@ -90,55 +161,20 @@ def decide_bar_close(
     """
 
     if position is None:
-        if not can_enter or halted:
-            return BarDecision(position=None)
-        direction = int(strategy.entry_signal(row))
-        if direction not in (-1, 0, 1):
-            raise ValueError(f"Direction de signal invalide : {direction!r}")
-        if direction == -1 and not allow_short:
-            direction = 0
-        events: tuple[DecisionEvent, ...] = (
-            (EntryRequested(Direction(direction)),) if direction else ()
+        return _decide_entry(
+            strategy,
+            row,
+            halted=halted,
+            can_enter=can_enter,
+            allow_short=allow_short,
         )
-        return BarDecision(position=None, events=events)
-
-    if position.direction not in (-1, 1):
-        raise ValueError(f"Direction de position invalide : {position.direction!r}")
 
     close = float(row["close"])
-    updated = replace(position)
-    updated.bars_held += 1
-    if updated.direction == 1:
-        updated.best_close = max(updated.best_close, close)
-    else:
-        updated.best_close = min(updated.best_close, close)
-
+    updated = _advance_position(position, close)
     mutable_events: list[DecisionEvent] = []
     if funding_rate:
         amount = funding_amount(updated, float(funding_rate), close)
         mutable_events.append(FundingAccrued(rate=float(funding_rate), amount=amount))
-
-    proposed_stop = strategy.trailing_stop(row, updated)
-    if proposed_stop is not None:
-        stop_tightened = (updated.direction == 1 and proposed_stop > updated.stop_price) or (
-            updated.direction == -1 and proposed_stop < updated.stop_price
-        )
-        if stop_tightened:
-            previous_stop = updated.stop_price
-            updated.stop_price = float(proposed_stop)
-            mutable_events.append(
-                StopTightened(previous_price=previous_stop, new_price=updated.stop_price)
-            )
-
-    if halted:
-        mutable_events.append(ExitRequested(reason="kill_switch"))
-    elif strategy.exit_signal(row, updated):
-        mutable_events.append(ExitRequested(reason="signal"))
-    else:
-        pyramid_fraction = float(strategy.pyramid_fraction(row, updated))
-        if pyramid_fraction < 0 or pyramid_fraction > 1:
-            raise ValueError("Fraction de renfort invalide")
-        if pyramid_fraction:
-            mutable_events.append(PyramidRequested(fraction=pyramid_fraction))
-
+    _append_tighter_stop(strategy, row, updated, mutable_events)
+    _append_exit_or_pyramid(strategy, row, updated, mutable_events, halted=halted)
     return BarDecision(position=updated, events=tuple(mutable_events))

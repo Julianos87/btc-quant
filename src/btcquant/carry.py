@@ -177,6 +177,130 @@ class CarryPolicy:
 PAPER_CARRY_POLICY = CarryPolicy()
 
 
+def _validate_carry_backtest_inputs(
+    leverage: float,
+    *,
+    borrow_rate_ann: float,
+    collateral_haircut: float,
+    maintenance_margin_rate: float,
+    liquidation_fee_rate: float,
+) -> None:
+    if leverage < 1.0:
+        raise ValueError("leverage < 1 non modélisé (sous-emploi du capital)")
+    values = {
+        "borrow_rate_ann": borrow_rate_ann,
+        "collateral_haircut": collateral_haircut,
+        "maintenance_margin_rate": maintenance_margin_rate,
+        "liquidation_fee_rate": liquidation_fee_rate,
+    }
+    for name, value in values.items():
+        if not np.isfinite(value) or value < 0:
+            raise ValueError(f"{name} doit être fini et positif ou nul")
+    if collateral_haircut >= 1:
+        raise ValueError("collateral_haircut doit être inférieur à 1")
+    if maintenance_margin_rate >= 0.5:
+        raise ValueError("maintenance_margin_rate doit être inférieur à 0.5")
+
+
+def _aligned_series(name: str, values: pd.Series, index: pd.Index) -> pd.Series:
+    numeric = values.astype(float).reindex(index)
+    if numeric.isna().any() or not np.isfinite(numeric.to_numpy()).all():
+        raise ValueError(f"{name} doit couvrir exactement tous les paiements de funding")
+    return numeric
+
+
+def _carry_market_components(
+    funding: pd.Series,
+    *,
+    leverage: float,
+    borrow_rate_ann: float,
+    borrow_rate_ann_series: pd.Series | None,
+    spot_price: pd.Series | None,
+    perp_price: pd.Series | None,
+) -> tuple[pd.Series, pd.Series, str]:
+    if borrow_rate_ann_series is None:
+        borrow_rates = pd.Series(float(borrow_rate_ann), index=funding.index)
+    else:
+        borrow_rates = _aligned_series(
+            "borrow_rate_ann_series", borrow_rate_ann_series, funding.index
+        )
+        if (borrow_rates < 0).any():
+            raise ValueError("borrow_rate_ann_series contient un taux négatif")
+
+    if (spot_price is None) != (perp_price is None):
+        raise ValueError("spot_price et perp_price doivent être fournis ensemble")
+    if spot_price is None:
+        return borrow_rates, pd.Series(0.0, index=funding.index), "synthetic_zero"
+    spot = _aligned_series("spot_price", spot_price, funding.index)
+    perp = _aligned_series("perp_price", perp_price, funding.index)  # type: ignore[arg-type]
+    if (spot <= 0).any() or (perp <= 0).any():
+        raise ValueError("les prix spot/perp doivent être strictement positifs")
+    basis_return = (spot.pct_change() - perp.pct_change()).fillna(0.0)
+    return borrow_rates, basis_return, "observed"
+
+
+def _carry_applied_positions(
+    funding: pd.Series,
+    *,
+    smooth_days: int,
+    enter_ann: float,
+    exit_ann: float,
+) -> pd.Series:
+    smooth = funding.rolling(
+        smooth_days * PAYMENTS_PER_DAY,
+        min_periods=PAYMENTS_PER_DAY,
+    ).mean()
+    smooth_ann = smooth * PAYMENTS_PER_YEAR
+    in_position = pd.Series(False, index=funding.index)
+    state = False
+    for i, value in enumerate(smooth_ann):
+        decision = decide_carry_payment(
+            in_position=state,
+            smooth_ann=float(value),
+            enter_ann=enter_ann,
+            exit_ann=exit_ann,
+        )
+        state = decision.in_position
+        in_position.iloc[i] = state
+    return in_position.shift(1, fill_value=False)
+
+
+def _apply_carry_liquidation(
+    pnl: pd.Series,
+    applied: pd.Series,
+    *,
+    initial_capital: float,
+    leverage: float,
+    collateral_haircut: float,
+    maintenance_margin_rate: float,
+    liquidation_fee_rate: float,
+) -> tuple[pd.Series, pd.Series, pd.Series, bool, object | None]:
+    equity = initial_capital * (1.0 + pnl).cumprod()
+    entry_equity = initial_capital
+    for i, timestamp in enumerate(applied.index):
+        if bool(applied.iloc[i]) and (i == 0 or not bool(applied.iloc[i - 1])):
+            entry_equity = initial_capital if i == 0 else float(equity.iloc[i - 1])
+        if not bool(applied.iloc[i]):
+            continue
+        spot_notional = entry_equity * leverage
+        effective_collateral = float(equity.iloc[i]) - spot_notional * collateral_haircut
+        maintenance = 2.0 * spot_notional * maintenance_margin_rate
+        if effective_collateral > maintenance:
+            continue
+        before = initial_capital if i == 0 else float(equity.iloc[i - 1])
+        after = max(
+            0.0,
+            float(equity.iloc[i]) - 2.0 * spot_notional * liquidation_fee_rate,
+        )
+        pnl.iloc[i] = after / before - 1.0
+        if i + 1 < len(pnl):
+            pnl.iloc[i + 1 :] = 0.0
+            applied.iloc[i + 1 :] = False
+        equity = initial_capital * (1.0 + pnl).cumprod()
+        return pnl, equity, applied, True, timestamp
+    return pnl, equity, applied, False, None
+
+
 def backtest_carry(
     funding: pd.Series,
     leverage: float = PAPER_CARRY_POLICY.leverage,
@@ -209,66 +333,28 @@ def backtest_carry(
     À ``leverage=1.0`` le terme d'emprunt s'annule : la position est intégralement
     financée par le capital, ce qui est le seul cas réalisable sans marge.
     """
-    if leverage < 1.0:
-        raise ValueError("leverage < 1 non modélisé (sous-emploi du capital)")
-    for name, value in (
-        ("borrow_rate_ann", borrow_rate_ann),
-        ("collateral_haircut", collateral_haircut),
-        ("maintenance_margin_rate", maintenance_margin_rate),
-        ("liquidation_fee_rate", liquidation_fee_rate),
-    ):
-        if not np.isfinite(value) or value < 0:
-            raise ValueError(f"{name} doit être fini et positif ou nul")
-    if collateral_haircut >= 1:
-        raise ValueError("collateral_haircut doit être inférieur à 1")
-    if maintenance_margin_rate >= 0.5:
-        raise ValueError("maintenance_margin_rate doit être inférieur à 0.5")
-
-    def aligned(name: str, values: pd.Series) -> pd.Series:
-        numeric = values.astype(float).reindex(funding.index)
-        if numeric.isna().any() or not np.isfinite(numeric.to_numpy()).all():
-            raise ValueError(f"{name} doit couvrir exactement tous les paiements de funding")
-        return numeric
-
-    if borrow_rate_ann_series is None:
-        borrow_rates = pd.Series(float(borrow_rate_ann), index=funding.index)
-    else:
-        borrow_rates = aligned("borrow_rate_ann_series", borrow_rate_ann_series)
-        if (borrow_rates < 0).any():
-            raise ValueError("borrow_rate_ann_series contient un taux négatif")
+    _validate_carry_backtest_inputs(
+        leverage,
+        borrow_rate_ann=borrow_rate_ann,
+        collateral_haircut=collateral_haircut,
+        maintenance_margin_rate=maintenance_margin_rate,
+        liquidation_fee_rate=liquidation_fee_rate,
+    )
+    borrow_rates, basis_return, basis_mode = _carry_market_components(
+        funding,
+        leverage=leverage,
+        borrow_rate_ann=borrow_rate_ann,
+        borrow_rate_ann_series=borrow_rate_ann_series,
+        spot_price=spot_price,
+        perp_price=perp_price,
+    )
     borrow_per_period = (leverage - 1.0) * borrow_rates / PAYMENTS_PER_YEAR
-
-    if (spot_price is None) != (perp_price is None):
-        raise ValueError("spot_price et perp_price doivent être fournis ensemble")
-    if spot_price is None:
-        basis_return = pd.Series(0.0, index=funding.index)
-        basis_mode = "synthetic_zero"
-    else:
-        spot = aligned("spot_price", spot_price)
-        perp = aligned("perp_price", perp_price)  # type: ignore[arg-type]
-        if (spot <= 0).any() or (perp <= 0).any():
-            raise ValueError("les prix spot/perp doivent être strictement positifs")
-        # Une position long spot / short perp gagne la performance du spot et
-        # perd celle du perp. Cette différence matérialise convergence et
-        # divergence du basis, au lieu de les supposer nulles.
-        basis_return = (spot.pct_change() - perp.pct_change()).fillna(0.0)
-        basis_mode = "observed"
-    smooth = funding.rolling(smooth_days * PAYMENTS_PER_DAY, min_periods=PAYMENTS_PER_DAY).mean()
-    smooth_ann = smooth * PAYMENTS_PER_YEAR
-
-    # signal décidé en t, appliqué en t+1 : aucun look-ahead
-    in_pos = pd.Series(False, index=funding.index)
-    state = False
-    for i, v in enumerate(smooth_ann):
-        decision = decide_carry_payment(
-            in_position=state,
-            smooth_ann=float(v),
-            enter_ann=enter_ann,
-            exit_ann=exit_ann,
-        )
-        state = decision.in_position
-        in_pos.iloc[i] = decision.in_position
-    applied = in_pos.shift(1, fill_value=False)
+    applied = _carry_applied_positions(
+        funding,
+        smooth_days=smooth_days,
+        enter_ann=enter_ann,
+        exit_ann=exit_ann,
+    )
 
     cost_per_switch = 2 * (fee_rate + slippage_bps / 10_000.0) * leverage  # 2 jambes
     switches = applied != applied.shift(1, fill_value=False)
@@ -278,36 +364,15 @@ def backtest_carry(
     borrow_component = applied * borrow_per_period
     basis_component = applied * basis_return * leverage
     pnl = funding_component - borrow_component + basis_component - switches * cost_per_switch
-    equity = initial_capital * (1.0 + pnl).cumprod()
-
-    # Modèle de liquidation conservateur par cycle. Le notionnel reste celui
-    # engagé à l'entrée du cycle ; le collatéral spot subit le haircut et les
-    # deux jambes consomment de la maintenance margin.
-    liquidated = False
-    liquidation_ts = None
-    entry_equity = initial_capital
-    for i, timestamp in enumerate(funding.index):
-        if bool(applied.iloc[i]) and (i == 0 or not bool(applied.iloc[i - 1])):
-            entry_equity = initial_capital if i == 0 else float(equity.iloc[i - 1])
-        if not bool(applied.iloc[i]):
-            continue
-        spot_notional = entry_equity * leverage
-        effective_collateral = float(equity.iloc[i]) - spot_notional * collateral_haircut
-        maintenance = 2.0 * spot_notional * maintenance_margin_rate
-        if effective_collateral <= maintenance:
-            liquidated = True
-            liquidation_ts = timestamp
-            before = initial_capital if i == 0 else float(equity.iloc[i - 1])
-            after = max(
-                0.0,
-                float(equity.iloc[i]) - 2.0 * spot_notional * liquidation_fee_rate,
-            )
-            pnl.iloc[i] = after / before - 1.0
-            if i + 1 < len(pnl):
-                pnl.iloc[i + 1 :] = 0.0
-                applied.iloc[i + 1 :] = False
-            equity = initial_capital * (1.0 + pnl).cumprod()
-            break
+    pnl, equity, applied, liquidated, liquidation_ts = _apply_carry_liquidation(
+        pnl,
+        applied,
+        initial_capital=initial_capital,
+        leverage=leverage,
+        collateral_haircut=collateral_haircut,
+        maintenance_margin_rate=maintenance_margin_rate,
+        liquidation_fee_rate=liquidation_fee_rate,
+    )
 
     years = len(funding) / PAYMENTS_PER_YEAR
     dd = (equity / equity.cummax() - 1.0).min()

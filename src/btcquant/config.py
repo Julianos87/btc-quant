@@ -14,7 +14,6 @@ from .domain import ExecutionConfig
 from .risk import RiskConfig
 from .strategies import STRATEGY_REGISTRY, Strategy
 
-
 TIMEFRAMES = {"1h", "2h", "4h", "6h", "12h", "1d"}
 MARKETS = {"spot", "perp"}
 
@@ -58,7 +57,7 @@ def _finite_non_negative(name: str, value: Any) -> None:
         raise ValueError(f"{name} doit être un nombre fini positif ou nul")
 
 
-def _validate_config(cfg: dict[str, Any]) -> None:
+def _validate_required_profile(cfg: dict[str, Any]) -> str:
     environment = cfg.get("environment")
     if environment not in {"dev", "paper", "testnet"}:
         raise ValueError("environment doit valoir dev, paper ou testnet")
@@ -67,25 +66,34 @@ def _validate_config(cfg: dict[str, Any]) -> None:
             raise ValueError(f"Section obligatoire absente ou invalide : {section}")
     if not isinstance(cfg.get("symbol"), str) or "/" not in cfg["symbol"]:
         raise ValueError("symbol doit être une paire de type BASE/QUOTE")
+    return environment
+
+
+def _validate_costs(costs: dict[str, Any]) -> None:
     for key in ("fee_rate", "perp_fee_rate", "funding_rate_8h", "slippage_bps"):
-        if key in cfg["costs"]:
-            _finite_non_negative(f"costs.{key}", cfg["costs"][key])
-    mode = cfg["execution"].get("mode", "paper")
+        if key in costs:
+            _finite_non_negative(f"costs.{key}", costs[key])
+
+
+def _validate_execution_profile(environment: str, execution: dict[str, Any]) -> None:
+    mode = execution.get("mode", "paper")
     if mode not in {"paper", "testnet"}:
         raise ValueError("Safety Baseline : execution.mode doit valoir 'paper' ou 'testnet'")
     if mode == "testnet":
         if environment != "testnet":
             raise ValueError("execution.mode testnet exige environment: testnet")
-        if cfg["execution"].get("testnet") is not True:
+        if execution.get("testnet") is not True:
             raise ValueError("Safety Baseline : le mode testnet exige execution.testnet: true")
-        if cfg["execution"].get("live_exchange") != "hyperliquid":
+        if execution.get("live_exchange") != "hyperliquid":
             raise ValueError("Safety Baseline : seul le testnet Hyperliquid est autorisé")
-        live_symbol = cfg["execution"].get("live_symbol")
+        live_symbol = execution.get("live_symbol")
         if not isinstance(live_symbol, str) or not live_symbol.endswith(":USDC"):
             raise ValueError("Le testnet Hyperliquid exige un perpétuel coté en USDC")
     elif environment == "testnet":
         raise ValueError("environment: testnet exige execution.mode: testnet")
-    strategies = cfg["strategies"]
+
+
+def _validate_strategies(strategies: dict[str, Any]) -> None:
     if not strategies:
         raise ValueError("strategies ne peut pas être vide")
     for name, spec in strategies.items():
@@ -102,16 +110,27 @@ def _validate_config(cfg: dict[str, Any]) -> None:
             raise ValueError(f"capital_fraction invalide pour {name}")
         if spec.get("enabled", False):
             _validate_strategy_params(name, spec)
-    risk_from_config(cfg)
+
+
+def _validate_tandem_capital(cfg: dict[str, Any], risk: RiskConfig) -> None:
+    if "portfolio" not in cfg and "carry" not in cfg:
+        return
+    portfolio = portfolio_from_config(cfg)
+    carry_policy_from_config(cfg)
+    if not math.isclose(risk.initial_capital, portfolio.trend_capital):
+        raise ValueError(
+            "risk.initial_capital doit égaler portfolio.total_capital × portfolio.trend_fraction"
+        )
+
+
+def _validate_config(cfg: dict[str, Any]) -> None:
+    environment = _validate_required_profile(cfg)
+    _validate_costs(cfg["costs"])
+    _validate_execution_profile(environment, cfg["execution"])
+    _validate_strategies(cfg["strategies"])
+    risk = risk_from_config(cfg)
     execution_config_from_config(cfg, float(cfg["costs"].get("fee_rate", 0.0)))
-    if "portfolio" in cfg or "carry" in cfg:
-        portfolio = portfolio_from_config(cfg)
-        carry_policy_from_config(cfg)
-        if not math.isclose(risk_from_config(cfg).initial_capital, portfolio.trend_capital):
-            raise ValueError(
-                "risk.initial_capital doit égaler "
-                "portfolio.total_capital × portfolio.trend_fraction"
-            )
+    _validate_tandem_capital(cfg, risk)
 
 
 def _validate_strategy_params(name: str, spec: dict[str, Any]) -> None:

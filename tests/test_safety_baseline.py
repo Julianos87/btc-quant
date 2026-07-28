@@ -9,8 +9,7 @@ import pandas as pd
 import pytest
 
 from btcquant.execution.broker import Broker, Fill, PaperBroker
-from btcquant.execution.carry_broker import (
-    CarryBroker,
+from btcquant.execution.carry_contract import (
     CarrySagaResult,
     CarrySagaStatus,
 )
@@ -262,10 +261,9 @@ def test_reconciliation_errors_fail_closed():
     assert reconcile(broker, [], "BTC/USDT") is False
 
 
-@pytest.mark.parametrize("broker_class", [CcxtBroker, CarryBroker])
-def test_external_brokers_are_centrally_disabled(broker_class):
+def test_external_broker_is_centrally_disabled():
     with pytest.raises(RuntimeError, match="Safety Baseline"):
-        broker_class()
+        CcxtBroker()
 
 
 def test_carry_close_failure_marks_unbalanced(tmp_path, monkeypatch):

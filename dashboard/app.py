@@ -112,15 +112,30 @@ def prometheus_metrics():
         "btcquant_dashboard_up": 1,
         "btcquant_dashboard_uptime_seconds": max(0.0, time.time() - START_TIME),
         "btcquant_portfolio_equity": float(combined.iloc[-1]) if len(combined) else None,
-        "btcquant_trend_state_age_seconds": _engine_age_seconds(
-            "trend", "live_state_4x.json"
-        ),
-        "btcquant_carry_state_age_seconds": _engine_age_seconds(
-            "carry", "carry_state.json"
-        ),
+        "btcquant_trend_state_age_seconds": _engine_age_seconds("trend", "live_state_4x.json"),
+        "btcquant_carry_state_age_seconds": _engine_age_seconds("carry", "carry_state.json"),
     }
     for key, value in _live_metrics().items():
         metrics[f"btcquant_portfolio_{key}"] = value
+    database = STATE / "btcquant.db"
+    if database.exists():
+        store = StateStore(database, initialize=False)
+        for engine in ("trend", "carry"):
+            health = execution_health(store, engine)
+            prefix = f"btcquant_execution_{engine}"
+            metrics.update(
+                {
+                    f"{prefix}_orders_analyzed": health.orders_analyzed,
+                    f"{prefix}_unresolved_orders": len(health.unresolved_order_ids),
+                    f"{prefix}_stale_pending_orders": len(health.stale_pending_order_ids),
+                    f"{prefix}_unbalanced_orders": len(health.unbalanced_order_ids),
+                    f"{prefix}_fill_ratio": health.fill_ratio,
+                    f"{prefix}_rejection_rate": health.rejection_rate,
+                    f"{prefix}_partial_rate": health.partial_rate,
+                    f"{prefix}_average_slippage_bps": health.average_slippage_bps,
+                    f"{prefix}_p95_slippage_bps": health.p95_slippage_bps,
+                }
+            )
     return Response(
         render_prometheus(metrics),
         content_type="text/plain; version=0.0.4; charset=utf-8",

@@ -86,9 +86,7 @@ def _run(
     base_risk = risk_from_config(scenario_cfg)
     curves = []
     trades = 0
-    for horizon, weight in zip(
-        structure["horizons"], structure["weights"], strict=True
-    ):
+    for horizon, weight in zip(structure["horizons"], structure["weights"], strict=True):
         risk = RiskConfig(
             **{**base_risk.__dict__, "initial_capital": base_risk.initial_capital * weight}
         )
@@ -98,6 +96,9 @@ def _run(
             adx_min=20,
             funding_long_max=0.0008,
             funding_short_min=-0.0008,
+            pyramid_atr_step=0.5,
+            pyramid_add_fraction=0.30,
+            pyramid_max_adds=1,
             funding_sizing_threshold=funding_mode["threshold"],
             funding_sizing_floor=funding_mode["floor"],
         )
@@ -127,12 +128,8 @@ def _candidate(
         "costs": cost_name,
         "trades": trades,
         "development": _period(equity, None, DEVELOPMENT_END),
-        "validation": _period(
-            equity, DEVELOPMENT_END + pd.Timedelta(seconds=1), VALIDATION_END
-        ),
-        "sealed_test": _period(
-            equity, VALIDATION_END + pd.Timedelta(seconds=1), None
-        ),
+        "validation": _period(equity, DEVELOPMENT_END + pd.Timedelta(seconds=1), VALIDATION_END),
+        "sealed_test": _period(equity, VALIDATION_END + pd.Timedelta(seconds=1), None),
         "full": _summary(equity),
     }
 
@@ -274,9 +271,7 @@ def main() -> None:
     winners_by_cost = {}
     for cost_name in COST_MODES:
         eligible = [item for item in candidates if item["costs"] == cost_name]
-        winners_by_cost[cost_name] = max(
-            eligible, key=lambda item: item["selection_score"]
-        )
+        winners_by_cost[cost_name] = max(eligible, key=lambda item: item["selection_score"])
     deployable = winners_by_cost["current"]
     for cost_name, winner in winners_by_cost.items():
         stress_equity, stress_trades = _run(
@@ -300,8 +295,7 @@ def main() -> None:
     }
     adoption_checks = {
         "full_cagr_above_baseline": deployable["full"]["cagr"] > baseline["full"]["cagr"],
-        "full_sharpe_above_baseline": deployable["full"]["sharpe"]
-        > baseline["full"]["sharpe"],
+        "full_sharpe_above_baseline": deployable["full"]["sharpe"] > baseline["full"]["sharpe"],
         "full_drawdown_no_worse": deployable["full"]["max_drawdown"]
         >= baseline["full"]["max_drawdown"],
         "sealed_test_cagr_no_worse": deployable["sealed_test"]["cagr"]
@@ -312,8 +306,7 @@ def main() -> None:
     adopted = all(adoption_checks.values())
     conditional_checks = {
         cost_name: {
-            "full_cagr_above_current_baseline": winner["full"]["cagr"]
-            > baseline["full"]["cagr"],
+            "full_cagr_above_current_baseline": winner["full"]["cagr"] > baseline["full"]["cagr"],
             "full_sharpe_above_current_baseline": winner["full"]["sharpe"]
             > baseline["full"]["sharpe"],
             "full_drawdown_no_worse_than_current_baseline": winner["full"]["max_drawdown"]

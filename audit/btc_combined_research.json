@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at_utc": "2026-07-28T18:51:49.463286+00:00",
+  "generated_at_utc": "2026-07-28T19:32:14.520339+00:00",
   "purpose": "Combinaison BTC des briques prometteuses",
   "protocol": {
     "candidate_count": 12,
@@ -11,8 +11,8 @@
     ]
   },
   "provenance": {
-    "script_sha256": "b300855aed85d3b226a7417240c008fedcc94b8f078cf26aa89dc9a8b97909c4",
-    "source_tree_sha256": "1622780aa1ae3b5d2ce1a60cbf66aa1c3935c0c12b8c8e4dfe810b53ab4bd061",
+    "script_sha256": "100de12101447c698e655f749f823aa453a2b7d5cb3825c7cb7dd4bac8785759",
+    "source_tree_sha256": "b94b9329d5dd693eb88b46924c08dbea203bc35c6d64726768e6086c719aa6ec",
     "config": {
       "path": "environments/paper/config.yaml",
       "sha256": "51dea6b4a5680fe2954dcd109ee02762745842b60d7179f371cab16b75557bcc"
@@ -32,69 +32,69 @@
     "structure": "deployed",
     "funding": "disabled",
     "costs": "current",
-    "trades": 478,
+    "trades": 477,
     "development": {
-      "cagr": 0.7590501269367336,
-      "sharpe": 1.3787662602624904,
-      "max_drawdown": -0.3418586886758437,
-      "total_return": 8.048676055001419
+      "cagr": 0.9425260844901353,
+      "sharpe": 1.3535694748106613,
+      "max_drawdown": -0.4025404654769078,
+      "total_return": 12.323881182887684
     },
     "validation": {
-      "cagr": 1.2576902756787374,
-      "sharpe": 1.9973895725684456,
-      "max_drawdown": -0.25400319218951606,
-      "total_return": 4.108550233448438
+      "cagr": 1.466001892461382,
+      "sharpe": 1.9068819531992436,
+      "max_drawdown": -0.31179397641999007,
+      "total_return": 5.096221884093497
     },
     "sealed_test": {
-      "cagr": -0.28452536052658617,
-      "sharpe": -0.7718667524752378,
-      "max_drawdown": -0.5527922396877066,
-      "total_return": -0.40907318679757887
+      "cagr": -0.2744770585430937,
+      "sharpe": -0.5547934936744336,
+      "max_drawdown": -0.557087610027692,
+      "total_return": -0.395981132145487
     },
     "full": {
-      "cagr": 0.5567917503619095,
-      "sharpe": 1.1824474955534656,
-      "max_drawdown": -0.5527922396877066,
-      "total_return": 26.335413730275455
+      "cagr": 0.6837238080005072,
+      "sharpe": 1.1825477450399053,
+      "max_drawdown": -0.557087610027692,
+      "total_return": 48.106858880331615
     },
-    "selection_score": 0.8969267529629826
+    "selection_score": 1.0778830319712014
   },
   "deployable_current_costs": {
     "structure": "fast_candidate",
     "funding": "disabled",
     "costs": "current",
-    "trades": 564,
+    "trades": 555,
     "development": {
-      "cagr": 0.8819092395286734,
-      "sharpe": 1.5287108800878264,
-      "max_drawdown": -0.3074148336863558,
-      "total_return": 10.774292773317692
+      "cagr": 1.1191977986568027,
+      "sharpe": 1.51400244834462,
+      "max_drawdown": -0.3640662359294613,
+      "total_return": 17.709786305847548
     },
     "validation": {
-      "cagr": 1.484143628261898,
-      "sharpe": 2.073665087042629,
-      "max_drawdown": -0.241032841651871,
-      "total_return": 5.186372696938818
+      "cagr": 1.8630382930970382,
+      "sharpe": 2.0230246875512945,
+      "max_drawdown": -0.2938755202822978,
+      "total_return": 7.220645012921683
     },
     "sealed_test": {
-      "cagr": -0.29238584041926263,
-      "sharpe": -0.7253640266545246,
-      "max_drawdown": -0.5573686390772896,
-      "total_return": -0.41924180646685594
+      "cagr": -0.3623757409964167,
+      "sharpe": -0.8735184757933984,
+      "max_drawdown": -0.5784288271062434,
+      "total_return": -0.5069104047558171
     },
     "full": {
-      "cagr": 0.6508337530665562,
-      "sharpe": 1.2888979568087156,
-      "max_drawdown": -0.5573686390772896,
-      "total_return": 41.374910899316326
+      "cagr": 0.7850725740880071,
+      "sharpe": 1.2749985660188885,
+      "max_drawdown": -0.5897027030323383,
+      "total_return": 75.00972021804708
     },
-    "selection_score": 1.034780327537456,
+    "selection_score": 1.2705980434912647,
     "stress_full": {
-      "cagr": 0.5741965978123043,
-      "sharpe": 1.1897325042105897,
-      "max_drawdown": -0.5759241468698691,
-      "total_return": 28.70389074511694,
-      "trades": 562
+      "cagr": 0.7060704623830669,
+      "sharpe": 1.1955825975830128,
+      "max_drawdown": -0.5960715512573933,
+      "total_return": 53.192470863096496,
+      "trades": 555
     }
   },
   "winners_by_cost": {
@@ -102,114 +102,114 @@
       "structure": "fast_candidate",
       "funding": "disabled",
       "costs": "current",
-      "trades": 564,
+      "trades": 555,
       "development": {
-        "cagr": 0.8819092395286734,
-        "sharpe": 1.5287108800878264,
-        "max_drawdown": -0.3074148336863558,
-        "total_return": 10.774292773317692
+        "cagr": 1.1191977986568027,
+        "sharpe": 1.51400244834462,
+        "max_drawdown": -0.3640662359294613,
+        "total_return": 17.709786305847548
       },
       "validation": {
-        "cagr": 1.484143628261898,
-        "sharpe": 2.073665087042629,
-        "max_drawdown": -0.241032841651871,
-        "total_return": 5.186372696938818
+        "cagr": 1.8630382930970382,
+        "sharpe": 2.0230246875512945,
+        "max_drawdown": -0.2938755202822978,
+        "total_return": 7.220645012921683
       },
       "sealed_test": {
-        "cagr": -0.29238584041926263,
-        "sharpe": -0.7253640266545246,
-        "max_drawdown": -0.5573686390772896,
-        "total_return": -0.41924180646685594
+        "cagr": -0.3623757409964167,
+        "sharpe": -0.8735184757933984,
+        "max_drawdown": -0.5784288271062434,
+        "total_return": -0.5069104047558171
       },
       "full": {
-        "cagr": 0.6508337530665562,
-        "sharpe": 1.2888979568087156,
-        "max_drawdown": -0.5573686390772896,
-        "total_return": 41.374910899316326
+        "cagr": 0.7850725740880071,
+        "sharpe": 1.2749985660188885,
+        "max_drawdown": -0.5897027030323383,
+        "total_return": 75.00972021804708
       },
-      "selection_score": 1.034780327537456,
+      "selection_score": 1.2705980434912647,
       "stress_full": {
-        "cagr": 0.5741965978123043,
-        "sharpe": 1.1897325042105897,
-        "max_drawdown": -0.5759241468698691,
-        "total_return": 28.70389074511694,
-        "trades": 562
+        "cagr": 0.7060704623830669,
+        "sharpe": 1.1955825975830128,
+        "max_drawdown": -0.5960715512573933,
+        "total_return": 53.192470863096496,
+        "trades": 555
       }
     },
     "half_slippage": {
       "structure": "fast_candidate",
       "funding": "disabled",
       "costs": "half_slippage",
-      "trades": 564,
+      "trades": 560,
       "development": {
-        "cagr": 0.9036421188193171,
-        "sharpe": 1.5533248596754896,
-        "max_drawdown": -0.30238350710794704,
-        "total_return": 11.313533326827063
+        "cagr": 1.1510273133123143,
+        "sharpe": 1.5393696943478186,
+        "max_drawdown": -0.3582559958330247,
+        "total_return": 18.82983531872749
       },
       "validation": {
-        "cagr": 1.525817093050371,
-        "sharpe": 2.107513574763468,
-        "max_drawdown": -0.2374206736425919,
-        "total_return": 5.395967773108286
+        "cagr": 1.929387190187303,
+        "sharpe": 2.0595123948573066,
+        "max_drawdown": -0.28969900993958253,
+        "total_return": 7.6066154088539
       },
       "sealed_test": {
-        "cagr": -0.2765481296984278,
-        "sharpe": -0.6680652271747451,
-        "max_drawdown": -0.5463015887817453,
-        "total_return": -0.39868808415208556
+        "cagr": -0.31392051317789493,
+        "sharpe": -0.6397505751244829,
+        "max_drawdown": -0.5680923827092037,
+        "total_return": -0.4467694784219568
       },
       "full": {
-        "cagr": 0.6759550755733876,
-        "sharpe": 1.3216980508145633,
-        "max_drawdown": -0.5463015887817453,
-        "total_return": 46.438487320300794
+        "cagr": 0.8381779946392822,
+        "sharpe": 1.3216001405069933,
+        "max_drawdown": -0.5752231103451995,
+        "total_return": 93.62925051148777
       },
-      "selection_score": 1.058974604786866,
+      "selection_score": 1.3049642827470962,
       "stress_full": {
-        "cagr": 0.6136393881503883,
-        "sharpe": 1.2443320588670688,
-        "max_drawdown": -0.565979044656747,
-        "total_return": 34.738801545370166,
-        "trades": 559
+        "cagr": 0.748438729897785,
+        "sharpe": 1.2389398979248047,
+        "max_drawdown": -0.5938516535726039,
+        "total_return": 64.09724011570003,
+        "trades": 554
       }
     },
     "maker_proxy": {
       "structure": "fast_candidate",
       "funding": "disabled",
       "costs": "maker_proxy",
-      "trades": 564,
+      "trades": 561,
       "development": {
-        "cagr": 0.9447754173672884,
-        "sharpe": 1.5992723295405276,
-        "max_drawdown": -0.29261761418049814,
-        "total_return": 12.384152591287574
+        "cagr": 1.2085720028356106,
+        "sharpe": 1.5845801450572146,
+        "max_drawdown": -0.3472366286132996,
+        "total_return": 20.98037480819382
       },
       "validation": {
-        "cagr": 1.6068702517768743,
-        "sharpe": 2.1719203565882035,
-        "max_drawdown": -0.23023249725095218,
-        "total_return": 5.813635319989672
+        "cagr": 2.0478432960418163,
+        "sharpe": 2.1249614243053565,
+        "max_drawdown": -0.2813945126960439,
+        "total_return": 8.317754752926001
       },
       "sealed_test": {
-        "cagr": -0.24409232119638968,
-        "sharpe": -0.554670286548972,
-        "max_drawdown": -0.522872020482946,
-        "total_return": -0.35576232967787347
+        "cagr": -0.2837907815103281,
+        "sharpe": -0.53855180059703,
+        "max_drawdown": -0.5495068027347624,
+        "total_return": -0.40811963158520215
       },
       "full": {
-        "cagr": 0.7250009820739138,
-        "sharpe": 1.3845557941296387,
-        "max_drawdown": -0.522872020482946,
-        "total_return": 57.851439426584896
+        "cagr": 0.9006731805862513,
+        "sharpe": 1.380004579225239,
+        "max_drawdown": -0.5495068027347624,
+        "total_return": 120.49170165936594
       },
-      "selection_score": 1.1047026503213413,
+      "selection_score": 1.3670300173413321,
       "stress_full": {
-        "cagr": 0.6669803041392102,
-        "sharpe": 1.3110516013997258,
-        "max_drawdown": -0.5432138691968426,
-        "total_return": 44.57243577862739,
-        "trades": 562
+        "cagr": 0.8167304862482929,
+        "sharpe": 1.3020404936713788,
+        "max_drawdown": -0.584288739986105,
+        "total_return": 85.68223959662316,
+        "trades": 560
       }
     }
   },
@@ -221,56 +221,56 @@
           "year": 2021,
           "selected_structure": "fast_candidate",
           "selected_funding": "disabled",
-          "selected_return": 0.22861262754863043,
-          "baseline_return": -0.012103445031352855
+          "selected_return": 0.20583864636372806,
+          "baseline_return": -0.08213018393625104
         },
         {
           "year": 2022,
           "selected_structure": "fast_candidate",
           "selected_funding": "disabled",
-          "selected_return": -0.15415567889818105,
-          "baseline_return": -0.06584924078505783
+          "selected_return": -0.18989082637886767,
+          "baseline_return": -0.06745682866109126
         },
         {
           "year": 2023,
           "selected_structure": "fast_candidate",
           "selected_funding": "disabled",
-          "selected_return": 2.7623129295782505,
-          "baseline_return": 2.30839167753079
+          "selected_return": 3.7486856069879613,
+          "baseline_return": 2.795420582473163
         },
         {
           "year": 2024,
           "selected_structure": "fast_candidate",
           "selected_funding": "disabled",
-          "selected_return": 0.6952267166071058,
-          "baseline_return": 0.5276379131682527
+          "selected_return": 0.8034785106016857,
+          "baseline_return": 0.6014509794060552
         },
         {
           "year": 2025,
           "selected_structure": "fast_candidate",
-          "selected_funding": "disabled",
-          "selected_return": -0.23160825263760254,
-          "baseline_return": -0.2270617415838485
+          "selected_funding": "continuous",
+          "selected_return": -0.24339070635763893,
+          "baseline_return": -0.2534808046012226
         },
         {
           "year": 2026,
           "selected_structure": "fast_candidate",
           "selected_funding": "continuous",
-          "selected_return": -0.21609597661620605,
-          "baseline_return": -0.18082088671862295
+          "selected_return": -0.22882168473278297,
+          "baseline_return": -0.14639195948586536
         }
       ],
       "selected": {
-        "cagr": 0.281930522210162,
-        "sharpe": 0.8028255057763191,
-        "max_drawdown": -0.5404044139183589,
-        "total_return": 2.9923968205129126
+        "cagr": 0.32901029894775724,
+        "sharpe": 0.8086983441490813,
+        "max_drawdown": -0.5732025592108648,
+        "total_return": 3.8813912549555223
       },
       "baseline": {
-        "cagr": 0.21442976598785113,
-        "sharpe": 0.6925612836822713,
-        "max_drawdown": -0.5443674067512434,
-        "total_return": 1.9531769138440178
+        "cagr": 0.23989405071642977,
+        "sharpe": 0.6871486853987949,
+        "max_drawdown": -0.5624094905968776,
+        "total_return": 2.315301797280297
       }
     },
     "half_slippage": {
@@ -280,56 +280,56 @@
           "year": 2021,
           "selected_structure": "fast_candidate",
           "selected_funding": "disabled",
-          "selected_return": 0.23870693685897937,
-          "baseline_return": -0.003923161008053233
+          "selected_return": 0.2184244092744363,
+          "baseline_return": -0.07025051941318827
         },
         {
           "year": 2022,
           "selected_structure": "fast_candidate",
           "selected_funding": "disabled",
-          "selected_return": -0.1438184572991904,
-          "baseline_return": -0.05684461035891342
+          "selected_return": -0.1774285647592183,
+          "baseline_return": -0.05661163174076622
         },
         {
           "year": 2023,
           "selected_structure": "fast_candidate",
           "selected_funding": "disabled",
-          "selected_return": 2.822166826708554,
-          "baseline_return": 2.3565105488717952
+          "selected_return": 3.8604732057268034,
+          "baseline_return": 2.873455520570739
         },
         {
           "year": 2024,
           "selected_structure": "fast_candidate",
           "selected_funding": "disabled",
-          "selected_return": 0.7221546566646679,
-          "baseline_return": 0.5510616510700341
+          "selected_return": 0.8395708087521656,
+          "baseline_return": 0.6321666321925545
         },
         {
           "year": 2025,
           "selected_structure": "fast_candidate",
-          "selected_funding": "disabled",
-          "selected_return": -0.21441534338371604,
-          "baseline_return": -0.2103731073769135
+          "selected_funding": "continuous",
+          "selected_return": -0.22379225877522724,
+          "baseline_return": -0.23427232265767184
         },
         {
           "year": 2026,
           "selected_structure": "fast_candidate",
-          "selected_funding": "disabled",
-          "selected_return": -0.23427764351847724,
-          "baseline_return": -0.10849044349292858
+          "selected_funding": "continuous",
+          "selected_return": -0.2173177379779948,
+          "baseline_return": -0.06749358913078252
         }
       ],
       "selected": {
-        "cagr": 0.2936055385568688,
-        "sharpe": 0.8246911259837467,
-        "max_drawdown": -0.5436533446609428,
-        "total_return": 3.1993351759101296
+        "cagr": 0.35528254505229584,
+        "sharpe": 0.8481522504451152,
+        "max_drawdown": -0.5563165696954854,
+        "total_return": 4.4441582255846335
       },
       "baseline": {
-        "cagr": 0.24833186894905945,
-        "sharpe": 0.7656873356319249,
-        "max_drawdown": -0.49782780101761914,
-        "total_return": 2.443032350420152
+        "cagr": 0.2800318676034397,
+        "sharpe": 0.7570269157813361,
+        "max_drawdown": -0.5149354770867675,
+        "total_return": 2.9595488109460004
       }
     }
   },
@@ -338,21 +338,21 @@
     "full_sharpe_above_baseline": true,
     "full_drawdown_no_worse": false,
     "sealed_test_cagr_no_worse": false,
-    "sealed_test_sharpe_no_worse": true
+    "sealed_test_sharpe_no_worse": false
   },
   "conditional_checks": {
     "half_slippage": {
       "full_cagr_above_current_baseline": true,
       "full_sharpe_above_current_baseline": true,
-      "full_drawdown_no_worse_than_current_baseline": true,
-      "sealed_test_cagr_no_worse_than_current_baseline": true,
-      "sealed_test_sharpe_no_worse_than_current_baseline": true
+      "full_drawdown_no_worse_than_current_baseline": false,
+      "sealed_test_cagr_no_worse_than_current_baseline": false,
+      "sealed_test_sharpe_no_worse_than_current_baseline": false
     },
     "maker_proxy": {
       "full_cagr_above_current_baseline": true,
       "full_sharpe_above_current_baseline": true,
       "full_drawdown_no_worse_than_current_baseline": true,
-      "sealed_test_cagr_no_worse_than_current_baseline": true,
+      "sealed_test_cagr_no_worse_than_current_baseline": false,
       "sealed_test_sharpe_no_worse_than_current_baseline": true
     }
   },
@@ -363,125 +363,125 @@
       "structure": "deployed",
       "funding": "disabled",
       "costs": "current",
+      "trades": 477,
+      "development": {
+        "cagr": 0.9425260844901353,
+        "sharpe": 1.3535694748106613,
+        "max_drawdown": -0.4025404654769078,
+        "total_return": 12.323881182887684
+      },
+      "validation": {
+        "cagr": 1.466001892461382,
+        "sharpe": 1.9068819531992436,
+        "max_drawdown": -0.31179397641999007,
+        "total_return": 5.096221884093497
+      },
+      "sealed_test": {
+        "cagr": -0.2744770585430937,
+        "sharpe": -0.5547934936744336,
+        "max_drawdown": -0.557087610027692,
+        "total_return": -0.395981132145487
+      },
+      "full": {
+        "cagr": 0.6837238080005072,
+        "sharpe": 1.1825477450399053,
+        "max_drawdown": -0.557087610027692,
+        "total_return": 48.106858880331615
+      },
+      "selection_score": 1.0778830319712014
+    },
+    {
+      "structure": "deployed",
+      "funding": "disabled",
+      "costs": "half_slippage",
+      "trades": 476,
+      "development": {
+        "cagr": 0.9698774275134383,
+        "sharpe": 1.3771161522366964,
+        "max_drawdown": -0.39838730357785646,
+        "total_return": 13.070608988911754
+      },
+      "validation": {
+        "cagr": 1.5208008227980292,
+        "sharpe": 1.9468607407135075,
+        "max_drawdown": -0.3044832999702165,
+        "total_return": 5.370553531336376
+      },
+      "sealed_test": {
+        "cagr": -0.24722277142407723,
+        "sharpe": -0.4645550225587542,
+        "max_drawdown": -0.5377653012751102,
+        "total_return": -0.35994940154560373
+      },
+      "full": {
+        "cagr": 0.7193519837159921,
+        "sharpe": 1.2200085302307435,
+        "max_drawdown": -0.5377653012751102,
+        "total_return": 56.42619248822598
+      },
+      "selection_score": 1.107589042737108
+    },
+    {
+      "structure": "deployed",
+      "funding": "disabled",
+      "costs": "maker_proxy",
+      "trades": 479,
+      "development": {
+        "cagr": 1.018960780621771,
+        "sharpe": 1.4187813297320586,
+        "max_drawdown": -0.39040075257245155,
+        "total_return": 14.488121333993282
+      },
+      "validation": {
+        "cagr": 1.621625710067491,
+        "sharpe": 2.0168990605561086,
+        "max_drawdown": -0.293121601196783,
+        "total_return": 5.891093522403157
+      },
+      "sealed_test": {
+        "cagr": -0.17004803230095356,
+        "sharpe": -0.18963485949486575,
+        "max_drawdown": -0.5226430309358591,
+        "total_return": -0.2538719833532139
+      },
+      "full": {
+        "cagr": 0.7964635854443793,
+        "sharpe": 1.2919303901845862,
+        "max_drawdown": -0.5226430309358591,
+        "total_return": 78.71063868105834
+      },
+      "selection_score": 1.160838913594977
+    },
+    {
+      "structure": "deployed",
+      "funding": "continuous",
+      "costs": "current",
       "trades": 478,
       "development": {
-        "cagr": 0.7590501269367336,
-        "sharpe": 1.3787662602624904,
-        "max_drawdown": -0.3418586886758437,
-        "total_return": 8.048676055001419
+        "cagr": 1.0103518148470227,
+        "sharpe": 1.4672138399993149,
+        "max_drawdown": -0.36257021269975265,
+        "total_return": 14.232144767392143
       },
       "validation": {
-        "cagr": 1.2576902756787374,
-        "sharpe": 1.9973895725684456,
-        "max_drawdown": -0.25400319218951606,
-        "total_return": 4.108550233448438
+        "cagr": 1.3624289580447946,
+        "sharpe": 1.9589270515452712,
+        "max_drawdown": -0.22211683063905496,
+        "total_return": 4.594231258869103
       },
       "sealed_test": {
-        "cagr": -0.28452536052658617,
-        "sharpe": -0.7718667524752378,
-        "max_drawdown": -0.5527922396877066,
-        "total_return": -0.40907318679757887
+        "cagr": -0.26232041806470074,
+        "sharpe": -0.5501518452487689,
+        "max_drawdown": -0.5484890884025899,
+        "total_return": -0.38000314717632533
       },
       "full": {
-        "cagr": 0.5567917503619095,
-        "sharpe": 1.1824474955534656,
-        "max_drawdown": -0.5527922396877066,
-        "total_return": 26.335413730275455
+        "cagr": 0.7004934812954926,
+        "sharpe": 1.2491566061171318,
+        "max_drawdown": -0.5484890884025899,
+        "total_return": 51.882383268046404
       },
-      "selection_score": 0.8969267529629826
-    },
-    {
-      "structure": "deployed",
-      "funding": "disabled",
-      "costs": "half_slippage",
-      "trades": 479,
-      "development": {
-        "cagr": 0.7781445118265675,
-        "sharpe": 1.4016776716654256,
-        "max_drawdown": -0.33822769057867264,
-        "total_return": 8.437816070924033
-      },
-      "validation": {
-        "cagr": 1.2961663602580704,
-        "sharpe": 2.033985644984331,
-        "max_drawdown": -0.2511066762989792,
-        "total_return": 4.2844008094495205
-      },
-      "sealed_test": {
-        "cagr": -0.20855022082201347,
-        "sharpe": -0.4323446184884231,
-        "max_drawdown": -0.5240317343963552,
-        "total_return": -0.30753241697924305
-      },
-      "full": {
-        "cagr": 0.6064173320351842,
-        "sharpe": 1.2445302148554012,
-        "max_drawdown": -0.5240317343963552,
-        "total_return": 33.560490783581415
-      },
-      "selection_score": 0.9183122789931101
-    },
-    {
-      "structure": "deployed",
-      "funding": "disabled",
-      "costs": "maker_proxy",
-      "trades": 479,
-      "development": {
-        "cagr": 0.813981202182859,
-        "sharpe": 1.4441589917821622,
-        "max_drawdown": -0.33084611955891274,
-        "total_return": 9.201589659549677
-      },
-      "validation": {
-        "cagr": 1.368113001002631,
-        "sharpe": 2.1011865905775955,
-        "max_drawdown": -0.24540390305541038,
-        "total_return": 4.621220277854133
-      },
-      "sealed_test": {
-        "cagr": -0.175775594011519,
-        "sharpe": -0.32762805675142453,
-        "max_drawdown": -0.5027229794213227,
-        "total_return": -0.2619464344790515
-      },
-      "full": {
-        "cagr": 0.6507304401856107,
-        "sharpe": 1.3049650462710425,
-        "max_drawdown": -0.5027229794213227,
-        "total_return": 41.35509455888053
-      },
-      "selection_score": 0.9583971013610753
-    },
-    {
-      "structure": "deployed",
-      "funding": "continuous",
-      "costs": "current",
-      "trades": 479,
-      "development": {
-        "cagr": 0.7906546202321116,
-        "sharpe": 1.4815965573141259,
-        "max_drawdown": -0.31026349073466375,
-        "total_return": 8.69942809248856
-      },
-      "validation": {
-        "cagr": 1.1444318826035964,
-        "sharpe": 2.041732145742473,
-        "max_drawdown": -0.1861239848832037,
-        "total_return": 3.60820951014807
-      },
-      "sealed_test": {
-        "cagr": -0.27358676404389004,
-        "sharpe": -0.7666670104920265,
-        "max_drawdown": -0.5449796385063435,
-        "total_return": -0.3948161325831019
-      },
-      "full": {
-        "cagr": 0.5547612392776109,
-        "sharpe": 1.235795100724787,
-        "max_drawdown": -0.5449796385063435,
-        "total_return": 26.070063841699362
-      },
-      "selection_score": 0.9388142759635243
+      "selection_score": 1.1570731988469543
     },
     {
       "structure": "deployed",
@@ -489,30 +489,30 @@
       "costs": "half_slippage",
       "trades": 479,
       "development": {
-        "cagr": 0.8069810209149686,
-        "sharpe": 1.5022089027677086,
-        "max_drawdown": -0.306733451816795,
-        "total_return": 9.048911126468175
+        "cagr": 1.0340689653120303,
+        "sharpe": 1.4883527665041845,
+        "max_drawdown": -0.3584828360561412,
+        "total_return": 14.945058875636834
       },
       "validation": {
-        "cagr": 1.1767282809212216,
-        "sharpe": 2.0770853705533394,
-        "max_drawdown": -0.18368389698752774,
-        "total_return": 3.7482538676583195
+        "cagr": 1.4094639071419688,
+        "sharpe": 1.9978585204574821,
+        "max_drawdown": -0.21824099961594057,
+        "total_return": 4.819520569439348
       },
       "sealed_test": {
-        "cagr": -0.18135254468033912,
-        "sharpe": -0.3696414784289836,
-        "max_drawdown": -0.5020175376515941,
-        "total_return": -0.2697778243091833
+        "cagr": -0.17710484349542077,
+        "sharpe": -0.2287914158718031,
+        "max_drawdown": -0.5219925174923378,
+        "total_return": -0.26381577892918096
       },
       "full": {
-        "cagr": 0.6083263425923671,
-        "sharpe": 1.3076086379253486,
-        "max_drawdown": -0.5020175376515941,
-        "total_return": 33.86863382881983
+        "cagr": 0.7599836523178536,
+        "sharpe": 1.3063322273229416,
+        "max_drawdown": -0.5219925174923378,
+        "total_return": 67.37932403921808
       },
-      "selection_score": 0.9572019111917395
+      "selection_score": 1.1829042419624487
     },
     {
       "structure": "deployed",
@@ -520,206 +520,206 @@
       "costs": "maker_proxy",
       "trades": 479,
       "development": {
-        "cagr": 0.838240728840794,
-        "sharpe": 1.5412367926312704,
-        "max_drawdown": -0.2995037404496421,
-        "total_return": 9.744081615631973
+        "cagr": 1.0773391995457944,
+        "sharpe": 1.5264407512976295,
+        "max_drawdown": -0.3505283546516006,
+        "total_return": 16.30927683231087
       },
       "validation": {
-        "cagr": 1.2376067954684062,
-        "sharpe": 2.142396866444655,
-        "max_drawdown": -0.17879152439381352,
-        "total_return": 4.017944531305328
+        "cagr": 1.4963979503249125,
+        "sharpe": 2.0659205062945882,
+        "max_drawdown": -0.2116893829358657,
+        "total_return": 5.2476424295777795
       },
       "sealed_test": {
-        "cagr": -0.14940886087751382,
-        "sharpe": -0.2669095821568475,
-        "max_drawdown": -0.4808980925765379,
-        "total_return": -0.22451197548873048
+        "cagr": -0.13987307634941815,
+        "sharpe": -0.1298883092757205,
+        "max_drawdown": -0.4992291573786337,
+        "total_return": -0.2108082895382719
       },
       "full": {
-        "cagr": 0.6480360196840882,
-        "sharpe": 1.3656388008146099,
-        "max_drawdown": -0.4808980925765379,
-        "total_return": 40.84110711840142
+        "cagr": 0.8131980623950101,
+        "sharpe": 1.3632729004019208,
+        "max_drawdown": -0.4992291573786337,
+        "total_return": 84.43044923760597
       },
-      "selection_score": 0.9923644081039211
+      "selection_score": 1.2299832746755572
     },
     {
       "structure": "fast_candidate",
       "funding": "disabled",
       "costs": "current",
-      "trades": 564,
+      "trades": 555,
       "development": {
-        "cagr": 0.8819092395286734,
-        "sharpe": 1.5287108800878264,
-        "max_drawdown": -0.3074148336863558,
-        "total_return": 10.774292773317692
+        "cagr": 1.1191977986568027,
+        "sharpe": 1.51400244834462,
+        "max_drawdown": -0.3640662359294613,
+        "total_return": 17.709786305847548
       },
       "validation": {
-        "cagr": 1.484143628261898,
-        "sharpe": 2.073665087042629,
-        "max_drawdown": -0.241032841651871,
-        "total_return": 5.186372696938818
+        "cagr": 1.8630382930970382,
+        "sharpe": 2.0230246875512945,
+        "max_drawdown": -0.2938755202822978,
+        "total_return": 7.220645012921683
       },
       "sealed_test": {
-        "cagr": -0.29238584041926263,
-        "sharpe": -0.7253640266545246,
-        "max_drawdown": -0.5573686390772896,
-        "total_return": -0.41924180646685594
+        "cagr": -0.3623757409964167,
+        "sharpe": -0.8735184757933984,
+        "max_drawdown": -0.5784288271062434,
+        "total_return": -0.5069104047558171
       },
       "full": {
-        "cagr": 0.6508337530665562,
-        "sharpe": 1.2888979568087156,
-        "max_drawdown": -0.5573686390772896,
-        "total_return": 41.374910899316326
+        "cagr": 0.7850725740880071,
+        "sharpe": 1.2749985660188885,
+        "max_drawdown": -0.5897027030323383,
+        "total_return": 75.00972021804708
       },
-      "selection_score": 1.034780327537456,
+      "selection_score": 1.2705980434912647,
       "stress_full": {
-        "cagr": 0.5741965978123043,
-        "sharpe": 1.1897325042105897,
-        "max_drawdown": -0.5759241468698691,
-        "total_return": 28.70389074511694,
-        "trades": 562
+        "cagr": 0.7060704623830669,
+        "sharpe": 1.1955825975830128,
+        "max_drawdown": -0.5960715512573933,
+        "total_return": 53.192470863096496,
+        "trades": 555
       }
     },
     {
       "structure": "fast_candidate",
       "funding": "disabled",
       "costs": "half_slippage",
-      "trades": 564,
+      "trades": 560,
       "development": {
-        "cagr": 0.9036421188193171,
-        "sharpe": 1.5533248596754896,
-        "max_drawdown": -0.30238350710794704,
-        "total_return": 11.313533326827063
+        "cagr": 1.1510273133123143,
+        "sharpe": 1.5393696943478186,
+        "max_drawdown": -0.3582559958330247,
+        "total_return": 18.82983531872749
       },
       "validation": {
-        "cagr": 1.525817093050371,
-        "sharpe": 2.107513574763468,
-        "max_drawdown": -0.2374206736425919,
-        "total_return": 5.395967773108286
+        "cagr": 1.929387190187303,
+        "sharpe": 2.0595123948573066,
+        "max_drawdown": -0.28969900993958253,
+        "total_return": 7.6066154088539
       },
       "sealed_test": {
-        "cagr": -0.2765481296984278,
-        "sharpe": -0.6680652271747451,
-        "max_drawdown": -0.5463015887817453,
-        "total_return": -0.39868808415208556
+        "cagr": -0.31392051317789493,
+        "sharpe": -0.6397505751244829,
+        "max_drawdown": -0.5680923827092037,
+        "total_return": -0.4467694784219568
       },
       "full": {
-        "cagr": 0.6759550755733876,
-        "sharpe": 1.3216980508145633,
-        "max_drawdown": -0.5463015887817453,
-        "total_return": 46.438487320300794
+        "cagr": 0.8381779946392822,
+        "sharpe": 1.3216001405069933,
+        "max_drawdown": -0.5752231103451995,
+        "total_return": 93.62925051148777
       },
-      "selection_score": 1.058974604786866,
+      "selection_score": 1.3049642827470962,
       "stress_full": {
-        "cagr": 0.6136393881503883,
-        "sharpe": 1.2443320588670688,
-        "max_drawdown": -0.565979044656747,
-        "total_return": 34.738801545370166,
-        "trades": 559
+        "cagr": 0.748438729897785,
+        "sharpe": 1.2389398979248047,
+        "max_drawdown": -0.5938516535726039,
+        "total_return": 64.09724011570003,
+        "trades": 554
       }
     },
     {
       "structure": "fast_candidate",
       "funding": "disabled",
       "costs": "maker_proxy",
-      "trades": 564,
+      "trades": 561,
       "development": {
-        "cagr": 0.9447754173672884,
-        "sharpe": 1.5992723295405276,
-        "max_drawdown": -0.29261761418049814,
-        "total_return": 12.384152591287574
+        "cagr": 1.2085720028356106,
+        "sharpe": 1.5845801450572146,
+        "max_drawdown": -0.3472366286132996,
+        "total_return": 20.98037480819382
       },
       "validation": {
-        "cagr": 1.6068702517768743,
-        "sharpe": 2.1719203565882035,
-        "max_drawdown": -0.23023249725095218,
-        "total_return": 5.813635319989672
+        "cagr": 2.0478432960418163,
+        "sharpe": 2.1249614243053565,
+        "max_drawdown": -0.2813945126960439,
+        "total_return": 8.317754752926001
       },
       "sealed_test": {
-        "cagr": -0.24409232119638968,
-        "sharpe": -0.554670286548972,
-        "max_drawdown": -0.522872020482946,
-        "total_return": -0.35576232967787347
+        "cagr": -0.2837907815103281,
+        "sharpe": -0.53855180059703,
+        "max_drawdown": -0.5495068027347624,
+        "total_return": -0.40811963158520215
       },
       "full": {
-        "cagr": 0.7250009820739138,
-        "sharpe": 1.3845557941296387,
-        "max_drawdown": -0.522872020482946,
-        "total_return": 57.851439426584896
+        "cagr": 0.9006731805862513,
+        "sharpe": 1.380004579225239,
+        "max_drawdown": -0.5495068027347624,
+        "total_return": 120.49170165936594
       },
-      "selection_score": 1.1047026503213413,
+      "selection_score": 1.3670300173413321,
       "stress_full": {
-        "cagr": 0.6669803041392102,
-        "sharpe": 1.3110516013997258,
-        "max_drawdown": -0.5432138691968426,
-        "total_return": 44.57243577862739,
-        "trades": 562
+        "cagr": 0.8167304862482929,
+        "sharpe": 1.3020404936713788,
+        "max_drawdown": -0.584288739986105,
+        "total_return": 85.68223959662316,
+        "trades": 560
       }
     },
     {
       "structure": "fast_candidate",
       "funding": "continuous",
       "costs": "current",
-      "trades": 564,
+      "trades": 561,
       "development": {
-        "cagr": 0.8506985954866559,
-        "sharpe": 1.5703048722773683,
-        "max_drawdown": -0.29144887911782813,
-        "total_return": 10.030855917126122
+        "cagr": 1.0902467326073348,
+        "sharpe": 1.5589738312445656,
+        "max_drawdown": -0.3400842289806367,
+        "total_return": 16.732519969805853
       },
       "validation": {
-        "cagr": 1.5203204270078663,
-        "sharpe": 2.181495002511559,
-        "max_drawdown": -0.19856843416627257,
-        "total_return": 5.368122330451095
+        "cagr": 1.9310944471062417,
+        "sharpe": 2.1300586687959426,
+        "max_drawdown": -0.2434517080317986,
+        "total_return": 7.6166640166317485
       },
       "sealed_test": {
-        "cagr": -0.2675077858666147,
-        "sharpe": -0.6716045698495052,
-        "max_drawdown": -0.5332644357921916,
-        "total_return": -0.3868396705422673
+        "cagr": -0.3077836016738682,
+        "sharpe": -0.6545214610090694,
+        "max_drawdown": -0.5591984910971496,
+        "total_return": -0.4389742502713887
       },
       "full": {
-        "cagr": 0.6548200022648958,
-        "sharpe": 1.345416670484152,
-        "max_drawdown": -0.5332644357921916,
-        "total_return": 42.145668238658146
+        "cagr": 0.814566222616999,
+        "sharpe": 1.3442783751417318,
+        "max_drawdown": -0.5591984910971496,
+        "total_return": 84.91341553882688
       },
-      "selection_score": 1.0077290827143928
+      "selection_score": 1.2461441157317914
     },
     {
       "structure": "fast_candidate",
       "funding": "continuous",
       "costs": "half_slippage",
-      "trades": 564,
+      "trades": 561,
       "development": {
-        "cagr": 0.8698038767471952,
-        "sharpe": 1.5939730214576548,
-        "max_drawdown": -0.2888699023126847,
-        "total_return": 10.481658301665608
+        "cagr": 1.1185504653634122,
+        "sharpe": 1.583557170548407,
+        "max_drawdown": -0.3373265443380088,
+        "total_return": 17.6875072120759
       },
       "validation": {
-        "cagr": 1.5588283030660888,
-        "sharpe": 2.2138250478683363,
-        "max_drawdown": -0.19540678001330092,
-        "total_return": 5.56447823164175
+        "cagr": 1.9935425333532937,
+        "sharpe": 2.1649179986388223,
+        "max_drawdown": -0.2397525742607194,
+        "total_return": 7.98825704678136
       },
       "sealed_test": {
-        "cagr": -0.2518740659237524,
-        "sharpe": -0.6148933217433673,
-        "max_drawdown": -0.5221390092876013,
-        "total_return": -0.3661522966887877
+        "cagr": -0.29160078639529563,
+        "sharpe": -0.5977624085463186,
+        "max_drawdown": -0.5489281169928071,
+        "total_return": -0.4182291165036609
       },
       "full": {
-        "cagr": 0.6779187837857896,
-        "sharpe": 1.3773783886904862,
-        "max_drawdown": -0.5221390092876013,
-        "total_return": 46.855495418638924
+        "cagr": 0.846647424502496,
+        "sharpe": 1.3763084350101058,
+        "max_drawdown": -0.5489281169928071,
+        "total_return": 96.93695637737544
       },
-      "selection_score": 1.0292011788929607
+      "selection_score": 1.2769061824182528
     },
     {
       "structure": "fast_candidate",
@@ -727,30 +727,30 @@
       "costs": "maker_proxy",
       "trades": 564,
       "development": {
-        "cagr": 0.9059168156527984,
-        "sharpe": 1.638175367997477,
-        "max_drawdown": -0.283957561640639,
-        "total_return": 11.371016125546399
+        "cagr": 1.169200483428917,
+        "sharpe": 1.6270449313172408,
+        "max_drawdown": -0.3318452513413508,
+        "total_return": 19.491266469598354
       },
       "validation": {
-        "cagr": 1.6337224385344609,
-        "sharpe": 2.2754949390516477,
-        "max_drawdown": -0.18909115473595273,
-        "total_return": 5.954921848164937
+        "cagr": 2.1043183756347275,
+        "sharpe": 2.2277031126849196,
+        "max_drawdown": -0.23234434437758034,
+        "total_return": 8.666747261921842
       },
       "sealed_test": {
-        "cagr": -0.2199145917510028,
-        "sharpe": -0.5027251328157919,
-        "max_drawdown": -0.4986503495005954,
-        "total_return": -0.3230911270017718
+        "cagr": -0.23420282556595684,
+        "sharpe": -0.3886937884544043,
+        "max_drawdown": -0.5226424209325058,
+        "total_return": -0.3424697627668366
       },
       "full": {
-        "cagr": 0.7229890402324619,
-        "sharpe": 1.4387194567807493,
-        "max_drawdown": -0.4986503495005954,
-        "total_return": 57.34035174716044
+        "cagr": 0.9190216375594742,
+        "sharpe": 1.4436956727402528,
+        "max_drawdown": -0.5226424209325058,
+        "total_return": 129.53627170137864
       },
-      "selection_score": 1.069734352452546
+      "selection_score": 1.331904976560641
     }
   ]
 }
