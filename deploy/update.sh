@@ -89,7 +89,8 @@ BACKUP_ENCRYPTION_KEY="$(
   sed -n 's/^BACKUP_ENCRYPTION_KEY=//p' "${ROOT}/.env" | tail -n 1
 )"
 export BACKUP_ENCRYPTION_KEY
-"${CURRENT}/scripts/backup_state.sh"
+sudo -u btcquant env BACKUP_ENCRYPTION_KEY="${BACKUP_ENCRYPTION_KEY}" \
+  "${CURRENT}/scripts/backup_state.sh"
 
 TARGET="$(bash "${CLONE}/deploy/create-release.sh" "${CLONE}" "${RELEASE_ID}")"
 systemd-analyze verify "${TARGET}/deploy/"*.service "${TARGET}/deploy/"*.timer
@@ -120,6 +121,7 @@ cp "${CURRENT}/deploy/"btcquant-*.service "${CURRENT}/deploy/"btcquant-*.timer \
 install -o root -g root -m 0755 "${CURRENT}/deploy/rebalance-root.sh" \
   /usr/local/libexec/btcquant-rebalance
 systemctl daemon-reload
+systemctl enable --now btcquant-compact.timer
 systemctl restart btcquant-dashboard
 if ${RESTART_ENGINES}; then
   restart_selected_engines
