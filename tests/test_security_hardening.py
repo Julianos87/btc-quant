@@ -139,6 +139,8 @@ def test_update_has_atomic_activation_backup_healthcheck_and_rollback():
     assert "http://127.0.0.1:8666/healthz" in script
     assert "systemd-analyze verify" in script
     assert "configure_shadow_service" in script
+    assert '!= "btcquant-shadow.service"' in script
+    assert 'systemd-analyze verify "${CURRENT}/deploy/"*.service' in script
 
 
 def test_host_preflight_blocks_bad_clock_permissions_disk_and_database():
