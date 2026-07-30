@@ -151,7 +151,7 @@ def main() -> None:
             "base_git_commit": _git_commit(),
             "source_tree_sha256": _tree_sha256(list((ROOT / "src").rglob("*.py"))),
             "config": {
-                "path": str(CONFIG.relative_to(ROOT)),
+                "path": CONFIG.relative_to(ROOT).as_posix(),
                 "sha256": _sha256(CONFIG),
             },
             "data": [

@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "generated_at_utc": "2026-07-30T08:43:13.754209+00:00",
+  "generated_at_utc": "2026-07-30T09:05:18.547749+00:00",
   "purpose": "Safety Baseline anti-régression; aucune promesse de performance",
   "provenance": {
-    "base_git_commit": "83f12fb674330acd0d2c076a1cbe9c89a3799da9",
+    "base_git_commit": "a69b98fc8d9c3c6f0e5c3edd2d2f79b039bdf3a3",
     "source_tree_sha256": "21ef56da0a47c82f0abd49a9261f85bdcf5b6efb386d801b24b30b6e424f442d",
     "config": {
-      "path": "environments\\paper\\config.yaml",
+      "path": "environments/paper/config.yaml",
       "sha256": "e7f210638451cf63633f5cc85db2e4ad5a27f89c4af4e5f166efa5faa7f6121f"
     },
     "data": [
