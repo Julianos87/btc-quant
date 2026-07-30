@@ -34,6 +34,20 @@ configure_pending_rebalance_timer() {
   fi
 }
 
+wait_for_dashboard() {
+  local attempt
+  for attempt in {1..15}; do
+    if systemctl is-active --quiet btcquant-dashboard &&
+      curl --fail --silent --show-error --max-time 10 \
+        http://127.0.0.1:8666/healthz >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "Le dashboard n'est pas sain après 15 secondes." >&2
+  return 1
+}
+
 if [ "$(id -u)" -ne 0 ]; then
   echo "Ce script doit être exécuté par root." >&2
   exit 1
@@ -59,10 +73,7 @@ case "${1:-}" in
     systemctl daemon-reload
     configure_pending_rebalance_timer
     configure_shadow_service
-    if ! systemctl restart btcquant-dashboard ||
-      ! systemctl is-active --quiet btcquant-dashboard ||
-      ! curl --fail --silent --show-error --max-time 10 \
-        http://127.0.0.1:8666/healthz >/dev/null; then
+    if ! systemctl restart btcquant-dashboard || ! wait_for_dashboard; then
       echo "Le rollback demandé est invalide ; restauration de ${OLD}." >&2
       ln -sfn "${OLD}" "${ROOT}/.current-next"
       mv -Tf "${ROOT}/.current-next" "${CURRENT}"
@@ -159,9 +170,7 @@ if ${RESTART_ENGINES}; then
   restart_selected_engines
 fi
 
-systemctl is-active --quiet btcquant-dashboard
-curl --fail --silent --show-error --max-time 10 \
-  http://127.0.0.1:8666/healthz >/dev/null
+wait_for_dashboard
 if ${RESTART_ENGINES}; then
   if [ -f "${TESTNET_APPROVAL}" ]; then
     systemctl is-active --quiet btcquant-hyperliquid-testnet

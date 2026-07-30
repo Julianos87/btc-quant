@@ -150,6 +150,8 @@ def test_update_has_atomic_activation_backup_healthcheck_and_rollback():
     assert 'mv -Tf "${ROOT}/.current-next" "${CURRENT}"' in script
     assert "rollback_on_error" in script
     assert "http://127.0.0.1:8666/healthz" in script
+    assert "wait_for_dashboard" in script
+    assert "for attempt in {1..15}" in script
     assert "systemd-analyze verify" in script
     assert "configure_shadow_service" in script
     assert 'systemd-analyze verify "${CURRENT}/deploy/"*.service' in script
