@@ -22,22 +22,62 @@ def _load_rebalance():
     return rebalance
 
 
-def _write_states(state: Path, trend_cash: float = 2000.0, carry_equity: float = 4000.0) -> None:
+def _write_states(
+    state: Path,
+    trend_cash: float = 2000.0,
+    carry_equity: float = 4000.0,
+    *,
+    trend_position: bool = False,
+    carry_position: bool = False,
+    trend_peak: float | None = None,
+    trend_day_start: float | None = None,
+    carry_peak: float | None = None,
+    carry_day_start: float | None = None,
+) -> None:
     state.mkdir(exist_ok=True)
+    trend_equity = trend_cash * 3
+    position = (
+        {
+            "entry_time": "2026-07-01T00:00:00+00:00",
+            "entry_price": 60_000.0,
+            "qty": 0.01,
+            "stop_price": 55_000.0,
+            "direction": 1,
+            "bars_held": 1,
+            "best_close": 61_000.0,
+        }
+        if trend_position
+        else None
+    )
     (state / "live_state_4x.json").write_text(
         json.dumps(
             {
                 "slots": {
-                    f"trend_ls_{n}": {"cash": trend_cash, "position": None} for n in (20, 55, 100)
+                    f"trend_ls_{n}": {
+                        "cash": trend_cash,
+                        "position": position if n == 20 else None,
+                    }
+                    for n in (20, 55, 100)
                 },
-                "peak_equity": trend_cash * 3,
-                "day_start_equity": trend_cash * 3,
+                "peak_equity": trend_peak if trend_peak is not None else trend_equity,
+                "day_start_equity": (
+                    trend_day_start if trend_day_start is not None else trend_equity
+                ),
                 "halted": False,
             }
         )
     )
     (state / "carry_state.json").write_text(
-        json.dumps({"equity": carry_equity, "in_position": False})
+        json.dumps(
+            {
+                "equity": carry_equity,
+                "in_position": carry_position,
+                "peak_equity": carry_peak if carry_peak is not None else carry_equity,
+                "day_start_equity": (
+                    carry_day_start if carry_day_start is not None else carry_equity
+                ),
+            }
+        )
     )
 
 
@@ -55,7 +95,10 @@ def test_rebalance_deposit_logs_flow(tmp_path, monkeypatch, capsys):
     assert trend is not None and carry is not None
     assert trend["slots"]["trend_ls_20"]["cash"] == pytest.approx(2020.0)
     assert trend["peak_equity"] == pytest.approx(6060.0)  # l'apport n'est pas un gain
+    assert trend["day_start_equity"] == pytest.approx(6060.0)
     assert carry["equity"] == pytest.approx(4040.0)
+    assert carry["peak_equity"] == pytest.approx(4040.0)
+    assert carry["day_start_equity"] == pytest.approx(4040.0)
 
     flows = pd.DataFrame(store.read_flows())
     assert len(flows) == 1  # apport seul : allocation à la cible, pas de transfert
@@ -76,6 +119,74 @@ def test_rebalance_transfer_logs_zero_sum_flow(tmp_path, monkeypatch):
     flows = pd.DataFrame(StateStore(tmp_path / "btcquant.db").read_flows())
     assert list(flows["kind"]) == ["rebalance"]
     assert flows["trend_flow"].iloc[0] + flows["carry_flow"].iloc[0] == pytest.approx(0.0)
+
+
+def test_rebalance_transfer_preserves_risk_ratios(tmp_path, monkeypatch):
+    reb = _load_rebalance()
+    monkeypatch.setattr(reb, "STATE", tmp_path)
+    _write_states(
+        tmp_path,
+        trend_cash=2400.0,
+        carry_equity=2800.0,
+        trend_peak=8000.0,
+        trend_day_start=7500.0,
+        carry_peak=4000.0,
+        carry_day_start=3200.0,
+    )
+
+    monkeypatch.setattr(sys, "argv", ["rebalance.py", "--apply"])
+    reb.main()
+
+    store = StateStore(tmp_path / "btcquant.db")
+    trend = store.load_engine_state("trend")
+    carry = store.load_engine_state("carry")
+    assert trend is not None and carry is not None
+    trend_equity = sum(slot["cash"] for slot in trend["slots"].values())
+    carry_equity = carry["equity"]
+    assert trend_equity == pytest.approx(6000.0)
+    assert carry_equity == pytest.approx(4000.0)
+    assert trend_equity / trend["peak_equity"] == pytest.approx(7200.0 / 8000.0)
+    assert trend_equity / trend["day_start_equity"] == pytest.approx(7200.0 / 7500.0)
+    assert carry_equity / carry["peak_equity"] == pytest.approx(2800.0 / 4000.0)
+    assert carry_equity / carry["day_start_equity"] == pytest.approx(2800.0 / 3200.0)
+
+
+@pytest.mark.parametrize(
+    ("trend_position", "carry_position", "engine"),
+    [
+        (True, False, "trend"),
+        (False, True, "carry"),
+    ],
+)
+def test_rebalance_transfer_is_deferred_while_a_position_is_open(
+    tmp_path,
+    monkeypatch,
+    capsys,
+    trend_position,
+    carry_position,
+    engine,
+):
+    reb = _load_rebalance()
+    monkeypatch.setattr(reb, "STATE", tmp_path)
+    _write_states(
+        tmp_path,
+        trend_cash=2400.0,
+        carry_equity=2800.0,
+        trend_position=trend_position,
+        carry_position=carry_position,
+    )
+
+    monkeypatch.setattr(sys, "argv", ["rebalance.py", "--apply"])
+    reb.main()
+
+    store = StateStore(tmp_path / "btcquant.db")
+    trend = store.load_engine_state("trend")
+    carry = store.load_engine_state("carry")
+    assert trend is not None and carry is not None
+    assert sum(slot["cash"] for slot in trend["slots"].values()) == pytest.approx(7200.0)
+    assert carry["equity"] == pytest.approx(2800.0)
+    assert store.read_flows() == []
+    assert f"Position ouverte ({engine})" in capsys.readouterr().out
 
 
 # ── côté dashboard ───────────────────────────────────────────────────────────
