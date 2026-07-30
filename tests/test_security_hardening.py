@@ -135,7 +135,8 @@ def test_update_has_atomic_activation_backup_healthcheck_and_rollback():
     script = (ROOT / "deploy" / "update.sh").read_text(encoding="utf-8")
 
     assert 'sudo -u btcquant env BACKUP_ENCRYPTION_KEY="${BACKUP_ENCRYPTION_KEY}"' in script
-    assert '"${CURRENT}/scripts/backup_state.sh"' in script
+    assert 'cd "${CURRENT}"' in script
+    assert "./scripts/backup_state.sh" in script
     assert "systemctl enable --now btcquant-compact.timer" in script
     assert "configure_pending_rebalance_timer" in script
     pending_timer = (ROOT / "deploy" / "btcquant-rebalance-pending.timer").read_text(

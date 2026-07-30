@@ -110,8 +110,13 @@ BACKUP_ENCRYPTION_KEY="$(
   sed -n 's/^BACKUP_ENCRYPTION_KEY=//p' "${ROOT}/.env" | tail -n 1
 )"
 export BACKUP_ENCRYPTION_KEY
-sudo -u btcquant env BACKUP_ENCRYPTION_KEY="${BACKUP_ENCRYPTION_KEY}" \
-  "${CURRENT}/scripts/backup_state.sh"
+(
+  # L'utilisateur btcquant doit démarrer depuis un dossier qu'il peut lire.
+  # Sinon GNU find échoue en tentant de revenir au cwd de l'administrateur.
+  cd "${CURRENT}"
+  sudo -u btcquant env BACKUP_ENCRYPTION_KEY="${BACKUP_ENCRYPTION_KEY}" \
+    ./scripts/backup_state.sh
+)
 
 TARGET="$(bash "${CLONE}/deploy/create-release.sh" "${CLONE}" "${RELEASE_ID}")"
 
