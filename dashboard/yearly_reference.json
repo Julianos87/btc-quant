@@ -1,20 +1,20 @@
 {
   "schema_version": 2,
-  "generated": "2026-07-28",
+  "generated": "2026-07-30",
   "profile": "portefeuille 60/40 \u2014 trend 4x (Donchian 20/55/100) + carry 3x, funding r\u00e9el",
   "span": [
     "2019-09-10",
-    "2026-07-28"
+    "2026-07-30"
   ],
   "provenance": {
-    "base_git_commit": "7c93cf4b5b34049c6624efdbce8a6bb1993713af",
-    "source_tree_sha256": "758774f01e846f637f1608a37876f0a6f0677759b4397bd549b8dfdffcbf09d2",
+    "base_git_commit": "83f12fb674330acd0d2c076a1cbe9c89a3799da9",
+    "source_tree_sha256": "21ef56da0a47c82f0abd49a9261f85bdcf5b6efb386d801b24b30b6e424f442d",
     "config": {
       "path": "environments/paper/config.yaml",
-      "sha256": "51dea6b4a5680fe2954dcd109ee02762745842b60d7179f371cab16b75557bcc"
+      "sha256": "e7f210638451cf63633f5cc85db2e4ad5a27f89c4af4e5f166efa5faa7f6121f"
     },
-    "base_data_sha256": "14e3a38bfc99044b649085044a5a03c7a76ba7e9c2b108f69d0cb5044840268d",
-    "base_rows": 66312
+    "base_data_sha256": "5dcf7a26d1034ca420526370bf5485ffb438aba2e7732854d80752edbdaa8a99",
+    "base_rows": 66355
   },
   "years": [
     {
@@ -82,10 +82,10 @@
     },
     {
       "year": 2026,
-      "portfolio": -0.18620531658567607,
+      "portfolio": -0.18619748559272575,
       "trend": -0.1912982691960976,
-      "carry": -0.03334390767913864,
-      "btc": -0.2760834161834661,
+      "carry": -0.03310103491237004,
+      "btc": -0.26978551304293463,
       "max_dd": -0.4078417267199109,
       "partial": true
     }

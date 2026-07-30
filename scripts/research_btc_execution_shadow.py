@@ -113,9 +113,7 @@ def main() -> None:
         seconds_to_funding=last["seconds_to_funding"],
     )
     store = StateStore(STATE_DB)
-    existing_orders = [
-        order for order in store.read_orders() if order["order_type"] != "STOP"
-    ]
+    existing_orders = [order for order in store.read_orders() if order["order_type"] != "STOP"]
     qualification_policy = ExecutionQualificationPolicy()
     evidence = ExecutionEvidence(
         observation_days=0.0,

@@ -25,14 +25,14 @@
     "sealed_test_used_for_selection": false
   },
   "provenance": {
-    "script_sha256": "f314683c8cdfdf4e87dae9e2b2fe063e549fc0f242fa711df25fb1cb6a11b7c2",
+    "script_sha256": "7d82d054d120b82f7a996b32e23e505b9161e8ac00786b396da39e989a5feb1e",
     "strategy": {
       "path": "src/btcquant/research/strategies/range_mean_reversion.py",
       "sha256": "c48e04b5c6e5f8ea927118deae49a333791c4ffcc9f954d27750de6352fd69cc"
     },
     "config": {
       "path": "environments/paper/config.yaml",
-      "sha256": "51dea6b4a5680fe2954dcd109ee02762745842b60d7179f371cab16b75557bcc"
+      "sha256": "e7f210638451cf63633f5cc85db2e4ad5a27f89c4af4e5f166efa5faa7f6121f"
     },
     "data": [
       {

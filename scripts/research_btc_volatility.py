@@ -85,12 +85,8 @@ def _candidate(equity: pd.Series, trades: int, target: float) -> dict:
         "vol_target_annual": target,
         "trades": trades,
         "development": _period(equity, None, DEVELOPMENT_END),
-        "validation": _period(
-            equity, DEVELOPMENT_END + pd.Timedelta(seconds=1), VALIDATION_END
-        ),
-        "sealed_test": _period(
-            equity, VALIDATION_END + pd.Timedelta(seconds=1), None
-        ),
+        "validation": _period(equity, DEVELOPMENT_END + pd.Timedelta(seconds=1), VALIDATION_END),
+        "sealed_test": _period(equity, VALIDATION_END + pd.Timedelta(seconds=1), None),
         "full": _summary(equity),
     }
 

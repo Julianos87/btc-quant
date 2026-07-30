@@ -36,7 +36,7 @@ const I18N = {
     reset:"Réinitialiser", no_trades:"Aucun trade clôturé pour l’instant — le journal se remplit à la première sortie de position.",
     auto_refresh:"Actualisation automatique", real_data:"données réelles Hyperliquid, exécution simulée",
     equity_total:"Équity totale", pnl_day:"PnL du jour · UTC", since_midnight:"depuis 00:00 UTC",
-    alloc_real:"Allocation réelle", online:"EN LIGNE", offline:"ARRÊTÉ",
+    alloc_real:"Allocation réelle", pending_deposit:"Apport en attente", online:"EN LIGNE", offline:"ARRÊTÉ",
     workspace:"Vue", view_monitor:"Surveillance", view_performance:"Performance", view_risk:"Risque",
     status_good:"Tout est nominal", status_warn:"Surveillance requise", status_crit:"Action requise",
     status_nominal_detail:"Trend et Carry répondent · protections armées",
@@ -81,7 +81,7 @@ const I18N = {
     reset:"Reset", no_trades:"No closed trades yet — the log fills on the first position exit.",
     auto_refresh:"Auto refresh", real_data:"real Hyperliquid data, simulated execution",
     equity_total:"Total equity", pnl_day:"Daily PnL · UTC", since_midnight:"since 00:00 UTC",
-    alloc_real:"Real allocation", online:"ONLINE", offline:"STOPPED",
+    alloc_real:"Real allocation", pending_deposit:"Pending deposit", online:"ONLINE", offline:"STOPPED",
     workspace:"View", view_monitor:"Monitor", view_performance:"Performance", view_risk:"Risk",
     yearly_title:"Previous years", yearly_sub:"backtest · same settings as live",
     yearly_note:"Simulation with real fees, slippage and funding — not realized results. Calendar-year returns; each year's worst drawdown on hover.",
@@ -216,6 +216,11 @@ async function refreshSummary() {
     $("ab-c").style.width = ((1-at)*100).toFixed(1) + "%";
     $("al-t").textContent = fmt$(s.trend.equity); $("al-c").textContent = fmt$(s.carry.equity);
   }
+  const pendingDeposit = s.totals.pending_deposits || 0;
+  $("pending-deposit").style.display = pendingDeposit > 0 ? "block" : "none";
+  $("pending-deposit").textContent = pendingDeposit > 0
+    ? `${t("pending_deposit")} : ${fmt$(pendingDeposit)} · ${s.totals.pending_deposit_count}`
+    : "";
 
   setState($("trend-state"), s.trend.alive);
   setState($("carry-state"), s.carry.alive);
@@ -232,6 +237,7 @@ async function refreshSummary() {
   if (s.carry.halted) issues.push(["crit", "KILL-SWITCH Carry déclenché : drawdown maximal atteint, position fermée"]);
   if (s.carry.daily_lockout) issues.push(["warn", "Carry : limite de perte journalière atteinte — plus d'entrées avant demain (UTC)"]);
   if (s.trend.daily_lockout) issues.push(["warn", "limite de perte journalière atteinte — plus de nouvelles entrées avant demain (UTC)"]);
+  if (pendingDeposit > 0) issues.push(["warn", `apport en attente : ${fmt$(pendingDeposit)} — nouvelle tentative quotidienne à 04:30 UTC`]);
   const a = $("alert");
   if (issues.length) {
     a.style.display = "flex";

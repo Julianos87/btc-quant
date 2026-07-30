@@ -160,11 +160,7 @@ class TrendLS(Strategy):
             return None
         atr_mult = float(self.params["atr_mult"])
         strong_adx = self.params["strong_trend_adx"]
-        if (
-            strong_adx is not None
-            and pd.notna(row.get("adx"))
-            and row["adx"] >= strong_adx
-        ):
+        if strong_adx is not None and pd.notna(row.get("adx")) and row["adx"] >= strong_adx:
             atr_mult = float(self.params["strong_trend_atr_mult"])
         return position.best_close - position.direction * atr_mult * row["atr"]
 
@@ -177,9 +173,7 @@ class TrendLS(Strategy):
             or bool(row["regime_up"]) != (position.direction == 1)
         ):
             return 0.0
-        favorable_move = position.direction * (
-            float(row["close"]) - position.last_add_price
-        )
+        favorable_move = position.direction * (float(row["close"]) - position.last_add_price)
         if favorable_move < float(step) * float(row["atr"]):
             return 0.0
         return float(self.params["pyramid_add_fraction"])

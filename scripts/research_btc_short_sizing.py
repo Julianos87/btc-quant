@@ -75,12 +75,8 @@ def _candidate(equity: pd.Series, trades: int, short_mult: float) -> dict:
         "short_size_mult": short_mult,
         "trades": trades,
         "development": _period(equity, None, DEVELOPMENT_END),
-        "validation": _period(
-            equity, DEVELOPMENT_END + pd.Timedelta(seconds=1), VALIDATION_END
-        ),
-        "sealed_test": _period(
-            equity, VALIDATION_END + pd.Timedelta(seconds=1), None
-        ),
+        "validation": _period(equity, DEVELOPMENT_END + pd.Timedelta(seconds=1), VALIDATION_END),
+        "sealed_test": _period(equity, VALIDATION_END + pd.Timedelta(seconds=1), None),
         "full": _summary(equity),
     }
 
@@ -124,15 +120,12 @@ def main() -> None:
     candidates.sort(key=lambda item: item["selection_score"], reverse=True)
     selected = candidates[0]
     baseline = next(item for item in candidates if item["short_size_mult"] == 1.0)
-    stress_equity, stress_trades = _run(
-        cfg, frame, float(selected["short_size_mult"]), "stress"
-    )
+    stress_equity, stress_trades = _run(cfg, frame, float(selected["short_size_mult"]), "stress")
     selected["stress_full"] = {**_summary(stress_equity), "trades": stress_trades}
     adoption_checks = {
         "asymmetry_selected": selected["short_size_mult"] != 1.0,
         "full_cagr_above_baseline": selected["full"]["cagr"] > baseline["full"]["cagr"],
-        "full_sharpe_above_baseline": selected["full"]["sharpe"]
-        > baseline["full"]["sharpe"],
+        "full_sharpe_above_baseline": selected["full"]["sharpe"] > baseline["full"]["sharpe"],
         "full_drawdown_no_worse": selected["full"]["max_drawdown"]
         >= baseline["full"]["max_drawdown"],
         "sealed_test_cagr_no_worse": selected["sealed_test"]["cagr"]

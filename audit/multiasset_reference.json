@@ -25,7 +25,7 @@
     }
   },
   "provenance": {
-    "script_sha256": "1407406d82baae5ed2e07a5f143b81ad1d29582c0e2ee94e674c6a204866cf3e",
+    "script_sha256": "48cd67b6cf98262db2a72d052eaf786b116a61bf79809d434a3a24fd4a39b03d",
     "data": [
       {
         "path": "data/binance_BTC-USDT_1h.csv",

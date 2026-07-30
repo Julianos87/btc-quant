@@ -196,27 +196,17 @@ def main() -> None:
             entry_buffer_atr=selected["confirmation_atr"],
             profile="stress",
         )
-        aligned = (
-            overlay_stress.reindex(baseline_stress.index)
-            .ffill()
-            .fillna(overlay_capital)
-        )
+        aligned = overlay_stress.reindex(baseline_stress.index).ffill().fillna(overlay_capital)
         selected_stress = baseline_stress + aligned - overlay_capital
     selected["stress_full"] = _summary(selected_stress)
     checks = {
         "overlay_selected": selected["overlay_weight"] > 0,
-        "full_cagr_above_baseline": (
-            selected["full"]["cagr"] > baseline["full"]["cagr"]
-        ),
-        "full_sharpe_no_worse": (
-            selected["full"]["sharpe"] >= baseline["full"]["sharpe"]
-        ),
+        "full_cagr_above_baseline": (selected["full"]["cagr"] > baseline["full"]["cagr"]),
+        "full_sharpe_no_worse": (selected["full"]["sharpe"] >= baseline["full"]["sharpe"]),
         "sealed_test_cagr_no_worse": (
             selected["sealed_test"]["cagr"] >= baseline["sealed_test"]["cagr"]
         ),
-        "stress_drawdown_above_halt": (
-            selected["stress_full"]["max_drawdown"] > -0.60
-        ),
+        "stress_drawdown_above_halt": (selected["stress_full"]["max_drawdown"] > -0.60),
     }
     payload = {
         "schema_version": 1,
@@ -234,9 +224,7 @@ def main() -> None:
         },
         "provenance": {
             "script_sha256": _sha256(Path(__file__)),
-            "strategy_sha256": _sha256(
-                ROOT / "src" / "btcquant" / "strategies" / "trend_ls.py"
-            ),
+            "strategy_sha256": _sha256(ROOT / "src" / "btcquant" / "strategies" / "trend_ls.py"),
             "config_sha256": _sha256(CONFIG),
         },
         "baseline": baseline,

@@ -379,6 +379,40 @@ déployable et scénarios d'exécution hypothétiques.
 | Exécution carry testnet | Désactivée |
 | Utilisation en argent réel | Non validée |
 
+### Allocation 60/40 et apports paper
+
+Le capital paper vise 60 % pour trend et 40 % pour carry. Le timer mensuel
+compare les deux poches et ne les rééquilibre que si l'écart à la cible atteint
+3 %. Aucun transfert ni apport n'est appliqué pendant qu'une position trend ou
+carry est ouverte : cela évite de modifier artificiellement le poids et le PnL
+d'une position existante.
+
+Un apport demandé pendant une position n'est pas perdu. Chaque demande est
+enregistrée dans la table SQLite `capital_deposits` avec un identifiant unique,
+un montant et un statut. Réutiliser le même identifiant avec le même montant est
+sans effet ; le réutiliser avec un autre montant est refusé. L'application de
+l'apport, son passage de `PENDING` à `APPLIED`, les nouveaux états trend/carry
+et le journal des flux sont validés dans une seule transaction.
+
+Sur le VPS, le montant demandé à chaque échéance vient de
+`MONTHLY_DEPOSIT` dans `/opt/btcquant/.env`. Une valeur absente équivaut à zéro.
+Le wrapper utilise automatiquement l'identifiant `monthly:AAAA-MM`, ce qui
+empêche un redémarrage ou une relance manuelle de compter deux fois le même mois.
+Un second timer vérifie chaque jour à 04:30 UTC si des apports sont en attente.
+Lorsqu'il n'y en a aucun, les runners ne sont pas arrêtés. Le montant et le
+nombre de demandes en attente sont affichés sur la carte d'allocation du
+dashboard et exposés dans `/api/summary`, `/api/operations` et Prometheus.
+
+Le wrapper privilégié arrête les deux runners pendant l'opération et les
+redémarre même si le rééquilibrage échoue. Tout apport manuel doit également
+recevoir un identifiant stable. Exemple :
+
+```bash
+BTCQUANT_ROOT=/opt/btcquant/current \
+  /opt/btcquant/current/venv/bin/btcquant-rebalance \
+  --apply --deposit 100 --deposit-id manual:2026-08-01
+```
+
 ### Persistance et reprise
 
 `state/btcquant.db` est la source de vérité unique. Elle journalise les

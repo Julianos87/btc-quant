@@ -8,10 +8,10 @@
     "infrastructure_worth_testing": true
   },
   "provenance": {
-    "script_sha256": "80d507b549060fc03c09d45caae3d220b03480a0703591a85192f98cc48b817c",
+    "script_sha256": "7fdfd6eda1719a749f2b54268d28ffb1a17105d63f913277d964b8f34ea1a832",
     "config": {
       "path": "environments/paper/config.yaml",
-      "sha256": "51dea6b4a5680fe2954dcd109ee02762745842b60d7179f371cab16b75557bcc"
+      "sha256": "e7f210638451cf63633f5cc85db2e4ad5a27f89c4af4e5f166efa5faa7f6121f"
     },
     "data": [
       {

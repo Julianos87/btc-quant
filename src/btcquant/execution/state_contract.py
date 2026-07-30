@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from typing import Any, TypedDict, cast
 
@@ -62,6 +63,24 @@ def _mapping(payload: object, label: str) -> Mapping[str, Any]:
     return payload
 
 
+def _finite_number(value: object, label: str, *, positive: bool = False) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"État invalide : {label} absent ou non numérique")
+    number = float(value)
+    if not math.isfinite(number) or (positive and number <= 0):
+        qualifier = " strictement positif" if positive else " fini"
+        raise ValueError(f"État invalide : {label} doit être{qualifier}")
+    return number
+
+
+def _validate_optional_risk_baselines(raw: Mapping[str, Any], engine: str) -> None:
+    """Valide les baselines présentes tout en acceptant les anciens checkpoints."""
+
+    for key in ("peak_equity", "day_start_equity"):
+        if key in raw:
+            _finite_number(raw[key], f"{engine}.{key}", positive=True)
+
+
 def validate_trend_state(payload: object) -> TrendStatePayload:
     raw = _mapping(payload, "trend")
     slots = raw.get("slots")
@@ -69,8 +88,7 @@ def validate_trend_state(payload: object) -> TrendStatePayload:
         raise ValueError("État trend invalide : slots absent ou non objet")
     for name, value in slots.items():
         slot = _mapping(value, f"trend.{name}")
-        if not isinstance(slot.get("cash"), (int, float)):
-            raise ValueError(f"État trend invalide : {name}.cash absent ou non numérique")
+        _finite_number(slot.get("cash"), f"trend.{name}.cash")
         position = slot.get("position")
         if position is not None:
             pos = _mapping(position, f"trend.{name}.position")
@@ -86,13 +104,14 @@ def validate_trend_state(payload: object) -> TrendStatePayload:
             missing = sorted(required - pos.keys())
             if missing:
                 raise ValueError(f"État trend invalide : {name}.position incomplet {missing}")
+    _validate_optional_risk_baselines(raw, "trend")
     return cast(TrendStatePayload, payload)
 
 
 def validate_carry_state(payload: object) -> CarryStatePayload:
     raw = _mapping(payload, "carry")
-    if not isinstance(raw.get("equity"), (int, float)):
-        raise ValueError("État carry invalide : equity absente ou non numérique")
+    _finite_number(raw.get("equity"), "carry.equity")
     if not isinstance(raw.get("in_position"), bool):
         raise ValueError("État carry invalide : in_position absent ou non booléen")
+    _validate_optional_risk_baselines(raw, "carry")
     return cast(CarryStatePayload, payload)

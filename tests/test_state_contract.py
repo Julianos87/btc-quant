@@ -48,3 +48,32 @@ def test_carry_requires_equity_and_position_flag():
         validate_carry_state({"equity": 4_000.0})
     with pytest.raises(ValueError, match="equity"):
         validate_carry_state({"equity": "4000", "in_position": False})
+
+
+@pytest.mark.parametrize("invalid", [True, float("nan"), float("inf")])
+def test_engine_states_reject_non_finite_or_boolean_money(invalid):
+    with pytest.raises(ValueError, match="cash"):
+        validate_trend_state(
+            {
+                "slots": {
+                    "d20": {
+                        "cash": invalid,
+                        "position": None,
+                    }
+                }
+            }
+        )
+    with pytest.raises(ValueError, match="equity"):
+        validate_carry_state({"equity": invalid, "in_position": False})
+
+
+@pytest.mark.parametrize("key", ["peak_equity", "day_start_equity"])
+def test_present_risk_baselines_must_be_positive_and_finite(key):
+    with pytest.raises(ValueError, match=key):
+        validate_carry_state(
+            {
+                "equity": 4_000.0,
+                "in_position": False,
+                key: float("nan"),
+            }
+        )

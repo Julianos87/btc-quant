@@ -58,9 +58,7 @@ def _scaled_risk(base: RiskConfig, initial_capital: float, scale: float) -> Risk
             "initial_capital": initial_capital,
             "risk_per_trade": base.risk_per_trade * scale,
             "vol_target_annual": (
-                base.vol_target_annual * scale
-                if base.vol_target_annual is not None
-                else None
+                base.vol_target_annual * scale if base.vol_target_annual is not None else None
             ),
             "max_leverage": base.max_leverage * scale,
         }
@@ -220,17 +218,11 @@ def main() -> None:
     winners = {
         "risk_only": _winner(
             candidates,
-            lambda item: (
-                item["structure"] == "deployed"
-                and item["strong_trend_adx"] is None
-            ),
+            lambda item: item["structure"] == "deployed" and item["strong_trend_adx"] is None,
         ),
         "adaptive_trailing_only": _winner(
             candidates,
-            lambda item: (
-                item["structure"] == "deployed"
-                and item["risk_scale"] == 1.0
-            ),
+            lambda item: item["structure"] == "deployed" and item["risk_scale"] == 1.0,
         ),
         "fast_structure_only": _winner(
             candidates,
@@ -257,19 +249,14 @@ def main() -> None:
         "full_cagr_gain_at_least_5pp": (
             selected["full"]["cagr"] >= baseline["full"]["cagr"] + 0.05
         ),
-        "full_sharpe_no_worse": (
-            selected["full"]["sharpe"] >= baseline["full"]["sharpe"]
-        ),
+        "full_sharpe_no_worse": (selected["full"]["sharpe"] >= baseline["full"]["sharpe"]),
         "sealed_test_cagr_no_worse": (
             selected["sealed_test"]["cagr"] >= baseline["sealed_test"]["cagr"]
         ),
         "sealed_test_drawdown_no_worse": (
-            selected["sealed_test"]["max_drawdown"]
-            >= baseline["sealed_test"]["max_drawdown"]
+            selected["sealed_test"]["max_drawdown"] >= baseline["sealed_test"]["max_drawdown"]
         ),
-        "stress_drawdown_above_halt": (
-            selected["stress_full"]["max_drawdown"] > -0.60
-        ),
+        "stress_drawdown_above_halt": (selected["stress_full"]["max_drawdown"] > -0.60),
     }
     payload = {
         "schema_version": 1,
@@ -289,9 +276,7 @@ def main() -> None:
         },
         "provenance": {
             "script_sha256": _sha256(Path(__file__)),
-            "strategy_sha256": _sha256(
-                ROOT / "src" / "btcquant" / "strategies" / "trend_ls.py"
-            ),
+            "strategy_sha256": _sha256(ROOT / "src" / "btcquant" / "strategies" / "trend_ls.py"),
             "config_sha256": _sha256(CONFIG),
         },
         "baseline": baseline,

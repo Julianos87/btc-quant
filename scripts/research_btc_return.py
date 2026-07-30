@@ -64,10 +64,7 @@ def _sha256(path: Path) -> str:
 
 def _summary(equity: pd.Series) -> dict[str, float]:
     metrics = compute_metrics(equity, [], BPY)
-    return {
-        key: float(metrics[key])
-        for key in ("cagr", "sharpe", "max_drawdown", "total_return")
-    }
+    return {key: float(metrics[key]) for key in ("cagr", "sharpe", "max_drawdown", "total_return")}
 
 
 def _slice(equity: pd.Series, start: pd.Timestamp | None, end: pd.Timestamp | None) -> pd.Series:
@@ -100,15 +97,19 @@ def _atomic_curve(
         funding_short_min=-0.0008,
     )
     fee_rate = float(profile_cfg["costs"]["perp_fee_rate"])
-    return BacktestEngine(
-        risk=unit_risk,
-        funding_rate_8h=float(profile_cfg["costs"]["funding_rate_8h"]),
-        allow_short=True,
-        short_size_mult=short_mult,
-        execution_simulator=ExecutionSimulator(
-            execution_config_from_config(profile_cfg, fee_rate)
-        ),
-    ).run(strategy, frame).equity
+    return (
+        BacktestEngine(
+            risk=unit_risk,
+            funding_rate_8h=float(profile_cfg["costs"]["funding_rate_8h"]),
+            allow_short=True,
+            short_size_mult=short_mult,
+            execution_simulator=ExecutionSimulator(
+                execution_config_from_config(profile_cfg, fee_rate)
+            ),
+        )
+        .run(strategy, frame)
+        .equity
+    )
 
 
 def _combine(
@@ -285,8 +286,7 @@ def main() -> None:
 
     adoption_checks = {
         "full_cagr_above_baseline": winner["full"]["cagr"] > baseline["full"]["cagr"],
-        "full_sharpe_at_least_baseline": winner["full"]["sharpe"]
-        >= baseline["full"]["sharpe"],
+        "full_sharpe_at_least_baseline": winner["full"]["sharpe"] >= baseline["full"]["sharpe"],
         "full_drawdown_no_worse": winner["full"]["max_drawdown"]
         >= baseline["full"]["max_drawdown"],
         "sealed_test_cagr_above_baseline": winner["sealed_test"]["cagr"]

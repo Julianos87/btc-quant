@@ -115,8 +115,7 @@ def main() -> None:
     current = results["current"]["full"]
     maker = results["maker_proxy"]["full"]
     infrastructure_worth_testing = (
-        maker["cagr"] - current["cagr"] >= 0.02
-        and maker["sharpe"] - current["sharpe"] >= 0.03
+        maker["cagr"] - current["cagr"] >= 0.02 and maker["sharpe"] - current["sharpe"] >= 0.03
     )
     data_paths = (
         ROOT / "data" / "binance_BTC-USDT_1h.csv",

@@ -50,10 +50,7 @@ def _sha256(path: Path) -> str:
 
 
 def _metric_summary(metrics: dict) -> dict[str, float]:
-    return {
-        key: float(metrics[key])
-        for key in ("cagr", "sharpe", "max_drawdown", "total_return")
-    }
+    return {key: float(metrics[key]) for key in ("cagr", "sharpe", "max_drawdown", "total_return")}
 
 
 def _engine(sleeve_capital: float, short_mult: float = 1.0) -> BacktestEngine:
@@ -217,8 +214,7 @@ def main() -> None:
             )
 
     data_paths = [
-        ROOT / "data" / f"binance_{symbol.replace('/', '-')}_1h.csv"
-        for symbol in SYMBOLS
+        ROOT / "data" / f"binance_{symbol.replace('/', '-')}_1h.csv" for symbol in SYMBOLS
     ]
     payload = {
         "schema_version": 1,

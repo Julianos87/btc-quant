@@ -1,0 +1,9 @@
+[Unit]
+Description=btcquant - nouvelle tentative quotidienne des apports en attente
+
+[Timer]
+OnCalendar=*-*-* 04:30:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

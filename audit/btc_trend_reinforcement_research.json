@@ -18,7 +18,7 @@
     "limitation": "Surcouche indépendante: valide l'économie du renforcement avant d'implémenter des ajouts stateful dans les moteurs backtest/live."
   },
   "provenance": {
-    "script_sha256": "6549f89fa07fcc86588eaad69c5f0267da6ea8494ffde85336ec93eeb60a8c99",
+    "script_sha256": "72639cc5bcf16a8138d591b4728145bf428522293eec2e79ceaf2926f52f589a",
     "strategy_sha256": "780caba149b169e4077fe92ef6d8d85621389115d511f26a2230887bf977f4a9",
     "config_sha256": "65b91b4cedd973d06355b2e924dbc5eb0ea1a390a8d89ceb8d6cfc6bf2660931"
   },

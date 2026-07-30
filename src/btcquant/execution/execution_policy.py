@@ -159,9 +159,7 @@ def evaluate_execution_evidence(
         "post_only_fill_rate": (
             fill_rate is not None and fill_rate >= target.min_post_only_fill_rate
         ),
-        "fallback_rate": (
-            fallback_rate is not None and fallback_rate <= target.max_fallback_rate
-        ),
+        "fallback_rate": (fallback_rate is not None and fallback_rate <= target.max_fallback_rate),
         "p95_fill_seconds": (
             evidence.p95_fill_seconds is not None
             and evidence.p95_fill_seconds <= target.max_p95_fill_seconds

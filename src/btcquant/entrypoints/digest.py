@@ -22,9 +22,7 @@ from btcquant.reporting.repository import ReportingRepository
 ROOT = Path(os.environ.get("BTCQUANT_ROOT", Path.cwd())).resolve()
 STATE = ROOT / "state"
 repository = ReportingRepository(STATE)
-PORTFOLIO = portfolio_from_config(
-    load_config(ROOT / "environments" / "paper" / "config.yaml")
-)
+PORTFOLIO = portfolio_from_config(load_config(ROOT / "environments" / "paper" / "config.yaml"))
 
 
 def _repository() -> ReportingRepository:

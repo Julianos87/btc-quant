@@ -1,35 +1,35 @@
 {
   "schema_version": 1,
-  "generated_at_utc": "2026-07-28T20:02:52.980200+00:00",
+  "generated_at_utc": "2026-07-30T08:43:13.754209+00:00",
   "purpose": "Safety Baseline anti-régression; aucune promesse de performance",
   "provenance": {
-    "base_git_commit": "7c93cf4b5b34049c6624efdbce8a6bb1993713af",
-    "source_tree_sha256": "758774f01e846f637f1608a37876f0a6f0677759b4397bd549b8dfdffcbf09d2",
+    "base_git_commit": "83f12fb674330acd0d2c076a1cbe9c89a3799da9",
+    "source_tree_sha256": "21ef56da0a47c82f0abd49a9261f85bdcf5b6efb386d801b24b30b6e424f442d",
     "config": {
       "path": "environments\\paper\\config.yaml",
-      "sha256": "51dea6b4a5680fe2954dcd109ee02762745842b60d7179f371cab16b75557bcc"
+      "sha256": "e7f210638451cf63633f5cc85db2e4ad5a27f89c4af4e5f166efa5faa7f6121f"
     },
     "data": [
       {
         "path": "data/binance_BTC-USDT_1h.csv",
-        "bytes": 4813703,
-        "sha256": "14e3a38bfc99044b649085044a5a03c7a76ba7e9c2b108f69d0cb5044840268d"
+        "bytes": 4816785,
+        "sha256": "5dcf7a26d1034ca420526370bf5485ffb438aba2e7732854d80752edbdaa8a99"
       },
       {
         "path": "data/binanceusdm_BTCUSDT_USDT_funding.csv",
-        "bytes": 294987,
-        "sha256": "a5c3bfab9c3526a46cc3907d3a9a8f65b9368f14fb0ffccbacadd91717c54621"
+        "bytes": 295173,
+        "sha256": "d288b930976ab66294b15dec55df221308e24c643c2953adffdea051bdea14ae"
       }
     ],
-    "base_rows": 66312,
+    "base_rows": 66355,
     "base_span": [
       "2019-01-01T00:00:00+00:00",
-      "2026-07-28T11:00:00+00:00"
+      "2026-07-30T06:00:00+00:00"
     ],
-    "funding_rows": 7540,
+    "funding_rows": 7545,
     "funding_span": [
       "2019-09-10T08:00:00+00:00",
-      "2026-07-28T08:00:00+00:00"
+      "2026-07-30T00:00:00+00:00"
     ]
   },
   "results": {
@@ -40,7 +40,7 @@
         "capital_fraction": 0.3333,
         "trades": 192,
         "final_equity": 130823.01620428718,
-        "sharpe": 1.200207123782206,
+        "sharpe": 1.1997659945862225,
         "max_drawdown": -0.6010533215386071
       },
       "trend_ls_55": {
@@ -49,7 +49,7 @@
         "capital_fraction": 0.3333,
         "trades": 155,
         "final_equity": 74417.807978529,
-        "sharpe": 1.105185906774235,
+        "sharpe": 1.1047799449538016,
         "max_drawdown": -0.5485719988311755
       },
       "trend_ls_100": {
@@ -58,37 +58,37 @@
         "capital_fraction": 0.3334,
         "trades": 130,
         "final_equity": 89400.3290991735,
-        "sharpe": 1.1822521643821682,
+        "sharpe": 1.181817685162348,
         "max_drawdown": -0.4603032030413283
       }
     },
     "combined": {
       "trades": 477,
       "final_equity": 294641.1532819897,
-      "cagr": 0.6837238080005072,
-      "sharpe": 1.1825477450399053,
+      "cagr": 0.6831882762641224,
+      "sharpe": 1.1821131563645804,
       "max_drawdown": -0.557087610027692
     },
     "conformity": {
       "profile": "trend 4x — baseline reproductible",
       "n_trades": 477,
-      "trades_per_year": 63.849590764720254,
+      "trades_per_year": 63.810615309486025,
       "win_rate": 0.35639412997903563,
       "avg_win_pct": 0.09281900222558338,
       "avg_loss_pct": -0.03266647047480937,
       "worst_loss_streak": 21,
       "max_drawdown": -0.557087610027692,
       "dd_time_fraction": {
-        "5": 0.9306573802541545,
-        "10": 0.7862292277614858,
-        "15": 0.5486925708699902,
-        "20": 0.33357771260997066,
-        "25": 0.22653958944281524,
-        "30": 0.14986559139784947,
-        "35": 0.12781036168132942,
-        "40": 0.06512707722385142,
-        "45": 0.04612658846529814,
-        "50": 0.014907135874877811
+        "5": 0.9306997191354256,
+        "10": 0.7863597508853339,
+        "15": 0.5489681279765539,
+        "20": 0.33398461350592257,
+        "25": 0.22701184515813896,
+        "30": 0.1503846623519355,
+        "35": 0.12834289901086823,
+        "40": 0.06569788740994016,
+        "45": 0.04670899987788497,
+        "50": 0.015508609109781414
       },
       "monthly_return_p10": -0.1096024431989563,
       "monthly_return_p90": 0.34078257903748327,

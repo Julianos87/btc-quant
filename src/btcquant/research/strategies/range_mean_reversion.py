@@ -42,9 +42,8 @@ class RangeMeanReversion(Strategy):
         out["atr"] = atr(out, params["atr_period"])
         out["ema_fast"] = ema(out["close"], params["ema_fast"])
         out["ema_slow"] = ema(out["close"], params["ema_slow"])
-        out["ema_gap_atr"] = (
-            (out["ema_fast"] - out["ema_slow"]).abs()
-            / out["atr"].replace(0.0, float("nan"))
+        out["ema_gap_atr"] = (out["ema_fast"] - out["ema_slow"]).abs() / out["atr"].replace(
+            0.0, float("nan")
         )
         out["annual_vol"] = realized_vol(
             out["close"],
@@ -87,9 +86,7 @@ class RangeMeanReversion(Strategy):
             or row["annual_vol"] > self.params["max_annual_vol"]
         )
         return bool(
-            reverted
-            or regime_invalid
-            or position.bars_held >= self.params["max_bars_held"]
+            reverted or regime_invalid or position.bars_held >= self.params["max_bars_held"]
         )
 
     def warmup_bars(self) -> int:

@@ -156,7 +156,9 @@ def _check_btc_return_research(*, verify_local_data: bool) -> None:
         raise SystemExit(f"Recherche BTC orientée rendement absente : {path}")
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload["protocol"].get("sealed_test_used_for_selection") is not False:
-        raise SystemExit("Recherche BTC invalide : le test scellé ne doit pas servir à la sélection")
+        raise SystemExit(
+            "Recherche BTC invalide : le test scellé ne doit pas servir à la sélection"
+        )
     provenance = payload["provenance"]
     script = ROOT / "scripts" / "research_btc_return.py"
     _check_file(script, provenance["script_sha256"], "script recherche BTC")

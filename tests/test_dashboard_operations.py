@@ -43,6 +43,7 @@ def test_operations_endpoint_exposes_metrics_and_incidents(tmp_path, monkeypatch
         message="Incident visible",
         context={"order_id": order_id},
     )
+    store.register_deposit("monthly:2026-08", 250.0)
 
     response = dashboard_app.app.test_client().get(
         "/api/operations",
@@ -55,6 +56,58 @@ def test_operations_endpoint_exposes_metrics_and_incidents(tmp_path, monkeypatch
     assert payload["execution"]["trend"]["p95_slippage_bps"] == pytest.approx(5.0)
     assert payload["incidents"][0]["message"] == "Incident visible"
     assert payload["incidents"][0]["context"] == {"order_id": order_id}
+    assert payload["deposits"][0]["deposit_id"] == "monthly:2026-08"
+    assert payload["deposits"][0]["amount"] == pytest.approx(250.0)
+    assert payload["deposits"][0]["status"] == "PENDING"
+
+
+def test_summary_exposes_pending_deposit_amount(tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard_app, "STATE", tmp_path)
+    monkeypatch.setattr(dashboard_app, "_cached", lambda *_args: None)
+    store = StateStore(tmp_path / "btcquant.db")
+    store.save_engine_state(
+        "trend",
+        {
+            "slots": {
+                "trend_ls_20": {
+                    "cash": 6_000.0,
+                    "position": None,
+                }
+            },
+            "peak_equity": 6_000.0,
+            "day_start_equity": 6_000.0,
+        },
+    )
+    store.save_engine_state(
+        "carry",
+        {
+            "equity": 4_000.0,
+            "in_position": False,
+            "peak_equity": 4_000.0,
+            "day_start_equity": 4_000.0,
+        },
+    )
+    now = datetime.now(UTC).isoformat()
+    store.append_equity("trend", 6_000.0, now)
+    store.append_equity("carry", 4_000.0, now)
+    store.register_deposit("monthly:2026-08", 250.0)
+
+    response = dashboard_app.app.test_client().get(
+        "/api/summary",
+        environ_base={"REMOTE_ADDR": "127.0.0.1"},
+    )
+
+    assert response.status_code == 200
+    totals = response.get_json()["totals"]
+    assert totals["pending_deposits"] == pytest.approx(250.0)
+    assert totals["pending_deposit_count"] == 1
+    metrics = dashboard_app.app.test_client().get(
+        "/metrics/prometheus",
+        environ_base={"REMOTE_ADDR": "127.0.0.1"},
+    )
+    metrics_text = metrics.get_data(as_text=True)
+    assert "btcquant_pending_deposit_amount 250" in metrics_text
+    assert "btcquant_pending_deposit_count 1" in metrics_text
 
 
 def test_shadow_endpoint_and_prometheus_metrics(tmp_path, monkeypatch):
@@ -63,9 +116,7 @@ def test_shadow_endpoint_and_prometheus_metrics(tmp_path, monkeypatch):
     store = ShadowStore(tmp_path / "execution-shadow.db")
     collector = ShadowCollector(None, store)
     collector.observe(BookTop(started, bid=100.00, ask=100.01))
-    collector.observe(
-        BookTop(started + timedelta(seconds=31), bid=100.00, ask=100.01)
-    )
+    collector.observe(BookTop(started + timedelta(seconds=31), bid=100.00, ask=100.01))
 
     client = dashboard_app.app.test_client()
     response = client.get(

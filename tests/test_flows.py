@@ -18,6 +18,13 @@ from btcquant.execution.readiness import ReadinessPolicy, start_campaign
 from btcquant.entrypoints import digest, rebalance
 
 
+@pytest.fixture(autouse=True)
+def _disable_rebalance_notifications(monkeypatch):
+    """Les tests de calcul ne doivent jamais contacter Telegram."""
+
+    monkeypatch.setattr(rebalance, "notify", lambda _message: False)
+
+
 def _load_rebalance():
     return rebalance
 
@@ -29,10 +36,10 @@ def _write_states(
     *,
     trend_position: bool = False,
     carry_position: bool = False,
-    trend_peak: float | None = None,
-    trend_day_start: float | None = None,
-    carry_peak: float | None = None,
-    carry_day_start: float | None = None,
+    trend_peak: object | None = None,
+    trend_day_start: object | None = None,
+    carry_peak: object | None = None,
+    carry_day_start: object | None = None,
 ) -> None:
     state.mkdir(exist_ok=True)
     trend_equity = trend_cash * 3
@@ -86,7 +93,18 @@ def test_rebalance_deposit_logs_flow(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(reb, "STATE", tmp_path)
     _write_states(tmp_path)  # 6000/4000 : déjà à la cible, pas de rééquilibrage
 
-    monkeypatch.setattr(sys, "argv", ["rebalance.py", "--apply", "--deposit", "100"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "rebalance.py",
+            "--apply",
+            "--deposit",
+            "100",
+            "--deposit-id",
+            "test:flat-deposit",
+        ],
+    )
     reb.main()
 
     store = StateStore(tmp_path / "btcquant.db")
@@ -156,6 +174,7 @@ def test_rebalance_transfer_preserves_risk_ratios(tmp_path, monkeypatch):
     [
         (True, False, "trend"),
         (False, True, "carry"),
+        (True, True, "trend, carry"),
     ],
 )
 def test_rebalance_transfer_is_deferred_while_a_position_is_open(
@@ -187,6 +206,206 @@ def test_rebalance_transfer_is_deferred_while_a_position_is_open(
     assert carry["equity"] == pytest.approx(2800.0)
     assert store.read_flows() == []
     assert f"Position ouverte ({engine})" in capsys.readouterr().out
+
+
+def test_deposit_is_queued_without_resizing_an_open_carry_position(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    reb = _load_rebalance()
+    monkeypatch.setattr(reb, "STATE", tmp_path)
+    _write_states(tmp_path, carry_position=True)
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "rebalance.py",
+            "--apply",
+            "--deposit",
+            "100",
+            "--deposit-id",
+            "test:queued-deposit",
+        ],
+    )
+    reb.main()
+
+    store = StateStore(tmp_path / "btcquant.db")
+    trend = store.load_engine_state("trend")
+    carry = store.load_engine_state("carry")
+    assert trend is not None and carry is not None
+    assert sum(slot["cash"] for slot in trend["slots"].values()) == pytest.approx(6000.0)
+    assert carry["equity"] == pytest.approx(4000.0)
+    pending = store.read_deposits(status="PENDING")
+    assert len(pending) == 1
+    assert pending[0]["deposit_id"] == "test:queued-deposit"
+    assert pending[0]["amount"] == pytest.approx(100.0)
+    assert store.read_flows() == []
+    assert "Total des apports en attente" in capsys.readouterr().out
+
+
+def test_pending_deposit_is_applied_once_both_engines_are_flat(tmp_path, monkeypatch):
+    reb = _load_rebalance()
+    monkeypatch.setattr(reb, "STATE", tmp_path)
+    _write_states(tmp_path, carry_position=True)
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "rebalance.py",
+            "--apply",
+            "--deposit",
+            "100",
+            "--deposit-id",
+            "test:apply-later",
+        ],
+    )
+    reb.main()
+
+    store = StateStore(tmp_path / "btcquant.db")
+    carry = store.load_engine_state("carry")
+    assert carry is not None
+    carry["in_position"] = False
+    store.save_engine_state("carry", carry)
+
+    monkeypatch.setattr(sys, "argv", ["rebalance.py", "--apply"])
+    reb.main()
+
+    trend = store.load_engine_state("trend")
+    carry = store.load_engine_state("carry")
+    assert trend is not None and carry is not None
+    assert sum(slot["cash"] for slot in trend["slots"].values()) == pytest.approx(6060.0)
+    assert carry["equity"] == pytest.approx(4040.0)
+    assert store.read_deposits(status="PENDING") == []
+    deposits = store.read_deposits(status="APPLIED")
+    assert len(deposits) == 1
+    assert deposits[0]["deposit_id"] == "test:apply-later"
+    flows = store.read_flows()
+    assert len(flows) == 1
+    assert flows[0]["kind"] == "deposit"
+    assert flows[0]["trend_flow"] == pytest.approx(60.0)
+    assert flows[0]["carry_flow"] == pytest.approx(40.0)
+
+
+def test_duplicate_deposit_id_is_ignored_without_doubling_pending_amount(
+    tmp_path,
+    monkeypatch,
+):
+    reb = _load_rebalance()
+    monkeypatch.setattr(reb, "STATE", tmp_path)
+    _write_states(tmp_path, carry_position=True)
+    argv = [
+        "rebalance.py",
+        "--apply",
+        "--deposit",
+        "100",
+        "--deposit-id",
+        "monthly:2026-08",
+    ]
+
+    monkeypatch.setattr(sys, "argv", argv)
+    reb.main()
+    monkeypatch.setattr(sys, "argv", argv)
+    reb.main()
+
+    pending = StateStore(tmp_path / "btcquant.db").read_deposits(status="PENDING")
+    assert len(pending) == 1
+    assert pending[0]["amount"] == pytest.approx(100.0)
+
+
+def test_duplicate_applied_deposit_id_is_ignored_without_doubling_equity(
+    tmp_path,
+    monkeypatch,
+):
+    reb = _load_rebalance()
+    monkeypatch.setattr(reb, "STATE", tmp_path)
+    _write_states(tmp_path)
+    argv = [
+        "rebalance.py",
+        "--apply",
+        "--deposit",
+        "100",
+        "--deposit-id",
+        "monthly:2026-08",
+    ]
+
+    monkeypatch.setattr(sys, "argv", argv)
+    reb.main()
+    monkeypatch.setattr(sys, "argv", argv)
+    reb.main()
+
+    store = StateStore(tmp_path / "btcquant.db")
+    trend = store.load_engine_state("trend")
+    carry = store.load_engine_state("carry")
+    assert trend is not None and carry is not None
+    assert sum(slot["cash"] for slot in trend["slots"].values()) == pytest.approx(6060.0)
+    assert carry["equity"] == pytest.approx(4040.0)
+    assert store.read_deposits(status="PENDING") == []
+    assert len(store.read_deposits(status="APPLIED")) == 1
+    deposit_flows = [flow for flow in store.read_flows() if flow["kind"] == "deposit"]
+    assert len(deposit_flows) == 1
+
+
+def test_same_deposit_id_with_another_amount_is_rejected(tmp_path, monkeypatch):
+    reb = _load_rebalance()
+    monkeypatch.setattr(reb, "STATE", tmp_path)
+    _write_states(tmp_path, carry_position=True)
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "rebalance.py",
+            "--apply",
+            "--deposit",
+            "100",
+            "--deposit-id",
+            "monthly:2026-08",
+        ],
+    )
+    reb.main()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "rebalance.py",
+            "--apply",
+            "--deposit",
+            "200",
+            "--deposit-id",
+            "monthly:2026-08",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        reb.main()
+
+
+def test_pending_probe_distinguishes_empty_and_non_empty_queue(tmp_path, monkeypatch):
+    reb = _load_rebalance()
+    monkeypatch.setattr(reb, "STATE", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["rebalance.py", "--check-pending"])
+
+    with pytest.raises(SystemExit) as empty:
+        reb.main()
+    assert empty.value.code == 3
+
+    StateStore(tmp_path / "btcquant.db").register_deposit("monthly:2026-08", 100.0)
+    with pytest.raises(SystemExit) as pending:
+        reb.main()
+    assert pending.value.code == 0
+
+
+def test_rebalance_rejects_a_present_but_invalid_risk_baseline(tmp_path, monkeypatch):
+    reb = _load_rebalance()
+    monkeypatch.setattr(reb, "STATE", tmp_path)
+    _write_states(tmp_path, carry_peak="corrompu")
+
+    monkeypatch.setattr(sys, "argv", ["rebalance.py", "--apply"])
+    with pytest.raises(SystemExit, match="carry.peak_equity"):
+        reb.main()
 
 
 # ── côté dashboard ───────────────────────────────────────────────────────────

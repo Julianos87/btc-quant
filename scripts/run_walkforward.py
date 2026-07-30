@@ -13,6 +13,7 @@ c'est ce que mesure ce walk-forward.
 Usage :
     python scripts/run_walkforward.py trend_ls --config environments/paper/config.yaml --no-refresh
     python scripts/run_walkforward.py trend_ls --symbol ETH/USDT --no-refresh
+    python scripts/run_walkforward.py trend_ls --no-short --no-refresh
 """
 
 import argparse
@@ -121,6 +122,7 @@ def _write_reference(
     symbol: str,
     timeframe: str,
     market: str,
+    allow_short: bool,
     train_bars: int,
     test_bars: int,
     result,
@@ -174,6 +176,7 @@ def _write_reference(
             "symbol": symbol,
             "timeframe": timeframe,
             "market": market,
+            "allow_short": allow_short,
             "grid": GRIDS[args.strategy],
             "train_bars": train_bars,
             "test_bars": test_bars,
@@ -239,6 +242,12 @@ def main() -> None:
         help="écrit un artefact JSON reproductible avec résultats et provenance",
     )
     parser.add_argument("--no-refresh", action="store_true")
+    parser.add_argument(
+        "--no-short",
+        action="store_true",
+        help="mesure les mêmes règles en long seulement — les signaux short sont "
+        "ignorés au lieu d'ouvrir une position (comparaison long-only vs long-short)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.WARNING)
@@ -276,20 +285,22 @@ def main() -> None:
             log.warning("Funding réel indisponible (%s) : filtre neutre", error)
 
     fee_rate = cfg["costs"]["perp_fee_rate"] if is_perp else cfg["costs"]["fee_rate"]
+    # Le spot ne shorte jamais ; `--no-short` retire en plus le côté vendeur du
+    # perp, sans toucher aux règles d'entrée : c'est le même signal, non exécuté.
+    allow_short = is_perp and not args.no_short
     engine = BacktestEngine(
         risk=risk_from_config(cfg),
         funding_rate_8h=cfg["costs"].get("funding_rate_8h", 0.0) if is_perp else 0.0,
-        allow_short=is_perp,
+        allow_short=allow_short,
         execution_simulator=ExecutionSimulator(execution_config_from_config(cfg, fee_rate)),
     )
     train_bars, test_bars = WINDOWS[args.strategy]
     grid = GRIDS[args.strategy]
     configured_params = dict(spec.get("params") or {})
-    fixed_params = {
-        key: value for key, value in configured_params.items() if key not in grid
-    }
+    fixed_params = {key: value for key, value in configured_params.items() if key not in grid}
     print(
-        f"Walk-forward {args.strategy} sur {symbol} ({timeframe}, {market}) : "
+        f"Walk-forward {args.strategy} sur {symbol} ({timeframe}, {market}, "
+        f"{'long-short' if allow_short else 'LONG SEULEMENT'}) : "
         f"train {train_bars} barres, test {test_bars} barres\n"
         f"Grille : {grid}\n"
         f"Paramètres fixes : {fixed_params}\n"
@@ -334,6 +345,7 @@ def main() -> None:
             symbol=symbol,
             timeframe=timeframe,
             market=market,
+            allow_short=allow_short,
             train_bars=train_bars,
             test_bars=test_bars,
             result=result,

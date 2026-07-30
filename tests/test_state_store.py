@@ -93,6 +93,28 @@ def test_checkpoint_rolls_back_state_positions_and_event(tmp_path, monkeypatch):
     assert store.integrity_check()
 
 
+def test_applied_deposit_rolls_back_with_engine_states(tmp_path, monkeypatch):
+    store = StateStore(tmp_path / "btcquant.db")
+    store.register_deposit("monthly:2026-08", 100.0)
+
+    def fail_sync(*args, **kwargs):
+        raise RuntimeError("simulated crash")
+
+    monkeypatch.setattr(store, "_sync_positions", fail_sync)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        store.save_states_and_flows(
+            {"trend": _trend_state(1_060.0)},
+            [{"kind": "deposit", "trend_flow": 60.0, "carry_flow": 40.0}],
+            applied_deposit_ids=["monthly:2026-08"],
+        )
+
+    assert store.load_engine_state("trend") is None
+    assert store.read_flows() == []
+    pending = store.read_deposits(status="PENDING")
+    assert len(pending) == 1
+    assert pending[0]["deposit_id"] == "monthly:2026-08"
+
+
 def test_order_intent_survives_until_explicit_completion(tmp_path):
     store = StateStore(tmp_path / "btcquant.db")
     order_id = store.begin_order(
@@ -282,7 +304,8 @@ def test_schema_v1_is_migrated_with_execution_observability(tmp_path):
         ).fetchone()[0]
 
     assert "reference_price" in columns
-    assert version == "3"
+    assert version == "4"
+    assert store.read_deposits() == []
     assert store.read_incidents() == []
 
 

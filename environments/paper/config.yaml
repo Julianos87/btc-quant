@@ -4,7 +4,7 @@ environment: paper
 # Historique 2019-2026 (frais + slippage + funding inclus, filtres ADX/funding actifs).
 # Ces chiffres proviennent de audit/baseline_reference.json et sont vérifiés en CI
 # par scripts/check_reference_provenance.py — ne pas les éditer à la main :
-#   +68.4 %/an (+4 811 % total) | Sharpe 1.18 | MAX DRAWDOWN -55.7 % | 477 trades
+#   +68.3 %/an (+4 811 % total) | Sharpe 1.18 | MAX DRAWDOWN -55.7 % | 477 trades
 #   Années perdantes du trend seul : 2021 (-4,1 %), 2025 (-25,3 %),
 #   2026 en cours (-19,1 %). Source : dashboard/yearly_reference.json.
 #

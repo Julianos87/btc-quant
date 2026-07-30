@@ -243,9 +243,7 @@ class BacktestEngine:
         signal_row, fraction = pending
         requested_qty = position.initial_qty * fraction
         equity = state.cash + position.unrealized(open_price)
-        max_total_qty = (
-            equity * self.risk.max_position_pct * self.risk.max_leverage / open_price
-        )
+        max_total_qty = equity * self.risk.max_position_pct * self.risk.max_leverage / open_price
         requested_qty = min(requested_qty, max_total_qty - position.qty)
         if requested_qty <= 0:
             return

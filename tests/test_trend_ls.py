@@ -330,14 +330,20 @@ def test_strong_trend_loosens_only_the_trailing_stop():
     )
 
     assert strategy.initial_stop(pd.Series({"atr": 2.0}), 100.0, 1) == 94.0
-    assert strategy.trailing_stop(
-        pd.Series({"atr": 2.0, "adx": 35.0}),
-        position,
-    ) == 111.0
-    assert strategy.trailing_stop(
-        pd.Series({"atr": 2.0, "adx": 25.0}),
-        position,
-    ) == 114.0
+    assert (
+        strategy.trailing_stop(
+            pd.Series({"atr": 2.0, "adx": 35.0}),
+            position,
+        )
+        == 111.0
+    )
+    assert (
+        strategy.trailing_stop(
+            pd.Series({"atr": 2.0, "adx": 25.0}),
+            position,
+        )
+        == 114.0
+    )
 
 
 def test_strong_trend_parameters_must_be_enabled_together():

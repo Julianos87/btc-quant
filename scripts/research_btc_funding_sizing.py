@@ -91,12 +91,8 @@ def _candidate(
         "funding_sizing_floor": floor,
         "trades": trades,
         "development": _period(equity, None, DEVELOPMENT_END),
-        "validation": _period(
-            equity, DEVELOPMENT_END + pd.Timedelta(seconds=1), VALIDATION_END
-        ),
-        "sealed_test": _period(
-            equity, VALIDATION_END + pd.Timedelta(seconds=1), None
-        ),
+        "validation": _period(equity, DEVELOPMENT_END + pd.Timedelta(seconds=1), VALIDATION_END),
+        "sealed_test": _period(equity, VALIDATION_END + pd.Timedelta(seconds=1), None),
         "full": _summary(equity),
     }
 
@@ -159,8 +155,7 @@ def main() -> None:
     adoption_checks = {
         "continuous_sizing_selected": selected["funding_sizing_threshold"] is not None,
         "full_cagr_above_baseline": selected["full"]["cagr"] > baseline["full"]["cagr"],
-        "full_sharpe_above_baseline": selected["full"]["sharpe"]
-        > baseline["full"]["sharpe"],
+        "full_sharpe_above_baseline": selected["full"]["sharpe"] > baseline["full"]["sharpe"],
         "full_drawdown_no_worse": selected["full"]["max_drawdown"]
         >= baseline["full"]["max_drawdown"],
         "sealed_test_cagr_no_worse": selected["sealed_test"]["cagr"]

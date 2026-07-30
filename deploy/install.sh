@@ -57,7 +57,7 @@ systemctl daemon-reload
 systemctl enable --now btcquant-trend btcquant-carry btcquant-dashboard btcquant-shadow
 systemctl enable --now btcquant-digest.timer btcquant-weekly.timer \
   btcquant-watchdog.timer btcquant-backup.timer btcquant-rebalance.timer \
-  btcquant-compact.timer
+  btcquant-rebalance-pending.timer btcquant-compact.timer
 
 systemctl is-active --quiet btcquant-dashboard
 curl --fail --silent --show-error --max-time 10 \

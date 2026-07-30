@@ -11,10 +11,10 @@
     "adoption_requires_all_checks": true
   },
   "provenance": {
-    "script_sha256": "5e945d9bb9ad04967260a9a2bcac77bad99da4892a779ca8e8023d3504881553",
+    "script_sha256": "432633b1c8ff655b070ac5a330da05e4b30d70f1c9ef4ea675c3eaa2f4c34d6c",
     "config": {
       "path": "environments/paper/config.yaml",
-      "sha256": "51dea6b4a5680fe2954dcd109ee02762745842b60d7179f371cab16b75557bcc"
+      "sha256": "e7f210638451cf63633f5cc85db2e4ad5a27f89c4af4e5f166efa5faa7f6121f"
     },
     "data": [
       {

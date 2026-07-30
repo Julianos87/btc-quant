@@ -4,7 +4,7 @@
   "venue": "hyperliquid",
   "symbol": "BTC/USDC:USDC",
   "provenance": {
-    "script_sha256": "a7af9f0940c86a5ec263a08d79d92d74e2edf4bdb31af019c72c4be69953f825",
+    "script_sha256": "f49af531372095be9bcb36228e2b3f0af032bb094f72fdbed2e080cffc016ecc",
     "policy_sha256": "ec0cda009a86c155724ccd767356a777c5a6f9693281b0bfe82831cad3b01073"
   },
   "policy": {

@@ -10,14 +10,17 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import math
+import re
 import sqlite3
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+DEPOSIT_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}")
 
 
 def utc_now() -> str:
@@ -208,6 +211,16 @@ class StateStore:
                     carry_flow REAL NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS capital_deposits (
+                    deposit_id TEXT PRIMARY KEY,
+                    amount REAL NOT NULL CHECK(amount > 0),
+                    status TEXT NOT NULL CHECK(status IN ('PENDING', 'APPLIED')),
+                    requested_at TEXT NOT NULL,
+                    applied_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_capital_deposits_status
+                    ON capital_deposits(status, requested_at);
+
                 CREATE TABLE IF NOT EXISTS qualification_campaigns (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     protocol_version INTEGER NOT NULL,
@@ -262,6 +275,8 @@ class StateStore:
                     current_version = 2
                 if current_version < 3:
                     current_version = 3
+                if current_version < 4:
+                    current_version = 4
                 connection.execute(
                     "UPDATE metadata SET value = ? WHERE key = 'schema_version'",
                     (str(current_version),),
@@ -313,6 +328,84 @@ class StateStore:
                 "SELECT payload FROM engine_state WHERE engine = ?", (engine,)
             ).fetchone()
         return json.loads(row["payload"]) if row else None
+
+    @staticmethod
+    def _validate_deposit(deposit_id: str, amount: float) -> tuple[str, float]:
+        normalized_id = deposit_id.strip()
+        if not DEPOSIT_ID_PATTERN.fullmatch(normalized_id):
+            raise ValueError(
+                "Identifiant d'apport invalide : utiliser 1 à 128 lettres, chiffres, "
+                "points, deux-points, tirets ou underscores"
+            )
+        normalized_amount = float(amount)
+        if not math.isfinite(normalized_amount) or normalized_amount <= 0:
+            raise ValueError("Montant d'apport invalide : nombre fini strictement positif requis")
+        return normalized_id, normalized_amount
+
+    def register_deposit(self, deposit_id: str, amount: float) -> tuple[dict[str, Any], bool]:
+        """Enregistre une demande une seule fois et retourne ``(dépôt, créé)``."""
+
+        normalized_id, normalized_amount = self._validate_deposit(deposit_id, amount)
+        now = utc_now()
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM capital_deposits WHERE deposit_id = ?",
+                (normalized_id,),
+            ).fetchone()
+            if row is not None:
+                existing = dict(row)
+                if not math.isclose(
+                    float(existing["amount"]),
+                    normalized_amount,
+                    rel_tol=0.0,
+                    abs_tol=1e-9,
+                ):
+                    raise ValueError(
+                        f"L'apport {normalized_id!r} existe déjà avec un autre montant"
+                    )
+                return existing, False
+            connection.execute(
+                """
+                INSERT INTO capital_deposits(
+                    deposit_id, amount, status, requested_at, applied_at
+                ) VALUES(?, ?, 'PENDING', ?, NULL)
+                """,
+                (normalized_id, normalized_amount, now),
+            )
+            payload = {
+                "deposit_id": normalized_id,
+                "amount": normalized_amount,
+                "status": "PENDING",
+                "requested_at": now,
+                "applied_at": None,
+            }
+            self._insert_event(
+                connection,
+                "portfolio",
+                "capital_deposit_requested",
+                payload,
+                "deposit",
+                normalized_id,
+            )
+        return payload, True
+
+    def read_deposits(self, *, status: str | None = None) -> list[dict[str, Any]]:
+        if status not in (None, "PENDING", "APPLIED"):
+            raise ValueError(f"Statut d'apport invalide : {status!r}")
+        with self._connect() as connection:
+            if status is None:
+                rows = connection.execute(
+                    "SELECT * FROM capital_deposits ORDER BY requested_at, deposit_id"
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT * FROM capital_deposits
+                    WHERE status = ? ORDER BY requested_at, deposit_id
+                    """,
+                    (status,),
+                ).fetchall()
+        return [dict(row) for row in rows]
 
     def replay_engine_state(self, engine: str) -> dict[str, Any] | None:
         """Reconstruit le dernier checkpoint uniquement depuis le journal."""
@@ -511,8 +604,10 @@ class StateStore:
         self,
         states: dict[str, dict[str, Any]],
         flows: list[dict[str, Any]],
+        *,
+        applied_deposit_ids: Sequence[str] = (),
     ) -> None:
-        """Checkpoint de plusieurs moteurs et flux dans une seule transaction."""
+        """Checkpoint des moteurs, flux et apports appliqués atomiquement."""
 
         now = utc_now()
         with self._transaction() as connection:
@@ -552,6 +647,38 @@ class StateStore:
                     "portfolio",
                     "capital_flow",
                     flow,
+                )
+            for deposit_id in applied_deposit_ids:
+                row = connection.execute(
+                    """
+                    SELECT amount, status FROM capital_deposits
+                    WHERE deposit_id = ?
+                    """,
+                    (deposit_id,),
+                ).fetchone()
+                if row is None or row["status"] != "PENDING":
+                    raise RuntimeError(
+                        f"Apport {deposit_id!r} absent ou déjà appliqué pendant la transaction"
+                    )
+                connection.execute(
+                    """
+                    UPDATE capital_deposits
+                    SET status = 'APPLIED', applied_at = ?
+                    WHERE deposit_id = ?
+                    """,
+                    (now, deposit_id),
+                )
+                self._insert_event(
+                    connection,
+                    "portfolio",
+                    "capital_deposit_applied",
+                    {
+                        "deposit_id": deposit_id,
+                        "amount": float(row["amount"]),
+                        "applied_at": now,
+                    },
+                    "deposit",
+                    deposit_id,
                 )
 
     def _sync_positions(

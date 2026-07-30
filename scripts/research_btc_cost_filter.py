@@ -48,10 +48,7 @@ def _sha256(path: Path) -> str:
 
 def _summary(equity: pd.Series) -> dict[str, float]:
     metrics = compute_metrics(equity, [], BPY)
-    return {
-        key: float(metrics[key])
-        for key in ("cagr", "sharpe", "max_drawdown", "total_return")
-    }
+    return {key: float(metrics[key]) for key in ("cagr", "sharpe", "max_drawdown", "total_return")}
 
 
 def _period(equity: pd.Series, start: pd.Timestamp | None, end: pd.Timestamp | None):
@@ -179,8 +176,7 @@ def main() -> None:
     adoption_checks = {
         "non_zero_filter_selected": selected["threshold_bps"] > 0,
         "full_cagr_above_baseline": selected["full"]["cagr"] > baseline["full"]["cagr"],
-        "full_sharpe_above_baseline": selected["full"]["sharpe"]
-        > baseline["full"]["sharpe"],
+        "full_sharpe_above_baseline": selected["full"]["sharpe"] > baseline["full"]["sharpe"],
         "full_drawdown_no_worse": selected["full"]["max_drawdown"]
         >= baseline["full"]["max_drawdown"],
         "sealed_test_cagr_no_worse": selected["sealed_test"]["cagr"]

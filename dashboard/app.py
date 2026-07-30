@@ -121,6 +121,11 @@ def prometheus_metrics():
     database = STATE / "btcquant.db"
     if database.exists():
         store = StateStore(database, initialize=False)
+        pending_deposits = store.read_deposits(status="PENDING")
+        metrics["btcquant_pending_deposit_count"] = len(pending_deposits)
+        metrics["btcquant_pending_deposit_amount"] = sum(
+            float(item["amount"]) for item in pending_deposits
+        )
         for engine in ("trend", "carry"):
             health = execution_health(store, engine)
             prefix = f"btcquant_execution_{engine}"
@@ -149,16 +154,10 @@ def prometheus_metrics():
                 "btcquant_shadow_touch_proxy_rate": shadow["touch_proxy_rate"],
                 "btcquant_shadow_fallback_rate": shadow["fallback_rate"],
                 "btcquant_shadow_p95_touch_seconds": evidence["p95_fill_seconds"],
-                "btcquant_shadow_mean_all_in_cost_bps": evidence[
-                    "mean_all_in_cost_bps"
-                ],
-                "btcquant_shadow_p95_all_in_cost_bps": evidence[
-                    "p95_slippage_bps"
-                ],
+                "btcquant_shadow_mean_all_in_cost_bps": evidence["mean_all_in_cost_bps"],
+                "btcquant_shadow_p95_all_in_cost_bps": evidence["p95_slippage_bps"],
                 "btcquant_shadow_mean_markout_bps": shadow["mean_markout_bps"],
-                "btcquant_shadow_proxy_qualified": int(
-                    shadow["proxy_qualification"]["passed"]
-                ),
+                "btcquant_shadow_proxy_qualified": int(shadow["proxy_qualification"]["passed"]),
             }
         )
     return Response(
@@ -501,6 +500,10 @@ def summary():
     )
     total = trend_equity + carry_equity
     initial_total = INITIAL_CAPITAL
+    database = STATE / "btcquant.db"
+    store = StateStore(database, initialize=False) if database.exists() else None
+    pending_deposits = store.read_deposits(status="PENDING") if store is not None else []
+    pending_deposit_amount = sum(float(item["amount"]) for item in pending_deposits)
     flows = _read_flows()
     deposits = _deposits_total(flows)
     invested = initial_total + deposits  # capital réellement engagé
@@ -560,9 +563,7 @@ def summary():
     now_ts = pd.Timestamp.now(tz="UTC")
     next_bar = now_ts.floor("4h") + pd.Timedelta(hours=4)
     operational: dict = {"execution": {}, "open_incidents": []}
-    database = STATE / "btcquant.db"
-    if database.exists():
-        store = StateStore(database, initialize=False)
+    if store is not None:
         operational["execution"] = {
             engine: execution_health(store, engine).to_dict() for engine in ("trend", "carry")
         }
@@ -609,6 +610,8 @@ def summary():
                 "equity": total,
                 "initial": initial_total,
                 "deposits": deposits,
+                "pending_deposits": pending_deposit_amount,
+                "pending_deposit_count": len(pending_deposits),
                 "pnl": total - invested,
                 "pnl_pct": total / invested - 1.0 if invested > 0 else None,
                 "day_pnl_pct": day_pnl_pct,
@@ -631,7 +634,7 @@ def summary():
 def operations():
     database = STATE / "btcquant.db"
     if not database.exists():
-        return jsonify({"execution": {}, "incidents": []})
+        return jsonify({"execution": {}, "incidents": [], "deposits": []})
     store = StateStore(database, initialize=False)
     incidents = store.read_incidents()
     for incident in incidents:
@@ -642,6 +645,7 @@ def operations():
                 engine: execution_health(store, engine).to_dict() for engine in ("trend", "carry")
             },
             "incidents": incidents,
+            "deposits": store.read_deposits(),
         }
     )
 

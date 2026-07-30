@@ -15,10 +15,10 @@
     "sealed_test_used_for_selection": false
   },
   "provenance": {
-    "script_sha256": "46ca7c28ba140c1f821a19fd7d1dcf4698768857e5b690e0ba2e4c6778efa009",
+    "script_sha256": "e70cc5f4188a4aef4b6e8fed795dfc79126d083195bc2c9bcdf682d76c02299e",
     "config": {
       "path": "environments/paper/config.yaml",
-      "sha256": "51dea6b4a5680fe2954dcd109ee02762745842b60d7179f371cab16b75557bcc"
+      "sha256": "e7f210638451cf63633f5cc85db2e4ad5a27f89c4af4e5f166efa5faa7f6121f"
     },
     "data": [
       {

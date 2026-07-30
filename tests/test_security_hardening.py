@@ -98,6 +98,9 @@ def test_runtime_services_use_installed_entrypoints():
     assert "/venv/bin/btcquant-digest" in digest
     assert "/venv/bin/btcquant-digest --weekly" in weekly
     assert "/venv/bin/btcquant-rebalance" in rebalance
+    assert "--deposit-id" in rebalance
+    assert "monthly:$(date -u +%Y-%m)" in rebalance
+    assert "--check-pending" in rebalance
     assert "/venv/bin/btcquant-shadow " in shadow
     assert "EnvironmentFile=" not in shadow
     assert "HYPERLIQUID_PRIVATE_KEY" not in shadow
@@ -134,6 +137,15 @@ def test_update_has_atomic_activation_backup_healthcheck_and_rollback():
     assert 'sudo -u btcquant env BACKUP_ENCRYPTION_KEY="${BACKUP_ENCRYPTION_KEY}"' in script
     assert '"${CURRENT}/scripts/backup_state.sh"' in script
     assert "systemctl enable --now btcquant-compact.timer" in script
+    assert "configure_pending_rebalance_timer" in script
+    pending_timer = (ROOT / "deploy" / "btcquant-rebalance-pending.timer").read_text(
+        encoding="utf-8"
+    )
+    pending_service = (ROOT / "deploy" / "btcquant-rebalance-pending.service").read_text(
+        encoding="utf-8"
+    )
+    assert "OnCalendar=*-*-* 04:30:00 UTC" in pending_timer
+    assert "--pending-only" in pending_service
     assert 'mv -Tf "${ROOT}/.current-next" "${CURRENT}"' in script
     assert "rollback_on_error" in script
     assert "http://127.0.0.1:8666/healthz" in script

@@ -1,0 +1,12 @@
+[Unit]
+Description=btcquant - application des apports en attente
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/libexec/btcquant-rebalance --pending-only
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/btcquant/state

@@ -151,19 +151,14 @@ def main() -> None:
         "full_cagr_gain_at_least_10pp": (
             return_profile["full"]["cagr"] >= baseline["full"]["cagr"] + 0.10
         ),
-        "full_sharpe_no_worse": (
-            return_profile["full"]["sharpe"] >= baseline["full"]["sharpe"]
-        ),
+        "full_sharpe_no_worse": (return_profile["full"]["sharpe"] >= baseline["full"]["sharpe"]),
         "full_drawdown_degradation_at_most_1pp": (
-            return_profile["full"]["max_drawdown"]
-            >= baseline["full"]["max_drawdown"] - 0.01
+            return_profile["full"]["max_drawdown"] >= baseline["full"]["max_drawdown"] - 0.01
         ),
         "sealed_test_cagr_no_worse": (
             return_profile["sealed_test"]["cagr"] >= baseline["sealed_test"]["cagr"]
         ),
-        "stress_drawdown_above_halt": (
-            return_profile["stress_full"]["max_drawdown"] > -0.60
-        ),
+        "stress_drawdown_above_halt": (return_profile["stress_full"]["max_drawdown"] > -0.60),
     }
     payload = {
         "schema_version": 1,
@@ -184,12 +179,8 @@ def main() -> None:
         },
         "provenance": {
             "script_sha256": _sha256(Path(__file__)),
-            "engine_sha256": _sha256(
-                ROOT / "src" / "btcquant" / "backtest" / "engine.py"
-            ),
-            "strategy_sha256": _sha256(
-                ROOT / "src" / "btcquant" / "strategies" / "trend_ls.py"
-            ),
+            "engine_sha256": _sha256(ROOT / "src" / "btcquant" / "backtest" / "engine.py"),
+            "strategy_sha256": _sha256(ROOT / "src" / "btcquant" / "strategies" / "trend_ls.py"),
             "config_sha256": _sha256(CONFIG),
         },
         "baseline": baseline,

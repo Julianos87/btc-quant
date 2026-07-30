@@ -53,9 +53,7 @@ def _run_mean_reversion(cfg: dict, frame: pd.DataFrame, params: dict, profile: s
         risk=risk,
         funding_rate_8h=float(profile_cfg["costs"]["funding_rate_8h"]),
         allow_short=True,
-        execution_simulator=ExecutionSimulator(
-            execution_config_from_config(profile_cfg, fee_rate)
-        ),
+        execution_simulator=ExecutionSimulator(execution_config_from_config(profile_cfg, fee_rate)),
     ).run(RangeMeanReversion(**params), frame)
     return result.equity, len(result.trades)
 
@@ -66,12 +64,8 @@ def _candidate(equity: pd.Series, params: dict | None, weight: float, trades: in
         "mean_reversion_weight": weight,
         "trades": trades,
         "development": _period(equity, None, DEVELOPMENT_END),
-        "validation": _period(
-            equity, DEVELOPMENT_END + pd.Timedelta(seconds=1), VALIDATION_END
-        ),
-        "sealed_test": _period(
-            equity, VALIDATION_END + pd.Timedelta(seconds=1), None
-        ),
+        "validation": _period(equity, DEVELOPMENT_END + pd.Timedelta(seconds=1), VALIDATION_END),
+        "sealed_test": _period(equity, VALIDATION_END + pd.Timedelta(seconds=1), None),
         "full": _summary(equity),
     }
 
@@ -95,9 +89,7 @@ def _combine_equity(
 
     initial_capital = float(trend_equity.iloc[0])
     aligned_mean_reversion = (
-        mean_reversion_equity.reindex(trend_equity.index)
-        .ffill()
-        .fillna(initial_capital)
+        mean_reversion_equity.reindex(trend_equity.index).ffill().fillna(initial_capital)
     )
     return (1.0 - weight) * trend_equity + weight * aligned_mean_reversion
 
@@ -191,8 +183,7 @@ def main() -> None:
     adoption_checks = {
         "mean_reversion_selected": selected["mean_reversion_weight"] > 0,
         "full_cagr_above_baseline": selected["full"]["cagr"] > baseline["full"]["cagr"],
-        "full_sharpe_above_baseline": selected["full"]["sharpe"]
-        > baseline["full"]["sharpe"],
+        "full_sharpe_above_baseline": selected["full"]["sharpe"] > baseline["full"]["sharpe"],
         "full_drawdown_no_worse": selected["full"]["max_drawdown"]
         >= baseline["full"]["max_drawdown"],
         "sealed_test_cagr_no_worse": selected["sealed_test"]["cagr"]
@@ -231,7 +222,11 @@ def main() -> None:
             "strategy": {
                 "path": "src/btcquant/research/strategies/range_mean_reversion.py",
                 "sha256": _sha256(
-                    ROOT / "src" / "btcquant" / "research" / "strategies"
+                    ROOT
+                    / "src"
+                    / "btcquant"
+                    / "research"
+                    / "strategies"
                     / "range_mean_reversion.py"
                 ),
             },
