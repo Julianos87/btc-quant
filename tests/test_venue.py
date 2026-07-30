@@ -24,13 +24,16 @@ class _StubExchange:
     def __init__(self, funding_rate: float = 1.25e-5, price: float = 60_000.0):
         self.funding_rate = funding_rate
         self.price = price
+        self.now_ms = int(time.time() * 1000)
 
     def fetch_funding_rate_history(self, symbol, since=None, limit=None):
-        now = int(time.time() * 1000)
-        return [
-            {"fundingRate": self.funding_rate, "timestamp": now - i * 3_600_000}
+        rows = [
+            {"fundingRate": self.funding_rate, "timestamp": self.now_ms - i * 3_600_000}
             for i in range(5, 0, -1)
         ]
+        if since is not None:
+            rows = [row for row in rows if row["timestamp"] >= since]
+        return rows[:limit]
 
     def fetch_ohlcv(self, symbol, timeframe, since=None, limit=None):
         return [[int(time.time() * 1000), self.price, self.price, self.price, self.price, 1.0]]

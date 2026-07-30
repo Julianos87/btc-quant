@@ -110,7 +110,7 @@ def _check_published_figures(baseline: dict) -> None:
             )
 
 
-def _check_walkforward_reference(source_hash: str) -> None:
+def _check_walkforward_reference(source_hash: str, *, verify_local_data: bool) -> None:
     path = ROOT / "audit" / "walkforward_trend_ls_reference.json"
     if not path.exists():
         raise SystemExit(f"Référence walk-forward absente : {path}")
@@ -124,8 +124,9 @@ def _check_walkforward_reference(source_hash: str) -> None:
     _check_file(ROOT / script["path"], script["sha256"], "script walk-forward")
     config = provenance["config"]
     _check_file(ROOT / config["path"], config["sha256"], "config walk-forward")
-    for item in provenance["data"]:
-        _check_file(ROOT / item["path"], item["sha256"], "données walk-forward")
+    if verify_local_data:
+        for item in provenance["data"]:
+            _check_file(ROOT / item["path"], item["sha256"], "données walk-forward")
     methodology = payload.get("methodology", {})
     if "ensemble fixe déployé" not in methodology.get("does_not_validate", ""):
         raise SystemExit(
@@ -237,7 +238,7 @@ def main() -> None:
     if "conformity" not in baseline["results"]:
         raise SystemExit("Baseline incomplète : référence de conformité absente")
     _check_published_figures(baseline)
-    _check_walkforward_reference(source_hash)
+    _check_walkforward_reference(source_hash, verify_local_data=verify_local_data)
     _check_multiasset_reference(verify_local_data=verify_local_data)
     _check_btc_return_research(verify_local_data=verify_local_data)
     _check_btc_cost_filter_research(verify_local_data=verify_local_data)
