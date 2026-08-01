@@ -67,6 +67,8 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 AUTH_TOKEN = os.environ.get("DASHBOARD_TOKEN")
 COOKIE_NAME = "tandem_session"
 COOKIE_MAX_AGE = 12 * 3600
+ENGINE_MAX_AGE_SECONDS = {"trend": 600.0, "carry": 1200.0}
+SHADOW_MAX_AGE_SECONDS = 300.0
 authenticator = DashboardAuthenticator(
     lambda: AUTH_TOKEN,
     cookie_name=COOKIE_NAME,
@@ -82,7 +84,7 @@ def _reporting_unavailable(error: ReportingReadError):
 
 @app.before_request
 def _guard():
-    if request.path in ("/login", "/healthz"):
+    if request.path in ("/login", "/healthz", "/readyz"):
         return None
     if request.path == "/metrics/prometheus":
         if request.remote_addr not in ("127.0.0.1", "::1"):
@@ -104,6 +106,56 @@ def healthz():
     return jsonify({"status": "ok"})
 
 
+def _readiness_snapshot() -> tuple[dict, int]:
+    checks: dict[str, bool] = {}
+    details: dict[str, float | int | None] = {}
+    database = STATE / "btcquant.db"
+    checks["database"] = database.exists()
+    if database.exists():
+        try:
+            store = StateStore(database, initialize=False)
+            for engine, max_age in ENGINE_MAX_AGE_SECONDS.items():
+                age = store.engine_age_seconds(engine)
+                details[f"{engine}_age_seconds"] = age
+                checks[f"{engine}_fresh"] = age is not None and age <= max_age
+            incidents = store.read_incidents(open_only=True)
+            critical_count = sum(item["severity"] == "CRITICAL" for item in incidents)
+            details["open_incidents"] = len(incidents)
+            details["open_critical_incidents"] = critical_count
+            checks["no_critical_incident"] = critical_count == 0
+        except Exception:
+            app.logger.exception("Readiness database check failed")
+            checks["database"] = False
+
+    shadow_database = STATE / "execution-shadow.db"
+    checks["shadow_database"] = shadow_database.exists()
+    if shadow_database.exists():
+        try:
+            runtime = ShadowStore(shadow_database).runtime_health()
+            shadow_age = runtime["last_success_age_seconds"]
+            details["shadow_age_seconds"] = shadow_age
+            details["shadow_consecutive_failures"] = runtime["consecutive_failures"]
+            checks["shadow_fresh"] = shadow_age is not None and shadow_age <= SHADOW_MAX_AGE_SECONDS
+        except Exception:
+            app.logger.exception("Readiness shadow check failed")
+            checks["shadow_database"] = False
+
+    ready = bool(checks) and all(checks.values())
+    return {
+        "status": "ready" if ready else "not_ready",
+        "checks": checks,
+        "details": details,
+    }, (200 if ready else 503)
+
+
+@app.get("/readyz")
+def readyz():
+    """Readiness opérationnelle sans exposition de données de portefeuille."""
+
+    payload, status = _readiness_snapshot()
+    return jsonify(payload), status
+
+
 @app.get("/metrics/prometheus")
 def prometheus_metrics():
     """Métriques locales destinées au scraper Prometheus du serveur."""
@@ -121,6 +173,11 @@ def prometheus_metrics():
     database = STATE / "btcquant.db"
     if database.exists():
         store = StateStore(database, initialize=False)
+        incidents = store.read_incidents(open_only=True)
+        metrics["btcquant_open_incidents"] = len(incidents)
+        metrics["btcquant_open_critical_incidents"] = sum(
+            item["severity"] == "CRITICAL" for item in incidents
+        )
         pending_deposits = store.read_deposits(status="PENDING")
         metrics["btcquant_pending_deposit_count"] = len(pending_deposits)
         metrics["btcquant_pending_deposit_amount"] = sum(
@@ -146,6 +203,7 @@ def prometheus_metrics():
     if shadow_database.exists():
         shadow = ShadowStore(shadow_database).summary()
         evidence = shadow["evidence"]
+        runtime = shadow["runtime"]
         metrics.update(
             {
                 "btcquant_shadow_observation_days": evidence["observation_days"],
@@ -158,8 +216,14 @@ def prometheus_metrics():
                 "btcquant_shadow_p95_all_in_cost_bps": evidence["p95_slippage_bps"],
                 "btcquant_shadow_mean_markout_bps": shadow["mean_markout_bps"],
                 "btcquant_shadow_proxy_qualified": int(shadow["proxy_qualification"]["passed"]),
+                "btcquant_shadow_last_success_age_seconds": runtime["last_success_age_seconds"],
+                "btcquant_shadow_consecutive_failures": runtime["consecutive_failures"],
+                "btcquant_shadow_total_failures": runtime["total_failures"],
+                "btcquant_shadow_outage_age_seconds": runtime["outage_age_seconds"],
             }
         )
+    readiness, _status = _readiness_snapshot()
+    metrics["btcquant_ready"] = int(readiness["status"] == "ready")
     return Response(
         render_prometheus(metrics),
         content_type="text/plain; version=0.0.4; charset=utf-8",

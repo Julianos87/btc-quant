@@ -101,37 +101,37 @@ d’être rediscuté avant tout passage en réel**.
 
 ## Résultats historiques de référence
 
-Le fichier `dashboard/yearly_reference.json`, régénéré le 28 juillet 2026,
-rejoue le profil paper 60/40 sur la période du 10 septembre 2019 au
-26 juillet 2026 avec funding historique :
+Le fichier `dashboard/yearly_reference.json`, régénéré le 2 août 2026,
+rejoue le profil paper adaptatif 60/40 sur la période du 10 septembre 2019 au
+30 juillet 2026 avec funding historique :
 
 | Année | Portefeuille 60/40 | Trend | Carry | BTC |
 |---|---:|---:|---:|---:|
-| 2019, partielle | +33,4 % | +41,4 % | -1,1 % | -28,7 % |
-| 2020 | +208,3 % | +235,3 % | +41,3 % | +302,0 % |
-| 2021 | +3,0 % | -4,1 % | +107,2 % | +59,8 % |
-| 2022 | +0,1 % | +1,4 % | -8,3 % | -64,2 % |
-| 2023 | +244,6 % | +276,6 % | +3,7 % | +155,6 % |
-| 2024 | +60,5 % | +62,0 % | +17,8 % | +121,3 % |
-| 2025 | -24,8 % | -25,3 % | -6,4 % | -6,3 % |
-| 2026, partielle | -18,6 % | -19,1 % | -3,3 % | -27,6 % |
+| 2019, partielle | +21,6 % | +31,2 % | -1,1 % | -28,7 % |
+| 2020 | +118,8 % | +143,6 % | +41,3 % | +302,0 % |
+| 2021 | +17,2 % | +0,5 % | +107,2 % | +59,8 % |
+| 2022 | -4,7 % | -3,3 % | -8,3 % | -64,2 % |
+| 2023 | +186,0 % | +252,2 % | +3,7 % | +155,6 % |
+| 2024 | +38,3 % | +40,4 % | +17,8 % | +121,3 % |
+| 2025 | -19,3 % | -20,4 % | -6,4 % | -6,3 % |
+| 2026, partielle | -11,2 % | -12,1 % | -3,3 % | -27,0 % |
 
 La colonne carry intègre le coût de financement du levier x3 (voir plus bas).
 Une fois ce coût chiffré, **le carry devient négatif 4 années sur 8** — dont
 2025 et 2026, où les deux poches perdent simultanément. La corrélation annuelle
-trend/carry reste faible (+0,06), mais la diversification protège moins que ce
+trend/carry reste faible (-0,01), mais la diversification protège moins que ce
 que suggéraient les chiffres non financés.
 
 La référence du moteur trend à x4 indique également :
 
 | Indicateur trend | Valeur |
 |---|---:|
-| Trades | 477 |
-| Trades par an | 63,8 |
-| Win rate | 35,6 % |
-| Perte moyenne | -3,27 % |
-| Gain moyen | +9,28 % |
-| Drawdown maximal historique | -55,7 % |
+| Trades | 470 |
+| Trades par an | 64,3 |
+| Win rate | 35,3 % |
+| Perte moyenne | -3,25 % |
+| Gain moyen | +9,24 % |
+| Drawdown maximal historique | -50,9 % |
 | Plus longue série de pertes | 21 trades |
 
 Ces chiffres sont régénérés depuis les caches locaux et liés par hash au code,
@@ -292,8 +292,8 @@ convention : rendements de clôture journaliers, 365 périodes par an et
 comparables le backtest, le carry et le reporting live, indépendamment du
 timeframe d'exécution.
 
-Référence reproductible du profil x4 : **Sharpe 1,18**, 477 trades et drawdown
-maximal de -55,7 %. Elle intègre la convention journalière et le profil
+Référence reproductible du profil x4 adaptatif : **Sharpe 1,14**, 470 trades et
+drawdown maximal de -50,9 %. Elle intègre la convention journalière et le profil
 d'exécution normal dépendant de la volatilité et du volume.
 
 Chaque horizon peut désormais ajouter une seule tranche égale à 30 % de sa
@@ -516,6 +516,12 @@ release compatible. Son état est disponible via `/api/execution-shadow`,
 ```bash
 btcquant-shadow --database state/execution-shadow.db status
 ```
+
+Les erreurs réseau transitoires utilisent un backoff exponentiel plafonné sans
+arrêter le processus. La base conserve le dernier succès et les échecs
+consécutifs dans `runtime`. Le watchdog ouvre un incident si aucune lecture du
+carnet ne réussit pendant cinq minutes. `/readyz` regroupe cette fraîcheur avec
+celle des moteurs et l'absence d'incident critique.
 
 Une éventuelle qualification n'est évaluée qu'après au moins 30 jours et
 50 intentions. Même en cas de `passed: true`, elle valide seulement le proxy

@@ -165,6 +165,19 @@ def test_continuous_funding_sizing_is_neutral_when_disabled_or_missing():
     assert strategy.position_size_multiplier(_row(funding=np.nan), 1) == 1.0
 
 
+def test_adaptive_sizing_combines_with_funding_and_fails_small_when_missing():
+    strategy = TrendLS(
+        funding_sizing_threshold=0.001,
+        funding_sizing_floor=0.25,
+        adaptive_regime_enabled=True,
+        adaptive_min_multiplier=0.40,
+    )
+
+    row = _row(funding=0.0005, adaptive_risk_multiplier=0.80)
+    assert strategy.position_size_multiplier(row, 1) == pytest.approx(0.50)
+    assert strategy.position_size_multiplier(_row(funding=np.nan), 1) == pytest.approx(0.40)
+
+
 @pytest.mark.parametrize(
     ("params", "message"),
     [
@@ -297,6 +310,23 @@ def test_prepare_omits_adx_when_filter_disabled():
     assert "adx" not in out.columns
     out2 = TrendLS(adx_min=20).prepare(_ohlc())
     assert "adx" in out2.columns
+
+
+def test_prepare_adds_causal_adaptive_regime_columns_when_enabled():
+    strategy = TrendLS(
+        adx_min=None,
+        adaptive_regime_enabled=True,
+        adaptive_efficiency_bars=20,
+        adaptive_volatility_bars=20,
+        adaptive_reference_bars=120,
+        adaptive_smoothing_span=6,
+    )
+    out = strategy.prepare(_ohlc(500))
+
+    assert "adx" in out.columns
+    assert "adaptive_regime" in out.columns
+    assert "adaptive_risk_multiplier" in out.columns
+    assert out.iloc[strategy.warmup_bars() :]["adaptive_risk_multiplier"].notna().all()
 
 
 def test_indicators_are_valid_after_warmup():

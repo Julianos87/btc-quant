@@ -11,8 +11,15 @@ from pathlib import Path
 import pandas as pd
 
 from ..console import enable_utf8_output
-from ..execution.shadow import BookTop, ShadowCollector, ShadowConfig, ShadowStore
-from ..execution.venue import Venue
+from ..execution.resilience import CircuitOpen
+from ..execution.shadow import (
+    BookTop,
+    MarketDataUnavailable,
+    ShadowCollector,
+    ShadowConfig,
+    ShadowStore,
+)
+from ..execution.venue import NETWORK_ERRORS, Venue
 
 DEFAULT_DATABASE = Path("state/execution-shadow.db")
 log = logging.getLogger(__name__)
@@ -37,9 +44,12 @@ class HyperliquidPublicBook:
         return self._funding_rate_8h
 
     def top(self) -> BookTop:
-        book = self.venue.fetch_order_book(limit=20)
+        try:
+            book = self.venue.fetch_order_book(limit=20)
+        except NETWORK_ERRORS + (CircuitOpen,) as error:
+            raise MarketDataUnavailable(type(error).__name__) from error
         if not book.get("bids") or not book.get("asks"):
-            raise RuntimeError("Carnet Hyperliquid vide")
+            raise MarketDataUnavailable("empty Hyperliquid order book")
         bid, bid_qty = map(float, book["bids"][0][:2])
         ask, ask_qty = map(float, book["asks"][0][:2])
         observed_at = datetime.now(UTC)

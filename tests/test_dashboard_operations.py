@@ -131,4 +131,44 @@ def test_shadow_endpoint_and_prometheus_metrics(tmp_path, monkeypatch):
         environ_base={"REMOTE_ADDR": "127.0.0.1"},
     )
     assert metrics.status_code == 200
-    assert "btcquant_shadow_eligible_intents 2" in metrics.get_data(as_text=True)
+    metrics_text = metrics.get_data(as_text=True)
+    assert "btcquant_shadow_eligible_intents 2" in metrics_text
+    assert "btcquant_shadow_consecutive_failures 0" in metrics_text
+    assert "btcquant_shadow_last_success_age_seconds" in metrics_text
+
+
+def test_readyz_checks_engines_incidents_and_shadow_freshness(tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard_app, "STATE", tmp_path)
+    store = StateStore(tmp_path / "btcquant.db")
+    store.save_engine_state("trend", {"slots": {}})
+    store.save_engine_state("carry", {"equity": 4000.0})
+    ShadowStore(tmp_path / "execution-shadow.db").record_success(datetime.now(UTC))
+    client = dashboard_app.app.test_client()
+
+    response = client.get("/readyz")
+
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "ready"
+
+    store.record_incident(
+        "test:critical",
+        engine="trend",
+        severity="CRITICAL",
+        kind="test",
+        message="critical test incident",
+    )
+    response = client.get("/readyz")
+
+    assert response.status_code == 503
+    assert response.get_json()["checks"]["no_critical_incident"] is False
+
+
+def test_readyz_reports_missing_operational_state_without_business_data(tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard_app, "STATE", tmp_path)
+
+    response = dashboard_app.app.test_client().get("/readyz")
+
+    assert response.status_code == 503
+    payload = response.get_json()
+    assert payload["status"] == "not_ready"
+    assert payload["checks"] == {"database": False, "shadow_database": False}

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at_utc": "2026-07-30T08:46:51.602830+00:00",
+  "generated_at_utc": "2026-08-01T23:14:15.984608+00:00",
   "purpose": "Combinaison BTC des briques prometteuses",
   "protocol": {
     "candidate_count": 12,
@@ -12,10 +12,10 @@
   },
   "provenance": {
     "script_sha256": "100de12101447c698e655f749f823aa453a2b7d5cb3825c7cb7dd4bac8785759",
-    "source_tree_sha256": "21ef56da0a47c82f0abd49a9261f85bdcf5b6efb386d801b24b30b6e424f442d",
+    "source_tree_sha256": "7bba96709d3f982846b9a4c79fe25c81720767c032b7368d557c1ab70402b8ff",
     "config": {
       "path": "environments/paper/config.yaml",
-      "sha256": "e7f210638451cf63633f5cc85db2e4ad5a27f89c4af4e5f166efa5faa7f6121f"
+      "sha256": "de8905ef1ed866fe5bc43c6421bb2e1f866d7c290b982b8dc9330b006c925011"
     },
     "data": [
       {

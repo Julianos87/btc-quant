@@ -131,6 +131,14 @@ def test_long_running_services_have_restart_rate_limits():
         assert "StartLimitBurst=5" in service
 
 
+def test_watchdog_monitors_shadow_every_two_minutes():
+    service = (ROOT / "deploy" / "btcquant-watchdog.service").read_text(encoding="utf-8")
+    timer = (ROOT / "deploy" / "btcquant-watchdog.timer").read_text(encoding="utf-8")
+
+    assert "--shadow-database /opt/btcquant/state/execution-shadow.db" in service
+    assert "OnUnitActiveSec=2min" in timer
+
+
 def test_update_has_atomic_activation_backup_healthcheck_and_rollback():
     script = (ROOT / "deploy" / "update.sh").read_text(encoding="utf-8")
 

@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-08-01T22:15:00+00:00",
+  "purpose": "Analyse agrégée de la campagne shadow d'exécution BTC sur le VPS",
+  "scope": {
+    "venue": "hyperliquid",
+    "environment": "paper-vps",
+    "raw_database_exported": false,
+    "terminal_quotes": 11310,
+    "database_snapshot_sha256": "2ac130d317ce57d56ab97c169093020ba56ac61eea036aeb39317dfcc27160d3"
+  },
+  "methodology": {
+    "fill_definition": "market-through proxy; ne prouve ni fill réel ni priorité dans la file",
+    "stored_fee_assumptions_bps": {
+      "maker": 2.0,
+      "taker": 5.0
+    },
+    "current_base_fee_scenario_bps": {
+      "maker": 1.5,
+      "taker": 4.5
+    },
+    "qualification_thresholds": {
+      "minimum_observation_days": 30.0,
+      "minimum_eligible_intents": 50,
+      "minimum_post_only_fill_rate": 0.7,
+      "maximum_fallback_rate": 0.3,
+      "maximum_p95_fill_seconds": 30.0,
+      "maximum_mean_all_in_cost_bps": 7.5,
+      "maximum_p95_all_in_cost_bps": 5.0
+    }
+  },
+  "aggregate_results": {
+    "all": {
+      "count": 11310,
+      "mean_all_in_cost_bps_stored": 4.30062,
+      "median_all_in_cost_bps_stored": 5.07737,
+      "p95_all_in_cost_bps_stored": 9.14145,
+      "mean_markout_bps": -0.72343
+    },
+    "touched": {
+      "count": 5364,
+      "rate": 0.474270557,
+      "mean_all_in_cost_bps_stored": 1.91851,
+      "median_all_in_cost_bps_stored": 1.92183,
+      "p95_all_in_cost_bps_stored": 1.9229,
+      "mean_markout_bps": -1.43537,
+      "touch_seconds": {
+        "p50": 8.9339,
+        "p75": 15.8278,
+        "p95": 29.0524
+      }
+    },
+    "fallback": {
+      "count": 5946,
+      "rate": 0.525729443,
+      "mean_all_in_cost_bps_stored": 6.44956,
+      "median_all_in_cost_bps_stored": 5.39671,
+      "p95_all_in_cost_bps_stored": 10.76879,
+      "mean_markout_bps": -0.08117
+    },
+    "current_base_fee_scenario": {
+      "mean_all_in_cost_bps": 3.80062,
+      "p95_all_in_cost_bps": 8.64145
+    },
+    "cumulative_touch_rate_by_timeout": {
+      "5_seconds": 0.184,
+      "10_seconds": 0.2736,
+      "15_seconds": 0.3361,
+      "20_seconds": 0.3828,
+      "25_seconds": 0.4321,
+      "30_seconds": 0.4627
+    }
+  },
+  "qualification": {
+    "passed": false,
+    "checks": {
+      "observation_days": false,
+      "eligible_intents": true,
+      "post_only_fill_rate": false,
+      "fallback_rate": false,
+      "p95_fill_seconds": true,
+      "mean_all_in_cost_bps": true,
+      "p95_all_in_cost_bps": false
+    },
+    "decision": "NO_GO",
+    "reason": "Le fallback taker domine encore les intentions et la queue de coûts reste au-dessus du seuil."
+  },
+  "next_test": {
+    "production_change": false,
+    "proposal": "Comparer en shadow indépendant les timeouts 30, 45 et 60 secondes avant toute modification d'exécution réelle.",
+    "warning": "Les observations actuelles sont censurées à 30 secondes et ne permettent pas d'estimer un timeout plus long."
+  }
+}

@@ -7,7 +7,7 @@ User=btcquant
 WorkingDirectory=/opt/btcquant/current
 Environment=PYTHONIOENCODING=utf-8
 EnvironmentFile=-/opt/btcquant/.env
-ExecStart=/opt/btcquant/current/venv/bin/btcquant-watchdog
+ExecStart=/opt/btcquant/current/venv/bin/btcquant-watchdog --shadow-database /opt/btcquant/state/execution-shadow.db
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

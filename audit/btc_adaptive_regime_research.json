@@ -1,0 +1,306 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-08-01T23:09:21.904654+00:00",
+  "purpose": "Gouverneur causal et auto-calibre de risque BTC",
+  "protocol": {
+    "profiles": [
+      {
+        "name": "disabled",
+        "enabled": false,
+        "minimum_multiplier": 1.0,
+        "volatility_shock_ratio": 2.0
+      },
+      {
+        "name": "mild",
+        "enabled": true,
+        "minimum_multiplier": 0.75,
+        "volatility_shock_ratio": 2.5
+      },
+      {
+        "name": "balanced",
+        "enabled": true,
+        "minimum_multiplier": 0.5,
+        "volatility_shock_ratio": 2.0
+      },
+      {
+        "name": "defensive",
+        "enabled": true,
+        "minimum_multiplier": 0.25,
+        "volatility_shock_ratio": 1.5
+      }
+    ],
+    "common_warmup_bars": 620,
+    "development_end": "2022-12-31T23:59:59+00:00",
+    "validation_end": "2024-12-31T23:59:59+00:00",
+    "sealed_test_used_for_selection": false,
+    "risk_increase_above_current_profile_allowed": false
+  },
+  "provenance": {
+    "script_sha256": "bdb3fb4581685e4c3dc74e60412dd56efdaa9d0d5da58625361d96848444a117",
+    "source_tree_sha256": "7bba96709d3f982846b9a4c79fe25c81720767c032b7368d557c1ab70402b8ff",
+    "config": {
+      "path": "environments/paper/config.yaml",
+      "sha256": "de8905ef1ed866fe5bc43c6421bb2e1f866d7c290b982b8dc9330b006c925011"
+    },
+    "data": [
+      {
+        "path": "data/binance_BTC-USDT_1h.csv",
+        "sha256": "5dcf7a26d1034ca420526370bf5485ffb438aba2e7732854d80752edbdaa8a99"
+      },
+      {
+        "path": "data/binanceusdm_BTCUSDT_USDT_funding.csv",
+        "sha256": "d288b930976ab66294b15dec55df221308e24c643c2953adffdea051bdea14ae"
+      }
+    ]
+  },
+  "baseline": {
+    "profile": {
+      "name": "disabled",
+      "enabled": false,
+      "minimum_multiplier": 1.0,
+      "volatility_shock_ratio": 2.0
+    },
+    "trades": 465,
+    "development": {
+      "cagr": 0.7582112871306517,
+      "sharpe": 1.2666877198015158,
+      "max_drawdown": -0.4041162331888788,
+      "total_return": 7.147330059083227
+    },
+    "validation": {
+      "cagr": 1.468265200315765,
+      "sharpe": 1.90710163983516,
+      "max_drawdown": -0.3121870775166331,
+      "total_return": 5.107432650464749
+    },
+    "sealed_test": {
+      "cagr": -0.2804217066017567,
+      "sharpe": -0.5725181057330875,
+      "max_drawdown": -0.563888167343934,
+      "total_return": -0.40463441309164705
+    },
+    "full": {
+      "cagr": 0.5913498976571105,
+      "sharpe": 1.1224768441703137,
+      "max_drawdown": -0.563888167343934,
+      "total_return": 28.6524303095085
+    },
+    "selection_score": 0.8848800591108033,
+    "stress_full": {
+      "cagr": 0.5385406461742277,
+      "sharpe": 1.0592296360466615,
+      "max_drawdown": -0.5685742260290535,
+      "total_return": 22.180701297144676,
+      "trades": 461
+    },
+    "regime_diagnostics": {
+      "enabled": false
+    }
+  },
+  "selected": {
+    "profile": {
+      "name": "disabled",
+      "enabled": false,
+      "minimum_multiplier": 1.0,
+      "volatility_shock_ratio": 2.0
+    },
+    "trades": 465,
+    "development": {
+      "cagr": 0.7582112871306517,
+      "sharpe": 1.2666877198015158,
+      "max_drawdown": -0.4041162331888788,
+      "total_return": 7.147330059083227
+    },
+    "validation": {
+      "cagr": 1.468265200315765,
+      "sharpe": 1.90710163983516,
+      "max_drawdown": -0.3121870775166331,
+      "total_return": 5.107432650464749
+    },
+    "sealed_test": {
+      "cagr": -0.2804217066017567,
+      "sharpe": -0.5725181057330875,
+      "max_drawdown": -0.563888167343934,
+      "total_return": -0.40463441309164705
+    },
+    "full": {
+      "cagr": 0.5913498976571105,
+      "sharpe": 1.1224768441703137,
+      "max_drawdown": -0.563888167343934,
+      "total_return": 28.6524303095085
+    },
+    "selection_score": 0.8848800591108033,
+    "stress_full": {
+      "cagr": 0.5385406461742277,
+      "sharpe": 1.0592296360466615,
+      "max_drawdown": -0.5685742260290535,
+      "total_return": 22.180701297144676,
+      "trades": 461
+    },
+    "regime_diagnostics": {
+      "enabled": false
+    }
+  },
+  "adoption_checks": {
+    "adaptive_profile_selected": false,
+    "full_cagr_above_baseline": false,
+    "full_sharpe_no_worse": true,
+    "full_drawdown_no_worse": true,
+    "sealed_cagr_no_worse": true,
+    "sealed_drawdown_no_worse": true,
+    "stress_drawdown_above_halt": true
+  },
+  "adopted": false,
+  "configured_adaptive": true,
+  "operator_override": true,
+  "activation_status": "OPERATOR_OVERRIDE_PAPER",
+  "activation_warning": "Le profil equilibre a ete active explicitement par l'operateur malgre la preference pre-test pour le temoin.",
+  "candidates_ranked_pre_test": [
+    {
+      "profile": {
+        "name": "disabled",
+        "enabled": false,
+        "minimum_multiplier": 1.0,
+        "volatility_shock_ratio": 2.0
+      },
+      "trades": 465,
+      "development": {
+        "cagr": 0.7582112871306517,
+        "sharpe": 1.2666877198015158,
+        "max_drawdown": -0.4041162331888788,
+        "total_return": 7.147330059083227
+      },
+      "validation": {
+        "cagr": 1.468265200315765,
+        "sharpe": 1.90710163983516,
+        "max_drawdown": -0.3121870775166331,
+        "total_return": 5.107432650464749
+      },
+      "sealed_test": {
+        "cagr": -0.2804217066017567,
+        "sharpe": -0.5725181057330875,
+        "max_drawdown": -0.563888167343934,
+        "total_return": -0.40463441309164705
+      },
+      "full": {
+        "cagr": 0.5913498976571105,
+        "sharpe": 1.1224768441703137,
+        "max_drawdown": -0.563888167343934,
+        "total_return": 28.6524303095085
+      },
+      "selection_score": 0.8848800591108033,
+      "stress_full": {
+        "cagr": 0.5385406461742277,
+        "sharpe": 1.0592296360466615,
+        "max_drawdown": -0.5685742260290535,
+        "total_return": 22.180701297144676,
+        "trades": 461
+      },
+      "regime_diagnostics": {
+        "enabled": false
+      }
+    },
+    {
+      "profile": {
+        "name": "mild",
+        "enabled": true,
+        "minimum_multiplier": 0.75,
+        "volatility_shock_ratio": 2.5
+      },
+      "trades": 467,
+      "development": {
+        "cagr": 0.6493034153750232,
+        "sharpe": 1.2605627816553584,
+        "max_drawdown": -0.35834436935857483,
+        "total_return": 5.423660469872424
+      },
+      "validation": {
+        "cagr": 1.3566277277778775,
+        "sharpe": 1.9465227003821663,
+        "max_drawdown": -0.27505190788378553,
+        "total_return": 4.566752870691464
+      },
+      "sealed_test": {
+        "cagr": -0.2761169342584766,
+        "sharpe": -0.6852404320933294,
+        "max_drawdown": -0.5469355618582257,
+        "total_return": -0.3990122501723803
+      },
+      "full": {
+        "cagr": 0.522828758135752,
+        "sharpe": 1.1182729687873711,
+        "max_drawdown": -0.5469355618582257,
+        "total_return": 20.50810699234832
+      },
+      "selection_score": 0.7753596935405591
+    },
+    {
+      "profile": {
+        "name": "balanced",
+        "enabled": true,
+        "minimum_multiplier": 0.5,
+        "volatility_shock_ratio": 2.0
+      },
+      "trades": 470,
+      "development": {
+        "cagr": 0.5313839868792622,
+        "sharpe": 1.2416929929962284,
+        "max_drawdown": -0.30358750680953006,
+        "total_return": 3.8755395145610025
+      },
+      "validation": {
+        "cagr": 1.2207222486358527,
+        "sharpe": 1.9815379603235765,
+        "max_drawdown": -0.23102353771603823,
+        "total_return": 3.942398811961108
+      },
+      "sealed_test": {
+        "cagr": -0.20282642966445086,
+        "sharpe": -0.46898194886861994,
+        "max_drawdown": -0.5088459640981553,
+        "total_return": -0.3003720736556519
+      },
+      "full": {
+        "cagr": 0.4729686993771387,
+        "sharpe": 1.1397433638304393,
+        "max_drawdown": -0.5088459640981553,
+        "total_return": 15.870248367490394
+      },
+      "selection_score": 0.6555532861788851
+    },
+    {
+      "profile": {
+        "name": "defensive",
+        "enabled": true,
+        "minimum_multiplier": 0.25,
+        "volatility_shock_ratio": 1.5
+      },
+      "trades": 470,
+      "development": {
+        "cagr": 0.37898979030630797,
+        "sharpe": 1.1589956961049368,
+        "max_drawdown": -0.22789803373061257,
+        "total_return": 2.302155307096532
+      },
+      "validation": {
+        "cagr": 1.0850278593760767,
+        "sharpe": 2.041738782893302,
+        "max_drawdown": -0.16415179368703325,
+        "total_return": 3.356101630319036
+      },
+      "sealed_test": {
+        "cagr": -0.16302499925350367,
+        "sharpe": -0.4438065831853673,
+        "max_drawdown": -0.4585424108033267,
+        "total_return": -0.24454185713281162
+      },
+      "full": {
+        "cagr": 0.3868959507642933,
+        "sharpe": 1.125184736608235,
+        "max_drawdown": -0.4585424108033267,
+        "total_return": 9.872679425725844
+      },
+      "selection_score": 0.49488935991680166
+    }
+  ]
+}

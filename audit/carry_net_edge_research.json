@@ -1,0 +1,588 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-08-01T21:52:40.161981+00:00",
+  "purpose": "Signal carry net de l'emprunt et des couts de bascule",
+  "protocol": {
+    "development_end": "2022-12-31T23:59:59+00:00",
+    "validation_end": "2024-12-31T23:59:59+00:00",
+    "sealed_test_used_for_selection": false,
+    "expected_holding_days": [
+      90,
+      180
+    ],
+    "minimum_net_returns_ann": [
+      0.0,
+      0.03
+    ],
+    "exit_modes": [
+      "raw_zero",
+      "net_breakeven"
+    ],
+    "borrow_stress_rates": [
+      0.05,
+      0.1,
+      0.15,
+      0.2
+    ],
+    "limitation": "basis et taux d'emprunt historiques reels incomplets"
+  },
+  "provenance": {
+    "script_sha256": "086cc983b439599abea318ddefa0de32a52ec5f29bd77c3f1ca85ea4733c2d89",
+    "data": {
+      "path": "data/binanceusdm_BTCUSDT_USDT_funding.csv",
+      "sha256": "d288b930976ab66294b15dec55df221308e24c643c2953adffdea051bdea14ae"
+    }
+  },
+  "paper_policy": {
+    "capital": 4000.0,
+    "leverage": 3.0,
+    "enter_ann": 0.03,
+    "exit_ann": 0.0,
+    "smooth_days": 14,
+    "fee_rate": 0.0005,
+    "slippage_bps": 5.0,
+    "borrow_rate_ann": 0.1
+  },
+  "baseline": {
+    "label": "paper_baseline",
+    "rule": null,
+    "enter_ann": 0.03,
+    "exit_ann": 0.0,
+    "development": {
+      "cagr": 0.34286093278832164,
+      "sharpe": 6.527389602496228,
+      "max_drawdown": -0.08708188358411095,
+      "total_return": 1.654385346659152
+    },
+    "validation": {
+      "cagr": 0.10498154687633687,
+      "sharpe": 5.919424486234247,
+      "max_drawdown": -0.028139530128397316,
+      "total_return": 0.22131820758981813
+    },
+    "sealed_test": {
+      "cagr": -0.06142621870257403,
+      "sharpe": -4.902438899652684,
+      "max_drawdown": -0.09954739462379658,
+      "total_return": -0.09509458505453483
+    },
+    "full": {
+      "cagr": 0.169089095775514,
+      "sharpe": 4.589503020893192,
+      "max_drawdown": -0.09954739462379658,
+      "total_return": 1.9342554116577402
+    },
+    "exposure": 0.8791252485089464,
+    "cycles": 10,
+    "real_market_inputs_complete": false
+  },
+  "selected_pre_test": {
+    "label": "net_0%_hold_180d_raw_zero",
+    "rule": {
+      "expected_holding_days": 180,
+      "minimum_net_return_ann": 0.0,
+      "exit_mode": "raw_zero"
+    },
+    "enter_ann": 0.07477777777777778,
+    "exit_ann": 0.0,
+    "development": {
+      "cagr": 0.34757640517478405,
+      "sharpe": 6.638771694089069,
+      "max_drawdown": -0.07282219602713746,
+      "total_return": 1.6853761929785063
+    },
+    "validation": {
+      "cagr": 0.10097080157455607,
+      "sharpe": 5.559444502470665,
+      "max_drawdown": -0.028139530128395207,
+      "total_return": 0.21245619531320625
+    },
+    "sealed_test": {
+      "cagr": -0.03162367138679012,
+      "sharpe": -3.1176702233147644,
+      "max_drawdown": -0.054068458209790116,
+      "total_return": -0.049390751691977264
+    },
+    "full": {
+      "cagr": 0.1781983793716062,
+      "sharpe": 4.871324381615076,
+      "max_drawdown": -0.0930114513050283,
+      "total_return": 2.0954528177152447
+    },
+    "exposure": 0.7403578528827037,
+    "cycles": 9,
+    "real_market_inputs_complete": false,
+    "selection_score": 0.6569152518216226
+  },
+  "borrow_sensitivity": {
+    "5%": {
+      "label": "net_0%_hold_180d_raw_zero",
+      "rule": {
+        "expected_holding_days": 180,
+        "minimum_net_return_ann": 0.0,
+        "exit_mode": "raw_zero"
+      },
+      "enter_ann": 0.041444444444444443,
+      "exit_ann": 0.0,
+      "development": {
+        "cagr": 0.4649920721340377,
+        "sharpe": 8.39020460393578,
+        "max_drawdown": -0.03239281898455537,
+        "total_return": 2.541192229511187
+      },
+      "validation": {
+        "cagr": 0.2144396335387022,
+        "sharpe": 11.37265973635163,
+        "max_drawdown": -0.01605051804434554,
+        "total_return": 0.47564887516478427
+      },
+      "sealed_test": {
+        "cagr": 0.014165937140345308,
+        "sharpe": 1.0681026799369528,
+        "max_drawdown": -0.0207373023455939,
+        "total_return": 0.02242009646480847
+      },
+      "full": {
+        "cagr": 0.2753982722022521,
+        "sharpe": 7.082219157188644,
+        "max_drawdown": -0.03239281898455537,
+        "total_return": 4.34494383002394
+      },
+      "exposure": 0.8665341285619615,
+      "cycles": 10,
+      "real_market_inputs_complete": false,
+      "selection_score": 1.0534600939322802
+    },
+    "10%": {
+      "label": "net_0%_hold_180d_raw_zero",
+      "rule": {
+        "expected_holding_days": 180,
+        "minimum_net_return_ann": 0.0,
+        "exit_mode": "raw_zero"
+      },
+      "enter_ann": 0.07477777777777778,
+      "exit_ann": 0.0,
+      "development": {
+        "cagr": 0.34757640517478405,
+        "sharpe": 6.638771694089069,
+        "max_drawdown": -0.07282219602713746,
+        "total_return": 1.6853761929785063
+      },
+      "validation": {
+        "cagr": 0.10097080157455607,
+        "sharpe": 5.559444502470665,
+        "max_drawdown": -0.028139530128395207,
+        "total_return": 0.21245619531320625
+      },
+      "sealed_test": {
+        "cagr": -0.03162367138679012,
+        "sharpe": -3.1176702233147644,
+        "max_drawdown": -0.054068458209790116,
+        "total_return": -0.049390751691977264
+      },
+      "full": {
+        "cagr": 0.1781983793716062,
+        "sharpe": 4.871324381615076,
+        "max_drawdown": -0.0930114513050283,
+        "total_return": 2.0954528177152447
+      },
+      "exposure": 0.7403578528827037,
+      "cycles": 9,
+      "real_market_inputs_complete": false,
+      "selection_score": 0.6569152518216226
+    },
+    "15%": {
+      "label": "net_0%_hold_180d_raw_zero",
+      "rule": {
+        "expected_holding_days": 180,
+        "minimum_net_return_ann": 0.0,
+        "exit_mode": "raw_zero"
+      },
+      "enter_ann": 0.1081111111111111,
+      "exit_ann": 0.0,
+      "development": {
+        "cagr": 0.2801535140396303,
+        "sharpe": 5.7361944496135715,
+        "max_drawdown": -0.053308263952666635,
+        "total_return": 1.2656312513180463
+      },
+      "validation": {
+        "cagr": 0.006002429540572507,
+        "sharpe": 0.35661118588957075,
+        "max_drawdown": -0.09479994667726943,
+        "total_return": 0.012057481652252733
+      },
+      "sealed_test": {
+        "cagr": -0.06339371314741427,
+        "sharpe": -6.6717687271074855,
+        "max_drawdown": -0.09824710930359937,
+        "total_return": -0.09808280450974838
+      },
+      "full": {
+        "cagr": 0.11121673775534702,
+        "sharpe": 3.2567171503292376,
+        "max_drawdown": -0.1430545900497654,
+        "total_return": 1.068104010263578
+      },
+      "exposure": 0.6557985420808482,
+      "cycles": 7,
+      "real_market_inputs_complete": false,
+      "selection_score": 0.04166354812952958
+    },
+    "20%": {
+      "label": "net_0%_hold_180d_raw_zero",
+      "rule": {
+        "expected_holding_days": 180,
+        "minimum_net_return_ann": 0.0,
+        "exit_mode": "raw_zero"
+      },
+      "enter_ann": 0.14144444444444446,
+      "exit_ann": 0.0,
+      "development": {
+        "cagr": 0.20086734092743996,
+        "sharpe": 4.342119036679517,
+        "max_drawdown": -0.08833409199041775,
+        "total_return": 0.8333318742162763
+      },
+      "validation": {
+        "cagr": 0.004476984878182488,
+        "sharpe": 0.30338552064364893,
+        "max_drawdown": -0.07642225658830315,
+        "total_return": 0.008986361389488051
+      },
+      "sealed_test": {
+        "cagr": -0.057855892510534135,
+        "sharpe": -7.322732856137397,
+        "max_drawdown": -0.08966277188828498,
+        "total_return": -0.08966277188828498
+      },
+      "full": {
+        "cagr": 0.0785562290153663,
+        "sharpe": 2.43733636385537,
+        "max_drawdown": -0.16267327092921724,
+        "total_return": 0.6838380903046639
+      },
+      "exposure": 0.4636182902584493,
+      "cycles": 6,
+      "real_market_inputs_complete": false,
+      "selection_score": 0.03481553694254738
+    }
+  },
+  "adoption_checks": {
+    "full_cagr_above_baseline": true,
+    "full_sharpe_above_baseline": true,
+    "full_drawdown_no_worse": true,
+    "sealed_cagr_no_worse": true,
+    "sealed_drawdown_no_worse": true,
+    "positive_at_15pct_borrow": true,
+    "real_market_inputs_complete": false
+  },
+  "research_passed": true,
+  "adopted": false,
+  "candidates_ranked_pre_test": [
+    {
+      "label": "net_0%_hold_180d_raw_zero",
+      "rule": {
+        "expected_holding_days": 180,
+        "minimum_net_return_ann": 0.0,
+        "exit_mode": "raw_zero"
+      },
+      "enter_ann": 0.07477777777777778,
+      "exit_ann": 0.0,
+      "development": {
+        "cagr": 0.34757640517478405,
+        "sharpe": 6.638771694089069,
+        "max_drawdown": -0.07282219602713746,
+        "total_return": 1.6853761929785063
+      },
+      "validation": {
+        "cagr": 0.10097080157455607,
+        "sharpe": 5.559444502470665,
+        "max_drawdown": -0.028139530128395207,
+        "total_return": 0.21245619531320625
+      },
+      "sealed_test": {
+        "cagr": -0.03162367138679012,
+        "sharpe": -3.1176702233147644,
+        "max_drawdown": -0.054068458209790116,
+        "total_return": -0.049390751691977264
+      },
+      "full": {
+        "cagr": 0.1781983793716062,
+        "sharpe": 4.871324381615076,
+        "max_drawdown": -0.0930114513050283,
+        "total_return": 2.0954528177152447
+      },
+      "exposure": 0.7403578528827037,
+      "cycles": 9,
+      "real_market_inputs_complete": false,
+      "selection_score": 0.6569152518216226
+    },
+    {
+      "label": "net_0%_hold_90d_raw_zero",
+      "rule": {
+        "expected_holding_days": 90,
+        "minimum_net_return_ann": 0.0,
+        "exit_mode": "raw_zero"
+      },
+      "enter_ann": 0.08288888888888889,
+      "exit_ann": 0.0,
+      "development": {
+        "cagr": 0.35428356959143636,
+        "sharpe": 6.792179397140973,
+        "max_drawdown": -0.06608342267990897,
+        "total_return": 1.7298906176324906
+      },
+      "validation": {
+        "cagr": 0.10045485703310031,
+        "sharpe": 5.51897813047265,
+        "max_drawdown": -0.02813953012839754,
+        "total_return": 0.2113185268000517
+      },
+      "sealed_test": {
+        "cagr": -0.027486569960360363,
+        "sharpe": -3.0524110833835185,
+        "max_drawdown": -0.047451369107881614,
+        "total_return": -0.04298139190413952
+      },
+      "full": {
+        "cagr": 0.18200422395560056,
+        "sharpe": 5.0028834054905795,
+        "max_drawdown": -0.08663379699212526,
+        "total_return": 2.165009004703299
+      },
+      "exposure": 0.6948972829688536,
+      "cycles": 9,
+      "real_market_inputs_complete": false,
+      "selection_score": 0.6523526700803653
+    },
+    {
+      "label": "net_3%_hold_180d_raw_zero",
+      "rule": {
+        "expected_holding_days": 180,
+        "minimum_net_return_ann": 0.03,
+        "exit_mode": "raw_zero"
+      },
+      "enter_ann": 0.08477777777777777,
+      "exit_ann": 0.0,
+      "development": {
+        "cagr": 0.35428356959143636,
+        "sharpe": 6.792179397140973,
+        "max_drawdown": -0.06608342267990897,
+        "total_return": 1.7298906176324906
+      },
+      "validation": {
+        "cagr": 0.10032590868114655,
+        "sharpe": 5.518418643426359,
+        "max_drawdown": -0.02813953012839754,
+        "total_return": 0.21103427650683426
+      },
+      "sealed_test": {
+        "cagr": -0.027558966248014793,
+        "sharpe": -3.0453973364831493,
+        "max_drawdown": -0.047563139095667784,
+        "total_return": -0.043093686389343966
+      },
+      "full": {
+        "cagr": 0.18194383638039358,
+        "sharpe": 5.001304207683155,
+        "max_drawdown": -0.08663379699212526,
+        "total_return": 2.163895009576934
+      },
+      "exposure": 0.6944996686547382,
+      "cycles": 9,
+      "real_market_inputs_complete": false,
+      "selection_score": 0.6521677730237825
+    },
+    {
+      "label": "net_3%_hold_90d_raw_zero",
+      "rule": {
+        "expected_holding_days": 90,
+        "minimum_net_return_ann": 0.03,
+        "exit_mode": "raw_zero"
+      },
+      "enter_ann": 0.0928888888888889,
+      "exit_ann": 0.0,
+      "development": {
+        "cagr": 0.37068763210891564,
+        "sharpe": 7.2100871127374155,
+        "max_drawdown": -0.03359673800761109,
+        "total_return": 1.84092818424409
+      },
+      "validation": {
+        "cagr": 0.09955253581373302,
+        "sharpe": 5.476801059995684,
+        "max_drawdown": -0.028139530128398982,
+        "total_return": 0.20933017495673933
+      },
+      "sealed_test": {
+        "cagr": -0.02784849750907048,
+        "sharpe": -3.064378000780211,
+        "max_drawdown": -0.04801008791372541,
+        "total_return": -0.04354273258171226
+      },
+      "full": {
+        "cagr": 0.1884787379290247,
+        "sharpe": 5.247362594503689,
+        "max_drawdown": -0.04859804728587924,
+        "total_return": 2.2864095075792927
+      },
+      "exposure": 0.6685222001325382,
+      "cycles": 7,
+      "real_market_inputs_complete": false,
+      "selection_score": 0.6472326418133014
+    },
+    {
+      "label": "net_3%_hold_90d_net_breakeven",
+      "rule": {
+        "expected_holding_days": 90,
+        "minimum_net_return_ann": 0.03,
+        "exit_mode": "net_breakeven"
+      },
+      "enter_ann": 0.0928888888888889,
+      "exit_ann": 0.06666666666666667,
+      "development": {
+        "cagr": 0.3457673487053363,
+        "sharpe": 6.545464831503407,
+        "max_drawdown": -0.04277421693971717,
+        "total_return": 1.673457088878597
+      },
+      "validation": {
+        "cagr": 0.08832579408998509,
+        "sharpe": 4.105250869722945,
+        "max_drawdown": -0.03805043824972931,
+        "total_return": 0.1847277310053037
+      },
+      "sealed_test": {
+        "cagr": -0.006318181686322699,
+        "sharpe": -0.7458751051408182,
+        "max_drawdown": -0.014565224166461332,
+        "total_return": -0.009940923799114487
+      },
+      "full": {
+        "cagr": 0.1804367042977444,
+        "sharpe": 4.836468995315684,
+        "max_drawdown": -0.05463750361264652,
+        "total_return": 2.136200671473698
+      },
+      "exposure": 0.4197481776010603,
+      "cycles": 18,
+      "real_market_inputs_complete": false,
+      "selection_score": 0.4988508810622796
+    },
+    {
+      "label": "net_3%_hold_180d_net_breakeven",
+      "rule": {
+        "expected_holding_days": 180,
+        "minimum_net_return_ann": 0.03,
+        "exit_mode": "net_breakeven"
+      },
+      "enter_ann": 0.08477777777777777,
+      "exit_ann": 0.06666666666666667,
+      "development": {
+        "cagr": 0.3377551768237754,
+        "sharpe": 6.340369055681577,
+        "max_drawdown": -0.04515266221987213,
+        "total_return": 1.621111938999408
+      },
+      "validation": {
+        "cagr": 0.07607828147890006,
+        "sharpe": 3.2740488513980264,
+        "max_drawdown": -0.06189599901130982,
+        "total_return": 0.15817710550232889
+      },
+      "sealed_test": {
+        "cagr": -0.006022238153645443,
+        "sharpe": -0.7151950578592727,
+        "max_drawdown": -0.01410257335184606,
+        "total_return": -0.009476101926216951
+      },
+      "full": {
+        "cagr": 0.1732684154142068,
+        "sharpe": 4.573436076609528,
+        "max_drawdown": -0.09881998014491211,
+        "total_return": 2.0072979937216213
+      },
+      "exposure": 0.44758117958913185,
+      "cycles": 22,
+      "real_market_inputs_complete": false,
+      "selection_score": 0.4034831666187027
+    },
+    {
+      "label": "net_0%_hold_180d_net_breakeven",
+      "rule": {
+        "expected_holding_days": 180,
+        "minimum_net_return_ann": 0.0,
+        "exit_mode": "net_breakeven"
+      },
+      "enter_ann": 0.07477777777777778,
+      "exit_ann": 0.06666666666666667,
+      "development": {
+        "cagr": 0.32560512397217667,
+        "sharpe": 6.022808941086575,
+        "max_drawdown": -0.06488040187205057,
+        "total_return": 1.5431044434799883
+      },
+      "validation": {
+        "cagr": 0.07180611694769956,
+        "sharpe": 2.99101082933396,
+        "max_drawdown": -0.05967225207463123,
+        "total_return": 0.14898662389358996
+      },
+      "sealed_test": {
+        "cagr": -0.013380810356955042,
+        "sharpe": -1.237274873256468,
+        "max_drawdown": -0.025582707312127195,
+        "total_return": -0.021010108135571248
+      },
+      "full": {
+        "cagr": 0.16480359227287678,
+        "sharpe": 4.26284556182148,
+        "max_drawdown": -0.11513919239758086,
+        "total_return": 1.860937296227915
+      },
+      "exposure": 0.4738237243207422,
+      "cycles": 27,
+      "real_market_inputs_complete": false,
+      "selection_score": 0.37090719988109555
+    },
+    {
+      "label": "net_0%_hold_90d_net_breakeven",
+      "rule": {
+        "expected_holding_days": 90,
+        "minimum_net_return_ann": 0.0,
+        "exit_mode": "net_breakeven"
+      },
+      "enter_ann": 0.08288888888888889,
+      "exit_ann": 0.06666666666666667,
+      "development": {
+        "cagr": 0.3379448112833021,
+        "sharpe": 6.345328701980825,
+        "max_drawdown": -0.04515266221987291,
+        "total_return": 1.6223425222947259
+      },
+      "validation": {
+        "cagr": 0.06932780582522091,
+        "sharpe": 2.8977178256316973,
+        "max_drawdown": -0.0613838638215749,
+        "total_return": 0.14367196606094512
+      },
+      "sealed_test": {
+        "cagr": -0.005948238499711045,
+        "sharpe": -0.7106520157681333,
+        "max_drawdown": -0.013986876713192986,
+        "total_return": -0.009359862363748084
+      },
+      "full": {
+        "cagr": 0.17122408666732913,
+        "sharpe": 4.505353888505323,
+        "max_drawdown": -0.09832800270961017,
+        "total_return": 1.9713771233622888
+      },
+      "exposure": 0.45076209410205437,
+      "cycles": 23,
+      "real_market_inputs_complete": false,
+      "selection_score": 0.3590995883883907
+    }
+  ]
+}

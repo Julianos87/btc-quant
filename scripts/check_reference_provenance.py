@@ -49,7 +49,7 @@ def _check_file(path: Path, expected: str, label: str) -> None:
 PUBLISHED_FIGURES = [
     (
         "README.md",
-        r"Référence reproductible du profil x4 : \*\*Sharpe (\d+,\d+)\*\*",
+        r"Référence reproductible du profil x4(?: adaptatif)? : \*\*Sharpe (\d+,\d+)\*\*",
         ("combined", "sharpe"),
         lambda value: f"{value:.2f}".replace(".", ","),
     ),
@@ -187,6 +187,57 @@ def _check_btc_cost_filter_research(*, verify_local_data: bool) -> None:
             _check_file(ROOT / item["path"], item["sha256"], "données filtre de coûts")
 
 
+def _check_carry_net_edge_research(*, verify_local_data: bool) -> None:
+    path = ROOT / "audit" / "carry_net_edge_research.json"
+    if not path.exists():
+        raise SystemExit(f"Recherche carry nette absente : {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload["protocol"].get("sealed_test_used_for_selection") is not False:
+        raise SystemExit("Recherche carry nette invalide : test scelle utilise pour selection")
+    provenance = payload["provenance"]
+    _check_file(
+        ROOT / "scripts" / "research_carry_net_edge.py",
+        provenance["script_sha256"],
+        "script carry nette",
+    )
+    if verify_local_data:
+        data = provenance["data"]
+        _check_file(ROOT / data["path"], data["sha256"], "donnees carry nette")
+    real_inputs_complete = payload.get("adoption_checks", {}).get(
+        "real_market_inputs_complete", False
+    )
+    if payload.get("adopted") and not real_inputs_complete:
+        raise SystemExit(
+            "Recherche carry nette invalide : adoption sans emprunt et basis complets"
+        )
+
+
+def _check_adaptive_regime_research(
+    source_hash: str,
+    *,
+    verify_local_data: bool,
+) -> None:
+    path = ROOT / "audit" / "btc_adaptive_regime_research.json"
+    if not path.exists():
+        raise SystemExit(f"Recherche de regime adaptatif absente : {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload["protocol"].get("sealed_test_used_for_selection") is not False:
+        raise SystemExit("Recherche adaptative invalide : test scelle utilise pour selection")
+    provenance = payload["provenance"]
+    _check_file(
+        ROOT / "scripts" / "research_btc_adaptive_regime.py",
+        provenance["script_sha256"],
+        "script regime adaptatif",
+    )
+    if provenance.get("source_tree_sha256") != source_hash:
+        raise SystemExit("Recherche adaptative perimee : relancer le script de recherche")
+    config = provenance["config"]
+    _check_file(ROOT / config["path"], config["sha256"], "config regime adaptatif")
+    if verify_local_data:
+        for item in provenance["data"]:
+            _check_file(ROOT / item["path"], item["sha256"], "donnees regime adaptatif")
+
+
 def _check_btc_improvement_research(
     source_hash: str,
     *,
@@ -242,6 +293,11 @@ def main() -> None:
     _check_multiasset_reference(verify_local_data=verify_local_data)
     _check_btc_return_research(verify_local_data=verify_local_data)
     _check_btc_cost_filter_research(verify_local_data=verify_local_data)
+    _check_carry_net_edge_research(verify_local_data=verify_local_data)
+    _check_adaptive_regime_research(
+        source_hash,
+        verify_local_data=verify_local_data,
+    )
     _check_btc_improvement_research(
         source_hash,
         verify_local_data=verify_local_data,

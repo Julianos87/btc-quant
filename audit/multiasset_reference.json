@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at_utc": "2026-07-28T12:46:44.032805+00:00",
+  "generated_at_utc": "2026-08-01T22:18:21.009122+00:00",
   "purpose": "Validation hors BTC du même ensemble trend gelé",
   "method": {
     "symbols": [
@@ -29,8 +29,8 @@
     "data": [
       {
         "path": "data/binance_BTC-USDT_1h.csv",
-        "sha256": "14e3a38bfc99044b649085044a5a03c7a76ba7e9c2b108f69d0cb5044840268d",
-        "bytes": 4813703
+        "sha256": "5dcf7a26d1034ca420526370bf5485ffb438aba2e7732854d80752edbdaa8a99",
+        "bytes": 4816785
       },
       {
         "path": "data/binance_ETH-USDT_1h.csv",
@@ -46,8 +46,8 @@
   },
   "per_asset": {
     "BTC/USDT": {
-      "cagr": 0.08150870109414932,
-      "sharpe": 1.2790583434480682,
+      "cagr": 0.08145695987857682,
+      "sharpe": 1.278587982096783,
       "max_drawdown": -0.07932067942757237,
       "total_return": 0.7961368412760683
     },
@@ -66,19 +66,19 @@
   },
   "common_window": {
     "btc_only": {
-      "cagr": 0.05231277218841068,
-      "sharpe": 0.9697408025013478,
+      "cagr": 0.05227173135623642,
+      "sharpe": 0.9692947187735136,
       "max_drawdown": -0.07932067942757237,
       "total_return": 0.3555032170950425
     },
     "btc_eth_sol": {
-      "cagr": 0.03210591931946882,
-      "sharpe": 0.8358290759928322,
+      "cagr": 0.03208054551788697,
+      "sharpe": 0.8354383930413742,
       "max_drawdown": -0.04601018001727042,
       "total_return": 0.2036234577633509
     },
-    "sharpe_difference": -0.14272337504324428,
-    "bootstrap_p_value": 0.768,
+    "sharpe_difference": -0.14265633937008493,
+    "bootstrap_p_value": 0.7736666666666667,
     "return_correlations": {
       "BTC/USDT": {
         "BTC/USDT": 1.0,

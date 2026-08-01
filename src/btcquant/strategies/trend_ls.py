@@ -22,7 +22,8 @@ from __future__ import annotations
 
 import pandas as pd
 
-from ..indicators import adx, atr, donchian_high, donchian_low, ema
+from ..indicators import adx, atr, bars_per_year, donchian_high, donchian_low, ema
+from ..regime import AdaptiveRegimeConfig, adaptive_regime_frame
 from .base import Position, Strategy
 
 
@@ -55,6 +56,15 @@ class TrendLS(Strategy):
             raise ValueError("pyramid_add_fraction doit être dans ]0, 1]")
         if pyramid_adds < 0:
             raise ValueError("pyramid_max_adds doit être positif ou nul")
+        AdaptiveRegimeConfig(
+            efficiency_bars=int(self.params["adaptive_efficiency_bars"]),
+            volatility_bars=int(self.params["adaptive_volatility_bars"]),
+            reference_bars=int(self.params["adaptive_reference_bars"]),
+            smoothing_span=int(self.params["adaptive_smoothing_span"]),
+            minimum_multiplier=float(self.params["adaptive_min_multiplier"]),
+            maximum_multiplier=float(self.params["adaptive_max_multiplier"]),
+            volatility_shock_ratio=float(self.params["adaptive_volatility_shock_ratio"]),
+        )
 
     @staticmethod
     def default_params() -> dict:
@@ -96,6 +106,16 @@ class TrendLS(Strategy):
             "pyramid_atr_step": None,
             "pyramid_add_fraction": 0.30,
             "pyramid_max_adds": 1,
+            # Gouverneur causal de risque. Désactivé par défaut : recherche et
+            # validation forward sont requises avant son activation en paper.
+            "adaptive_regime_enabled": False,
+            "adaptive_efficiency_bars": 30,
+            "adaptive_volatility_bars": 30,
+            "adaptive_reference_bars": 540,
+            "adaptive_smoothing_span": 12,
+            "adaptive_min_multiplier": 0.50,
+            "adaptive_max_multiplier": 1.00,
+            "adaptive_volatility_shock_ratio": 2.00,
         }
 
     def prepare(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -107,8 +127,31 @@ class TrendLS(Strategy):
         out["donchian_low"] = donchian_low(out, p["donchian"])
         out["atr"] = atr(out, p["atr_period"])
         out["regime_up"] = out["ema_fast"] > out["ema_slow"]
-        if p["adx_min"] is not None or p["strong_trend_adx"] is not None:
+        if (
+            p["adx_min"] is not None
+            or p["strong_trend_adx"] is not None
+            or p["adaptive_regime_enabled"]
+        ):
             out["adx"] = adx(out, p["adx_period"])
+        if p["adaptive_regime_enabled"]:
+            out = out.join(
+                adaptive_regime_frame(
+                    out["close"],
+                    out["adx"],
+                    bars_per_year=bars_per_year(self.timeframe),
+                    config=AdaptiveRegimeConfig(
+                        efficiency_bars=int(p["adaptive_efficiency_bars"]),
+                        volatility_bars=int(p["adaptive_volatility_bars"]),
+                        reference_bars=int(p["adaptive_reference_bars"]),
+                        smoothing_span=int(p["adaptive_smoothing_span"]),
+                        minimum_multiplier=float(p["adaptive_min_multiplier"]),
+                        maximum_multiplier=float(p["adaptive_max_multiplier"]),
+                        volatility_shock_ratio=float(
+                            p["adaptive_volatility_shock_ratio"]
+                        ),
+                    ),
+                )
+            )
         return out
 
     def entry_signal(self, row: pd.Series) -> int:
@@ -144,16 +187,21 @@ class TrendLS(Strategy):
         return entry_price - direction * self.params["atr_mult"] * row["atr"]
 
     def position_size_multiplier(self, row: pd.Series, direction: int) -> float:
+        multiplier = 1.0
         threshold = self.params["funding_sizing_threshold"]
         funding = row.get("funding")
-        if threshold is None or funding is None or pd.isna(funding):
-            return 1.0
-        crowding = direction * float(funding)
-        if crowding <= 0:
-            return 1.0
-        floor = float(self.params["funding_sizing_floor"])
-        progress = min(1.0, crowding / float(threshold))
-        return max(floor, 1.0 - (1.0 - floor) * progress)
+        if threshold is not None and funding is not None and pd.notna(funding):
+            crowding = direction * float(funding)
+            if crowding > 0:
+                floor = float(self.params["funding_sizing_floor"])
+                progress = min(1.0, crowding / float(threshold))
+                multiplier *= max(floor, 1.0 - (1.0 - floor) * progress)
+        if self.params["adaptive_regime_enabled"]:
+            adaptive = row.get("adaptive_risk_multiplier")
+            if adaptive is None or pd.isna(adaptive):
+                adaptive = self.params["adaptive_min_multiplier"]
+            multiplier *= float(adaptive)
+        return max(0.0, min(1.0, multiplier))
 
     def trailing_stop(self, row: pd.Series, position: Position) -> float | None:
         if pd.isna(row["atr"]):
@@ -176,11 +224,28 @@ class TrendLS(Strategy):
         favorable_move = position.direction * (float(row["close"]) - position.last_add_price)
         if favorable_move < float(step) * float(row["atr"]):
             return 0.0
-        return float(self.params["pyramid_add_fraction"])
+        fraction = float(self.params["pyramid_add_fraction"])
+        if self.params["adaptive_regime_enabled"]:
+            adaptive = row.get("adaptive_risk_multiplier")
+            if adaptive is None or pd.isna(adaptive):
+                adaptive = self.params["adaptive_min_multiplier"]
+            fraction *= float(adaptive)
+        return fraction
 
     def exit_signal(self, row: pd.Series, position: Position) -> bool:
         # retournement de régime contre la position
         return bool(row["regime_up"]) != (position.direction == 1)
 
     def warmup_bars(self) -> int:
-        return max(self.params["ema_slow"], self.params["donchian"]) + 20
+        warmup = max(self.params["ema_slow"], self.params["donchian"]) + 20
+        if self.params["adaptive_regime_enabled"]:
+            adaptive = (
+                int(self.params["adaptive_reference_bars"])
+                + max(
+                    int(self.params["adaptive_efficiency_bars"]),
+                    int(self.params["adaptive_volatility_bars"]),
+                )
+                + int(self.params["adaptive_smoothing_span"])
+            )
+            warmup = max(warmup, adaptive)
+        return warmup

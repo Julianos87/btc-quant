@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
+from btcquant.execution.shadow import ShadowStore
 from btcquant.execution.state_store import StateStore
 from btcquant.entrypoints import watchdog
 
@@ -112,3 +115,40 @@ def test_watchdog_resolves_the_carry_alert_once_the_engine_writes(tmp_path, monk
 
     fingerprints = {item["fingerprint"] for item in store.read_incidents(open_only=True)}
     assert "engine:carry:stale" not in fingerprints
+
+
+def test_watchdog_alerts_once_for_stale_shadow_then_resolves(tmp_path, monkeypatch):
+    monkeypatch.setattr(watchdog, "STATE", tmp_path)
+    messages: list[str] = []
+    monkeypatch.setattr(watchdog, "notify", messages.append)
+    main_database = tmp_path / "btcquant.db"
+    store = StateStore(main_database)
+    store.save_engine_state("trend", {"slots": {}})
+    store.save_engine_state("carry", {"equity": 4000.0})
+    shadow_database = tmp_path / "execution-shadow.db"
+    shadow = ShadowStore(shadow_database)
+    shadow.record_success(datetime.now(UTC) - timedelta(minutes=10))
+
+    args = [
+        "--database",
+        str(main_database),
+        "--shadow-database",
+        str(shadow_database),
+    ]
+    watchdog.main(args)
+    watchdog.main(args)
+
+    assert len(messages) == 1
+    assert "shadow" in messages[0].lower()
+    assert any(
+        item["fingerprint"] == "shadow:market_data_stale"
+        for item in store.read_incidents(open_only=True)
+    )
+
+    shadow.record_success(datetime.now(UTC))
+    watchdog.main(args)
+
+    assert not any(
+        item["fingerprint"] == "shadow:market_data_stale"
+        for item in store.read_incidents(open_only=True)
+    )

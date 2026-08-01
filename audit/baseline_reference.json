@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generated_at_utc": "2026-07-30T09:05:18.547749+00:00",
+  "generated_at_utc": "2026-08-01T22:50:16.112813+00:00",
   "purpose": "Safety Baseline anti-régression; aucune promesse de performance",
   "provenance": {
-    "base_git_commit": "a69b98fc8d9c3c6f0e5c3edd2d2f79b039bdf3a3",
-    "source_tree_sha256": "21ef56da0a47c82f0abd49a9261f85bdcf5b6efb386d801b24b30b6e424f442d",
+    "base_git_commit": "f473573895010ba87e61873e5fe84d494c72a31b",
+    "source_tree_sha256": "7bba96709d3f982846b9a4c79fe25c81720767c032b7368d557c1ab70402b8ff",
     "config": {
       "path": "environments/paper/config.yaml",
-      "sha256": "e7f210638451cf63633f5cc85db2e4ad5a27f89c4af4e5f166efa5faa7f6121f"
+      "sha256": "de8905ef1ed866fe5bc43c6421bb2e1f866d7c290b982b8dc9330b006c925011"
     },
     "data": [
       {
@@ -39,60 +39,60 @@
         "market": "perp",
         "capital_fraction": 0.3333,
         "trades": 192,
-        "final_equity": 130823.01620428718,
-        "sharpe": 1.1997659945862225,
-        "max_drawdown": -0.6010533215386071
+        "final_equity": 50414.81676198921,
+        "sharpe": 1.2027369607227603,
+        "max_drawdown": -0.560180020435878
       },
       "trend_ls_55": {
         "timeframe": "4h",
         "market": "perp",
         "capital_fraction": 0.3333,
-        "trades": 155,
-        "final_equity": 74417.807978529,
-        "sharpe": 1.1047799449538016,
-        "max_drawdown": -0.5485719988311755
+        "trades": 151,
+        "final_equity": 23292.967238085803,
+        "sharpe": 1.0139219423145525,
+        "max_drawdown": -0.4798640251953966
       },
       "trend_ls_100": {
         "timeframe": "4h",
         "market": "perp",
         "capital_fraction": 0.3334,
-        "trades": 130,
-        "final_equity": 89400.3290991735,
-        "sharpe": 1.181817685162348,
-        "max_drawdown": -0.4603032030413283
+        "trades": 127,
+        "final_equity": 27513.706204867347,
+        "sharpe": 1.1039754811367677,
+        "max_drawdown": -0.4145489620486916
       }
     },
     "combined": {
-      "trades": 477,
-      "final_equity": 294641.1532819897,
-      "cagr": 0.6831882762641224,
-      "sharpe": 1.1821131563645804,
-      "max_drawdown": -0.557087610027692
+      "trades": 470,
+      "final_equity": 101221.49020494235,
+      "cagr": 0.471615852998831,
+      "sharpe": 1.1384579592223296,
+      "max_drawdown": -0.5088459640981553
     },
     "conformity": {
       "profile": "trend 4x — baseline reproductible",
-      "n_trades": 477,
-      "trades_per_year": 63.810615309486025,
-      "win_rate": 0.35639412997903563,
-      "avg_win_pct": 0.09281900222558338,
-      "avg_loss_pct": -0.03266647047480937,
+      "n_trades": 470,
+      "trades_per_year": 64.29895748798302,
+      "win_rate": 0.35319148936170214,
+      "avg_win_pct": 0.09237092860178836,
+      "avg_loss_pct": -0.032494965023320804,
       "worst_loss_streak": 21,
-      "max_drawdown": -0.557087610027692,
+      "max_drawdown": -0.5088459640981553,
       "dd_time_fraction": {
-        "5": 0.9306997191354256,
-        "10": 0.7863597508853339,
-        "15": 0.5489681279765539,
-        "20": 0.33398461350592257,
-        "25": 0.22701184515813896,
-        "30": 0.1503846623519355,
-        "35": 0.12834289901086823,
-        "40": 0.06569788740994016,
-        "45": 0.04670899987788497,
-        "50": 0.015508609109781414
+        "5": 0.9043456543456544,
+        "10": 0.6143231768231768,
+        "15": 0.3427197802197802,
+        "20": 0.19137112887112886,
+        "25": 0.14872627372627373,
+        "30": 0.10027472527472528,
+        "35": 0.057817182817182816,
+        "40": 0.019355644355644356,
+        "45": 0.010364635364635364,
+        "50": 0.003246753246753247
       },
-      "monthly_return_p10": -0.1096024431989563,
-      "monthly_return_p90": 0.34078257903748327,
-      "worst_month": -0.17974082347408893
+      "monthly_return_p10": -0.09492778246672247,
+      "monthly_return_p90": 0.23526407654941833,
+      "worst_month": -0.15394224862395778
     }
   }
 }

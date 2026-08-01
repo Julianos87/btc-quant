@@ -25,6 +25,7 @@ une copie anonymisée de `state/`.
 sudo bash deploy/install.sh
 systemctl is-active btcquant-dashboard btcquant-trend btcquant-carry
 curl --fail http://127.0.0.1:8666/healthz
+curl --fail http://127.0.0.1:8666/readyz
 sudo -u btcquant /opt/btcquant/current/venv/bin/python \
   /opt/btcquant/current/scripts/inspect_state.py
 ```
@@ -124,7 +125,12 @@ systemctl is-active btcquant-shadow
 journalctl -u btcquant-shadow --since today
 /opt/btcquant/current/venv/bin/btcquant-shadow \
   --database /opt/btcquant/state/execution-shadow.db status
+curl --fail http://127.0.0.1:8666/readyz
 ```
+
+Le collecteur absorbe les indisponibilités réseau temporaires avec un backoff
+plafonné. Le watchdog ouvre un incident si le heartbeat du carnet dépasse cinq
+minutes et le résout automatiquement à la reprise.
 
 Le statut `SHADOW_PROXY_ONLY` est intentionnel : le market-through ne connaît
 pas la position dans la file et ne constitue donc pas un fill réel. Conserver

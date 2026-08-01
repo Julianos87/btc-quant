@@ -9,6 +9,8 @@ proxy de fill : la position réelle dans la file est inconnue.
 from __future__ import annotations
 
 import json
+import logging
+import random
 import sqlite3
 import threading
 from dataclasses import asdict, dataclass
@@ -27,6 +29,11 @@ from .execution_policy import (
 from .quality_metrics import percentile
 
 Side = Literal["BUY", "SELL"]
+log = logging.getLogger(__name__)
+
+
+class MarketDataUnavailable(RuntimeError):
+    """Indisponibilité transitoire du carnet public."""
 
 
 def _utc_now() -> datetime:
@@ -115,6 +122,72 @@ class ShadowStore:
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS shadow_quotes_outcome ON shadow_quotes(outcome)"
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS shadow_runtime(
+                    id INTEGER PRIMARY KEY CHECK(id = 1),
+                    last_attempt_at TEXT,
+                    last_success_at TEXT,
+                    last_failure_at TEXT,
+                    outage_started_at TEXT,
+                    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                    total_failures INTEGER NOT NULL DEFAULT 0,
+                    last_error_type TEXT
+                )
+                """
+            )
+            connection.execute("INSERT OR IGNORE INTO shadow_runtime(id) VALUES(1)")
+
+    def record_success(self, observed_at: datetime) -> None:
+        timestamp = _iso(observed_at)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE shadow_runtime
+                SET last_attempt_at=?, last_success_at=?, outage_started_at=NULL,
+                    consecutive_failures=0, last_error_type=NULL
+                WHERE id=1
+                """,
+                (timestamp, timestamp),
+            )
+
+    def record_failure(self, error: BaseException, observed_at: datetime | None = None) -> None:
+        timestamp = _iso(observed_at or _utc_now())
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE shadow_runtime
+                SET last_attempt_at=?, last_failure_at=?,
+                    outage_started_at=COALESCE(outage_started_at, ?),
+                    consecutive_failures=consecutive_failures + 1,
+                    total_failures=total_failures + 1,
+                    last_error_type=?
+                WHERE id=1
+                """,
+                (timestamp, timestamp, timestamp, type(error).__name__),
+            )
+
+    def runtime_health(self, *, now: datetime | None = None) -> dict:
+        current = now or _utc_now()
+        with self._connect() as connection:
+            row = connection.execute("SELECT * FROM shadow_runtime WHERE id=1").fetchone()
+        if row is None:
+            raise RuntimeError("état runtime shadow absent")
+        payload = dict(row)
+        last_success = (
+            _parse(str(payload["last_success_at"])) if payload["last_success_at"] else None
+        )
+        outage_started = (
+            _parse(str(payload["outage_started_at"])) if payload["outage_started_at"] else None
+        )
+        payload.pop("id", None)
+        payload["last_success_age_seconds"] = (
+            max(0.0, (current - last_success).total_seconds()) if last_success else None
+        )
+        payload["outage_age_seconds"] = (
+            max(0.0, (current - outage_started).total_seconds()) if outage_started else None
+        )
+        return payload
 
     def begin_pair(self, book: BookTop, timeout_seconds: float) -> None:
         expires_at = book.observed_at.timestamp() + timeout_seconds
@@ -245,6 +318,7 @@ class ShadowStore:
             "touch_proxy_rate": len(touches) / len(terminal) if terminal else None,
             "fallback_rate": len(fallbacks) / len(terminal) if terminal else None,
             "mean_markout_bps": mean(markouts) if markouts else None,
+            "runtime": self.runtime_health(),
             "evidence": asdict(evidence),
             "proxy_qualification": evaluate_execution_evidence(
                 evidence,
@@ -264,11 +338,22 @@ class ShadowConfig:
     maker_fee_bps: float = 2.0
     taker_fee_bps: float = 5.0
     notional: float = 1_000.0
+    outage_backoff_base_seconds: float = 5.0
+    outage_backoff_max_seconds: float = 300.0
+    outage_jitter_ratio: float = 0.20
+    heartbeat_interval_seconds: float = 30.0
 
     def __post_init__(self) -> None:
-        for name, value in asdict(self).items():
+        values = asdict(self)
+        for name, value in values.items():
+            if name == "outage_jitter_ratio":
+                continue
             if value <= 0:
                 raise ValueError(f"{name} doit être strictement positif")
+        if not 0 <= self.outage_jitter_ratio <= 1:
+            raise ValueError("outage_jitter_ratio doit être compris entre 0 et 1")
+        if self.outage_backoff_max_seconds < self.outage_backoff_base_seconds:
+            raise ValueError("le backoff maximum doit être >= au backoff de base")
         if self.quote_interval_seconds < self.maker_timeout_seconds:
             raise ValueError("quote_interval_seconds doit être >= maker_timeout_seconds")
 
@@ -288,6 +373,15 @@ class ShadowCollector:
             maker_timeout_seconds=self.config.maker_timeout_seconds
         )
         self._last_pair_at: datetime | None = None
+        self._last_heartbeat_at: datetime | None = None
+
+    def _record_success(self, observed_at: datetime, *, force: bool = False) -> None:
+        if not force and self._last_heartbeat_at is not None:
+            elapsed = (observed_at - self._last_heartbeat_at).total_seconds()
+            if elapsed < self.config.heartbeat_interval_seconds:
+                return
+        self.store.record_success(observed_at)
+        self._last_heartbeat_at = observed_at
 
     @staticmethod
     def _market_through(quote: dict, book: BookTop) -> bool:
@@ -296,6 +390,7 @@ class ShadowCollector:
         return book.bid >= float(quote["limit_price"])
 
     def observe(self, book: BookTop) -> None:
+        self._record_success(book.observed_at)
         for quote in self.store.pending():
             if quote["touched_at"] is None and self._market_through(quote, book):
                 self.store.mark_touched(int(quote["id"]), book.observed_at)
@@ -345,6 +440,34 @@ class ShadowCollector:
 
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
         stopped = stop_event or threading.Event()
+        consecutive_failures = 0
         while not stopped.is_set():
-            self.observe(self.market.top())
+            try:
+                book = self.market.top()
+                if consecutive_failures:
+                    self._record_success(book.observed_at, force=True)
+                self.observe(book)
+            except MarketDataUnavailable as error:
+                consecutive_failures += 1
+                self.store.record_failure(error)
+                exponential = self.config.outage_backoff_base_seconds * (
+                    2 ** min(consecutive_failures - 1, 20)
+                )
+                delay = min(exponential, self.config.outage_backoff_max_seconds)
+                jitter = random.uniform(-1.0, 1.0) * self.config.outage_jitter_ratio
+                delay = max(0.0, delay * (1.0 + jitter))
+                log.warning(
+                    "Carnet shadow indisponible (%s, échec consécutif %d), nouvel essai dans %.1fs",
+                    type(error).__name__,
+                    consecutive_failures,
+                    delay,
+                )
+                stopped.wait(delay)
+                continue
+            if consecutive_failures:
+                log.info(
+                    "Carnet shadow de nouveau disponible après %d échec(s)",
+                    consecutive_failures,
+                )
+                consecutive_failures = 0
             stopped.wait(self.config.poll_interval_seconds)

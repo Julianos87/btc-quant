@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at_utc": "2026-07-28T17:22:54.398629+00:00",
+  "generated_at_utc": "2026-08-01T23:07:19.914820+00:00",
   "purpose": "Sensibilité BTC aux coûts; aucun fill maker n'est prétendu",
   "methodology": {
     "scenarios_are_hypothetical": true,
@@ -11,16 +11,16 @@
     "script_sha256": "7fdfd6eda1719a749f2b54268d28ffb1a17105d63f913277d964b8f34ea1a832",
     "config": {
       "path": "environments/paper/config.yaml",
-      "sha256": "e7f210638451cf63633f5cc85db2e4ad5a27f89c4af4e5f166efa5faa7f6121f"
+      "sha256": "de8905ef1ed866fe5bc43c6421bb2e1f866d7c290b982b8dc9330b006c925011"
     },
     "data": [
       {
         "path": "data/binance_BTC-USDT_1h.csv",
-        "sha256": "14e3a38bfc99044b649085044a5a03c7a76ba7e9c2b108f69d0cb5044840268d"
+        "sha256": "5dcf7a26d1034ca420526370bf5485ffb438aba2e7732854d80752edbdaa8a99"
       },
       {
         "path": "data/binanceusdm_BTCUSDT_USDT_funding.csv",
-        "sha256": "a5c3bfab9c3526a46cc3907d3a9a8f65b9368f14fb0ffccbacadd91717c54621"
+        "sha256": "d288b930976ab66294b15dec55df221308e24c643c2953adffdea051bdea14ae"
       }
     ]
   },
@@ -44,14 +44,14 @@
         "total_return": 4.108550233448438
       },
       "sealed_test": {
-        "cagr": -0.28452536052658617,
-        "sharpe": -0.7718667524752378,
+        "cagr": -0.28383088449724003,
+        "sharpe": -0.7705233577919756,
         "max_drawdown": -0.5527922396877066,
         "total_return": -0.40907318679757887
       },
       "full": {
-        "cagr": 0.5567917503619095,
-        "sharpe": 1.1824474955534656,
+        "cagr": 0.5563710731339864,
+        "sharpe": 1.182012944001269,
         "max_drawdown": -0.5527922396877066,
         "total_return": 26.335413730275455
       }
@@ -75,14 +75,14 @@
         "total_return": 4.2844008094495205
       },
       "sealed_test": {
-        "cagr": -0.20855022082201347,
-        "sharpe": -0.4323446184884231,
+        "cagr": -0.20801364005354483,
+        "sharpe": -0.43159298699871046,
         "max_drawdown": -0.5240317343963552,
         "total_return": -0.30753241697924305
       },
       "full": {
-        "cagr": 0.6064173320351842,
-        "sharpe": 1.2445302148554012,
+        "cagr": 0.6059524755309571,
+        "sharpe": 1.2440726596777814,
         "max_drawdown": -0.5240317343963552,
         "total_return": 33.560490783581415
       }
@@ -106,14 +106,14 @@
         "total_return": 4.621220277854133
       },
       "sealed_test": {
-        "cagr": -0.175775594011519,
-        "sharpe": -0.32762805675142453,
+        "cagr": -0.17531376418587474,
+        "sharpe": -0.3270585993267768,
         "max_drawdown": -0.5027229794213227,
         "total_return": -0.2619464344790515
       },
       "full": {
-        "cagr": 0.6507304401856107,
-        "sharpe": 1.3049650462710425,
+        "cagr": 0.6502253424784221,
+        "sharpe": 1.3044850703423512,
         "max_drawdown": -0.5027229794213227,
         "total_return": 41.35509455888053
       }
@@ -137,14 +137,14 @@
         "total_return": 4.858522408826728
       },
       "sealed_test": {
-        "cagr": -0.1530544075326591,
-        "sharpe": -0.25699613959816225,
+        "cagr": -0.1526466200160954,
+        "sharpe": -0.25654949960378964,
         "max_drawdown": -0.4878906697880243,
         "total_return": -0.22972782650418266
       },
       "full": {
-        "cagr": 0.6810601314028182,
-        "sharpe": 1.3454521557149757,
+        "cagr": 0.6805270714572813,
+        "sharpe": 1.3449571434858447,
         "max_drawdown": -0.4878906697880243,
         "total_return": 47.52918727447314
       }

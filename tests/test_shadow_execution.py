@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import threading
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from btcquant.execution.shadow import (
     BookTop,
+    MarketDataUnavailable,
     ShadowCollector,
     ShadowConfig,
     ShadowStore,
@@ -78,3 +80,50 @@ def test_empty_summary_and_invalid_timing(tmp_path):
 
     with pytest.raises(ValueError, match="quote_interval_seconds"):
         ShadowConfig(quote_interval_seconds=20, maker_timeout_seconds=30)
+
+
+def test_transient_market_outage_recovers_without_stopping_the_collector(tmp_path, monkeypatch):
+    started = datetime.now(UTC)
+    stop_event = threading.Event()
+    calls = 0
+
+    class FlakyMarket:
+        def top(self):
+            nonlocal calls
+            calls += 1
+            if calls <= 2:
+                raise MarketDataUnavailable("temporary 502")
+            stop_event.set()
+            return _book(started, 100.00, 100.01)
+
+    monkeypatch.setattr("btcquant.execution.shadow.random.uniform", lambda *_args: 0.0)
+    store = ShadowStore(tmp_path / "shadow.db")
+    collector = ShadowCollector(
+        FlakyMarket(),
+        store,
+        ShadowConfig(
+            outage_backoff_base_seconds=0.001,
+            outage_backoff_max_seconds=0.002,
+            outage_jitter_ratio=0.0,
+        ),
+    )
+
+    collector.run_forever(stop_event)
+
+    health = store.runtime_health(now=started)
+    assert calls == 3
+    assert health["consecutive_failures"] == 0
+    assert health["total_failures"] == 2
+    assert health["last_success_age_seconds"] == 0
+    assert health["outage_started_at"] is None
+
+
+def test_unexpected_shadow_failure_remains_fail_closed(tmp_path):
+    class BrokenMarket:
+        def top(self):
+            raise ValueError("programming defect")
+
+    collector = ShadowCollector(BrokenMarket(), ShadowStore(tmp_path / "shadow.db"))
+
+    with pytest.raises(ValueError, match="programming defect"):
+        collector.run_forever()

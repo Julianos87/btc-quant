@@ -2,7 +2,7 @@
 
 systemd relance les crashs, mais pas un processus bloqué (réseau gelé,
 exception avalée dans une boucle). Ce script — appelé par un timer systemd
-toutes les 10 min — lit l'horodatage du dernier checkpoint SQLite de chaque
+toutes les 2 min — lit l'horodatage du dernier checkpoint SQLite de chaque
 moteur et ouvre un incident si l'un d'eux n'a pas écrit depuis trop longtemps.
 
 Il **ne redémarre rien** : il tourne sous l'utilisateur `btcquant`, sans droit
@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 
 from btcquant.execution.health import execution_health, sync_execution_incidents
+from btcquant.execution.shadow import ShadowStore
 from btcquant.execution.state_store import StateStore
 from btcquant.notify import notify
 
@@ -30,6 +31,51 @@ CHECKS = [
     ("trend", 600, "btcquant-trend"),
     ("carry", 1200, "btcquant-carry"),
 ]
+SHADOW_MAX_AGE_SECONDS = 300
+
+
+def _sync_shadow_incident(
+    store: StateStore,
+    database: Path,
+    *,
+    max_age: int = SHADOW_MAX_AGE_SECONDS,
+) -> None:
+    fingerprint = "shadow:market_data_stale"
+    if not database.exists():
+        incident = store.record_incident(
+            fingerprint,
+            engine="shadow",
+            severity="WARNING",
+            kind="shadow_data_missing",
+            message="Base shadow absente ; observation mainnet indisponible",
+            context={"database": str(database)},
+        )
+    else:
+        health = ShadowStore(database).runtime_health()
+        age = health["last_success_age_seconds"]
+        if age is not None and age <= max_age:
+            store.resolve_incident(fingerprint)
+            return
+        message = (
+            "Aucune lecture de carnet shadow réussie"
+            if age is None
+            else f"Carnet shadow silencieux depuis {age / 60:.0f} min"
+        )
+        incident = store.record_incident(
+            fingerprint,
+            engine="shadow",
+            severity="WARNING",
+            kind="shadow_data_stale",
+            message=message,
+            context={
+                "age_seconds": age,
+                "threshold_seconds": max_age,
+                "consecutive_failures": health["consecutive_failures"],
+                "last_error_type": health["last_error_type"],
+            },
+        )
+    if incident["is_new_or_reopened"]:
+        notify(f"Watchdog shadow : {incident['message']}")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -37,6 +83,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--database", default=str(STATE / "btcquant.db"))
     parser.add_argument("--service", default="btcquant-trend")
     parser.add_argument("--max-age", type=int, default=600)
+    parser.add_argument("--shadow-database", type=Path)
+    parser.add_argument("--shadow-max-age", type=int, default=SHADOW_MAX_AGE_SECONDS)
     args = parser.parse_args(argv)
     database = Path(args.database)
     if not database.exists():
@@ -84,6 +132,13 @@ def main(argv: list[str] | None = None) -> None:
         for incident in sync_execution_incidents(store, health):
             icon = "⛔" if incident["severity"] == "CRITICAL" else "⚠"
             notify(f"{icon} Exécution {engine} : {incident['message']}")
+
+    if args.shadow_database is not None:
+        _sync_shadow_incident(
+            store,
+            args.shadow_database,
+            max_age=args.shadow_max_age,
+        )
 
 
 if __name__ == "__main__":

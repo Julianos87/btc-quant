@@ -1,17 +1,17 @@
 {
   "schema_version": 1,
-  "generated_at_utc": "2026-07-30T08:44:42.109952+00:00",
+  "generated_at_utc": "2026-08-01T23:15:38.266894+00:00",
   "purpose": "Référence walk-forward de recherche; aucune promesse de performance",
   "provenance": {
-    "base_git_commit": "83f12fb674330acd0d2c076a1cbe9c89a3799da9",
-    "source_tree_sha256": "21ef56da0a47c82f0abd49a9261f85bdcf5b6efb386d801b24b30b6e424f442d",
+    "base_git_commit": "f473573895010ba87e61873e5fe84d494c72a31b",
+    "source_tree_sha256": "7bba96709d3f982846b9a4c79fe25c81720767c032b7368d557c1ab70402b8ff",
     "script": {
       "path": "scripts/run_walkforward.py",
       "sha256": "c2ad5e5418af035011f80fd54dbf37749d864f546edb9b1da7aeba4917b37966"
     },
     "config": {
       "path": "environments/paper/config.yaml",
-      "sha256": "e7f210638451cf63633f5cc85db2e4ad5a27f89c4af4e5f166efa5faa7f6121f"
+      "sha256": "de8905ef1ed866fe5bc43c6421bb2e1f866d7c290b982b8dc9330b006c925011"
     },
     "data": [
       {
@@ -34,7 +34,15 @@
       "funding_short_min": -0.0008,
       "pyramid_atr_step": 0.5,
       "pyramid_add_fraction": 0.3,
-      "pyramid_max_adds": 1
+      "pyramid_max_adds": 1,
+      "adaptive_regime_enabled": true,
+      "adaptive_efficiency_bars": 30,
+      "adaptive_volatility_bars": 30,
+      "adaptive_reference_bars": 540,
+      "adaptive_smoothing_span": 12,
+      "adaptive_min_multiplier": 0.5,
+      "adaptive_max_multiplier": 1.0,
+      "adaptive_volatility_shock_ratio": 2.0
     },
     "symbol": "BTC/USDT",
     "timeframe": "4h",
@@ -76,10 +84,10 @@
           "donchian": 100,
           "atr_mult": 3.5
         },
-        "is_sharpe": 2.2301513652419125,
-        "oos_sharpe": 1.0245193245697155,
-        "oos_return": 0.17788072224025187,
-        "oos_max_dd": -0.1794139446580063,
+        "is_sharpe": 2.1710675771745036,
+        "oos_sharpe": 0.9865672747386246,
+        "oos_return": 0.13800732370253277,
+        "oos_max_dd": -0.15100650480096123,
         "oos_trades": 5
       },
       {
@@ -96,10 +104,10 @@
           "donchian": 100,
           "atr_mult": 3.5
         },
-        "is_sharpe": 1.7835519458765454,
-        "oos_sharpe": 0.5707183479407967,
-        "oos_return": 0.07177961113625497,
-        "oos_max_dd": -0.16656855712547936,
+        "is_sharpe": 1.6872650984300492,
+        "oos_sharpe": 0.8383776032357222,
+        "oos_return": 0.09966056858893557,
+        "oos_max_dd": -0.11312882968692084,
         "oos_trades": 8
       },
       {
@@ -116,10 +124,10 @@
           "donchian": 100,
           "atr_mult": 3.5
         },
-        "is_sharpe": 1.5919587215115583,
-        "oos_sharpe": 1.0936578938441708,
-        "oos_return": 0.20328180829869713,
-        "oos_max_dd": -0.22247378595037426,
+        "is_sharpe": 1.6515897813910083,
+        "oos_sharpe": 0.8221255581905565,
+        "oos_return": 0.10605673760617162,
+        "oos_max_dd": -0.17575850091474543,
         "oos_trades": 9
       },
       {
@@ -133,14 +141,14 @@
           "2022-12-31 16:00:00+00:00"
         ],
         "best_params": {
-          "donchian": 55,
+          "donchian": 20,
           "atr_mult": 3.5
         },
-        "is_sharpe": 1.5803621014425828,
-        "oos_sharpe": -2.7805553208007874,
-        "oos_return": -0.31920344516665633,
-        "oos_max_dd": -0.31920344516665633,
-        "oos_trades": 9
+        "is_sharpe": 1.6199576580092405,
+        "oos_sharpe": -1.5205531554434601,
+        "oos_return": -0.14985045436184552,
+        "oos_max_dd": -0.18645174114755314,
+        "oos_trades": 13
       },
       {
         "fold": 4,
@@ -156,10 +164,10 @@
           "donchian": 20,
           "atr_mult": 3.5
         },
-        "is_sharpe": 0.3973604223841782,
-        "oos_sharpe": 2.9521548164959275,
-        "oos_return": 1.3793133688108816,
-        "oos_max_dd": -0.18248252063567194,
+        "is_sharpe": 0.38402375887910417,
+        "oos_sharpe": 2.8913563149418864,
+        "oos_return": 1.1783797893462493,
+        "oos_max_dd": -0.14219461081827023,
         "oos_trades": 10
       },
       {
@@ -176,10 +184,10 @@
           "donchian": 20,
           "atr_mult": 3.0
         },
-        "is_sharpe": 1.3330763533306684,
-        "oos_sharpe": 2.3400534230277903,
-        "oos_return": 1.1853228547475,
-        "oos_max_dd": -0.2346327470602525,
+        "is_sharpe": 1.4182114717004832,
+        "oos_sharpe": 2.448133245380927,
+        "oos_return": 0.9743229035645942,
+        "oos_max_dd": -0.1805158449314378,
         "oos_trades": 10
       },
       {
@@ -196,10 +204,10 @@
           "donchian": 20,
           "atr_mult": 3.0
         },
-        "is_sharpe": 1.5651381651181353,
-        "oos_sharpe": 0.702371350206118,
-        "oos_return": 0.1297654658767733,
-        "oos_max_dd": -0.30940520678065153,
+        "is_sharpe": 1.9173099280277612,
+        "oos_sharpe": 0.5875740723926186,
+        "oos_return": 0.08211978219982874,
+        "oos_max_dd": -0.21993459428954798,
         "oos_trades": 15
       },
       {
@@ -216,10 +224,10 @@
           "donchian": 20,
           "atr_mult": 3.5
         },
-        "is_sharpe": 1.7781535279686245,
-        "oos_sharpe": 1.3810122492795849,
-        "oos_return": 0.2799673145898647,
-        "oos_max_dd": -0.17768773945307803,
+        "is_sharpe": 1.9727664980870272,
+        "oos_sharpe": 1.3226958013597672,
+        "oos_return": 0.19393689472952214,
+        "oos_max_dd": -0.12452239798626885,
         "oos_trades": 11
       },
       {
@@ -236,10 +244,10 @@
           "donchian": 20,
           "atr_mult": 2.5
         },
-        "is_sharpe": 1.7290823348637279,
-        "oos_sharpe": 0.30406603676255384,
-        "oos_return": 0.011265856122083973,
-        "oos_max_dd": -0.26655413402205985,
+        "is_sharpe": 1.6762744428350478,
+        "oos_sharpe": 0.4229881381242713,
+        "oos_return": 0.04761886396642523,
+        "oos_max_dd": -0.20110198456373785,
         "oos_trades": 16
       },
       {
@@ -256,10 +264,10 @@
           "donchian": 20,
           "atr_mult": 2.5
         },
-        "is_sharpe": 1.6072760469481182,
-        "oos_sharpe": -1.6108439155753598,
-        "oos_return": -0.2881479671985797,
-        "oos_max_dd": -0.4071713682804906,
+        "is_sharpe": 1.654631702806447,
+        "oos_sharpe": -1.4869392238710255,
+        "oos_return": -0.2088243936736277,
+        "oos_max_dd": -0.3165304800369415,
         "oos_trades": 18
       },
       {
@@ -276,10 +284,10 @@
           "donchian": 20,
           "atr_mult": 2.5
         },
-        "is_sharpe": 0.8239148176822401,
-        "oos_sharpe": 0.3981687996818839,
-        "oos_return": 0.028936448860557906,
-        "oos_max_dd": -0.5028490344599454,
+        "is_sharpe": 0.2914169954439989,
+        "oos_sharpe": 0.2264846264230703,
+        "oos_return": -0.005487938428728412,
+        "oos_max_dd": -0.4038441216864389,
         "oos_trades": 18
       }
     ],
@@ -287,13 +295,13 @@
       "start": "2020-12-31 20:00:00+00:00",
       "end": "2026-07-01 04:00:00+00:00",
       "years": 5.5,
-      "total_return": 4.759563334532575,
-      "cagr": 0.37484154430724703,
-      "volatility": 0.5184740656133752,
-      "sharpe": 0.8585097425131204,
-      "sortino": 1.1661258481811767,
-      "max_drawdown": -0.6323051714169211,
-      "calmar": 0.5928174578538895,
+      "total_return": 4.389781846910368,
+      "cagr": 0.3583539286121591,
+      "volatility": 0.40760641164737316,
+      "sharpe": 0.9445506481162377,
+      "sortino": 1.3040412110290083,
+      "max_drawdown": -0.5524121042102925,
+      "calmar": 0.6487075968844823,
       "n_trades": 0,
       "win_rate": NaN,
       "profit_factor": NaN,
@@ -302,7 +310,7 @@
       "avg_bars_held": NaN,
       "exposure": NaN
     },
-    "oos_trades": 129,
-    "efficiency": 0.38826510275719966
+    "oos_trades": 133,
+    "efficiency": 0.4584391996635889
   }
 }

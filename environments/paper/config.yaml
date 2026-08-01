@@ -4,12 +4,12 @@ environment: paper
 # Historique 2019-2026 (frais + slippage + funding inclus, filtres ADX/funding actifs).
 # Ces chiffres proviennent de audit/baseline_reference.json et sont vérifiés en CI
 # par scripts/check_reference_provenance.py — ne pas les éditer à la main :
-#   +68.3 %/an (+4 811 % total) | Sharpe 1.18 | MAX DRAWDOWN -55.7 % | 477 trades
-#   Années perdantes du trend seul : 2021 (-4,1 %), 2025 (-25,3 %),
-#   2026 en cours (-19,1 %). Source : dashboard/yearly_reference.json.
+#   +47.2 %/an (+1 587 % total) | Sharpe 1.14 | MAX DRAWDOWN -50.9 % | 470 trades
+#   Années perdantes du trend seul : 2022 (-3,3 %), 2025 (-20,4 %),
+#   2026 en cours (-12,1 %). Source : dashboard/yearly_reference.json.
 #
 # CONTRAT ACCEPTÉ EN LANÇANT CE PROFIL :
-# - un creux de -56 % s'est produit dans le passé et se reproduira ; le futur
+# - un creux de -51 % s'est produit dans le passé et se reproduira ; le futur
 #   fera pire au moins une fois ;
 # - ~14 mois consécutifs sous le sommet précédent, à tenir sans rien modifier ;
 # - le risque par trade reste borné (~6 % par stop) et la liquidation (~25 %)
@@ -63,21 +63,66 @@ strategies:
     market: perp
     timeframe: 4h
     capital_fraction: 0.3333
-    params: { donchian: 20, adx_min: 20, funding_long_max: 0.0008, funding_short_min: -0.0008, pyramid_atr_step: 0.5, pyramid_add_fraction: 0.30, pyramid_max_adds: 1 }
+    params:
+      donchian: 20
+      adx_min: 20
+      funding_long_max: 0.0008
+      funding_short_min: -0.0008
+      pyramid_atr_step: 0.5
+      pyramid_add_fraction: 0.30
+      pyramid_max_adds: 1
+      adaptive_regime_enabled: true
+      adaptive_efficiency_bars: 30
+      adaptive_volatility_bars: 30
+      adaptive_reference_bars: 540
+      adaptive_smoothing_span: 12
+      adaptive_min_multiplier: 0.50
+      adaptive_max_multiplier: 1.00
+      adaptive_volatility_shock_ratio: 2.00
   trend_ls_55:
     enabled: true
     type: trend_ls
     market: perp
     timeframe: 4h
     capital_fraction: 0.3333
-    params: { donchian: 55, adx_min: 20, funding_long_max: 0.0008, funding_short_min: -0.0008, pyramid_atr_step: 0.5, pyramid_add_fraction: 0.30, pyramid_max_adds: 1 }
+    params:
+      donchian: 55
+      adx_min: 20
+      funding_long_max: 0.0008
+      funding_short_min: -0.0008
+      pyramid_atr_step: 0.5
+      pyramid_add_fraction: 0.30
+      pyramid_max_adds: 1
+      adaptive_regime_enabled: true
+      adaptive_efficiency_bars: 30
+      adaptive_volatility_bars: 30
+      adaptive_reference_bars: 540
+      adaptive_smoothing_span: 12
+      adaptive_min_multiplier: 0.50
+      adaptive_max_multiplier: 1.00
+      adaptive_volatility_shock_ratio: 2.00
   trend_ls_100:
     enabled: true
     type: trend_ls
     market: perp
     timeframe: 4h
     capital_fraction: 0.3334
-    params: { donchian: 100, adx_min: 20, funding_long_max: 0.0008, funding_short_min: -0.0008, pyramid_atr_step: 0.5, pyramid_add_fraction: 0.30, pyramid_max_adds: 1 }
+    params:
+      donchian: 100
+      adx_min: 20
+      funding_long_max: 0.0008
+      funding_short_min: -0.0008
+      pyramid_atr_step: 0.5
+      pyramid_add_fraction: 0.30
+      pyramid_max_adds: 1
+      adaptive_regime_enabled: true
+      adaptive_efficiency_bars: 30
+      adaptive_volatility_bars: 30
+      adaptive_reference_bars: 540
+      adaptive_smoothing_span: 12
+      adaptive_min_multiplier: 0.50
+      adaptive_max_multiplier: 1.00
+      adaptive_volatility_shock_ratio: 2.00
 
 execution:
   # Le code rejette toute autre valeur tant que le moteur transactionnel
