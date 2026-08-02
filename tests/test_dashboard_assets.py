@@ -18,6 +18,9 @@ def test_dashboard_loads_external_versioned_assets(monkeypatch):
     assert b"Hyperliquid" in page.data
     assert b'id="signal-guide"' in page.data
     assert b"cl\xc3\xb4ture d\xe2\x80\x99une bougie 4 h" in page.data
+    assert b'data-i18n="threshold_active"' in page.data
+    assert b'data-i18n="threshold_inactive"' in page.data
+    assert b'data-i18n="waiting_zone"' in page.data
 
     assert client.get("/static/dashboard.css").status_code == 200
     assert client.get("/static/dashboard.js").status_code == 200
@@ -45,6 +48,9 @@ def test_frontend_escapes_remote_text_before_html_injection():
     assert "${esc(r.reason)}" in javascript
     assert "${esc(sl.name)}" in javascript
     assert 'btcusdt:"BTC-PERP / USDC"' in javascript
-    assert '`${ch.name} ${direction}`' in javascript
-    assert 'signal_short_mode:"Régime baissier · seuils SHORT actifs"' in javascript
+    assert 'signal_wait:"ATTENTE · AUCUN SIGNAL"' in javascript
+    assert 'label: `${ch.name} ${ch.direction}${ch.active ? "" : ` · ${t("inactive_suffix")}`}`' in javascript
+    assert 'direction:"LONG", active:!isShort' in javascript
+    assert 'direction:"SHORT", active:isShort' in javascript
+    assert "const waiting = candles.map" in javascript
     assert "if (all.length < 10 || !sideKnown)" in javascript

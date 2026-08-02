@@ -56,12 +56,18 @@ const I18N = {
     yearly_note:"Simulation avec frais, slippage et funding réels — pas des résultats réalisés. Rendements par année civile ; pire creux de l’année au survol.",
     yearly_partial:"année incomplète", yearly_missing:"Référence annuelle absente — lancer scripts/make_yearly_reference.py",
     readiness_title:"Prêt pour le testnet ?", readiness_note:"Critères fixés à froid — le passage ne se décide pas au feeling.",
-    signal_long_mode:"Régime haussier · seuils LONG actifs",
-    signal_short_mode:"Régime baissier · seuils SHORT actifs",
-    signal_unknown_mode:"Régime en cours de calcul",
-    signal_long_rule:"Signal potentiel si une bougie 4 h clôture AU-DESSUS d’un seuil. Une mèche ou un rebond ne suffit pas ; ADX et funding restent contrôlés.",
-    signal_short_rule:"Signal potentiel si une bougie 4 h clôture EN DESSOUS d’un seuil. Une mèche ou un rejet ne suffit pas ; ADX et funding restent contrôlés.",
+    signal_wait:"ATTENTE · AUCUN SIGNAL",
+    signal_threshold:"SEUIL FRANCHI EN COURS · ATTENDRE LA CLÔTURE 4 H",
+    signal_position:"POSITION TREND OUVERTE",
+    signal_unknown_mode:"CALCUL EN COURS",
+    signal_long_rule:"Régime haussier : LONG autorisé au-dessus des lignes pleines. Les lignes SHORT grises sont inactives. Une mèche ne suffit pas ; ADX et funding restent contrôlés.",
+    signal_short_rule:"Régime baissier : SHORT autorisé sous les lignes pleines. Les lignes LONG grises sont inactives. Une mèche ne suffit pas ; ADX et funding restent contrôlés.",
     signal_unknown_rule:"Aucune direction n’est affichée tant que le régime 4 h n’est pas disponible.",
+    threshold_active:"direction autorisée",
+    threshold_inactive:"direction inactive",
+    waiting_zone:"zone d’attente",
+    inactive_suffix:"INACTIF",
+    waiting_label:"ATTENTE",
     cards:{performance_brief:"Synthèse de performance", risk_radar:"Radar de risque", monitor_pulse:"Pulse opérationnel",
       chart:"Courbe d’équity", price:"Graphe prix", events:"Journal", trend:"Moteur Trend",
       carry:"Moteur Carry", breakdown:"Répartition & records", conformity:"Est-ce normal ?", yearly:"Années précédentes",
@@ -93,12 +99,18 @@ const I18N = {
     yearly_note:"Simulation with real fees, slippage and funding — not realized results. Calendar-year returns; each year's worst drawdown on hover.",
     yearly_partial:"partial year", yearly_missing:"Yearly reference missing — run scripts/make_yearly_reference.py",
     readiness_title:"Ready for testnet?", readiness_note:"Criteria set in advance — the transition is not a gut call.",
-    signal_long_mode:"Bullish regime · active LONG thresholds",
-    signal_short_mode:"Bearish regime · active SHORT thresholds",
-    signal_unknown_mode:"Regime is being calculated",
-    signal_long_rule:"Potential signal only if a 4h candle closes ABOVE a threshold. A wick or bounce is not enough; ADX and funding are still checked.",
-    signal_short_rule:"Potential signal only if a 4h candle closes BELOW a threshold. A wick or rejection is not enough; ADX and funding are still checked.",
+    signal_wait:"WAITING · NO SIGNAL",
+    signal_threshold:"THRESHOLD CROSSED · WAIT FOR THE 4H CLOSE",
+    signal_position:"TREND POSITION OPEN",
+    signal_unknown_mode:"CALCULATING",
+    signal_long_rule:"Bullish regime: LONG is allowed above solid lines. Grey SHORT lines are inactive. A wick is not enough; ADX and funding are still checked.",
+    signal_short_rule:"Bearish regime: SHORT is allowed below solid lines. Grey LONG lines are inactive. A wick is not enough; ADX and funding are still checked.",
     signal_unknown_rule:"No direction is shown until the 4h regime is available.",
+    threshold_active:"allowed direction",
+    threshold_inactive:"inactive direction",
+    waiting_zone:"waiting zone",
+    inactive_suffix:"INACTIVE",
+    waiting_label:"WAITING",
     status_good:"All systems nominal", status_warn:"Monitoring required", status_crit:"Action required",
     status_nominal_detail:"Trend and Carry are responding · safeguards armed",
     status_trend_down:"Trend is not responding", status_carry_down:"Carry is not responding",
@@ -697,9 +709,23 @@ function drawPChart() {
   const direction = isShort ? "SHORT" : "LONG";
   const guide = $("signal-guide");
   guide.dataset.side = sideKnown ? direction.toLowerCase() : "unknown";
-  $("signal-mode").textContent = t(sideKnown
-    ? (isShort ? "signal_short_mode" : "signal_long_mode")
-    : "signal_unknown_mode");
+  const sourceChannels = data.channels || [];
+  const lastValue = values => {
+    for (let i = values.length - 1; i >= 0; i--) if (values[i] != null) return values[i];
+    return null;
+  };
+  const latestPrice = all.length ? Number(all[all.length - 1][4]) : null;
+  const activeThresholds = sourceChannels
+    .map(ch => lastValue(isShort ? ch.low : ch.high))
+    .filter(value => value != null);
+  const crossedNow = sideKnown && latestPrice != null && activeThresholds.some(
+    value => isShort ? latestPrice < value : latestPrice > value
+  );
+  const hasPosition = (data.positions || []).length > 0;
+  guide.dataset.status = hasPosition ? "position" : crossedNow ? "threshold" : "waiting";
+  $("signal-mode").textContent = t(!sideKnown
+    ? "signal_unknown_mode"
+    : hasPosition ? "signal_position" : crossedNow ? "signal_threshold" : "signal_wait");
   $("signal-rule").textContent = t(sideKnown
     ? (isShort ? "signal_short_rule" : "signal_long_rule")
     : "signal_unknown_rule");
@@ -707,10 +733,26 @@ function drawPChart() {
   // fenêtre affichée : les pcRange dernières bougies 1h (chips 2 j / 4 j / 8 j)
   const start = Math.max(0, all.length - pcRange);
   const candles = all.slice(start);
-  const side = isShort ? "low" : "high";
-  const chans = (data.channels || []).map(ch => ({name: ch.name, vals: (ch[side] || []).slice(start)}));
-  const M = {t: 12, r: 104, b: 24, l: 10};
+  const rawChans = sourceChannels.map(ch => ({
+    name: ch.name,
+    high: (ch.high || []).slice(start),
+    low: (ch.low || []).slice(start),
+  }));
+  const chans = rawChans.flatMap(ch => [
+    {name: ch.name, direction:"LONG", active:!isShort, vals:ch.high},
+    {name: ch.name, direction:"SHORT", active:isShort, vals:ch.low},
+  ]).map(ch => ({
+    ...ch,
+    color: ch.active ? (PC_CHCOL[ch.name] || col("--s1")) : col("--muted"),
+    label: `${ch.name} ${ch.direction}${ch.active ? "" : ` · ${t("inactive_suffix")}`}`,
+  }));
+  const M = {t: 12, r: 132, b: 24, l: 10};
   let lo = Math.min(...candles.map(c => c[3])), hi = Math.max(...candles.map(c => c[2]));
+  const channelValues = rawChans.flatMap(ch => [...ch.high, ...ch.low]).filter(v => v != null);
+  if (channelValues.length) {
+    lo = Math.min(lo, ...channelValues);
+    hi = Math.max(hi, ...channelValues);
+  }
   for (const p of data.positions) { lo = Math.min(lo, p.stop, p.entry); hi = Math.max(hi, p.stop, p.entry); }
   const pad = (hi - lo) * .06; lo -= pad; hi += pad;
   const X = i => M.l + i / (candles.length - 1) * (W - M.l - M.r);
@@ -719,10 +761,26 @@ function drawPChart() {
   const bw = Math.max(1.5, (W - M.l - M.r) / candles.length * 0.62);
 
   let g = "";
+  g += `<clipPath id="pclip"><rect x="${M.l}" y="${M.t}" width="${W - M.l - M.r}" height="${H - M.t - M.b}"/></clipPath>`;
   for (let i = 0; i <= 4; i++) {
     const v = lo + (hi - lo) * i / 4, y = Y(v);
     g += `<line x1="${M.l}" x2="${W - M.r}" y1="${y}" y2="${y}" stroke="${col("--grid")}"/>`;
     g += `<text x="${W - M.r + 8}" y="${y + 4}" fill="${col("--muted")}" font-size="10.5" style="font-variant-numeric:tabular-nums">${Math.round(v).toLocaleString("fr-FR")}</text>`;
+  }
+  // Corridor sans signal : sous le plus proche seuil LONG et au-dessus du
+  // plus proche seuil SHORT. Les enveloppes suivent les paliers 4 h dans le
+  // temps, elles ne projettent donc jamais les niveaux actuels dans le passé.
+  const waiting = candles.map((_, i) => {
+    const highs = rawChans.map(ch => ch.high[i]).filter(v => v != null);
+    const lows = rawChans.map(ch => ch.low[i]).filter(v => v != null);
+    return highs.length && lows.length ? {i, high:Math.min(...highs), low:Math.max(...lows)} : null;
+  }).filter(Boolean);
+  if (waiting.length > 1) {
+    const top = waiting.map(p => `${X(p.i).toFixed(1)},${Y(p.high).toFixed(1)}`).join(" ");
+    const bottom = [...waiting].reverse().map(p => `${X(p.i).toFixed(1)},${Y(p.low).toFixed(1)}`).join(" ");
+    g += `<polygon points="${top} ${bottom}" fill="${col("--muted")}" opacity=".055" clip-path="url(#pclip)"/>`;
+    const last = waiting[waiting.length - 1], middle = (Y(last.high) + Y(last.low)) / 2;
+    g += `<text x="${W - M.r - 8}" y="${middle.toFixed(1)}" text-anchor="end" fill="${col("--muted")}" font-size="9.5" font-weight="700" opacity=".8">${t("waiting_label")}</text>`;
   }
   candles.forEach((c, i) => {
     const [ts, o, h, l, cl] = c, x = X(i), colr = cl >= o ? up : down;
@@ -735,15 +793,12 @@ function drawPChart() {
     g += `<text x="${X(idx)}" y="${H - 7}" text-anchor="middle" fill="${col("--muted")}" font-size="10.5">${d.toLocaleDateString("fr-FR", {day:"2-digit", month:"2-digit"})} ${d.getHours()}h</text>`;
   }
   // canaux de Donchian 20/55/100 (calculés sur 4h, le timeframe de décision).
-  // Lisibilité : on ne trace QUE le côté qui peut déclencher une entrée dans
-  // le régime EMA actuel (haut du canal si EMA50>EMA200, bas sinon) — le côté
-  // inactif ne fait que du bruit. Escalier : un palier par barre 4h. Chaque
-  // ligne porte son étiquette à droite (niveau de cassure), empilée sans
-  // chevauchement quand les canaux se confondent.
-  g += `<clipPath id="pclip"><rect x="${M.l}" y="${M.t}" width="${W - M.l - M.r}" height="${H - M.t - M.b}"/></clipPath>`;
+  // Les deux côtés sont visibles : plein/couleur pour la direction autorisée
+  // par le régime EMA, gris/pointillé pour la direction inactive. Escalier :
+  // un palier par barre 4 h. Les libellés sont empilés si les seuils coïncident.
   const labels = [];
   chans.forEach(ch => {
-    const c = PC_CHCOL[ch.name] || col("--muted");
+    const c = ch.color;
     let d = "", prev = null, last = null;
     ch.vals.forEach((v, i) => {
       if (v == null) { prev = null; return; }
@@ -752,15 +807,15 @@ function drawPChart() {
       prev = v; last = v;
     });
     if (!d) return;
-    g += `<path d="${d}" fill="none" stroke="${c}" stroke-width="1.2" opacity=".7" clip-path="url(#pclip)"/>`;
-    labels.push({name: `${ch.name} ${direction}`, color: c, y: Y(last)});
+    g += `<path d="${d}" fill="none" stroke="${c}" stroke-width="${ch.active ? 1.35 : 1}" opacity="${ch.active ? .78 : .36}" ${ch.active ? "" : 'stroke-dasharray="3 4"'} clip-path="url(#pclip)"/>`;
+    labels.push({name: ch.label, color: c, active:ch.active, y: Y(last)});
   });
-  // étiquettes empilées : si deux niveaux sont confondus, on les écarte de 11px
+  // étiquettes empilées : si deux niveaux sont confondus, on les écarte de 12px
   labels.sort((a, b) => a.y - b.y);
   for (let i = 1; i < labels.length; i++)
-    labels[i].y = Math.max(labels[i].y, labels[i - 1].y + 11);
+    labels[i].y = Math.max(labels[i].y, labels[i - 1].y + 12);
   for (const l of labels)
-    g += `<text x="${W - M.r - 4}" y="${(l.y - 3).toFixed(1)}" text-anchor="end" fill="${l.color}" font-size="10" font-weight="700">${l.name}</text>`;
+    g += `<text x="${W - M.r - 4}" y="${(l.y - 3).toFixed(1)}" text-anchor="end" fill="${l.color}" font-size="${l.active ? 10 : 9.2}" font-weight="${l.active ? 700 : 600}" opacity="${l.active ? 1 : .72}">${l.name}</text>`;
   // lignes d'entrée/stop + étiquettes à gauche, empilées comme les canaux à
   // droite : quand plusieurs systèmes sont entrés à des niveaux proches (cas
   // fréquent, les trois Donchian suivent souvent le même mouvement), les
@@ -808,7 +863,7 @@ function drawPChart() {
   }
   g += `<g id="pcursor"></g>`;
   svg.innerHTML = g;
-  pcView = {candles, chans, positions: data.positions, direction, X, Y, M, W, H};
+  pcView = {candles, chans, positions: data.positions, X, Y, M, W, H};
 }
 
 // survol : réticule aimanté à la bougie + infobulle OHLC / canaux / position
@@ -818,7 +873,7 @@ function drawPChart() {
   svg.addEventListener("mouseleave", hide);
   svg.addEventListener("mousemove", e => {
     if (!pcView) return;
-    const {candles, chans, positions, direction, X, Y, M, W, H} = pcView;
+    const {candles, chans, positions, X, Y, M, W, H} = pcView;
     const r = svg.getBoundingClientRect(), mx = e.clientX - r.left;
     if (mx < M.l || mx > W - M.r) { hide(); return; }
     const i = Math.max(0, Math.min(candles.length - 1,
@@ -835,7 +890,7 @@ function drawPChart() {
     html += `<div class="row"><span>H / B</span><span class="num">${fp(h)} / ${fp(l)}</span></div>`;
     for (const ch of chans) {
       const v = ch.vals[i];
-      if (v != null) html += `<div class="row"><span style="color:${PC_CHCOL[ch.name]}">■ ${ch.name} ${direction}</span><span class="num">${fp(v)}</span></div>`;
+      if (v != null) html += `<div class="row"><span style="color:${ch.color}">${ch.active ? "■" : "□"} ${ch.label}</span><span class="num">${fp(v)}</span></div>`;
     }
     for (const p of positions) {
       html += `<div class="row"><span>${p.name} entrée</span><span class="num">${fp(p.entry)}</span></div>`;
