@@ -238,6 +238,26 @@ def _check_adaptive_regime_research(
             _check_file(ROOT / item["path"], item["sha256"], "donnees regime adaptatif")
 
 
+def _check_horizon_contribution_research(*, verify_local_data: bool) -> None:
+    path = ROOT / "audit" / "btc_horizon_contribution_research.json"
+    if not path.exists():
+        raise SystemExit(f"Recherche de contribution Donchian absente : {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload["protocol"].get("sealed_test_used_for_selection") is not False:
+        raise SystemExit("Contribution Donchian invalide : test scellé utilisé pour sélection")
+    provenance = payload["provenance"]
+    _check_file(
+        ROOT / "scripts" / "research_btc_horizon_contribution.py",
+        provenance["script_sha256"],
+        "script contribution Donchian",
+    )
+    config = provenance["config"]
+    _check_file(ROOT / config["path"], config["sha256"], "config contribution Donchian")
+    if verify_local_data:
+        for item in provenance["data"]:
+            _check_file(ROOT / item["path"], item["sha256"], "données contribution Donchian")
+
+
 def _check_btc_improvement_research(
     source_hash: str,
     *,
@@ -298,6 +318,7 @@ def main() -> None:
         source_hash,
         verify_local_data=verify_local_data,
     )
+    _check_horizon_contribution_research(verify_local_data=verify_local_data)
     _check_btc_improvement_research(
         source_hash,
         verify_local_data=verify_local_data,

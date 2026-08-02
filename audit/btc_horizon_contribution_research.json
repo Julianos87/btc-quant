@@ -1,0 +1,554 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-08-02T10:15:15.042626+00:00",
+  "purpose": "Contribution marginale des horizons Donchian BTC déployés",
+  "protocol": {
+    "horizons": [
+      20,
+      55,
+      100
+    ],
+    "combinations": [
+      [
+        20
+      ],
+      [
+        55
+      ],
+      [
+        100
+      ],
+      [
+        20,
+        55
+      ],
+      [
+        20,
+        100
+      ],
+      [
+        55,
+        100
+      ],
+      [
+        20,
+        55,
+        100
+      ]
+    ],
+    "capital_rule": "capital Trend total constant, poids configurés renormalisés",
+    "common_warmup_bars": 620,
+    "development_end": "2022-12-31T23:59:59+00:00",
+    "validation_end": "2024-12-31T23:59:59+00:00",
+    "sealed_test_used_for_selection": false,
+    "selection_rule": "minimum CAGR dev/validation + 0.10 minimum Sharpe - 0.0025 par composant supplémentaire",
+    "pair_challenger_rule": "meilleure combinaison à deux horizons selon le score pré-test",
+    "deployment_rule": "un passage historique autorise seulement un challenger forward, jamais une modification paper immédiate"
+  },
+  "provenance": {
+    "script_sha256": "7d4d8c26fcb06c3321c471a8686852601e9ba3f4d75f7433db2e9aecbadf5a03",
+    "source_tree_sha256": "7bba96709d3f982846b9a4c79fe25c81720767c032b7368d557c1ab70402b8ff",
+    "config": {
+      "path": "environments/paper/config.yaml",
+      "sha256": "de8905ef1ed866fe5bc43c6421bb2e1f866d7c290b982b8dc9330b006c925011"
+    },
+    "data": [
+      {
+        "path": "data/binance_BTC-USDT_1h.csv",
+        "sha256": "5dcf7a26d1034ca420526370bf5485ffb438aba2e7732854d80752edbdaa8a99"
+      },
+      {
+        "path": "data/binanceusdm_BTCUSDT_USDT_funding.csv",
+        "sha256": "d288b930976ab66294b15dec55df221308e24c643c2953adffdea051bdea14ae"
+      }
+    ]
+  },
+  "baseline_trio": {
+    "horizons": [
+      20,
+      55,
+      100
+    ],
+    "component_count": 3,
+    "trades": 470,
+    "trades_by_horizon": {
+      "D20": 192,
+      "D55": 151,
+      "D100": 127
+    },
+    "development": {
+      "cagr": 0.5313839868792622,
+      "sharpe": 1.2416929929962284,
+      "max_drawdown": -0.30358750680953006,
+      "total_return": 3.8755395145610025
+    },
+    "validation": {
+      "cagr": 1.2207222486358527,
+      "sharpe": 1.9815379603235765,
+      "max_drawdown": -0.23102353771603823,
+      "total_return": 3.942398811961108
+    },
+    "sealed_test": {
+      "cagr": -0.20282642966445086,
+      "sharpe": -0.46898194886861994,
+      "max_drawdown": -0.5088459640981553,
+      "total_return": -0.3003720736556519
+    },
+    "full": {
+      "cagr": 0.4729686993771387,
+      "sharpe": 1.1397433638304393,
+      "max_drawdown": -0.5088459640981553,
+      "total_return": 15.870248367490394
+    },
+    "pretest_score": 0.6505532861788851,
+    "stress_full": {
+      "cagr": 0.42805290767018844,
+      "sharpe": 1.062515498592042,
+      "max_drawdown": -0.5244762694915179,
+      "total_return": 12.458524167912135
+    }
+  },
+  "selected_pretest": {
+    "horizons": [
+      20
+    ],
+    "component_count": 1,
+    "trades": 192,
+    "trades_by_horizon": {
+      "D20": 192
+    },
+    "development": {
+      "cagr": 0.5954007211735248,
+      "sharpe": 1.2826826387116144,
+      "max_drawdown": -0.2546787128167016,
+      "total_return": 4.677253881282959
+    },
+    "validation": {
+      "cagr": 1.562180890354918,
+      "sharpe": 2.086518116305701,
+      "max_drawdown": -0.21994030717982582,
+      "total_return": 5.581714723027471
+    },
+    "sealed_test": {
+      "cagr": -0.22195261660431265,
+      "sharpe": -0.5008699635593574,
+      "max_drawdown": -0.5602258136310003,
+      "total_return": -0.32663982410237447
+    },
+    "full": {
+      "cagr": 0.5562949825622012,
+      "sharpe": 1.2040304219910756,
+      "max_drawdown": -0.5602258136310003,
+      "total_return": 24.204702605266245
+    },
+    "pretest_score": 0.7236689850446862,
+    "stress_full": {
+      "cagr": 0.5144644994358913,
+      "sharpe": 1.1416458627495214,
+      "max_drawdown": -0.576684554043628,
+      "total_return": 19.66096589756285
+    }
+  },
+  "selected_pair_pretest": {
+    "horizons": [
+      20,
+      100
+    ],
+    "component_count": 2,
+    "trades": 319,
+    "trades_by_horizon": {
+      "D20": 192,
+      "D100": 127
+    },
+    "development": {
+      "cagr": 0.5557941290293462,
+      "sharpe": 1.2816807563194916,
+      "max_drawdown": -0.2544801177078829,
+      "total_return": 4.170750122221822
+    },
+    "validation": {
+      "cagr": 1.3088130546820786,
+      "sharpe": 2.032937079262372,
+      "max_drawdown": -0.2186626915778639,
+      "total_return": 4.34285175741439
+    },
+    "sealed_test": {
+      "cagr": -0.19933826635605356,
+      "sharpe": -0.4530601903042925,
+      "max_drawdown": -0.5170013045175076,
+      "total_return": -0.29554194921214727
+    },
+    "full": {
+      "cagr": 0.5023000474072743,
+      "sharpe": 1.1814462360189977,
+      "max_drawdown": -0.5170013045175076,
+      "total_return": 18.48037772551951
+    },
+    "pretest_score": 0.6814622046612955,
+    "stress_full": {
+      "cagr": 0.4616348651087101,
+      "sharpe": 1.1130872685143725,
+      "max_drawdown": -0.5334640924343593,
+      "total_return": 14.945807078460794
+    }
+  },
+  "diagnostics": {
+    "daily_return_correlation": {
+      "D20_D55": 0.9349289757159785,
+      "D20_D100": 0.9045453562684533,
+      "D55_D100": 0.9598359437224158
+    },
+    "entry_overlap_in_deployed_trio": {
+      "D20_D55": {
+        "left_entries": 192,
+        "right_entries": 151,
+        "shared_entries": 112,
+        "share_of_smaller": 0.7417218543046358,
+        "jaccard": 0.48484848484848486
+      },
+      "D20_D100": {
+        "left_entries": 192,
+        "right_entries": 127,
+        "shared_entries": 89,
+        "share_of_smaller": 0.7007874015748031,
+        "jaccard": 0.3869565217391304
+      },
+      "D55_D100": {
+        "left_entries": 151,
+        "right_entries": 127,
+        "shared_entries": 109,
+        "share_of_smaller": 0.8582677165354331,
+        "jaccard": 0.6449704142011834
+      }
+    },
+    "leave_one_out_vs_trio": {
+      "without_D20": {
+        "kept": [
+          55,
+          100
+        ],
+        "full_cagr_delta": -0.05621346030999397,
+        "full_sharpe_delta": -0.07223658937337718,
+        "full_drawdown_delta": 0.06253566693271706,
+        "sealed_cagr_delta": 0.02014671553044467,
+        "sealed_sharpe_delta": 0.049787167262676846
+      },
+      "without_D55": {
+        "kept": [
+          20,
+          100
+        ],
+        "full_cagr_delta": 0.029331348030135596,
+        "full_sharpe_delta": 0.04170287218855839,
+        "full_drawdown_delta": -0.008155340419352286,
+        "sealed_cagr_delta": 0.0034881633083972963,
+        "sealed_sharpe_delta": 0.015921758564327426
+      },
+      "without_D100": {
+        "kept": [
+          20,
+          55
+        ],
+        "full_cagr_delta": 0.01793934221692517,
+        "full_sharpe_delta": 0.0019390242789181222,
+        "full_drawdown_delta": -0.028462912872580404,
+        "sealed_cagr_delta": -0.01668456637221505,
+        "sealed_sharpe_delta": -0.03965731561924962
+      }
+    }
+  },
+  "overall_winner_checks": {
+    "full_sharpe_no_worse": true,
+    "full_drawdown_no_worse": false,
+    "sealed_cagr_no_worse": false,
+    "sealed_sharpe_no_worse": false,
+    "stress_drawdown_above_halt": true
+  },
+  "simplification_checks": {
+    "pair_selected_without_sealed_test": true,
+    "full_cagr_above_trio": true,
+    "full_sharpe_no_worse": true,
+    "full_drawdown_degradation_at_most_1pp": true,
+    "sealed_cagr_no_worse": true,
+    "sealed_sharpe_no_worse": true,
+    "stress_drawdown_above_halt": true
+  },
+  "historical_pair_gate_passed": true,
+  "recommendation": "FORWARD_CHALLENGER_D20_D100",
+  "recommend_simplification_now": false,
+  "candidates_ranked_pretest": [
+    {
+      "horizons": [
+        20
+      ],
+      "component_count": 1,
+      "trades": 192,
+      "trades_by_horizon": {
+        "D20": 192
+      },
+      "development": {
+        "cagr": 0.5954007211735248,
+        "sharpe": 1.2826826387116144,
+        "max_drawdown": -0.2546787128167016,
+        "total_return": 4.677253881282959
+      },
+      "validation": {
+        "cagr": 1.562180890354918,
+        "sharpe": 2.086518116305701,
+        "max_drawdown": -0.21994030717982582,
+        "total_return": 5.581714723027471
+      },
+      "sealed_test": {
+        "cagr": -0.22195261660431265,
+        "sharpe": -0.5008699635593574,
+        "max_drawdown": -0.5602258136310003,
+        "total_return": -0.32663982410237447
+      },
+      "full": {
+        "cagr": 0.5562949825622012,
+        "sharpe": 1.2040304219910756,
+        "max_drawdown": -0.5602258136310003,
+        "total_return": 24.204702605266245
+      },
+      "pretest_score": 0.7236689850446862,
+      "stress_full": {
+        "cagr": 0.5144644994358913,
+        "sharpe": 1.1416458627495214,
+        "max_drawdown": -0.576684554043628,
+        "total_return": 19.66096589756285
+      }
+    },
+    {
+      "horizons": [
+        20,
+        100
+      ],
+      "component_count": 2,
+      "trades": 319,
+      "trades_by_horizon": {
+        "D20": 192,
+        "D100": 127
+      },
+      "development": {
+        "cagr": 0.5557941290293462,
+        "sharpe": 1.2816807563194916,
+        "max_drawdown": -0.2544801177078829,
+        "total_return": 4.170750122221822
+      },
+      "validation": {
+        "cagr": 1.3088130546820786,
+        "sharpe": 2.032937079262372,
+        "max_drawdown": -0.2186626915778639,
+        "total_return": 4.34285175741439
+      },
+      "sealed_test": {
+        "cagr": -0.19933826635605356,
+        "sharpe": -0.4530601903042925,
+        "max_drawdown": -0.5170013045175076,
+        "total_return": -0.29554194921214727
+      },
+      "full": {
+        "cagr": 0.5023000474072743,
+        "sharpe": 1.1814462360189977,
+        "max_drawdown": -0.5170013045175076,
+        "total_return": 18.48037772551951
+      },
+      "pretest_score": 0.6814622046612955,
+      "stress_full": {
+        "cagr": 0.4616348651087101,
+        "sharpe": 1.1130872685143725,
+        "max_drawdown": -0.5334640924343593,
+        "total_return": 14.945807078460794
+      }
+    },
+    {
+      "horizons": [
+        20,
+        55
+      ],
+      "component_count": 2,
+      "trades": 343,
+      "trades_by_horizon": {
+        "D20": 192,
+        "D55": 151
+      },
+      "development": {
+        "cagr": 0.5402381804459382,
+        "sharpe": 1.2284628154638728,
+        "max_drawdown": -0.32464936477420514,
+        "total_return": 3.981155771157381
+      },
+      "validation": {
+        "cagr": 1.3343086272937676,
+        "sharpe": 2.0168885277415867,
+        "max_drawdown": -0.23418252442895304,
+        "total_return": 4.461666818519369
+      },
+      "sealed_test": {
+        "cagr": -0.2195109960366659,
+        "sharpe": -0.5086392644878696,
+        "max_drawdown": -0.5373088769707357,
+        "total_return": -0.3233069997892337
+      },
+      "full": {
+        "cagr": 0.49090804159406387,
+        "sharpe": 1.1416823881093574,
+        "max_drawdown": -0.5373088769707357,
+        "total_return": 17.428010287627924
+      },
+      "pretest_score": 0.6605844619923256
+    },
+    {
+      "horizons": [
+        20,
+        55,
+        100
+      ],
+      "component_count": 3,
+      "trades": 470,
+      "trades_by_horizon": {
+        "D20": 192,
+        "D55": 151,
+        "D100": 127
+      },
+      "development": {
+        "cagr": 0.5313839868792622,
+        "sharpe": 1.2416929929962284,
+        "max_drawdown": -0.30358750680953006,
+        "total_return": 3.8755395145610025
+      },
+      "validation": {
+        "cagr": 1.2207222486358527,
+        "sharpe": 1.9815379603235765,
+        "max_drawdown": -0.23102353771603823,
+        "total_return": 3.942398811961108
+      },
+      "sealed_test": {
+        "cagr": -0.20282642966445086,
+        "sharpe": -0.46898194886861994,
+        "max_drawdown": -0.5088459640981553,
+        "total_return": -0.3003720736556519
+      },
+      "full": {
+        "cagr": 0.4729686993771387,
+        "sharpe": 1.1397433638304393,
+        "max_drawdown": -0.5088459640981553,
+        "total_return": 15.870248367490394
+      },
+      "pretest_score": 0.6505532861788851,
+      "stress_full": {
+        "cagr": 0.42805290767018844,
+        "sharpe": 1.062515498592042,
+        "max_drawdown": -0.5244762694915179,
+        "total_return": 12.458524167912135
+      }
+    },
+    {
+      "horizons": [
+        100
+      ],
+      "component_count": 1,
+      "trades": 127,
+      "trades_by_horizon": {
+        "D100": 127
+      },
+      "development": {
+        "cagr": 0.5132447523836741,
+        "sharpe": 1.2357180360411957,
+        "max_drawdown": -0.2542422444679113,
+        "total_return": 3.664291292148908
+      },
+      "validation": {
+        "cagr": 0.9558341492756575,
+        "sharpe": 1.807821721916769,
+        "max_drawdown": -0.2217541439907632,
+        "total_return": 2.832324003906354
+      },
+      "sealed_test": {
+        "cagr": -0.15325510105399076,
+        "sharpe": -0.3214704389046694,
+        "max_drawdown": -0.4135243337194646,
+        "total_return": -0.23059926698842492
+      },
+      "full": {
+        "cagr": 0.4322970955085772,
+        "sharpe": 1.105195206817797,
+        "max_drawdown": -0.4145742757990918,
+        "total_return": 12.75309617703667
+      },
+      "pretest_score": 0.6368165559877936
+    },
+    {
+      "horizons": [
+        55,
+        100
+      ],
+      "component_count": 2,
+      "trades": 278,
+      "trades_by_horizon": {
+        "D55": 151,
+        "D100": 127
+      },
+      "development": {
+        "cagr": 0.4964446978848083,
+        "sharpe": 1.1970488092685687,
+        "max_drawdown": -0.3311200132536294,
+        "total_return": 3.4746808794539676
+      },
+      "validation": {
+        "cagr": 0.9731312120250073,
+        "sharpe": 1.8020498683402593,
+        "max_drawdown": -0.25175138568005495,
+        "total_return": 2.9005026702009067
+      },
+      "sealed_test": {
+        "cagr": -0.1826797141340062,
+        "sharpe": -0.4191947816059431,
+        "max_drawdown": -0.4459177364087674,
+        "total_return": -0.27230761197139497
+      },
+      "full": {
+        "cagr": 0.41675523906714473,
+        "sharpe": 1.067506774457062,
+        "max_drawdown": -0.44631029716543824,
+        "total_return": 11.700782528151757
+      },
+      "pretest_score": 0.6136495788116652
+    },
+    {
+      "horizons": [
+        55
+      ],
+      "component_count": 1,
+      "trades": 151,
+      "trades_by_horizon": {
+        "D55": 151
+      },
+      "development": {
+        "cagr": 0.4791043650679294,
+        "sharpe": 1.1382909016875347,
+        "max_drawdown": -0.39862298990160483,
+        "total_return": 3.284946269610849
+      },
+      "validation": {
+        "cagr": 0.9917603748139536,
+        "sharpe": 1.7797361013673505,
+        "max_drawdown": -0.28325904473461816,
+        "total_return": 2.9746052667614022
+      },
+      "sealed_test": {
+        "cagr": -0.21428176121027276,
+        "sharpe": -0.5090282153531891,
+        "max_drawdown": -0.4798851869585936,
+        "total_return": -0.31614886283742816
+      },
+      "full": {
+        "cagr": 0.40002952557949634,
+        "sharpe": 1.015036764599712,
+        "max_drawdown": -0.4798851869585936,
+        "total_return": 10.646648208993684
+      },
+      "pretest_score": 0.592933455236683
+    }
+  ]
+}
