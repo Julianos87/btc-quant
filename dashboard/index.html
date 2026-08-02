@@ -129,11 +129,15 @@
           <button class="chip on" data-n="200">8 j</button>
         </span>
       </h2>
+      <div class="signal-guide" id="signal-guide" data-side="unknown">
+        <strong id="signal-mode">Régime en cours de calcul</strong>
+        <span id="signal-rule">Les entrées sont décidées uniquement à la clôture d’une bougie 4 h.</span>
+      </div>
       <div style="position:relative;margin-top:8px">
-        <svg id="pchart" style="width:100%;height:440px;display:block" role="img" aria-label="Prix BTC et positions"></svg>
+        <svg id="pchart" style="width:100%;height:440px;display:block" role="img" aria-label="Prix BTC, seuils Donchian actifs et positions"></svg>
         <div id="ptip"></div>
       </div>
-      <div style="color:var(--muted);font-size:11px;margin-top:6px">Les bougies de prix sont en 1 h ; les seuils actifs D20 / D55 / D100 et le régime EMA sont calculés sur les seules bougies 4 h clôturées.</div>
+      <div style="color:var(--muted);font-size:11px;margin-top:6px">Bougies affichées : 1 h · décisions, régime EMA et seuils D20 / D55 / D100 : clôtures 4 h uniquement.</div>
       <div style="color:var(--muted);font-size:11px;margin-top:4px">Pas de take-profit fixe : la sortie se fait par
         stop suiveur 3×ATR (remonte avec le prix, ne redescend jamais) ou retournement de régime EMA50/200 — les gains courent.</div>
     </div>

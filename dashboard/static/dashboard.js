@@ -56,6 +56,12 @@ const I18N = {
     yearly_note:"Simulation avec frais, slippage et funding réels — pas des résultats réalisés. Rendements par année civile ; pire creux de l’année au survol.",
     yearly_partial:"année incomplète", yearly_missing:"Référence annuelle absente — lancer scripts/make_yearly_reference.py",
     readiness_title:"Prêt pour le testnet ?", readiness_note:"Critères fixés à froid — le passage ne se décide pas au feeling.",
+    signal_long_mode:"Régime haussier · seuils LONG actifs",
+    signal_short_mode:"Régime baissier · seuils SHORT actifs",
+    signal_unknown_mode:"Régime en cours de calcul",
+    signal_long_rule:"Signal potentiel si une bougie 4 h clôture AU-DESSUS d’un seuil. Une mèche ou un rebond ne suffit pas ; ADX et funding restent contrôlés.",
+    signal_short_rule:"Signal potentiel si une bougie 4 h clôture EN DESSOUS d’un seuil. Une mèche ou un rejet ne suffit pas ; ADX et funding restent contrôlés.",
+    signal_unknown_rule:"Aucune direction n’est affichée tant que le régime 4 h n’est pas disponible.",
     cards:{performance_brief:"Synthèse de performance", risk_radar:"Radar de risque", monitor_pulse:"Pulse opérationnel",
       chart:"Courbe d’équity", price:"Graphe prix", events:"Journal", trend:"Moteur Trend",
       carry:"Moteur Carry", breakdown:"Répartition & records", conformity:"Est-ce normal ?", yearly:"Années précédentes",
@@ -87,6 +93,12 @@ const I18N = {
     yearly_note:"Simulation with real fees, slippage and funding — not realized results. Calendar-year returns; each year's worst drawdown on hover.",
     yearly_partial:"partial year", yearly_missing:"Yearly reference missing — run scripts/make_yearly_reference.py",
     readiness_title:"Ready for testnet?", readiness_note:"Criteria set in advance — the transition is not a gut call.",
+    signal_long_mode:"Bullish regime · active LONG thresholds",
+    signal_short_mode:"Bearish regime · active SHORT thresholds",
+    signal_unknown_mode:"Regime is being calculated",
+    signal_long_rule:"Potential signal only if a 4h candle closes ABOVE a threshold. A wick or bounce is not enough; ADX and funding are still checked.",
+    signal_short_rule:"Potential signal only if a 4h candle closes BELOW a threshold. A wick or rejection is not enough; ADX and funding are still checked.",
+    signal_unknown_rule:"No direction is shown until the 4h regime is available.",
     status_good:"All systems nominal", status_warn:"Monitoring required", status_crit:"Action required",
     status_nominal_detail:"Trend and Carry are responding · safeguards armed",
     status_trend_down:"Trend is not responding", status_carry_down:"Carry is not responding",
@@ -118,6 +130,7 @@ function applyI18n() {
   $("f-refresh").textContent = PREFS.refresh
     ? t("auto_refresh") + " " + (PREFS.refresh/1000) + " s" : (PREFS.lang==="en"?"Manual refresh":"Rafraîchissement manuel");
   if (lastSummary) { renderCockpitStatus(lastSummary); renderViewFocus(lastSummary); }
+  if (pcData) drawPChart();
   updateDataFreshness();
 }
 
@@ -679,13 +692,24 @@ function drawPChart() {
   $("pos-note").textContent = data.positions.length
     ? "— " + data.positions.map(p => `${p.name} ${p.direction === 1 ? "LONG" : "SHORT"} @ ${Math.round(p.entry).toLocaleString("fr-FR")}`).join(" · ")
     : "— aucune position ouverte";
-  if (all.length < 10) { svg.innerHTML = ""; pcView = null; return; }
+  const sideKnown = data.regime_up === true || data.regime_up === false;
+  const isShort = data.regime_up === false;
+  const direction = isShort ? "SHORT" : "LONG";
+  const guide = $("signal-guide");
+  guide.dataset.side = sideKnown ? direction.toLowerCase() : "unknown";
+  $("signal-mode").textContent = t(sideKnown
+    ? (isShort ? "signal_short_mode" : "signal_long_mode")
+    : "signal_unknown_mode");
+  $("signal-rule").textContent = t(sideKnown
+    ? (isShort ? "signal_short_rule" : "signal_long_rule")
+    : "signal_unknown_rule");
+  if (all.length < 10 || !sideKnown) { svg.innerHTML = ""; pcView = null; return; }
   // fenêtre affichée : les pcRange dernières bougies 1h (chips 2 j / 4 j / 8 j)
   const start = Math.max(0, all.length - pcRange);
   const candles = all.slice(start);
-  const side = data.regime_up === false ? "low" : "high";
+  const side = isShort ? "low" : "high";
   const chans = (data.channels || []).map(ch => ({name: ch.name, vals: (ch[side] || []).slice(start)}));
-  const M = {t: 12, r: 64, b: 24, l: 10};
+  const M = {t: 12, r: 104, b: 24, l: 10};
   let lo = Math.min(...candles.map(c => c[3])), hi = Math.max(...candles.map(c => c[2]));
   for (const p of data.positions) { lo = Math.min(lo, p.stop, p.entry); hi = Math.max(hi, p.stop, p.entry); }
   const pad = (hi - lo) * .06; lo -= pad; hi += pad;
@@ -729,7 +753,7 @@ function drawPChart() {
     });
     if (!d) return;
     g += `<path d="${d}" fill="none" stroke="${c}" stroke-width="1.2" opacity=".7" clip-path="url(#pclip)"/>`;
-    labels.push({name: ch.name, color: c, y: Y(last)});
+    labels.push({name: `${ch.name} ${direction}`, color: c, y: Y(last)});
   });
   // étiquettes empilées : si deux niveaux sont confondus, on les écarte de 11px
   labels.sort((a, b) => a.y - b.y);
@@ -784,7 +808,7 @@ function drawPChart() {
   }
   g += `<g id="pcursor"></g>`;
   svg.innerHTML = g;
-  pcView = {candles, chans, positions: data.positions, X, Y, M, W, H};
+  pcView = {candles, chans, positions: data.positions, direction, X, Y, M, W, H};
 }
 
 // survol : réticule aimanté à la bougie + infobulle OHLC / canaux / position
@@ -794,7 +818,7 @@ function drawPChart() {
   svg.addEventListener("mouseleave", hide);
   svg.addEventListener("mousemove", e => {
     if (!pcView) return;
-    const {candles, chans, positions, X, Y, M, W, H} = pcView;
+    const {candles, chans, positions, direction, X, Y, M, W, H} = pcView;
     const r = svg.getBoundingClientRect(), mx = e.clientX - r.left;
     if (mx < M.l || mx > W - M.r) { hide(); return; }
     const i = Math.max(0, Math.min(candles.length - 1,
@@ -811,7 +835,7 @@ function drawPChart() {
     html += `<div class="row"><span>H / B</span><span class="num">${fp(h)} / ${fp(l)}</span></div>`;
     for (const ch of chans) {
       const v = ch.vals[i];
-      if (v != null) html += `<div class="row"><span style="color:${PC_CHCOL[ch.name]}">■ ${ch.name} cassure</span><span class="num">${fp(v)}</span></div>`;
+      if (v != null) html += `<div class="row"><span style="color:${PC_CHCOL[ch.name]}">■ ${ch.name} ${direction}</span><span class="num">${fp(v)}</span></div>`;
     }
     for (const p of positions) {
       html += `<div class="row"><span>${p.name} entrée</span><span class="num">${fp(p.entry)}</span></div>`;

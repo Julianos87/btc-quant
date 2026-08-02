@@ -326,6 +326,16 @@
   }
   #tooltip .t, #ptip .t { color:var(--muted); margin-bottom:7px; font-size:11px; letter-spacing:.3px; }
   #tooltip .row, #ptip .row { display:flex; justify-content:space-between; gap:18px; padding:2px 0; }
+  .signal-guide {
+    display:flex; align-items:center; gap:9px; flex-wrap:wrap; margin-top:10px; padding:9px 12px;
+    border:1px solid var(--ring); border-radius:11px; background:var(--surface-2); font-size:11.5px;
+  }
+  .signal-guide strong { font-size:10.5px; letter-spacing:.65px; text-transform:uppercase; }
+  .signal-guide span { color:var(--ink-2); }
+  .signal-guide[data-side="long"] { border-color:color-mix(in srgb,var(--s2) 42%,var(--ring)); }
+  .signal-guide[data-side="long"] strong { color:var(--good-text); }
+  .signal-guide[data-side="short"] { border-color:color-mix(in srgb,var(--crit) 42%,var(--ring)); }
+  .signal-guide[data-side="short"] strong { color:var(--crit); }
 
   /* ── moteurs ────────────────────────────────────────────── */
   .engines { display:grid; gap:16px; align-content:start; }
