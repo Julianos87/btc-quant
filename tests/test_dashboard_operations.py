@@ -16,6 +16,39 @@ from btcquant.execution.state_store import StateStore
 from btcquant.execution.shadow import BookTop, ShadowCollector, ShadowStore
 
 
+def test_donchian_display_uses_only_closed_4h_bars_for_regime_and_thresholds():
+    four_h = dashboard_app.FOUR_HOURS_MS
+    start = datetime(2026, 1, 1, tzinfo=UTC).timestamp() * 1000
+    closed_4h = []
+    for index in range(220):
+        close = 100.0 + index * 0.1
+        closed_4h.append(
+            [int(start + index * four_h), close - 0.2, close + 1.0, close - 1.0, close]
+        )
+
+    open_ts = int(start + len(closed_4h) * four_h)
+    # Valeurs volontairement absurdes : si la bougie ouverte fuit dans le
+    # calcul, elle retourne le régime et pollue immédiatement les canaux.
+    open_4h = [open_ts, 1.0, 1_000_000.0, 0.01, 1.0]
+    candles_1h = [
+        [open_ts + hour * 3_600_000, 120.0, 121.0, 119.0, 120.0] for hour in range(2)
+    ]
+
+    channels, regime_up = dashboard_app._donchian_channels(
+        candles_1h,
+        [*closed_4h, open_4h],
+        now_ms=open_ts + 2 * 3_600_000,
+    )
+
+    assert regime_up is True
+    assert [channel["name"] for channel in channels] == ["D20", "D55", "D100"]
+    for period, channel in zip((20, 55, 100), channels, strict=True):
+        expected_high = max(row[2] for row in closed_4h[-period:])
+        expected_low = min(row[3] for row in closed_4h[-period:])
+        assert channel["high"] == [expected_high, expected_high]
+        assert channel["low"] == [expected_low, expected_low]
+
+
 def test_operations_endpoint_exposes_metrics_and_incidents(tmp_path, monkeypatch):
     monkeypatch.setattr(dashboard_app, "STATE", tmp_path)
     store = StateStore(tmp_path / "btcquant.db")

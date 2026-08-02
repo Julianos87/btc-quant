@@ -14,6 +14,9 @@ def test_dashboard_loads_external_versioned_assets(monkeypatch):
     assert b"<script>" not in page.data
     assert b"fonts.googleapis.com" not in page.data
     assert b"fonts.gstatic.com" not in page.data
+    assert b"BTC-PERP / USDC" in page.data
+    assert b"Hyperliquid" in page.data
+    assert b"bougies 4 h cl\xc3\xb4tur\xc3\xa9es" in page.data
 
     assert client.get("/static/dashboard.css").status_code == 200
     assert client.get("/static/dashboard.js").status_code == 200
@@ -40,3 +43,4 @@ def test_frontend_escapes_remote_text_before_html_injection():
     assert "${esc(e.msg)}" in javascript
     assert "${esc(r.reason)}" in javascript
     assert "${esc(sl.name)}" in javascript
+    assert 'btcusdt:"BTC-PERP / USDC"' in javascript

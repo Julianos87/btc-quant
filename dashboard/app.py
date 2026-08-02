@@ -329,6 +329,7 @@ _ex_lock = threading.Lock()
 # on ne l'appelle JAMAIS — prix via la dernière bougie 1m (~0,5 s), variation
 # 24 h via les bougies 1h, funding via l'historique des paiements (horaires).
 SYMBOL = "BTC/USDC:USDC"
+FOUR_HOURS_MS = 4 * 3_600_000
 PROFILE_CONFIG = load_config(ROOT / "environments" / "paper" / "config.yaml")
 PORTFOLIO = portfolio_from_config(PROFILE_CONFIG)
 CARRY_POLICY = carry_policy_from_config(PROFILE_CONFIG)
@@ -773,7 +774,10 @@ DONCHIAN_PERIODS = (20, 55, 100)
 
 
 def _donchian_channels(
-    candles_1h: list[list], candles_4h: list[list]
+    candles_1h: list[list],
+    candles_4h: list[list],
+    *,
+    now_ms: int | None = None,
 ) -> tuple[list[dict], bool | None]:
     """Canaux de Donchian 20/55/100 sur bougies 4h (le timeframe de décision du
     trend), rééchantillonnés sur les timestamps 1h du graphique.
@@ -783,12 +787,20 @@ def _donchian_channels(
     barre 4h = extrême des N barres PRÉCÉDENTES (barre courante exclue) — c'est
     le seuil que le runner comparera au close de cette barre. Retourne aussi le
     régime EMA50>EMA200 (4h) qui conditionne le sens des entrées."""
-    if len(candles_4h) < max(DONCHIAN_PERIODS) + 2:
+    current_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
+    current_bucket = current_ms // FOUR_HOURS_MS * FOUR_HOURS_MS
+    # Le flux Hyperliquid contient la bougie 4 h en formation. Elle est utile
+    # comme support temporel pour prolonger le seuil Donchian applicable à la
+    # période courante, mais ne doit jamais influencer le régime EMA : le
+    # moteur Trend ne décide qu'à partir de bougies entièrement clôturées.
+    eligible = [candle for candle in candles_4h if int(candle[0]) <= current_bucket]
+    closed = [candle for candle in eligible if int(candle[0]) + FOUR_HOURS_MS <= current_ms]
+    if len(closed) < max(DONCHIAN_PERIODS) or not eligible:
         return [], None
-    df = pd.DataFrame(candles_4h, columns=["ts", "open", "high", "low", "close"])
-    four_h = 4 * 3_600_000
+    df = pd.DataFrame(eligible, columns=["ts", "open", "high", "low", "close"])
+    closed_df = pd.DataFrame(closed, columns=["ts", "open", "high", "low", "close"])
     idx_of = {int(t): i for i, t in enumerate(df["ts"])}
-    map_idx = [idx_of.get(int(c[0]) // four_h * four_h) for c in candles_1h]
+    map_idx = [idx_of.get(int(c[0]) // FOUR_HOURS_MS * FOUR_HOURS_MS) for c in candles_1h]
 
     def _sample(series: pd.Series) -> list:
         return [
@@ -804,8 +816,8 @@ def _donchian_channels(
         }
         for n in DONCHIAN_PERIODS
     ]
-    e50 = df["close"].ewm(span=50, adjust=False, min_periods=50).mean().iat[-1]
-    e200 = df["close"].ewm(span=200, adjust=False, min_periods=200).mean().iat[-1]
+    e50 = closed_df["close"].ewm(span=50, adjust=False, min_periods=50).mean().iat[-1]
+    e200 = closed_df["close"].ewm(span=200, adjust=False, min_periods=200).mean().iat[-1]
     regime = None if pd.isna(e50) or pd.isna(e200) else bool(e50 > e200)
     return channels, regime
 

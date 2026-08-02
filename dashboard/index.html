@@ -26,7 +26,7 @@
   <button class="iconbtn" id="theme-btn" title="Basculer le thème">🌗 <span data-i18n="theme">Thème</span></button>
   <button class="iconbtn" id="settings-btn" title="Préférences">⚙️ <span data-i18n="settings">Réglages</span></button>
   <span class="spacer"></span>
-  <div class="hm"><div class="lab" data-i18n="btcusdt">BTC / USDT</div><div class="val num display" id="h-price">—</div></div>
+  <div class="hm"><div class="lab" data-i18n="btcusdt">BTC-PERP / USDC</div><div class="val num display" id="h-price">—</div></div>
   <div class="hm"><div class="lab" data-i18n="h24">24 heures</div><div class="val num" id="h-change">—</div></div>
   <div class="hm"><div class="lab" data-i18n="funding_ann">Funding annualisé</div><div class="val num" id="h-funding">—</div></div>
 </header>
@@ -122,7 +122,7 @@
     </div>
 
     <div class="card" data-card="price">
-      <h2>BTC/USDT · 1 h <span style="color:var(--muted);font-weight:500;font-size:11.5px" id="pos-note">— aucune position ouverte</span>
+      <h2>BTC-PERP / USDC · Hyperliquid · 1 h <span style="color:var(--muted);font-weight:500;font-size:11.5px" id="pos-note">— aucune position ouverte</span>
         <span class="chips" id="prange" style="margin-left:auto">
           <button class="chip" data-n="48">2 j</button>
           <button class="chip" data-n="96">4 j</button>
@@ -133,7 +133,8 @@
         <svg id="pchart" style="width:100%;height:440px;display:block" role="img" aria-label="Prix BTC et positions"></svg>
         <div id="ptip"></div>
       </div>
-      <div style="color:var(--muted);font-size:11px;margin-top:6px">Pas de take-profit fixe : la sortie se fait par
+      <div style="color:var(--muted);font-size:11px;margin-top:6px">Les bougies de prix sont en 1 h ; les seuils actifs D20 / D55 / D100 et le régime EMA sont calculés sur les seules bougies 4 h clôturées.</div>
+      <div style="color:var(--muted);font-size:11px;margin-top:4px">Pas de take-profit fixe : la sortie se fait par
         stop suiveur 3×ATR (remonte avec le prix, ne redescend jamais) ou retournement de régime EMA50/200 — les gains courent.</div>
     </div>
 

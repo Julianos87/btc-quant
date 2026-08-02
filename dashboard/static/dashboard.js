@@ -18,7 +18,7 @@ const LOCALE = () => PREFS.lang === "en" ? "en-US" : "fr-FR";
 // ── i18n ───────────────────────────────────────────────────
 const I18N = {
   fr: {
-    paper:"PAPER TRADING", theme:"Thème", settings:"Réglages", btcusdt:"BTC / USDT",
+    paper:"PAPER TRADING", theme:"Thème", settings:"Réglages", btcusdt:"BTC-PERP / USDC",
     h24:"24 heures", funding_ann:"Funding annualisé", live_perf:"Performance en direct",
     realized:"réalisé", exposure_health:"Exposition & santé", gross_exposure:"Exposition brute",
     leverage_note:"levier effectif · repère = 1× (notionnel = équity)", next_bar:"Prochaine bougie 4 h",
@@ -63,7 +63,7 @@ const I18N = {
       readiness:"Prêt pour le testnet ?"},
   },
   en: {
-    paper:"PAPER TRADING", theme:"Theme", settings:"Settings", btcusdt:"BTC / USDT",
+    paper:"PAPER TRADING", theme:"Theme", settings:"Settings", btcusdt:"BTC-PERP / USDC",
     h24:"24 hours", funding_ann:"Annualized funding", live_perf:"Live performance",
     realized:"realized", exposure_health:"Exposure & health", gross_exposure:"Gross exposure",
     leverage_note:"effective leverage · marker = 1× (notional = equity)", next_bar:"Next 4h candle",
