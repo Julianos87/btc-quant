@@ -12,7 +12,7 @@
   },
   "provenance": {
     "script_sha256": "100de12101447c698e655f749f823aa453a2b7d5cb3825c7cb7dd4bac8785759",
-    "source_tree_sha256": "7bba96709d3f982846b9a4c79fe25c81720767c032b7368d557c1ab70402b8ff",
+    "source_tree_sha256": "865c00f93b96eb3635a6cdbb059c5b14755834c764c09fc23d0bef3d5b1454a2",
     "config": {
       "path": "environments/paper/config.yaml",
       "sha256": "de8905ef1ed866fe5bc43c6421bb2e1f866d7c290b982b8dc9330b006c925011"

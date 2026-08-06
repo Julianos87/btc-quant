@@ -231,8 +231,7 @@ def main() -> None:
             selected["sealed_test"]["cagr"] >= baseline["sealed_test"]["cagr"]
         ),
         "sealed_drawdown_no_worse": (
-            selected["sealed_test"]["max_drawdown"]
-            >= baseline["sealed_test"]["max_drawdown"]
+            selected["sealed_test"]["max_drawdown"] >= baseline["sealed_test"]["max_drawdown"]
         ),
         "stress_drawdown_above_halt": selected["stress_full"]["max_drawdown"] > -0.60,
     }
@@ -243,8 +242,7 @@ def main() -> None:
         if spec.get("enabled") and spec.get("type") == "trend_ls"
     ]
     configured_adaptive = bool(configured_specs) and all(
-        spec.get("params", {}).get("adaptive_regime_enabled") is True
-        for spec in configured_specs
+        spec.get("params", {}).get("adaptive_regime_enabled") is True for spec in configured_specs
     )
     operator_override = configured_adaptive and not adopted
     data_paths = (

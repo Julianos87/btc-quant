@@ -49,7 +49,10 @@ def test_frontend_escapes_remote_text_before_html_injection():
     assert "${esc(sl.name)}" in javascript
     assert 'btcusdt:"BTC-PERP / USDC"' in javascript
     assert 'signal_wait:"ATTENTE · AUCUN SIGNAL"' in javascript
-    assert 'label: `${ch.name} ${ch.direction}${ch.active ? "" : ` · ${t("inactive_suffix")}`}`' in javascript
+    assert (
+        'label: `${ch.name} ${ch.direction}${ch.active ? "" : ` · ${t("inactive_suffix")}`}`'
+        in javascript
+    )
     assert 'direction:"LONG", active:!isShort' in javascript
     assert 'direction:"SHORT", active:isShort' in javascript
     assert "const waiting = candles.map" in javascript

@@ -146,9 +146,7 @@ class TrendLS(Strategy):
                         smoothing_span=int(p["adaptive_smoothing_span"]),
                         minimum_multiplier=float(p["adaptive_min_multiplier"]),
                         maximum_multiplier=float(p["adaptive_max_multiplier"]),
-                        volatility_shock_ratio=float(
-                            p["adaptive_volatility_shock_ratio"]
-                        ),
+                        volatility_shock_ratio=float(p["adaptive_volatility_shock_ratio"]),
                     ),
                 )
             )

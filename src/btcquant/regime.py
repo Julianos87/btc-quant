@@ -78,22 +78,18 @@ def adaptive_regime_frame(
 
     volatility = realized_vol(close, cfg.volatility_bars, bars_per_year)
     volatility_reference = (
-        volatility.shift(1)
-        .rolling(cfg.reference_bars, min_periods=cfg.reference_bars)
-        .median()
+        volatility.shift(1).rolling(cfg.reference_bars, min_periods=cfg.reference_bars).median()
     )
     volatility_ratio = _safe_ratio(volatility, volatility_reference)
-    shock_progress = (
-        (volatility_ratio - 1.0) / (cfg.volatility_shock_ratio - 1.0)
-    ).clip(0.0, 1.0)
+    shock_progress = ((volatility_ratio - 1.0) / (cfg.volatility_shock_ratio - 1.0)).clip(0.0, 1.0)
     volatility_score = 1.0 - shock_progress
 
     adx_score = ((adx_values - 15.0) / 20.0).clip(0.0, 1.0)
     trend_quality = (0.55 * efficiency_score + 0.45 * adx_score).clip(0.0, 1.0)
     raw_score = (trend_quality * volatility_score).clip(0.0, 1.0)
-    raw_multiplier = cfg.minimum_multiplier + (
-        cfg.maximum_multiplier - cfg.minimum_multiplier
-    ) * raw_score
+    raw_multiplier = (
+        cfg.minimum_multiplier + (cfg.maximum_multiplier - cfg.minimum_multiplier) * raw_score
+    )
     multiplier = raw_multiplier.ewm(
         span=cfg.smoothing_span,
         adjust=False,

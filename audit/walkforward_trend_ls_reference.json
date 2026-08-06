@@ -4,7 +4,7 @@
   "purpose": "Référence walk-forward de recherche; aucune promesse de performance",
   "provenance": {
     "base_git_commit": "f473573895010ba87e61873e5fe84d494c72a31b",
-    "source_tree_sha256": "7bba96709d3f982846b9a4c79fe25c81720767c032b7368d557c1ab70402b8ff",
+    "source_tree_sha256": "865c00f93b96eb3635a6cdbb059c5b14755834c764c09fc23d0bef3d5b1454a2",
     "script": {
       "path": "scripts/run_walkforward.py",
       "sha256": "c2ad5e5418af035011f80fd54dbf37749d864f546edb9b1da7aeba4917b37966"

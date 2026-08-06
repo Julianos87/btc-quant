@@ -54,9 +54,7 @@ def _source_tree_sha256() -> str:
 
 def _all_combinations() -> tuple[tuple[int, ...], ...]:
     return tuple(
-        combo
-        for size in range(1, len(HORIZONS) + 1)
-        for combo in combinations(HORIZONS, size)
+        combo for size in range(1, len(HORIZONS) + 1) for combo in combinations(HORIZONS, size)
     )
 
 
@@ -268,9 +266,7 @@ def main() -> None:
     selected["stress_full"] = _summary(selected_stress_equity)
     selected_pair["stress_full"] = _summary(selected_pair_stress_equity)
 
-    single_curves = {
-        horizon: normal_runs[(horizon,)][0] for horizon in HORIZONS
-    }
+    single_curves = {horizon: normal_runs[(horizon,)][0] for horizon in HORIZONS}
     full_trades = normal_runs[HORIZONS][1]
     pair_overlap = {
         f"D{left}_D{right}": _entry_overlap(
@@ -307,17 +303,12 @@ def main() -> None:
     }
     simplification_checks = {
         "pair_selected_without_sealed_test": True,
-        "full_cagr_above_trio": (
-            selected_pair["full"]["cagr"] > baseline["full"]["cagr"]
-        ),
-        "full_sharpe_no_worse": (
-            selected_pair["full"]["sharpe"] >= baseline["full"]["sharpe"]
-        ),
+        "full_cagr_above_trio": (selected_pair["full"]["cagr"] > baseline["full"]["cagr"]),
+        "full_sharpe_no_worse": (selected_pair["full"]["sharpe"] >= baseline["full"]["sharpe"]),
         # Même tolérance que la recherche de pyramiding déjà adoptée : au plus
         # un point de drawdown supplémentaire, jamais une dérive ouverte.
         "full_drawdown_degradation_at_most_1pp": (
-            selected_pair["full"]["max_drawdown"]
-            >= baseline["full"]["max_drawdown"] - 0.01
+            selected_pair["full"]["max_drawdown"] >= baseline["full"]["max_drawdown"] - 0.01
         ),
         "sealed_cagr_no_worse": (
             selected_pair["sealed_test"]["cagr"] >= baseline["sealed_test"]["cagr"]
@@ -325,9 +316,7 @@ def main() -> None:
         "sealed_sharpe_no_worse": (
             selected_pair["sealed_test"]["sharpe"] >= baseline["sealed_test"]["sharpe"]
         ),
-        "stress_drawdown_above_halt": (
-            selected_pair["stress_full"]["max_drawdown"] > -0.60
-        ),
+        "stress_drawdown_above_halt": (selected_pair["stress_full"]["max_drawdown"] > -0.60),
     }
     historical_pair_gate = all(simplification_checks.values())
     data_paths = (
@@ -374,9 +363,7 @@ def main() -> None:
         "simplification_checks": simplification_checks,
         "historical_pair_gate_passed": historical_pair_gate,
         "recommendation": (
-            "FORWARD_CHALLENGER_D20_D100"
-            if historical_pair_gate
-            else "KEEP_D20_D55_D100"
+            "FORWARD_CHALLENGER_D20_D100" if historical_pair_gate else "KEEP_D20_D55_D100"
         ),
         "recommend_simplification_now": False,
         "candidates_ranked_pretest": ranked,
