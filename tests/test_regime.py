@@ -49,7 +49,9 @@ def test_adaptive_multiplier_is_bounded_and_warmup_is_explicit():
         "TREND",
         "STRESS",
     }
-    assert (result.loc[result["adaptive_risk_multiplier"].isna(), "adaptive_regime"] == "WARMUP").all()
+    assert (
+        result.loc[result["adaptive_risk_multiplier"].isna(), "adaptive_regime"] == "WARMUP"
+    ).all()
 
 
 @pytest.mark.parametrize(

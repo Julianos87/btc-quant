@@ -30,9 +30,7 @@ def test_donchian_display_uses_only_closed_4h_bars_for_regime_and_thresholds():
     # Valeurs volontairement absurdes : si la bougie ouverte fuit dans le
     # calcul, elle retourne le régime et pollue immédiatement les canaux.
     open_4h = [open_ts, 1.0, 1_000_000.0, 0.01, 1.0]
-    candles_1h = [
-        [open_ts + hour * 3_600_000, 120.0, 121.0, 119.0, 120.0] for hour in range(2)
-    ]
+    candles_1h = [[open_ts + hour * 3_600_000, 120.0, 121.0, 119.0, 120.0] for hour in range(2)]
 
     channels, regime_up = dashboard_app._donchian_channels(
         candles_1h,

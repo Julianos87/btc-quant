@@ -31,7 +31,7 @@ default-groups = ["dev", "exchange", "dashboard"]
 
 [dependency-groups]
 exchange = [
-    "ccxt>=4.3",
+    "ccxt>=4.5.71",
 ]
 dashboard = [
     "flask>=3.0",

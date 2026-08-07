@@ -207,9 +207,7 @@ def _check_carry_net_edge_research(*, verify_local_data: bool) -> None:
         "real_market_inputs_complete", False
     )
     if payload.get("adopted") and not real_inputs_complete:
-        raise SystemExit(
-            "Recherche carry nette invalide : adoption sans emprunt et basis complets"
-        )
+        raise SystemExit("Recherche carry nette invalide : adoption sans emprunt et basis complets")
 
 
 def _check_adaptive_regime_research(
