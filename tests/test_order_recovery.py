@@ -7,8 +7,16 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from btcquant.execution.broker import Broker, BrokerOrderSnapshot, Fill, PaperBroker
+from btcquant.execution.broker import (
+    Broker,
+    BrokerOrderResult,
+    BrokerOrderSnapshot,
+    Fill,
+    PaperBroker,
+)
 from btcquant.execution.ccxt_broker import CcxtBroker
+from btcquant.execution.errors import ReconciliationRequired
+from btcquant.execution.order_state import ExternalOrderState, LocalOrderState
 from btcquant.execution.recovery import recover_interrupted_orders
 from btcquant.execution.runner import LiveRunner, StrategySlot
 from btcquant.execution.state_store import StateStore
@@ -46,23 +54,29 @@ class LookupBroker(Broker):
         self,
         snapshot: BrokerOrderSnapshot | None = None,
         *,
-        fill: Fill | None = None,
+        result: BrokerOrderResult | None = None,
         lookup_error: Exception | None = None,
         execute_error: Exception | None = None,
         crash_before_send: bool = False,
     ) -> None:
         self.snapshot = snapshot
-        self.fill = fill or Fill(price=100.0, qty=1.0, fee=0.1, broker_order_id="remote-1")
+        self.result = result or BrokerOrderResult(
+            fill=Fill(price=100.0, qty=1.0, fee=0.1, broker_order_id="remote-1"),
+            status=ExternalOrderState.FILLED,
+            requested_qty=1.0,
+            remaining_qty=0.0,
+        )
         self.lookup_error = lookup_error
         self.execute_error = execute_error
         self.crash_before_send = crash_before_send
         self.last_client_order_id: str | None = None
+        self.execute_calls = 0
 
-    def market_buy(self, qty: float, ref_price: float) -> Fill:
-        return self.fill
+    def market_buy(self, qty: float, ref_price: float) -> BrokerOrderResult:
+        return self.result
 
-    def market_sell(self, qty: float, ref_price: float) -> Fill:
-        return self.fill
+    def market_sell(self, qty: float, ref_price: float) -> BrokerOrderResult:
+        return self.result
 
     def execute_market(
         self,
@@ -75,7 +89,7 @@ class LookupBroker(Broker):
         available_volume: float | None = None,
         delayed_price: float | None = None,
         volatility_annual: float | None = None,
-    ) -> Fill:
+    ) -> BrokerOrderResult:
         del (
             side,
             qty,
@@ -85,12 +99,13 @@ class LookupBroker(Broker):
             delayed_price,
             volatility_annual,
         )
+        self.execute_calls += 1
         self.last_client_order_id = client_order_id
         if self.crash_before_send:
             raise PowerLoss("crash before broker send")
         if self.execute_error is not None:
             raise self.execute_error
-        return self.fill
+        return self.result
 
     def lookup_order(self, client_order_id: str) -> BrokerOrderSnapshot | None:
         if self.lookup_error is not None:
@@ -130,7 +145,7 @@ def risk() -> RiskConfig:
 
 
 def pending_order(store: StateStore, intent_id: str = "intent-1") -> int:
-    return store.begin_order(
+    order_id = store.begin_order(
         "trend",
         "recovery",
         intent_id,
@@ -139,6 +154,7 @@ def pending_order(store: StateStore, intent_id: str = "intent-1") -> int:
         1.0,
         "entry",
     )
+    return order_id
 
 
 def make_runner(path: Path, broker: Broker) -> tuple[LiveRunner, StrategySlot]:
@@ -182,7 +198,7 @@ def test_ccxt_uses_stable_client_id_and_returns_broker_id():
     broker.exchange = FakeExchange()
     broker.symbol = "BTC/USDT"
 
-    fill = broker.execute_market(
+    result = broker.execute_market(
         "BUY",
         2.0,
         100.0,
@@ -191,8 +207,9 @@ def test_ccxt_uses_stable_client_id_and_returns_broker_id():
 
     expected_client_id = CcxtBroker._external_client_order_id("local-intent-123")
     assert broker.exchange.params == {"newClientOrderId": expected_client_id}
-    assert fill.broker_order_id == "exchange-123"
-    assert fill.qty == pytest.approx(2.0)
+    assert result.fill.broker_order_id == "exchange-123"
+    assert result.fill.qty == pytest.approx(2.0)
+    assert result.status == ExternalOrderState.FILLED
 
 
 def test_ccxt_lookup_uses_the_same_deterministic_client_id():
@@ -244,7 +261,7 @@ def test_paper_intent_is_safely_aborted_after_restart(tmp_path):
     assert store.read_orders("trend")[0]["status"] == "RECOVERED_ABORTED"
 
 
-def test_external_absence_confirmed_is_recovered_automatically(tmp_path):
+def test_external_absence_after_submission_is_ambiguous_and_blocks(tmp_path):
     store = StateStore(tmp_path / "btcquant.db")
     order_id = pending_order(store)
 
@@ -255,9 +272,13 @@ def test_external_absence_confirmed_is_recovered_automatically(tmp_path):
         external=True,
     )
 
-    assert report.can_start
-    assert report.recovered_order_ids == [order_id]
-    assert store.read_orders("trend")[0]["status"] == "RECOVERED_ABORTED"
+    assert not report.can_start
+    assert report.recovered_order_ids == []
+    assert order_id in report.lookup_errors
+    order = store.read_orders("trend")[0]
+    assert order["status"] == "PENDING"
+    assert order["external_state"] == ExternalOrderState.UNKNOWN
+    assert order["local_state"] == LocalOrderState.PENDING_RECONCILIATION
 
 
 @pytest.mark.parametrize("remote_status", ["CANCELED", "REJECTED", "EXPIRED"])
@@ -332,13 +353,39 @@ def test_lookup_outage_keeps_pending_order_retryable(tmp_path):
     assert store.read_orders("trend")[0]["status"] == "PENDING"
 
 
-def test_crash_before_broker_send_leaves_recoverable_intent(tmp_path):
+def test_open_order_is_rechecked_and_can_resolve_after_confirmed_cancellation(tmp_path):
+    store = StateStore(tmp_path / "btcquant.db")
+    order_id = pending_order(store)
+    broker = LookupBroker(
+        BrokerOrderSnapshot("intent-1", "remote-open", "OPEN", 0.0, remaining_qty=1.0)
+    )
+
+    first = recover_interrupted_orders(store, broker, "trend", external=True)
+    broker.snapshot = BrokerOrderSnapshot(
+        "intent-1",
+        "remote-open",
+        "CANCELED",
+        0.0,
+        remaining_qty=0.0,
+    )
+    second = recover_interrupted_orders(store, broker, "trend", external=True)
+
+    assert not first.can_start
+    assert second.can_start
+    assert second.recovered_order_ids == [order_id]
+    order = store.read_orders("trend")[0]
+    assert order["status"] == "RECOVERED_ABORTED"
+    assert order["external_state"] == ExternalOrderState.CANCELED
+    assert order["local_state"] == LocalOrderState.TERMINAL
+
+
+def test_crash_after_submitting_before_send_is_ambiguous_and_blocks(tmp_path):
     broker = LookupBroker(crash_before_send=True)
     runner, slot = make_runner(tmp_path / "btcquant.db", broker)
     row = pd.Series({"close": 100.0, "volume": 100.0, "_rvol": float("nan")})
 
     with pytest.raises(PowerLoss, match="before broker send"):
-        runner._enter_position(slot, row, 100.0, 1)
+        runner._enter_position(slot, row, 100.0, 1, decision_checkpoint="2026-08-09T16:00:00Z")
 
     assert runner.store.pending_orders("trend")
     broker.crash_before_send = False
@@ -348,8 +395,10 @@ def test_crash_before_broker_send_leaves_recoverable_intent(tmp_path):
         "trend",
         external=True,
     )
-    assert report.can_start
-    assert runner.store.read_orders("trend")[0]["status"] == "RECOVERED_ABORTED"
+    assert not report.can_start
+    order = runner.store.read_orders("trend")[0]
+    assert order["status"] == "PENDING"
+    assert order["local_state"] == LocalOrderState.PENDING_RECONCILIATION
 
 
 def test_network_timeout_stays_pending_until_broker_lookup(tmp_path):
@@ -368,8 +417,8 @@ def test_network_timeout_stays_pending_until_broker_lookup(tmp_path):
     runner, slot = make_runner(tmp_path / "btcquant.db", broker)
     row = pd.Series({"close": 100.0, "volume": 100.0, "_rvol": float("nan")})
 
-    with pytest.raises(TimeoutError, match="response lost"):
-        runner._enter_position(slot, row, 100.0, 1)
+    with pytest.raises(ReconciliationRequired, match="résultat externe ambigu"):
+        runner._enter_position(slot, row, 100.0, 1, decision_checkpoint="2026-08-09T16:00:00Z")
 
     order = runner.store.read_orders("trend")[0]
     assert order["status"] == "PENDING"
@@ -383,6 +432,101 @@ def test_network_timeout_stays_pending_until_broker_lookup(tmp_path):
     )
     assert not report.can_start
     assert runner.store.read_orders("trend")[0]["status"] == "UNBALANCED"
+
+
+def test_open_market_result_stops_runner_before_applying_position(tmp_path):
+    broker = LookupBroker(
+        result=BrokerOrderResult(
+            fill=Fill(price=100.0, qty=0.0, fee=0.0, broker_order_id="remote-open"),
+            status=ExternalOrderState.OPEN,
+            requested_qty=1.0,
+            remaining_qty=1.0,
+        )
+    )
+    runner, slot = make_runner(tmp_path / "btcquant.db", broker)
+    row = pd.Series({"close": 100.0, "volume": 100.0, "_rvol": float("nan")})
+
+    with pytest.raises(ReconciliationRequired, match="non terminal"):
+        runner._enter_position(
+            slot,
+            row,
+            100.0,
+            1,
+            decision_checkpoint="2026-08-09T16:00:00Z",
+        )
+
+    order = runner.store.read_orders("trend")[0]
+    assert broker.execute_calls == 1
+    assert slot.position is None
+    assert order["status"] == "OPEN"
+    assert order["external_state"] == ExternalOrderState.OPEN
+    assert order["local_state"] == LocalOrderState.AWAITING_EXTERNAL
+    assert runner.store.load_engine_state("trend") is not None
+
+
+def test_open_result_with_failed_checkpoint_still_stops_fail_closed(tmp_path, monkeypatch):
+    broker = LookupBroker(
+        result=BrokerOrderResult(
+            fill=Fill(price=100.0, qty=0.0, fee=0.0, broker_order_id="remote-open"),
+            status=ExternalOrderState.OPEN,
+            requested_qty=1.0,
+            remaining_qty=1.0,
+        )
+    )
+    runner, slot = make_runner(tmp_path / "btcquant.db", broker)
+    row = pd.Series({"close": 100.0, "volume": 100.0, "_rvol": float("nan")})
+    monkeypatch.setattr(
+        runner.store,
+        "save_engine_state",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk unavailable")),
+    )
+
+    with pytest.raises(ReconciliationRequired, match="checkpoint impossible"):
+        runner._enter_position(
+            slot,
+            row,
+            100.0,
+            1,
+            decision_checkpoint="2026-08-09T16:00:00Z",
+        )
+
+    order = runner.store.read_orders("trend")[0]
+    assert broker.execute_calls == 1
+    assert slot.position is None
+    assert order["external_state"] == ExternalOrderState.OPEN
+    assert order["local_state"] == LocalOrderState.AWAITING_EXTERNAL
+
+
+def test_confirmed_rejection_advances_persisted_sequence_for_next_decision(tmp_path):
+    rejected = BrokerOrderResult(
+        fill=Fill(price=100.0, qty=0.0, fee=0.0, broker_order_id="rejected-1"),
+        status=ExternalOrderState.REJECTED,
+        requested_qty=1.0,
+        remaining_qty=0.0,
+    )
+    broker = LookupBroker(result=rejected)
+    broker.supports_stop_orders = False
+    runner, slot = make_runner(tmp_path / "btcquant.db", broker)
+    row = pd.Series({"close": 100.0, "volume": 100.0, "_rvol": float("nan")})
+    checkpoint = "2026-08-09T16:00:00Z"
+
+    runner._enter_position(slot, row, 100.0, 1, decision_checkpoint=checkpoint)
+    broker.result = BrokerOrderResult(
+        fill=Fill(price=100.0, qty=1.0, fee=0.1, broker_order_id="filled-2"),
+        status=ExternalOrderState.FILLED,
+        requested_qty=1.0,
+        remaining_qty=0.0,
+    )
+    runner._enter_position(slot, row, 100.0, 1, decision_checkpoint=checkpoint)
+
+    orders = runner.store.read_orders("trend")
+    assert broker.execute_calls == 2
+    assert len(orders) == 2
+    assert orders[0]["logical_order_key"] != orders[1]["logical_order_key"]
+    assert slot.financial_transition_seq == 2
+    persisted = runner.store.load_engine_state("trend")
+    assert persisted is not None
+    assert persisted["slots"]["recovery"]["financial_transition_seq"] == 2
 
 
 def test_crash_after_fill_before_checkpoint_is_never_auto_applied(tmp_path, monkeypatch):
@@ -403,7 +547,7 @@ def test_crash_after_fill_before_checkpoint_is_never_auto_applied(tmp_path, monk
 
     monkeypatch.setattr(runner.store, "complete_order_and_checkpoint", crash_checkpoint)
     with pytest.raises(PowerLoss, match="after fill"):
-        runner._enter_position(slot, row, 100.0, 1)
+        runner._enter_position(slot, row, 100.0, 1, decision_checkpoint="2026-08-09T16:00:00Z")
 
     assert slot.position is not None  # mémoire du processus mourant uniquement
     assert runner.store.load_engine_state("trend") is None
@@ -415,6 +559,58 @@ def test_crash_after_fill_before_checkpoint_is_never_auto_applied(tmp_path, monk
     )
     assert not report.can_start
     assert StateStore(tmp_path / "btcquant.db").read_orders("trend")[0]["status"] == "UNBALANCED"
+
+
+def test_checkpoint_exception_after_fill_stops_runner_fail_closed(tmp_path, monkeypatch):
+    broker = LookupBroker()
+    runner, slot = make_runner(tmp_path / "btcquant.db", broker)
+    row = pd.Series({"close": 100.0, "volume": 100.0, "_rvol": float("nan")})
+    monkeypatch.setattr(
+        runner.store,
+        "complete_order_and_checkpoint",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk unavailable")),
+    )
+
+    with pytest.raises(ReconciliationRequired, match="checkpoint métier impossible"):
+        runner._enter_position(
+            slot,
+            row,
+            100.0,
+            1,
+            decision_checkpoint="2026-08-09T16:00:00Z",
+        )
+
+    order = runner.store.read_orders("trend")[0]
+    assert broker.execute_calls == 1
+    assert order["external_state"] == ExternalOrderState.FILLED
+    assert order["local_state"] == LocalOrderState.PENDING_RECONCILIATION
+    assert runner.store.load_engine_state("trend") is None
+
+
+def test_accounting_exception_after_fill_stops_runner_fail_closed(tmp_path, monkeypatch):
+    broker = LookupBroker()
+    runner, slot = make_runner(tmp_path / "btcquant.db", broker)
+    row = pd.Series({"close": 100.0, "volume": 100.0, "_rvol": float("nan")})
+    monkeypatch.setattr(
+        runner.accounting_service,
+        "open_position",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("accounting unavailable")),
+    )
+
+    with pytest.raises(ReconciliationRequired, match="application métier impossible"):
+        runner._enter_position(
+            slot,
+            row,
+            100.0,
+            1,
+            decision_checkpoint="2026-08-09T16:00:00Z",
+        )
+
+    order = runner.store.read_orders("trend")[0]
+    assert broker.execute_calls == 1
+    assert order["external_state"] == ExternalOrderState.FILLED
+    assert order["local_state"] == LocalOrderState.PENDING_RECONCILIATION
+    assert runner.store.load_engine_state("trend") is None
 
 
 def test_crash_after_atomic_checkpoint_needs_no_recovery(tmp_path, monkeypatch):
@@ -429,7 +625,7 @@ def test_crash_after_atomic_checkpoint_needs_no_recovery(tmp_path, monkeypatch):
 
     monkeypatch.setattr(runner.store, "complete_order_and_checkpoint", checkpoint_then_crash)
     with pytest.raises(PowerLoss, match="committed checkpoint"):
-        runner._enter_position(slot, row, 100.0, 1)
+        runner._enter_position(slot, row, 100.0, 1, decision_checkpoint="2026-08-09T16:00:00Z")
 
     restarted_store = StateStore(tmp_path / "btcquant.db")
     assert restarted_store.unresolved_orders("trend") == []
@@ -467,7 +663,7 @@ def test_hyperliquid_market_exit_uses_reference_price_cloid_and_reduce_only():
     broker.exchange_id = "hyperliquid"
     broker.symbol = "BTC/USDC:USDC"
 
-    fill = broker.execute_market(
+    result = broker.execute_market(
         "SELL",
         0.01,
         50_000.0,
@@ -475,7 +671,7 @@ def test_hyperliquid_market_exit_uses_reference_price_cloid_and_reduce_only():
         reduce_only=True,
     )
 
-    assert fill.broker_order_id == "hl-123"
+    assert result.fill.broker_order_id == "hl-123"
     assert broker.exchange.created is not None
     _, order_type, side, qty, price, params = broker.exchange.created
     assert (order_type, side, qty, price) == ("market", "sell", 0.01, 50_000.0)

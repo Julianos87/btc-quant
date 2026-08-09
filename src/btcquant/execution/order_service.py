@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-import uuid
-from collections.abc import Callable
 from dataclasses import dataclass
 
 from .broker import Broker, Fill
-from .state_store import StateStore
+from .errors import FinancialTransitionAlreadyReserved, ReconciliationRequired
+from .order_state import (
+    ExternalOrderState,
+    FinancialTransitionType,
+    LocalOrderState,
+    LogicalOrderIdentity,
+)
+from .state_store import OrderReservation, StateStore
 
 
 @dataclass(frozen=True)
@@ -15,7 +20,12 @@ class SubmittedOrder:
     fill: Fill
     order_id: int
     intent_id: str
+    logical_order_key: str
     status: str
+    external_state: ExternalOrderState
+    remaining_qty: float
+    is_terminal: bool
+    transition_sequence: int
 
 
 class OrderExecutionService:
@@ -23,12 +33,41 @@ class OrderExecutionService:
         self,
         store: StateStore,
         broker: Broker,
-        *,
-        intent_factory: Callable[[], str] | None = None,
     ) -> None:
         self.store = store
         self.broker = broker
-        self.intent_factory = intent_factory or (lambda: uuid.uuid4().hex)
+
+    @staticmethod
+    def _legacy_terminal_status(
+        external_state: ExternalOrderState,
+    ) -> str:
+        if external_state == ExternalOrderState.FILLED:
+            return "FILLED"
+        if external_state == ExternalOrderState.PARTIAL_TERMINAL:
+            return "PARTIAL"
+        if external_state == ExternalOrderState.REJECTED:
+            return "REJECTED"
+        if external_state in (ExternalOrderState.CANCELED, ExternalOrderState.EXPIRED):
+            return "CANCELED"
+        if external_state in (ExternalOrderState.OPEN, ExternalOrderState.PARTIAL_OPEN):
+            return "OPEN"
+        return "PENDING"
+
+    @staticmethod
+    def _can_start_next_attempt(reservation: OrderReservation) -> bool:
+        """Une tentative suivante exige la preuve que la précédente est finie sans effet."""
+
+        return (
+            reservation.local_state == LocalOrderState.TERMINAL.value
+            and reservation.external_state
+            in {
+                ExternalOrderState.CANCELED.value,
+                ExternalOrderState.REJECTED.value,
+                ExternalOrderState.EXPIRED.value,
+            }
+            and reservation.filled_qty <= 1e-12
+            and reservation.remaining_qty <= 1e-12
+        )
 
     def submit_market(
         self,
@@ -39,24 +78,74 @@ class OrderExecutionService:
         qty: float,
         reference_price: float,
         reason: str,
+        decision_checkpoint: str,
+        transition_type: FinancialTransitionType | str,
+        position_generation: str | None = None,
+        transition_sequence: int = 0,
         reduce_only: bool = False,
         available_volume: float | None = None,
         volatility_annual: float | None = None,
     ) -> SubmittedOrder:
-        intent_id = f"{engine}-{slot}-{self.intent_factory()}"
-        order_id = self.store.begin_order(
-            engine,
-            slot,
-            intent_id,
-            "MARKET",
-            side,
-            qty,
-            reason,
-            reference_price=reference_price,
-        )
+        if not isinstance(side, str):
+            raise ValueError(f"Côté d'ordre invalide : {side!r}")
+        normalized_side = side.strip().upper()
+        if normalized_side not in {"BUY", "SELL"}:
+            raise ValueError(f"Côté d'ordre invalide : {side!r}")
+        normalized_transition = FinancialTransitionType(transition_type)
+        expected_entry_side = {
+            FinancialTransitionType.ENTER_LONG: "BUY",
+            FinancialTransitionType.ENTER_SHORT: "SELL",
+        }.get(normalized_transition)
+        if expected_entry_side is not None and normalized_side != expected_entry_side:
+            raise ValueError(
+                f"{normalized_transition.value} exige le côté {expected_entry_side}, "
+                f"pas {normalized_side}"
+            )
+        attempt_sequence = transition_sequence
+        while True:
+            identity = LogicalOrderIdentity(
+                engine=engine,
+                slot=slot,
+                decision_checkpoint=decision_checkpoint,
+                transition_type=normalized_transition,
+                position_generation=position_generation,
+                transition_sequence=attempt_sequence,
+            )
+            reservation = self.store.reserve_market_order(
+                identity,
+                side=normalized_side,
+                requested_qty=qty,
+                reason=reason,
+                reference_price=reference_price,
+            )
+            if reservation.acquired:
+                self.store.mark_order_submitting(reservation.order_id)
+                break
+            if reservation.status in {"RECOVERED_ABORTED", "FAILED"} and (
+                self.store.reclaim_safe_market_order(
+                    reservation.order_id,
+                    allow_local_failure=(
+                        reservation.status == "FAILED" and not self.broker.external_execution
+                    ),
+                )
+            ):
+                break
+            if self._can_start_next_attempt(reservation):
+                # Ne jamais réutiliser le client_order_id d'un ordre que
+                # l'exchange connaît déjà, même explicitement terminal.
+                attempt_sequence += 1
+                continue
+            raise FinancialTransitionAlreadyReserved(
+                reservation.logical_order_key,
+                reservation.order_id,
+                reservation.local_state,
+                reservation.external_state,
+            )
+        order_id = reservation.order_id
+        intent_id = reservation.intent_id
         try:
-            fill = self.broker.execute_market(
-                side,
+            result = self.broker.execute_market(
+                normalized_side,
                 qty,
                 reference_price,
                 client_order_id=intent_id,
@@ -65,15 +154,51 @@ class OrderExecutionService:
                 volatility_annual=volatility_annual,
             )
         except Exception as error:
-            status = "PENDING" if self.broker.supports_order_lookup else "FAILED"
-            suffix = (
-                " (résultat externe ambigu, réconciliation requise)" if status == "PENDING" else ""
-            )
-            self.store.complete_order(
-                order_id,
-                status=status,
-                error=f"{type(error).__name__}: {error}{suffix}",
-            )
+            ambiguous = self.broker.external_execution
+            suffix = " (résultat externe ambigu, réconciliation requise)" if ambiguous else ""
+            try:
+                self.store.record_submission_error(
+                    order_id,
+                    error=f"{type(error).__name__}: {error}{suffix}",
+                    ambiguous=ambiguous,
+                )
+            except Exception as persistence_error:
+                raise ReconciliationRequired(
+                    f"Ordre {order_id}: échec broker puis impossibilité de persister "
+                    "son état; arrêt fail-closed"
+                ) from persistence_error
+            if ambiguous:
+                raise ReconciliationRequired(
+                    f"Ordre {order_id}: résultat externe ambigu après "
+                    f"{type(error).__name__}; réconciliation requise"
+                ) from error
             raise
-        status = "REJECTED" if fill.qty <= 0 else "PARTIAL" if fill.qty < qty - 1e-9 else "FILLED"
-        return SubmittedOrder(fill, order_id, intent_id, status)
+        fill = result.fill
+        try:
+            self.store.record_order_observation(
+                order_id,
+                external_state=result.status,
+                filled_qty=fill.qty,
+                remaining_qty=result.remaining_qty,
+                price=fill.price,
+                fee=fill.fee,
+                broker_order_id=fill.broker_order_id,
+            )
+        except Exception as error:
+            # L'appel broker est terminé mais sa réponse n'est pas durable. Le
+            # processus ne doit traiter aucune autre transition avant reprise
+            # par client_order_id, même si l'état était terminal en mémoire.
+            raise ReconciliationRequired(
+                f"Ordre {order_id}: réponse broker non persistée; arrêt fail-closed"
+            ) from error
+        return SubmittedOrder(
+            fill=fill,
+            order_id=order_id,
+            intent_id=intent_id,
+            logical_order_key=reservation.logical_order_key,
+            status=self._legacy_terminal_status(result.status),
+            external_state=result.status,
+            remaining_qty=result.remaining_qty,
+            is_terminal=result.is_terminal,
+            transition_sequence=attempt_sequence,
+        )

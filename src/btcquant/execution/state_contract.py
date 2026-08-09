@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from typing import Any, TypedDict, cast
+from typing import Any, NotRequired, TypedDict, cast
 
 
 class PositionState(TypedDict):
@@ -29,6 +29,7 @@ class TrendSlotState(TypedDict):
     stop_transition: dict[str, Any] | None
     entry_fee: float
     last_bar_ts: str | None
+    financial_transition_seq: NotRequired[int]
 
 
 class TrendStatePayload(TypedDict):
@@ -90,6 +91,12 @@ def validate_trend_state(payload: object) -> TrendStatePayload:
         slot = _mapping(value, f"trend.{name}")
         _finite_number(slot.get("cash"), f"trend.{name}.cash")
         position = slot.get("position")
+        sequence = slot.get("financial_transition_seq", 0)
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0:
+            raise ValueError(
+                f"État trend invalide : {name}.financial_transition_seq doit être "
+                "un entier positif ou nul"
+            )
         if position is not None:
             pos = _mapping(position, f"trend.{name}.position")
             required = {

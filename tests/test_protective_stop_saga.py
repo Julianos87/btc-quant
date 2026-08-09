@@ -7,8 +7,9 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from btcquant.execution.broker import Broker, BrokerOrderSnapshot, Fill
+from btcquant.execution.broker import Broker, BrokerOrderResult, BrokerOrderSnapshot, Fill
 from btcquant.execution.errors import ReconciliationRequired
+from btcquant.execution.order_state import ExternalOrderState
 from btcquant.execution.runner import LiveRunner, StrategySlot
 from btcquant.risk import RiskConfig
 from btcquant.strategies.base import Position, Strategy
@@ -50,11 +51,25 @@ class SagaBroker(Broker):
         self.crash_on_cancel = False
         self.timeout_on_cancel = False
 
-    def market_buy(self, qty: float, ref_price: float) -> Fill:
-        return Fill(ref_price, qty, 0.0)
+    def market_buy(self, qty: float, ref_price: float) -> BrokerOrderResult:
+        return BrokerOrderResult(Fill(ref_price, qty, 0.0), ExternalOrderState.FILLED, qty, 0.0)
 
-    def market_sell(self, qty: float, ref_price: float) -> Fill:
-        return Fill(ref_price, qty, 0.0)
+    def market_sell(self, qty: float, ref_price: float) -> BrokerOrderResult:
+        return BrokerOrderResult(Fill(ref_price, qty, 0.0), ExternalOrderState.FILLED, qty, 0.0)
+
+    def execute_market(
+        self,
+        side: str,
+        qty: float,
+        ref_price: float,
+        *,
+        client_order_id: str | None = None,
+        **_kwargs,
+    ) -> BrokerOrderResult:
+        assert client_order_id is not None
+        if side == "BUY":
+            return self.market_buy(qty, ref_price)
+        return self.market_sell(qty, ref_price)
 
     def place_stop(
         self,

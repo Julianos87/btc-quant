@@ -6,11 +6,32 @@ import logging
 from dataclasses import dataclass, field
 
 from .broker import Broker
+from .order_state import ExternalOrderState, LocalOrderState
 from .state_store import StateStore
 
 log = logging.getLogger(__name__)
 
-SAFE_REMOTE_TERMINAL_STATUSES = {"CANCELED", "CANCELLED", "REJECTED", "EXPIRED"}
+SAFE_REMOTE_TERMINAL_STATUSES = {
+    ExternalOrderState.CANCELED,
+    ExternalOrderState.REJECTED,
+    ExternalOrderState.EXPIRED,
+}
+
+
+def _external_state(value: object) -> ExternalOrderState:
+    raw = str(value).upper()
+    aliases = {
+        "CANCELLED": ExternalOrderState.CANCELED,
+        # L'ancien contrat ne persistait pas remaining_qty : PARTIAL pouvait
+        # être terminal ou encore ouvert après timeout.
+        "PARTIAL": ExternalOrderState.UNKNOWN,
+    }
+    if raw in aliases:
+        return aliases[raw]
+    try:
+        return ExternalOrderState(raw)
+    except ValueError:
+        return ExternalOrderState.UNKNOWN
 
 
 @dataclass
@@ -48,17 +69,31 @@ def recover_interrupted_orders(
         if order["order_type"] == "STOP":
             continue
         order_id = int(order["id"])
-        if order["status"] == "UNBALANCED":
+        if order["status"] == "UNBALANCED" and not external:
             report.manual_order_ids.append(order_id)
             continue
 
-        if not external:
+        # La réservation existe mais SUBMITTING n'a jamais été persisté : le
+        # chemin broker n'a pas pu commencer. C'est le seul cas externe où
+        # l'absence d'effet est prouvée uniquement par l'état local.
+        if order["local_state"] == LocalOrderState.INTENT_CREATED.value:
             store.complete_order(
                 order_id,
                 status="RECOVERED_ABORTED",
-                error="Ordre paper interrompu : aucun effet externe durable",
+                error="Crash après réservation et avant soumission broker",
             )
             report.recovered_order_ids.append(order_id)
+            continue
+
+        if not external:
+            recovered = store.recover_local_market_order(
+                order_id,
+                error="Ordre paper interrompu : aucun effet externe durable",
+            )
+            if recovered:
+                report.recovered_order_ids.append(order_id)
+            else:
+                report.manual_order_ids.append(order_id)
             continue
 
         if not broker.supports_order_lookup:
@@ -79,24 +114,38 @@ def recover_interrupted_orders(
             continue
 
         if snapshot is None:
+            message = (
+                "Ordre absent du lookup après début de soumission : "
+                "absence externe non démontrée, nouvelle émission interdite"
+            )
             store.complete_order(
                 order_id,
-                status="RECOVERED_ABORTED",
-                error="Broker confirme l'absence de l'ordre : envoi non effectué",
+                status="PENDING",
+                remaining_qty=float(order["remaining_qty"]),
+                error=message,
+                external_state=ExternalOrderState.UNKNOWN,
+                local_state=LocalOrderState.PENDING_RECONCILIATION,
             )
-            report.recovered_order_ids.append(order_id)
+            report.lookup_errors[order_id] = message
             continue
 
-        remote_status = snapshot.status.upper()
+        remote_status = _external_state(snapshot.status)
+        remaining_qty = (
+            snapshot.remaining_qty
+            if snapshot.remaining_qty is not None
+            else max(0.0, float(order["requested_qty"]) - snapshot.filled_qty)
+        )
         if snapshot.filled_qty <= 0 and remote_status in SAFE_REMOTE_TERMINAL_STATUSES:
             store.complete_order(
                 order_id,
                 status="RECOVERED_ABORTED",
                 filled_qty=0.0,
+                remaining_qty=0.0,
                 price=snapshot.price,
                 fee=snapshot.fee,
                 broker_order_id=snapshot.broker_order_id,
-                error=f"Ordre broker terminal sans fill ({remote_status})",
+                error=f"Ordre broker terminal sans fill ({remote_status.value})",
+                external_state=remote_status,
             )
             report.recovered_order_ids.append(order_id)
             continue
@@ -105,11 +154,14 @@ def recover_interrupted_orders(
             order_id,
             status="UNBALANCED",
             filled_qty=snapshot.filled_qty,
+            remaining_qty=remaining_qty,
             price=snapshot.price,
             fee=snapshot.fee,
             broker_order_id=snapshot.broker_order_id,
+            external_state=remote_status,
+            local_state=LocalOrderState.PENDING_RECONCILIATION,
             error=(
-                f"État broker {remote_status}, fill {snapshot.filled_qty:g} : "
+                f"État broker {remote_status.value}, fill {snapshot.filled_qty:g} : "
                 "checkpoint local incertain, réconciliation manuelle requise"
             ),
         )

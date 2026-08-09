@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from btcquant.execution.order_state import ExternalOrderState, LocalOrderState
 from btcquant.execution.state_store import StateStore
 
 
@@ -304,9 +305,153 @@ def test_schema_v1_is_migrated_with_execution_observability(tmp_path):
         ).fetchone()[0]
 
     assert "reference_price" in columns
-    assert version == "4"
+    assert {
+        "logical_order_key",
+        "local_state",
+        "external_state",
+        "remaining_qty",
+    } <= columns
+    assert version == "5"
     assert store.read_deposits() == []
     assert store.read_incidents() == []
+
+
+def test_schema_v4_migration_is_idempotent_and_never_invents_market_terminality(
+    tmp_path,
+):
+    database = tmp_path / "legacy-v4.db"
+    timestamp = "2026-08-01T00:00:00+00:00"
+    with sqlite3.connect(database) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO metadata VALUES('schema_version', '4');
+            CREATE TABLE orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                engine TEXT NOT NULL,
+                slot TEXT NOT NULL,
+                intent_id TEXT NOT NULL UNIQUE,
+                broker_order_id TEXT,
+                order_type TEXT NOT NULL,
+                side TEXT NOT NULL,
+                requested_qty REAL NOT NULL,
+                reference_price REAL,
+                filled_qty REAL NOT NULL DEFAULT 0,
+                price REAL,
+                fee REAL NOT NULL DEFAULT 0,
+                status TEXT NOT NULL,
+                reason TEXT,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            """
+        )
+        connection.executemany(
+            """
+            INSERT INTO orders(
+                engine, slot, intent_id, order_type, side, requested_qty,
+                reference_price, filled_qty, fee, status, reason, created_at, updated_at
+            ) VALUES('trend', 'slot', ?, ?, 'BUY', 1, 100, ?, 0, ?, 'legacy', ?, ?)
+            """,
+            [
+                ("market-pending", "MARKET", 0.0, "PENDING", timestamp, timestamp),
+                ("market-open", "MARKET", 0.0, "OPEN", timestamp, timestamp),
+                ("market-partial", "MARKET", 0.4, "PARTIAL", timestamp, timestamp),
+                ("market-rejected", "MARKET", 0.0, "REJECTED", timestamp, timestamp),
+                ("market-filled", "MARKET", 1.0, "FILLED", timestamp, timestamp),
+                ("carry-rejected", "CARRY_PAIR", 0.0, "REJECTED", timestamp, timestamp),
+            ],
+        )
+
+    StateStore(database)
+    store = StateStore(database)  # deuxième passage : migration idempotente
+    orders = {order["intent_id"]: order for order in store.read_orders("trend")}
+
+    assert len(orders) == 6
+    assert orders["market-pending"]["local_state"] == LocalOrderState.PENDING_RECONCILIATION
+    assert orders["market-open"]["local_state"] == LocalOrderState.AWAITING_EXTERNAL
+    assert orders["market-open"]["external_state"] == ExternalOrderState.OPEN
+    for intent in ("market-partial", "market-rejected"):
+        assert orders[intent]["local_state"] == LocalOrderState.PENDING_RECONCILIATION
+        assert orders[intent]["external_state"] == ExternalOrderState.UNKNOWN
+    assert orders["market-partial"]["remaining_qty"] == pytest.approx(0.6)
+    assert orders["market-rejected"]["remaining_qty"] == pytest.approx(1.0)
+    assert orders["market-filled"]["local_state"] == LocalOrderState.TERMINAL
+    assert orders["market-filled"]["external_state"] == ExternalOrderState.FILLED
+    assert orders["carry-rejected"]["local_state"] == LocalOrderState.TERMINAL
+    assert orders["carry-rejected"]["external_state"] == ExternalOrderState.REJECTED
+
+    with sqlite3.connect(database) as connection:
+        version = connection.execute(
+            "SELECT value FROM metadata WHERE key='schema_version'"
+        ).fetchone()[0]
+        indexes = {row[1]: row for row in connection.execute("PRAGMA index_list(orders)")}
+        connection.execute(
+            "UPDATE orders SET logical_order_key='duplicate-key' WHERE intent_id='market-filled'"
+        )
+        connection.commit()
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE orders SET logical_order_key='duplicate-key' "
+                "WHERE intent_id='carry-rejected'"
+            )
+        connection.rollback()
+
+    assert version == "5"
+    assert indexes["idx_orders_logical_order_key"][2] == 1
+    assert indexes["idx_orders_logical_order_key"][4] == 1
+    assert store.integrity_check()
+
+
+def test_schema_migration_rejects_wrongly_named_non_unique_index_and_rolls_back(tmp_path):
+    database = tmp_path / "broken-index-v4.db"
+    with sqlite3.connect(database) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO metadata VALUES('schema_version', '4');
+            CREATE TABLE orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                engine TEXT NOT NULL,
+                slot TEXT NOT NULL,
+                intent_id TEXT NOT NULL UNIQUE,
+                logical_order_key TEXT,
+                broker_order_id TEXT,
+                order_type TEXT NOT NULL,
+                side TEXT NOT NULL,
+                requested_qty REAL NOT NULL,
+                reference_price REAL,
+                filled_qty REAL NOT NULL DEFAULT 0,
+                price REAL,
+                fee REAL NOT NULL DEFAULT 0,
+                status TEXT NOT NULL,
+                reason TEXT,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX idx_orders_logical_order_key ON orders(logical_order_key);
+            """
+        )
+
+    with pytest.raises(RuntimeError, match="sans garantir l'unicité"):
+        StateStore(database)
+
+    with sqlite3.connect(database) as connection:
+        version = connection.execute(
+            "SELECT value FROM metadata WHERE key='schema_version'"
+        ).fetchone()[0]
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(orders)")}
+        index = next(
+            row
+            for row in connection.execute("PRAGMA index_list(orders)")
+            if row[1] == "idx_orders_logical_order_key"
+        )
+
+    assert version == "4"
+    assert "local_state" not in columns
+    assert index[2] == 0
 
 
 # ── rétention du journal ────────────────────────────────────────────────────

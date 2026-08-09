@@ -8,13 +8,14 @@ import threading
 import pandas as pd
 import pytest
 
-from btcquant.execution.broker import Broker, Fill, PaperBroker
+from btcquant.execution.broker import Broker, BrokerOrderResult, Fill, PaperBroker
 from btcquant.execution.carry_contract import (
     CarrySagaResult,
     CarrySagaStatus,
 )
 from btcquant.execution.carry_runner import CarryRunner
 from btcquant.execution.ccxt_broker import CcxtBroker
+from btcquant.execution.order_state import ExternalOrderState
 from btcquant.execution.reconcile import reconcile
 from btcquant.execution.runner import LiveRunner, ReconciliationRequired, StrategySlot
 from btcquant.execution.state_store import StateStore
@@ -55,11 +56,37 @@ class RecordingBroker(Broker):
         self.cancelled: list[str] = []
         self.placed: list[tuple[float, float, int]] = []
 
-    def market_buy(self, qty: float, ref_price: float) -> Fill:
-        return self.fills.pop(0)
+    def _next_result(self, requested_qty: float) -> BrokerOrderResult:
+        fill = self.fills.pop(0)
+        status = (
+            ExternalOrderState.REJECTED
+            if fill.qty <= 0
+            else ExternalOrderState.PARTIAL_TERMINAL
+            if fill.qty < requested_qty - 1e-9
+            else ExternalOrderState.FILLED
+        )
+        return BrokerOrderResult(fill, status, requested_qty, 0.0)
 
-    def market_sell(self, qty: float, ref_price: float) -> Fill:
-        return self.fills.pop(0)
+    def market_buy(self, qty: float, ref_price: float) -> BrokerOrderResult:
+        del ref_price
+        return self._next_result(qty)
+
+    def market_sell(self, qty: float, ref_price: float) -> BrokerOrderResult:
+        del ref_price
+        return self._next_result(qty)
+
+    def execute_market(
+        self,
+        side: str,
+        qty: float,
+        ref_price: float,
+        *,
+        client_order_id: str | None = None,
+        **_kwargs,
+    ) -> BrokerOrderResult:
+        del side, ref_price
+        assert client_order_id is not None
+        return self._next_result(qty)
 
     def place_stop(
         self,
