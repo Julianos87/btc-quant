@@ -103,6 +103,8 @@ class RecordingBroker(Broker):
     def cancel_stop(self, order_id: str) -> None:
         self.cancelled.append(order_id)
 
+        self.stop = {**self.stop, "status": "canceled", "remaining": 0.0}
+
     def stop_status(self, order_id: str) -> dict:
         return self.stop
 
@@ -174,6 +176,41 @@ def test_partial_exit_reprotects_remainder_before_cancel(tmp_path):
     assert broker.placed == [(1.25, 90.0, 1)]
     assert broker.cancelled == ["existing-stop"]
     assert slot.stop_order_id == "stop-1"
+
+
+def test_partial_exit_persists_remainder_and_retries_only_remainder(tmp_path):
+    broker = RecordingBroker(
+        [
+            Fill(price=100.0, qty=0.4, fee=0.0),
+            Fill(price=99.0, qty=0.6, fee=0.0),
+        ]
+    )
+    runner, slot = _runner(tmp_path, broker)
+    slot.position = _position(qty=1.0)
+    slot.stop_order_id = "existing-stop"
+
+    runner._exit_position(slot, 100.0, "signal")
+
+    first_order = runner.store.read_orders("trend")[0]
+    assert first_order["requested_qty"] == pytest.approx(1.0)
+    assert first_order["filled_qty"] == pytest.approx(0.4)
+    assert first_order["status"] == "PARTIAL"
+    assert slot.position is not None
+    assert slot.position.qty == pytest.approx(0.6)
+    assert broker.placed == [(0.6, 90.0, 1)]
+
+    # L'intention initiale est terminale mais son reliquat métier reste
+    # visible dans la position checkpointée. Le second essai ne réémet que
+    # 0.6 BTC et reçoit une séquence logique différente.
+    runner._exit_position(slot, 99.0, "signal")
+
+    market_orders = [
+        order for order in runner.store.read_orders("trend") if order["order_type"] == "MARKET"
+    ]
+    assert market_orders[1]["requested_qty"] == pytest.approx(0.6)
+    assert market_orders[1]["filled_qty"] == pytest.approx(0.6)
+    assert market_orders[1]["logical_order_key"] != market_orders[0]["logical_order_key"]
+    assert slot.position is None
 
 
 def test_canceled_exchange_stop_is_recreated_at_next_tick(tmp_path):
@@ -288,7 +325,37 @@ def test_reconciliation_errors_fail_closed():
     assert reconcile(broker, [], "BTC/USDT") is False
 
 
+def test_periodic_position_reconciliation_is_bounded_and_fail_closed(tmp_path):
+    broker = RecordingBroker([])
+    broker.supports_position_reconciliation = True
+    remote = {"qty": 2.0}
+    calls: list[int] = []
+
+    def net_position(_symbol: str) -> float:
+        calls.append(1)
+        return remote["qty"]
+
+    broker.net_position = net_position
+    runner, slot = _runner(tmp_path, broker)
+    runner.notifier = lambda _message: True
+    slot.position = _position(qty=2.0)
+
+    runner._maybe_reconcile_position(force=True)
+    runner._maybe_reconcile_position()
+    assert len(calls) == 1
+
+    runner._last_position_reconciliation_at = runner.clock.time() - 301.0
+    remote["qty"] = 0.0
+    with pytest.raises(ReconciliationRequired):
+        runner._maybe_reconcile_position()
+
+    assert runner.reconciliation_required is True
+    incidents = runner.store.read_incidents(open_only=True)
+    assert incidents[0]["kind"] == "position_reconciliation_required"
+
+
 def test_external_broker_is_centrally_disabled():
+
     with pytest.raises(RuntimeError, match="Safety Baseline"):
         CcxtBroker()
 

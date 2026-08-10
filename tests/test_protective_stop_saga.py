@@ -50,6 +50,7 @@ class SagaBroker(Broker):
         self.timeout_after_create = False
         self.crash_on_cancel = False
         self.timeout_on_cancel = False
+        self.stop_states: dict[str, str] = {"old-stop": "open"}
 
     def market_buy(self, qty: float, ref_price: float) -> BrokerOrderResult:
         return BrokerOrderResult(Fill(ref_price, qty, 0.0), ExternalOrderState.FILLED, qty, 0.0)
@@ -88,6 +89,7 @@ class SagaBroker(Broker):
             client_order_id,
             f"remote-stop-{len(self.remote_by_intent) + 1}",
         )
+        self.stop_states[remote_id] = "open"
         if self.crash_after_create:
             raise PowerLoss("après création distante")
         if self.timeout_after_create:
@@ -111,6 +113,76 @@ class SagaBroker(Broker):
             raise PowerLoss("pendant annulation")
         if self.timeout_on_cancel:
             raise TimeoutError("réponse d'annulation perdue")
+
+        self.stop_states[order_id] = "canceled"
+
+    def stop_status(self, order_id: str) -> dict:
+        state = self.stop_states.get(order_id)
+        if state is None:
+            raise LookupError(order_id)
+        return {
+            "id": order_id,
+            "status": state,
+            "amount": 1.0,
+            "filled": 0.0,
+            "remaining": 1.0 if state == "open" else 0.0,
+        }
+
+
+class CancelRaceBroker(SagaBroker):
+    """Simule le OrderNotFound avalé par l'ancien adaptateur CCXT.
+
+    L'annulation fait passer l'ancien stop à FILLED, puis renvoie comme si
+    l'appel avait simplement réussi. Le code appelant doit donc effectuer sa
+    propre vérification de terminalité.
+    """
+
+    def __init__(self, lookup_status: str = "FILLED") -> None:
+        super().__init__()
+        self.lookup_status = lookup_status
+        self.crash_after_cancel = False
+
+    def cancel_stop(self, order_id: str) -> None:
+        self.cancel_calls.append(order_id)
+        if self.crash_after_cancel:
+            self.lookup_status = "FILLED"
+            raise PowerLoss("après fill pendant annulation")
+
+    def stop_status(self, order_id: str) -> dict:
+        if order_id != "old-stop":
+            return {
+                "id": order_id,
+                "status": "open",
+                "amount": 1.0,
+                "filled": 0.0,
+                "remaining": 1.0,
+            }
+        if self.lookup_status == "UNKNOWN":
+            raise TimeoutError("lookup indisponible")
+        if self.lookup_status == "PARTIAL":
+            return {
+                "id": order_id,
+                "status": "open",
+                "amount": 1.0,
+                "filled": 0.4,
+                "remaining": 0.6,
+            }
+        if self.lookup_status == "CANCELED":
+            return {
+                "id": order_id,
+                "status": "canceled",
+                "amount": 1.0,
+                "filled": 0.0,
+                "remaining": 0.0,
+            }
+        return {
+            "id": order_id,
+            "status": "closed",
+            "amount": 1.0,
+            "filled": 1.0,
+            "remaining": 0.0,
+            "average": 90.0,
+        }
 
 
 def _risk() -> RiskConfig:
@@ -180,6 +252,117 @@ def _seed_old_stop(runner: LiveRunner, slot: StrategySlot) -> int:
     slot.stop_intent_id = old_intent
     runner._save_state()
     return local_id
+
+
+def test_stop_identity_is_deterministic_across_equivalent_timezones(tmp_path):
+    runner, slot = _runner(tmp_path / "btcquant.db", SagaBroker())
+    slot.position = _position()
+
+    first = runner._stop_intent_id(
+        slot,
+        qty=1.0,
+        stop_price=95.0,
+        direction=1,
+    )
+    slot.position.entry_time = pd.Timestamp("2026-01-01 01:00:00", tz="Europe/Paris")
+    second = runner._stop_intent_id(
+        slot,
+        qty=1.0,
+        stop_price=95.0,
+        direction=1,
+    )
+
+    assert first == second
+    assert first != runner._stop_intent_id(slot, qty=1.0, stop_price=96.0, direction=1)
+
+
+def test_order_not_found_lookup_filled_requires_reconciliation(tmp_path):
+    broker = CancelRaceBroker("FILLED")
+
+    runner, slot = _runner(tmp_path / "btcquant.db", broker)
+    _seed_old_stop(runner, slot)
+
+    with pytest.raises(ReconciliationRequired):
+        runner._begin_stop_replacement(
+            slot,
+            qty=1.0,
+            stop_price=95.0,
+            direction=1,
+            reason="ratchet",
+        )
+
+    assert runner.reconciliation_required is True
+    assert slot.stop_order_id == "old-stop"
+    assert slot.stop_transition is not None
+    assert runner.store.read_orders("trend")[0]["status"] == "OPEN"
+
+
+def test_order_not_found_lookup_canceled_allows_promotion(tmp_path):
+    broker = CancelRaceBroker("CANCELED")
+    runner, slot = _runner(tmp_path / "btcquant.db", broker)
+    _seed_old_stop(runner, slot)
+
+    runner._begin_stop_replacement(
+        slot,
+        qty=1.0,
+        stop_price=95.0,
+        direction=1,
+        reason="ratchet",
+    )
+
+    assert runner.reconciliation_required is False
+    assert slot.stop_order_id == "remote-stop-1"
+    assert slot.stop_transition is None
+    assert [order["status"] for order in runner.store.read_orders("trend")] == [
+        "CANCELED",
+        "OPEN",
+    ]
+
+
+def test_order_not_found_lookup_unknown_stays_pending(tmp_path):
+    broker = CancelRaceBroker("UNKNOWN")
+    runner, slot = _runner(tmp_path / "btcquant.db", broker)
+    _seed_old_stop(runner, slot)
+
+    with pytest.raises(ReconciliationRequired, match="impossible à prouver"):
+        runner._begin_stop_replacement(
+            slot,
+            qty=1.0,
+            stop_price=95.0,
+            direction=1,
+            reason="ratchet",
+        )
+
+    assert runner.reconciliation_required is False
+    assert slot.stop_order_id == "old-stop"
+    assert slot.stop_transition is not None
+    assert slot.stop_transition["phase"] == "VERIFY_OLD_TERMINAL"
+    assert [order["status"] for order in runner.store.read_orders("trend")] == [
+        "OPEN",
+        "OPEN",
+    ]
+
+
+def test_order_not_found_lookup_partial_requires_reconciliation(tmp_path):
+    broker = CancelRaceBroker("PARTIAL")
+    runner, slot = _runner(tmp_path / "btcquant.db", broker)
+    _seed_old_stop(runner, slot)
+
+    with pytest.raises(ReconciliationRequired):
+        runner._begin_stop_replacement(
+            slot,
+            qty=1.0,
+            stop_price=95.0,
+            direction=1,
+            reason="ratchet",
+        )
+
+    assert runner.reconciliation_required is True
+    assert slot.position is not None and slot.position.qty == pytest.approx(1.0)
+    assert slot.stop_order_id == "old-stop"
+    assert slot.stop_transition is not None
+    assert slot.stop_transition["phase"] == "RECONCILIATION_REQUIRED"
+    assert runner.store.read_orders("trend")[0]["status"] == "OPEN"
 
 
 def test_timeout_after_create_is_resolved_by_client_id(tmp_path):
@@ -290,7 +473,7 @@ def test_crash_after_confirmation_resumes_only_the_cancel(tmp_path):
     persisted = runner.store.load_engine_state("trend")
     assert persisted is not None
     transition = persisted["slots"]["stop-saga"]["stop_transition"]
-    assert transition["phase"] == "CANCELING"
+    assert transition["phase"] == "VERIFY_OLD_TERMINAL"
     assert runner.store.read_orders("trend")[1]["status"] == "OPEN"
 
     broker.crash_on_cancel = False
@@ -299,6 +482,36 @@ def test_crash_after_confirmation_resumes_only_the_cancel(tmp_path):
     assert restarted_slot.stop_order_id == "remote-stop-1"
     assert len(broker.place_calls) == 1
     assert broker.cancel_calls == ["old-stop", "old-stop"]
+
+
+def test_crash_after_old_stop_fill_recovers_fail_closed(tmp_path):
+    database = tmp_path / "btcquant.db"
+    broker = CancelRaceBroker("FILLED")
+    broker.crash_after_cancel = True
+    runner, slot = _runner(database, broker)
+    _seed_old_stop(runner, slot)
+
+    with pytest.raises(PowerLoss, match="fill pendant annulation"):
+        runner._begin_stop_replacement(
+            slot,
+            qty=1.0,
+            stop_price=95.0,
+            direction=1,
+            reason="ratchet",
+        )
+
+    persisted = runner.store.load_engine_state("trend")
+    assert persisted is not None
+    assert persisted["slots"]["stop-saga"]["stop_transition"]["phase"] == ("VERIFY_OLD_TERMINAL")
+
+    broker.crash_after_cancel = False
+    restarted, restarted_slot = _runner(database, broker)
+    with pytest.raises(ReconciliationRequired):
+        restarted._recover_protective_stop_transitions()
+
+    assert restarted.reconciliation_required is True
+    assert restarted_slot.stop_transition is not None
+    assert restarted_slot.stop_transition["phase"] == "RECONCILIATION_REQUIRED"
 
 
 def test_sqlite_failure_after_create_reverts_to_recoverable_placing(tmp_path, monkeypatch):
@@ -359,7 +572,7 @@ def test_crash_after_cancel_before_final_checkpoint_is_idempotent(tmp_path, monk
 
     persisted = runner.store.load_engine_state("trend")
     assert persisted is not None
-    assert persisted["slots"]["stop-saga"]["stop_transition"]["phase"] == "CANCELING"
+    assert persisted["slots"]["stop-saga"]["stop_transition"]["phase"] == "PROMOTION_PENDING"
 
     restarted, restarted_slot = _restarted_runner(database, broker)
 

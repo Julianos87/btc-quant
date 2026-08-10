@@ -7,6 +7,7 @@ script d'intégration doit ensuite vérifier contre le vrai matching engine.
 from __future__ import annotations
 
 import pytest
+import ccxt
 
 from btcquant.execution.ccxt_broker import CcxtBroker
 
@@ -142,3 +143,16 @@ def test_spot_short_stop_is_rejected_before_exchange_call():
     with pytest.raises(ValueError, match="short impossible"):
         broker.place_stop(0.01, 50_000.0, direction=-1)
     assert exchange.created is None
+
+
+def test_cancel_order_not_found_is_not_swallowed():
+    class CancelExchange:
+        def cancel_order(self, _order_id, _symbol):
+            raise ccxt.OrderNotFound("gone")
+
+    broker = object.__new__(CcxtBroker)
+    broker.exchange = CancelExchange()
+    broker.symbol = "BTC/USDT"
+
+    with pytest.raises(ccxt.OrderNotFound):
+        broker.cancel_stop("gone")

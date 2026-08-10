@@ -449,7 +449,11 @@ class CcxtBroker(Broker):
         try:
             self._with_retries(self.exchange.cancel_order, order_id, self.symbol)
         except ccxt.OrderNotFound:
-            log.info("Stop %s introuvable (déjà exécuté ou annulé)", order_id)
+            # L'absence dans cette requête ne prouve aucune cause terminale.
+            # Le runner doit effectuer le lookup et échouer fermé si la preuve
+            # n'est pas disponible.
+            log.warning("Stop %s introuvable : terminalité non prouvée", order_id)
+            raise
 
     def stop_status(self, order_id: str) -> dict:
         return self._with_retries(self.exchange.fetch_order, order_id, self.symbol)
