@@ -189,6 +189,7 @@ def test_external_broker_cannot_inherit_a_client_id_dropping_fallback(tmp_path):
             reason="exit",
             decision_checkpoint="checkpoint",
             transition_type=FinancialTransitionType.EXIT,
+            position_generation="entry=2026-08-01T00:00:00Z|initial_qty=1",
         )
 
     order = store.read_orders("trend")[0]

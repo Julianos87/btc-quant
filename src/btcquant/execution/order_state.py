@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import datetime, UTC
 from enum import StrEnum
 
 
@@ -19,6 +20,24 @@ class FinancialTransitionType(StrEnum):
     EXIT = "EXIT"
     ADD = "ADD"
     REDUCE = "REDUCE"
+
+
+def _canonical_timestamp(value: str) -> str:
+    candidate = value[:-1] + "+00:00" if value[-1:] in {"Z", "z"} else value
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return value
+    if parsed.tzinfo is None:
+        return value
+    return parsed.astimezone(UTC).isoformat()
+
+
+def _canonical_position_generation(value: str) -> str:
+    prefix, separator, initial_qty = value.partition("|initial_qty=")
+    if not separator or not prefix.startswith("entry="):
+        return value
+    return f"entry={_canonical_timestamp(prefix.removeprefix('entry='))}|initial_qty={initial_qty}"
 
 
 class LocalOrderState(StrEnum):
@@ -72,15 +91,28 @@ class LogicalOrderIdentity:
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} doit être une chaîne non vide")
             object.__setattr__(self, name, value.strip())
-        object.__setattr__(
-            self,
-            "transition_type",
-            FinancialTransitionType(self.transition_type),
-        )
+        transition_type = FinancialTransitionType(self.transition_type)
+        object.__setattr__(self, "transition_type", transition_type)
         if self.position_generation is not None and not self.position_generation.strip():
             raise ValueError("position_generation doit être non vide lorsqu'elle est fournie")
         if self.position_generation is not None:
-            object.__setattr__(self, "position_generation", self.position_generation.strip())
+            position_generation = _canonical_position_generation(self.position_generation.strip())
+            object.__setattr__(self, "position_generation", position_generation)
+        decision_checkpoint = _canonical_timestamp(self.decision_checkpoint.strip())
+        object.__setattr__(self, "decision_checkpoint", decision_checkpoint)
+        position_transition = {
+            FinancialTransitionType.EXIT,
+            FinancialTransitionType.ADD,
+            FinancialTransitionType.REDUCE,
+        }
+        entry_transition = {
+            FinancialTransitionType.ENTER_LONG,
+            FinancialTransitionType.ENTER_SHORT,
+        }
+        if transition_type in position_transition and self.position_generation is None:
+            raise ValueError(f"{transition_type.value} exige une position_generation non nulle")
+        if transition_type in entry_transition and self.position_generation is not None:
+            raise ValueError(f"{transition_type.value} ne doit pas avoir de position_generation")
         if (
             isinstance(self.transition_sequence, bool)
             or not isinstance(self.transition_sequence, int)

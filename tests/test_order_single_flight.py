@@ -411,6 +411,31 @@ def test_paper_crash_after_submitting_reclaims_the_same_intention(tmp_path):
     assert len(store.read_orders("trend")) == 1
 
 
+def test_reclaim_restores_remaining_quantity_for_a_new_submission(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    identity = LogicalOrderIdentity(
+        "trend",
+        "trend_ls_55",
+        "2026-08-09T16:00:00Z",
+        FinancialTransitionType.ENTER_LONG,
+    )
+    reserved = store.reserve_market_order(
+        identity,
+        side="BUY",
+        requested_qty=1.0,
+        reference_price=100.0,
+        reason="entry",
+    )
+    store.mark_order_submitting(reserved.order_id)
+    recover_interrupted_orders(store, PaperBroker(), "trend", external=False)
+
+    assert store.reclaim_safe_market_order(reserved.order_id)
+    order = store.read_orders("trend")[0]
+    assert order["status"] == "PENDING"
+    assert order["local_state"] == LocalOrderState.SUBMITTING
+    assert order["remaining_qty"] == pytest.approx(order["requested_qty"])
+
+
 def test_logical_identity_is_stable_and_changes_for_a_new_decision():
     first = LogicalOrderIdentity(
         "trend",
@@ -615,3 +640,92 @@ def test_instance_lock_is_released_if_pid_fsync_fails(tmp_path, monkeypatch):
     replacement = EngineInstanceLock(database, "trend")
     replacement.acquire()
     replacement.release()
+
+
+def test_equivalent_timezone_serializations_share_identity():
+    identities = [
+        LogicalOrderIdentity(
+            "trend",
+            "trend_ls_55",
+            checkpoint,
+            FinancialTransitionType.ENTER_LONG,
+        )
+        for checkpoint in (
+            "2026-08-09T16:00:00Z",
+            "2026-08-09T16:00:00+00:00",
+            "2026-08-09T17:00:00+01:00",
+        )
+    ]
+
+    assert {identity.logical_key for identity in identities} == {identities[0].logical_key}
+    assert {identity.intent_id for identity in identities} == {identities[0].intent_id}
+
+
+def test_position_generation_timezone_is_canonicalized():
+    identities = [
+        LogicalOrderIdentity(
+            "trend",
+            "trend_ls_55",
+            "2026-08-09T16:00:00Z",
+            FinancialTransitionType.EXIT,
+            generation,
+        )
+        for generation in (
+            "entry=2026-08-01T00:00:00Z|initial_qty=1",
+            "entry=2026-08-01T00:00:00+00:00|initial_qty=1",
+            "entry=2026-08-01T01:00:00+01:00|initial_qty=1",
+        )
+    ]
+
+    assert {identity.logical_key for identity in identities} == {identities[0].logical_key}
+
+
+def test_position_transitions_require_a_position_generation():
+    with pytest.raises(ValueError, match="position_generation"):
+        LogicalOrderIdentity(
+            "trend",
+            "trend_ls_55",
+            "2026-08-09T16:00:00Z",
+            FinancialTransitionType.EXIT,
+        )
+
+    with pytest.raises(ValueError, match="position_generation"):
+        LogicalOrderIdentity(
+            "trend",
+            "trend_ls_55",
+            "2026-08-09T16:00:00Z",
+            FinancialTransitionType.ENTER_LONG,
+            "entry=2026-08-01T00:00:00Z|initial_qty=1",
+        )
+
+
+def test_distinct_logical_keys_map_to_distinct_exchange_client_ids():
+    first = LogicalOrderIdentity(
+        "trend",
+        "trend_ls_55",
+        "2026-08-09T16:00:00Z",
+        FinancialTransitionType.ENTER_LONG,
+    )
+    same = LogicalOrderIdentity(
+        "trend",
+        "trend_ls_55",
+        "2026-08-09T16:00:00+00:00",
+        FinancialTransitionType.ENTER_LONG,
+    )
+    next_sequence = LogicalOrderIdentity(
+        "trend",
+        "trend_ls_55",
+        "2026-08-09T16:00:00Z",
+        FinancialTransitionType.ENTER_LONG,
+        transition_sequence=1,
+    )
+
+    assert first.intent_id == same.intent_id
+    assert first.intent_id != next_sequence.intent_id
+    for exchange_id in ("binance", "hyperliquid"):
+        assert CcxtBroker._external_client_order_id(first.intent_id, exchange_id) == (
+            CcxtBroker._external_client_order_id(same.intent_id, exchange_id)
+        )
+        assert CcxtBroker._external_client_order_id(first.intent_id, exchange_id) != (
+            CcxtBroker._external_client_order_id(next_sequence.intent_id, exchange_id)
+        )

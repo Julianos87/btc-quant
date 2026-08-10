@@ -1114,7 +1114,7 @@ class StateStore:
             cursor = connection.execute(
                 """
                 UPDATE orders SET status='PENDING', local_state='SUBMITTING',
-                    error=NULL, updated_at=?
+                    remaining_qty=requested_qty, error=NULL, updated_at=?
                 WHERE id=? AND logical_order_key IS NOT NULL
                   AND (
                       status='RECOVERED_ABORTED'
