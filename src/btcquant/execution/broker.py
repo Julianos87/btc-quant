@@ -200,6 +200,10 @@ class Broker(ABC):
         remaining = (
             float(remaining_raw) if remaining_raw is not None else max(0.0, requested - filled)
         )
+        if raw_status in ("canceled", "cancelled", "rejected", "expired") and filled <= 1e-9:
+            # Une terminalité sans fill ne conserve aucun reste actif, même
+            # si l'adaptateur n'a pas fourni le champ remaining.
+            remaining = 0.0
         if raw_status == "closed":
             status = "FILLED" if filled > 0 and remaining <= 1e-12 else "PARTIAL"
         elif filled > 0:
