@@ -46,8 +46,8 @@
     "deployment_rule": "un passage historique autorise seulement un challenger forward, jamais une modification paper immédiate"
   },
   "provenance": {
-    "script_sha256": "2b52f0afce5d159322a4167e77848c94da373adcefcc998e3837ba9d0cace8a4",
-    "source_tree_sha256": "7bba96709d3f982846b9a4c79fe25c81720767c032b7368d557c1ab70402b8ff",
+    "script_sha256": "d623498a3214f1c378a0fe839a00ed71ee50fba0ca7cbfca94c2f3b61daf54f9",
+    "source_tree_sha256": "01d4d82d90928bf88f2d255ece42f6ca1a34a921695bbe2d2d8dcd5ea5471aa0",
     "config": {
       "path": "environments/paper/config.yaml",
       "sha256": "de8905ef1ed866fe5bc43c6421bb2e1f866d7c290b982b8dc9330b006c925011"

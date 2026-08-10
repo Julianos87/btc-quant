@@ -6,7 +6,6 @@ publiee seulement apres la selection. Le script ne modifie aucune configuration.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sys
 from copy import deepcopy
@@ -22,6 +21,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from btcquant.backtest import BacktestEngine
 from btcquant.carry import add_funding_columns, load_funding
 from btcquant.config import execution_config_from_config, load_config, risk_from_config
+from btcquant.provenance import quantitative_source_sha256
 from btcquant.console import enable_utf8_output
 from btcquant.data import TIMEFRAME_TO_PANDAS, load_ohlcv, resample
 from btcquant.domain import ExecutionSimulator
@@ -68,16 +68,6 @@ PROFILES = (
         "volatility_shock_ratio": 1.5,
     },
 )
-
-
-def _source_tree_sha256() -> str:
-    digest = hashlib.sha256()
-    for path in sorted((ROOT / "src").rglob("*.py")):
-        digest.update(path.relative_to(ROOT).as_posix().encode())
-        digest.update(b"\0")
-        digest.update(path.read_bytes().replace(b"\r\n", b"\n"))
-        digest.update(b"\0")
-    return digest.hexdigest()
 
 
 def _strategy(horizon: int, profile: dict) -> TrendLS:
@@ -263,7 +253,7 @@ def main() -> None:
         },
         "provenance": {
             "script_sha256": _sha256(Path(__file__)),
-            "source_tree_sha256": _source_tree_sha256(),
+            "source_tree_sha256": quantitative_source_sha256(Path(__file__)),
             "config": {
                 "path": CONFIG.relative_to(ROOT).as_posix(),
                 "sha256": _sha256(CONFIG),

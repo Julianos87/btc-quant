@@ -36,8 +36,8 @@
     "risk_increase_above_current_profile_allowed": false
   },
   "provenance": {
-    "script_sha256": "25510db305772c1644fde33596b34ff03f8f428edb5585d218499c7e701cb6de",
-    "source_tree_sha256": "865c00f93b96eb3635a6cdbb059c5b14755834c764c09fc23d0bef3d5b1454a2",
+    "script_sha256": "bb6e4d434ffdb62e2b4d612556029bec3acad507fb8c6c847ca2463e62287835",
+    "source_tree_sha256": "d611fdae80ff32cf77898df684b0ca6cca40a861a5ac70cb58bf1ae8d5f673fd",
     "config": {
       "path": "environments/paper/config.yaml",
       "sha256": "de8905ef1ed866fe5bc43c6421bb2e1f866d7c290b982b8dc9330b006c925011"

@@ -41,6 +41,7 @@ from btcquant.data import TIMEFRAME_TO_PANDAS, load_ohlcv, resample
 from btcquant.domain import ExecutionSimulator
 from btcquant.indicators import bars_per_year
 from btcquant.carry import add_funding_columns, load_funding
+from btcquant.provenance import quantitative_source_sha256
 from btcquant.research.strategies import RESEARCH_STRATEGY_REGISTRY
 from btcquant.research.walkforward import walk_forward
 from btcquant.strategies import STRATEGY_REGISTRY
@@ -87,16 +88,6 @@ def _portable_bytes(path: Path) -> bytes:
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(_portable_bytes(path)).hexdigest()
-
-
-def _source_tree_sha256() -> str:
-    digest = hashlib.sha256()
-    for path in sorted((ROOT / "src").rglob("*.py")):
-        digest.update(path.relative_to(ROOT).as_posix().encode())
-        digest.update(b"\0")
-        digest.update(_portable_bytes(path))
-        digest.update(b"\0")
-    return digest.hexdigest()
 
 
 def _jsonable(value):
@@ -152,7 +143,7 @@ def _write_reference(
             "base_git_commit": subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
             ).strip(),
-            "source_tree_sha256": _source_tree_sha256(),
+            "source_tree_sha256": quantitative_source_sha256(Path(__file__)),
             "script": {
                 "path": Path(__file__).resolve().relative_to(ROOT).as_posix(),
                 "sha256": _sha256(Path(__file__)),

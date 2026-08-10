@@ -21,6 +21,7 @@ from btcquant.config import execution_config_from_config, load_config, risk_from
 from btcquant.console import enable_utf8_output
 from btcquant.data import TIMEFRAME_TO_PANDAS, load_ohlcv, resample
 from btcquant.domain import ExecutionSimulator
+from btcquant.provenance import quantitative_source_sha256
 from btcquant.risk import RiskConfig
 from btcquant.strategies.trend_ls import TrendLS
 from scripts.research_btc_cost_filter import (
@@ -56,18 +57,6 @@ COST_MODES = {
     "half_slippage": {"fee_rate": 0.0005, "slippage_bps": 2.5},
     "maker_proxy": {"fee_rate": 0.0002, "slippage_bps": 1.0},
 }
-
-
-def _source_tree_sha256() -> str:
-    import hashlib
-
-    digest = hashlib.sha256()
-    for path in sorted((ROOT / "src").rglob("*.py")):
-        digest.update(path.relative_to(ROOT).as_posix().encode())
-        digest.update(b"\0")
-        digest.update(path.read_bytes().replace(b"\r\n", b"\n"))
-        digest.update(b"\0")
-    return digest.hexdigest()
 
 
 def _run(
@@ -334,7 +323,7 @@ def main() -> None:
         },
         "provenance": {
             "script_sha256": _sha256(Path(__file__)),
-            "source_tree_sha256": _source_tree_sha256(),
+            "source_tree_sha256": quantitative_source_sha256(Path(__file__)),
             "config": {"path": CONFIG.relative_to(ROOT).as_posix(), "sha256": _sha256(CONFIG)},
             "data": [
                 {"path": path.relative_to(ROOT).as_posix(), "sha256": _sha256(path)}

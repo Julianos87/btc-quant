@@ -6,9 +6,13 @@ import hashlib
 import json
 import os
 import re
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from btcquant.provenance import quantitative_source_sha256
 
 
 def _portable_bytes(path: Path) -> bytes:
@@ -19,16 +23,6 @@ def _portable_bytes(path: Path) -> bytes:
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(_portable_bytes(path)).hexdigest()
-
-
-def _source_tree_sha256() -> str:
-    digest = hashlib.sha256()
-    for path in sorted((ROOT / "src").rglob("*.py")):
-        digest.update(path.relative_to(ROOT).as_posix().encode())
-        digest.update(b"\0")
-        digest.update(_portable_bytes(path))
-        digest.update(b"\0")
-    return digest.hexdigest()
 
 
 def _check_file(path: Path, expected: str, label: str) -> None:
@@ -236,7 +230,11 @@ def _check_adaptive_regime_research(
             _check_file(ROOT / item["path"], item["sha256"], "donnees regime adaptatif")
 
 
-def _check_horizon_contribution_research(*, verify_local_data: bool) -> None:
+def _check_horizon_contribution_research(
+    source_hash: str,
+    *,
+    verify_local_data: bool,
+) -> None:
     path = ROOT / "audit" / "btc_horizon_contribution_research.json"
     if not path.exists():
         raise SystemExit(f"Recherche de contribution Donchian absente : {path}")
@@ -249,6 +247,8 @@ def _check_horizon_contribution_research(*, verify_local_data: bool) -> None:
         provenance["script_sha256"],
         "script contribution Donchian",
     )
+    if provenance.get("source_tree_sha256") != source_hash:
+        raise SystemExit("Recherche Donchian périmée : relancer le script de recherche")
     config = provenance["config"]
     _check_file(ROOT / config["path"], config["sha256"], "config contribution Donchian")
     if verify_local_data:
@@ -293,11 +293,20 @@ def _check_btc_improvement_research(
 
 
 def main() -> None:
-    source_hash = _source_tree_sha256()
+    source_hashes = {
+        "baseline": quantitative_source_sha256(ROOT / "scripts/make_baseline_snapshot.py"),
+        "walkforward": quantitative_source_sha256(ROOT / "scripts/run_walkforward.py"),
+        "adaptive": quantitative_source_sha256(ROOT / "scripts/research_btc_adaptive_regime.py"),
+        "combined": quantitative_source_sha256(ROOT / "scripts/research_btc_combined.py"),
+        "horizon": quantitative_source_sha256(
+            ROOT / "scripts/research_btc_horizon_contribution.py"
+        ),
+        "yearly": quantitative_source_sha256(ROOT / "scripts/make_yearly_reference.py"),
+    }
     verify_local_data = os.environ.get("BTCQUANT_VERIFY_REFERENCE_DATA", "1") != "0"
     baseline = json.loads((ROOT / "audit" / "baseline_reference.json").read_text(encoding="utf-8"))
     provenance = baseline["provenance"]
-    if provenance["source_tree_sha256"] != source_hash:
+    if provenance["source_tree_sha256"] != source_hashes["baseline"]:
         raise SystemExit("Baseline périmée : relancer scripts/make_baseline_snapshot.py")
     config = provenance["config"]
     _check_file(ROOT / config["path"], config["sha256"], "config baseline")
@@ -307,24 +316,27 @@ def main() -> None:
     if "conformity" not in baseline["results"]:
         raise SystemExit("Baseline incomplète : référence de conformité absente")
     _check_published_figures(baseline)
-    _check_walkforward_reference(source_hash, verify_local_data=verify_local_data)
+    _check_walkforward_reference(source_hashes["walkforward"], verify_local_data=verify_local_data)
     _check_multiasset_reference(verify_local_data=verify_local_data)
     _check_btc_return_research(verify_local_data=verify_local_data)
     _check_btc_cost_filter_research(verify_local_data=verify_local_data)
     _check_carry_net_edge_research(verify_local_data=verify_local_data)
     _check_adaptive_regime_research(
-        source_hash,
+        source_hashes["adaptive"],
         verify_local_data=verify_local_data,
     )
-    _check_horizon_contribution_research(verify_local_data=verify_local_data)
+    _check_horizon_contribution_research(
+        source_hashes["horizon"],
+        verify_local_data=verify_local_data,
+    )
     _check_btc_improvement_research(
-        source_hash,
+        source_hashes["combined"],
         verify_local_data=verify_local_data,
     )
 
     yearly = json.loads((ROOT / "dashboard" / "yearly_reference.json").read_text(encoding="utf-8"))
     yearly_provenance = yearly["provenance"]
-    if yearly_provenance["source_tree_sha256"] != source_hash:
+    if yearly_provenance["source_tree_sha256"] != source_hashes["yearly"]:
         raise SystemExit("Référence annuelle périmée : relancer make_yearly_reference.py")
     config = yearly_provenance["config"]
     _check_file(ROOT / config["path"], config["sha256"], "config annuelle")
