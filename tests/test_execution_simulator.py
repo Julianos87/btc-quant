@@ -181,12 +181,12 @@ def test_paper_broker_is_an_adapter_over_the_shared_simulator():
     simulator = ExecutionSimulator(ExecutionConfig(fee_rate=0.002, slippage_bps=7.0))
     broker = PaperBroker(simulator=simulator)
 
-    fill = broker.execute_market("BUY", 3.0, 100.0, client_order_id="paper-order")
+    result = broker.execute_market("BUY", 3.0, 100.0, client_order_id="paper-order")
     replay = broker.execute_market("BUY", 3.0, 100.0, client_order_id="paper-order")
 
-    assert fill == replay
-    assert fill.price == pytest.approx(100.07)
-    assert fill.fee == pytest.approx(3.0 * 100.07 * 0.002)
+    assert result == replay
+    assert result.fill.price == pytest.approx(100.07)
+    assert result.fill.fee == pytest.approx(3.0 * 100.07 * 0.002)
 
 
 def test_runner_passes_bar_volume_to_paper_execution(tmp_path, monkeypatch):

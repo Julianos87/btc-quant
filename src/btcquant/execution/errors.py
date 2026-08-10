@@ -7,3 +7,35 @@ class ExecutionError(RuntimeError):
 
 class ReconciliationRequired(ExecutionError):
     """État externe ambigu nécessitant une intervention humaine."""
+
+
+class FinancialTransitionAlreadyReserved(ReconciliationRequired):
+    """Une transition identique possède déjà une intention durable."""
+
+    def __init__(
+        self,
+        logical_order_key: str,
+        order_id: int,
+        local_state: str,
+        external_state: str | None,
+    ) -> None:
+        self.logical_order_key = logical_order_key
+        self.order_id = order_id
+        self.local_state = local_state
+        self.external_state = external_state
+        super().__init__(
+            f"Transition financière déjà réservée par l'ordre {order_id} "
+            f"(local={local_state}, externe={external_state or 'NON_OBSERVÉ'})"
+        )
+
+
+class OrderIdentityCollision(ExecutionError):
+    """Une empreinte d'intention désigne deux clés logiques différentes."""
+
+
+class InvalidOrderStateTransition(ExecutionError):
+    """Une mise à jour tenterait d'inventer ou de perdre un état externe."""
+
+
+class EngineInstanceAlreadyRunning(ExecutionError):
+    """Le verrou OS indique qu'une autre instance du moteur est active."""

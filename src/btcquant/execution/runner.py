@@ -37,12 +37,14 @@ from ..indicators import bars_per_year, realized_vol
 from ..notify import notify
 from ..risk import RiskConfig, position_size
 from ..strategies.base import Direction, Position, Strategy
-from .broker import Broker, Fill
+from .broker import Broker
 from .clock import SystemClock
 from .data_quality import validate_closed_ohlcv
 from .errors import ReconciliationRequired
 from .funding_service import FundingService
-from .order_service import OrderExecutionService
+from .instance_lock import EngineInstanceLock
+from .order_service import OrderExecutionService, SubmittedOrder
+from .order_state import FinancialTransitionType
 from .ports import ClockPort, MarketDataPort, Notifier
 from .position_accounting import PositionAccountingService
 from .protective_stops import ProtectiveStopService, StopDecision, StopDecisionKind
@@ -79,6 +81,7 @@ class StrategySlot:
         self.stop_intent_id: str | None = None
         self.stop_transition: dict[str, Any] | None = None
         self.last_bar_ts: pd.Timestamp | None = None
+        self.financial_transition_seq = 0
         #: frais d'entrée de la position ouverte — inclus dans le PnL du trade
         #: à la sortie (même convention que le backtest)
         self.entry_fee: float = 0.0
@@ -157,7 +160,7 @@ class LiveRunner:
             self.store,
             self.broker,
             "trend",
-            external=self.broker.supports_stop_orders,
+            external=self.broker.external_execution,
         )
         if not recovery.can_start:
             details = (
@@ -198,6 +201,7 @@ class LiveRunner:
             slot.stop_intent_id = s.get("stop_intent_id")
             slot.stop_transition = s.get("stop_transition")
             slot.entry_fee = s.get("entry_fee", 0.0)
+            slot.financial_transition_seq = s.get("financial_transition_seq", 0)
             last_bar_ts = s.get("last_bar_ts")
             slot.last_bar_ts = pd.Timestamp(last_bar_ts) if last_bar_ts else None
             p = s.get("position")
@@ -262,6 +266,7 @@ class LiveRunner:
                 "stop_transition": slot.stop_transition,
                 "entry_fee": slot.entry_fee,
                 "last_bar_ts": str(slot.last_bar_ts) if slot.last_bar_ts is not None else None,
+                "financial_transition_seq": slot.financial_transition_seq,
             }
             raw["slots"][slot.strategy.name] = slot_state
         return raw
@@ -782,11 +787,14 @@ class LiveRunner:
         qty: float,
         ref_price: float,
         reason: str,
+        decision_checkpoint: str,
+        transition_type: FinancialTransitionType,
+        position_generation: str | None,
         available_volume: float | None = None,
         *,
         reduce_only: bool = False,
         volatility_annual: float | None = None,
-    ) -> tuple[Fill, int, str]:
+    ) -> SubmittedOrder:
         submitted = self.order_service.submit_market(
             engine="trend",
             slot=slot.strategy.name,
@@ -794,11 +802,83 @@ class LiveRunner:
             qty=qty,
             reference_price=ref_price,
             reason=reason,
+            decision_checkpoint=decision_checkpoint,
+            transition_type=transition_type,
+            position_generation=position_generation,
+            transition_sequence=slot.financial_transition_seq,
             reduce_only=reduce_only,
             available_volume=available_volume,
             volatility_annual=volatility_annual,
         )
-        return submitted.fill, submitted.order_id, submitted.status
+        if not submitted.is_terminal:
+            # La barre/décision est checkpointée, mais aucun fill encore actif
+            # n'est appliqué au portefeuille local. La reprise devra rapprocher
+            # l'intention par son client_order_id avant toute autre émission.
+            try:
+                self.store.save_engine_state(
+                    "trend",
+                    self._state_payload(),
+                    event_type="order_pending_reconciliation",
+                    event_payload={
+                        "order_id": submitted.order_id,
+                        "logical_order_key": submitted.logical_order_key,
+                        "external_state": submitted.external_state.value,
+                        "filled_qty": submitted.fill.qty,
+                        "remaining_qty": submitted.remaining_qty,
+                    },
+                )
+            except Exception as error:
+                raise ReconciliationRequired(
+                    f"Ordre {submitted.order_id} non terminal et checkpoint impossible; "
+                    "arrêt fail-closed"
+                ) from error
+            raise ReconciliationRequired(
+                f"Ordre {submitted.order_id} non terminal "
+                f"({submitted.external_state.value}) : reprise bloquée"
+            )
+        return submitted
+
+    def _complete_market_order_and_checkpoint(
+        self,
+        slot: StrategySlot,
+        submitted: SubmittedOrder,
+        *,
+        trade: dict[str, Any] | None = None,
+    ) -> None:
+        """Checkpoint terminal et numéro de décision suivante atomiquement."""
+
+        previous_sequence = slot.financial_transition_seq
+        slot.financial_transition_seq = submitted.transition_sequence + 1
+        try:
+            self.store.complete_order_and_checkpoint(
+                submitted.order_id,
+                engine="trend",
+                state=self._state_payload(),
+                status=submitted.status,
+                filled_qty=submitted.fill.qty,
+                remaining_qty=submitted.remaining_qty,
+                price=submitted.fill.price,
+                fee=submitted.fill.fee,
+                broker_order_id=submitted.fill.broker_order_id,
+                trade=trade,
+                external_state=submitted.external_state,
+            )
+        except Exception as error:
+            slot.financial_transition_seq = previous_sequence
+            raise ReconciliationRequired(
+                f"Ordre {submitted.order_id} observé mais checkpoint métier impossible; "
+                "arrêt fail-closed"
+            ) from error
+        except BaseException:
+            slot.financial_transition_seq = previous_sequence
+            raise
+
+    @staticmethod
+    def _position_generation(position: Position) -> str:
+        return (
+            f"entry={position.entry_time.isoformat()}|"
+            f"initial_qty={format(position.initial_qty, '.17g')}"
+        )
 
     # ── données ──────────────────────────────────────────────────────────────
     def _fetch_frame(self, strategy: Strategy) -> pd.DataFrame:
@@ -828,32 +908,32 @@ class LiveRunner:
         reason: str,
         available_volume: float | None = None,
         volatility_annual: float | None = None,
+        *,
+        decision_checkpoint: str | None = None,
     ) -> None:
         assert slot.position is not None
         pos = slot.position
         # clôture : on vend un long, on rachète un short
         side = "SELL" if pos.direction == 1 else "BUY"
-        fill, order_id, order_status = self._execute_market_order(
+        checkpoint = decision_checkpoint or (
+            f"{reason}:entry={pos.entry_time.isoformat()}:qty={format(pos.qty, '.17g')}"
+        )
+        submitted = self._execute_market_order(
             slot,
             side,
             pos.qty,
             ref_price,
             reason,
+            checkpoint,
+            FinancialTransitionType.EXIT,
+            self._position_generation(pos),
             available_volume,
             reduce_only=True,
             volatility_annual=volatility_annual,
         )
+        fill = submitted.fill
         if fill.qty <= 0:
-            self.store.complete_order_and_checkpoint(
-                order_id,
-                engine="trend",
-                state=self._state_payload(),
-                status=order_status,
-                filled_qty=fill.qty,
-                price=fill.price,
-                fee=fill.fee,
-                broker_order_id=fill.broker_order_id,
-            )
+            self._complete_market_order_and_checkpoint(slot, submitted)
             # ordre non exécuté : on GARDE la position (nouvel essai au tick
             # suivant via soft stop / condition de sortie toujours vraie)
             log.error(
@@ -861,53 +941,53 @@ class LiveRunner:
             )
             self.notifier(f"⚠ {slot.strategy.name} : ordre de sortie non exécuté, on retentera")
             return
-        accounting = self.accounting_service.close_position(
-            pos,
-            fill,
-            entry_fee=slot.entry_fee,
-        )
-        slot.cash += accounting.cash_delta
-        partial = accounting.partial
-        trade_pnl = accounting.trade_pnl
-        slot.entry_fee = accounting.remaining_entry_fee
-        log.info(
-            "[%s] Sortie %s (%s) : %.6f @ %.2f",
-            slot.strategy.name,
-            "LONG" if pos.direction == 1 else "SHORT",
-            reason,
-            fill.qty,
-            fill.price,
-        )
-        trade = self._trade_payload(
-            slot,
-            pos,
-            fill.price,
-            trade_pnl,
-            reason,
-            qty=fill.qty,
-        )
-        if partial:
-            assert accounting.remaining_position is not None
-            slot.position = accounting.remaining_position
-            pos = accounting.remaining_position
-            log.warning(
-                "[%s] Sortie PARTIELLE : %.6f restant en position", slot.strategy.name, pos.qty
+        try:
+            accounting = self.accounting_service.close_position(
+                pos,
+                fill,
+                entry_fee=slot.entry_fee,
             )
-        else:
-            slot.position = None
-            if self.broker.supports_stop_orders:
-                self._prepare_stop_cancellation(slot, reason=f"position_closed:{reason}")
-        self.store.complete_order_and_checkpoint(
-            order_id,
-            engine="trend",
-            state=self._state_payload(),
-            status=order_status,
-            filled_qty=fill.qty,
-            price=fill.price,
-            fee=fill.fee,
-            broker_order_id=fill.broker_order_id,
-            trade=trade,
-        )
+            slot.cash += accounting.cash_delta
+            partial = accounting.partial
+            trade_pnl = accounting.trade_pnl
+            slot.entry_fee = accounting.remaining_entry_fee
+            log.info(
+                "[%s] Sortie %s (%s) : %.6f @ %.2f",
+                slot.strategy.name,
+                "LONG" if pos.direction == 1 else "SHORT",
+                reason,
+                fill.qty,
+                fill.price,
+            )
+            trade = self._trade_payload(
+                slot,
+                pos,
+                fill.price,
+                trade_pnl,
+                reason,
+                qty=fill.qty,
+            )
+            if partial:
+                assert accounting.remaining_position is not None
+                slot.position = accounting.remaining_position
+                pos = accounting.remaining_position
+                log.warning(
+                    "[%s] Sortie PARTIELLE : %.6f restant en position",
+                    slot.strategy.name,
+                    pos.qty,
+                )
+            else:
+                slot.position = None
+                if self.broker.supports_stop_orders:
+                    self._prepare_stop_cancellation(slot, reason=f"position_closed:{reason}")
+            self._complete_market_order_and_checkpoint(slot, submitted, trade=trade)
+        except ReconciliationRequired:
+            raise
+        except Exception as error:
+            raise ReconciliationRequired(
+                f"Ordre {submitted.order_id} observé mais application métier impossible; "
+                "arrêt fail-closed"
+            ) from error
         if partial and self.broker.supports_stop_orders:
             self._begin_stop_replacement(
                 slot,
@@ -927,7 +1007,13 @@ class LiveRunner:
             self.notifier(f"⚠ {slot.strategy.name} : sortie partielle, {pos.qty:.6f} BTC restants")
 
     def _enter_position(
-        self, slot: StrategySlot, row: pd.Series, ref_price: float, direction: int
+        self,
+        slot: StrategySlot,
+        row: pd.Series,
+        ref_price: float,
+        direction: int,
+        *,
+        decision_checkpoint: str,
     ) -> None:
         stop = slot.strategy.initial_stop(row, ref_price, direction)
         rvol = row.get("_rvol")
@@ -947,50 +1033,48 @@ class LiveRunner:
             return
         side = "BUY" if direction == 1 else "SELL"
         volatility_annual = float(rvol) if pd.notna(rvol) else None
-        fill, order_id, order_status = self._execute_market_order(
+        submitted = self._execute_market_order(
             slot,
             side,
             qty,
             ref_price,
             "entry",
+            decision_checkpoint,
+            (
+                FinancialTransitionType.ENTER_LONG
+                if direction == 1
+                else FinancialTransitionType.ENTER_SHORT
+            ),
+            None,
             float(row["volume"]) if pd.notna(row.get("volume")) else None,
             volatility_annual=volatility_annual,
         )
+        fill = submitted.fill
         if fill.qty <= 0:
-            self.store.complete_order_and_checkpoint(
-                order_id,
-                engine="trend",
-                state=self._state_payload(),
-                status=order_status,
-                filled_qty=fill.qty,
-                price=fill.price,
-                fee=fill.fee,
-                broker_order_id=fill.broker_order_id,
-            )
+            self._complete_market_order_and_checkpoint(slot, submitted)
             log.error("[%s] Entrée non exécutée", slot.strategy.name)
             return
-        accounting = self.accounting_service.open_position(
-            fill,
-            entry_time=self.clock.utc_now(),
-            stop_price=stop,
-            direction=direction,
-        )
-        slot.cash += accounting.cash_delta
-        slot.entry_fee = accounting.entry_fee
-        slot.position = accounting.position
-        # Le fill market et la position sont d'abord matérialisés
-        # atomiquement. La pose du stop possède ensuite sa propre saga ; un
-        # crash entre les deux est détecté au redémarrage comme stop manquant.
-        self.store.complete_order_and_checkpoint(
-            order_id,
-            engine="trend",
-            state=self._state_payload(),
-            status=order_status,
-            filled_qty=fill.qty,
-            price=fill.price,
-            fee=fill.fee,
-            broker_order_id=fill.broker_order_id,
-        )
+        try:
+            accounting = self.accounting_service.open_position(
+                fill,
+                entry_time=self.clock.utc_now(),
+                stop_price=stop,
+                direction=direction,
+            )
+            slot.cash += accounting.cash_delta
+            slot.entry_fee = accounting.entry_fee
+            slot.position = accounting.position
+            # Le fill market et la position sont d'abord matérialisés
+            # atomiquement. La pose du stop possède ensuite sa propre saga ; un
+            # crash entre les deux est détecté au redémarrage comme stop manquant.
+            self._complete_market_order_and_checkpoint(slot, submitted)
+        except ReconciliationRequired:
+            raise
+        except Exception as error:
+            raise ReconciliationRequired(
+                f"Ordre {submitted.order_id} observé mais application métier impossible; "
+                "arrêt fail-closed"
+            ) from error
         if self.broker.supports_stop_orders:
             self._begin_stop_replacement(
                 slot,
@@ -1019,6 +1103,8 @@ class LiveRunner:
         row: pd.Series,
         ref_price: float,
         fraction: float,
+        *,
+        decision_checkpoint: str,
     ) -> None:
         position = slot.position
         if position is None:
@@ -1039,36 +1125,39 @@ class LiveRunner:
             return
         side = "BUY" if position.direction == 1 else "SELL"
         rvol = row.get("_rvol")
-        fill, order_id, order_status = self._execute_market_order(
+        submitted = self._execute_market_order(
             slot,
             side,
             qty,
             ref_price,
             "pyramid",
+            decision_checkpoint,
+            FinancialTransitionType.ADD,
+            self._position_generation(position),
             float(row["volume"]) if pd.notna(row.get("volume")) else None,
             volatility_annual=(float(rvol) if pd.notna(rvol) else None),
         )
-        if fill.qty > 0:
-            previous_qty = position.qty
-            total_qty = previous_qty + fill.qty
-            position.entry_price = (
-                previous_qty * position.entry_price + fill.qty * fill.price
-            ) / total_qty
-            position.qty = total_qty
-            position.last_add_price = fill.price
-            position.pyramid_adds += 1
-            slot.cash -= fill.fee
-            slot.entry_fee += fill.fee
-        self.store.complete_order_and_checkpoint(
-            order_id,
-            engine="trend",
-            state=self._state_payload(),
-            status=order_status,
-            filled_qty=fill.qty,
-            price=fill.price,
-            fee=fill.fee,
-            broker_order_id=fill.broker_order_id,
-        )
+        fill = submitted.fill
+        try:
+            if fill.qty > 0:
+                previous_qty = position.qty
+                total_qty = previous_qty + fill.qty
+                position.entry_price = (
+                    previous_qty * position.entry_price + fill.qty * fill.price
+                ) / total_qty
+                position.qty = total_qty
+                position.last_add_price = fill.price
+                position.pyramid_adds += 1
+                slot.cash -= fill.fee
+                slot.entry_fee += fill.fee
+            self._complete_market_order_and_checkpoint(slot, submitted)
+        except ReconciliationRequired:
+            raise
+        except Exception as error:
+            raise ReconciliationRequired(
+                f"Ordre {submitted.order_id} observé mais application métier impossible; "
+                "arrêt fail-closed"
+            ) from error
 
     def _process_bar(self, slot: StrategySlot, execution_price: float) -> BarDecision | None:
         """Décide sur la dernière clôture et exécute au prix de marché courant.
@@ -1150,6 +1239,7 @@ class LiveRunner:
                     exit_event.reason,
                     float(row["volume"]) if pd.notna(row.get("volume")) else None,
                     (float(row["_rvol"]) if pd.notna(row.get("_rvol")) else None),
+                    decision_checkpoint=last_ts.isoformat(),
                 )
             elif pyramid_event:
                 self._pyramid_position(
@@ -1157,6 +1247,7 @@ class LiveRunner:
                     row,
                     execution_price,
                     pyramid_event.fraction,
+                    decision_checkpoint=last_ts.isoformat(),
                 )
             return decision
         else:
@@ -1170,7 +1261,13 @@ class LiveRunner:
             )
             for event in decision.events:
                 if isinstance(event, EntryRequested):
-                    self._enter_position(slot, row, execution_price, event.direction)
+                    self._enter_position(
+                        slot,
+                        row,
+                        execution_price,
+                        event.direction,
+                        decision_checkpoint=last_ts.isoformat(),
+                    )
             return decision
 
     def _check_soft_stops(self, price: float) -> None:
@@ -1338,8 +1435,13 @@ class LiveRunner:
 
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
         stop_event = stop_event or threading.Event()
+        with EngineInstanceLock(self.store.path, "trend"):
+            self._run_forever_owned(stop_event)
+
+    def _run_forever_owned(self, stop_event: threading.Event) -> None:
         last_price: float | None = None
         consecutive_failures = 0
+        clean_shutdown = False
         log.info(
             "Runner démarré : %s, stratégies %s",
             self.symbol,
@@ -1366,8 +1468,15 @@ class LiveRunner:
                         self.store.resolve_incident("execution:trend:loop_failure")
                 if not waited_while_halted:
                     stop_event.wait(TICK_SECONDS)
+            clean_shutdown = True
         finally:
-            self._save_state()
-            if last_price is not None:
-                self._append_equity(last_price)
-            log.info("Runner arrêté proprement ; checkpoint final enregistré")
+            if clean_shutdown:
+                self._save_state()
+                if last_price is not None:
+                    self._append_equity(last_price)
+                log.info("Runner arrêté proprement ; checkpoint final enregistré")
+            else:
+                # Un fill peut déjà avoir muté la mémoire alors que la transaction
+                # ordre + checkpoint n'a pas abouti. Sauvegarder ici contournerait
+                # précisément l'atomicité et pourrait comptabiliser le fill deux fois.
+                log.critical("Arrêt non propre : checkpoint final volontairement ignoré")

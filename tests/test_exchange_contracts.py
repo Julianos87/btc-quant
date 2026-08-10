@@ -40,6 +40,25 @@ def test_hyperliquid_cloid_is_stable_128_bit_hex():
     int(first[2:], 16)
 
 
+def test_binance_client_order_id_is_stable_and_within_36_char_limit():
+    intent = f"btq-mkt-{'a' * 64}"
+    first = CcxtBroker._external_client_order_id(intent, "binance")
+    second = CcxtBroker._external_client_order_id(intent, "binance")
+
+    assert first == second
+    assert len(first) == 36
+    assert first.startswith("btq-")
+    int(first[4:], 16)
+
+
+def test_binance_legacy_client_order_id_mapping_is_preserved_for_recovery():
+    legacy = CcxtBroker._external_client_order_id("trend-slot-old-uuid", "binance")
+
+    assert len(legacy) == 32
+    assert legacy.startswith("btq-")
+    int(legacy[4:], 16)
+
+
 def test_hyperliquid_stop_is_reduce_only_trigger_market():
     exchange = StopExchange([])
     broker = object.__new__(CcxtBroker)

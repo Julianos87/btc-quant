@@ -42,6 +42,22 @@ def test_trend_rejects_position_missing_a_risk_field():
         )
 
 
+@pytest.mark.parametrize("invalid", [-1, True, 1.5, "1"])
+def test_trend_rejects_invalid_financial_transition_sequence(invalid):
+    with pytest.raises(ValueError, match="financial_transition_seq"):
+        validate_trend_state(
+            {
+                "slots": {
+                    "d20": {
+                        "cash": 2_000.0,
+                        "position": None,
+                        "financial_transition_seq": invalid,
+                    }
+                }
+            }
+        )
+
+
 def test_carry_requires_equity_and_position_flag():
     assert validate_carry_state({"equity": 4_000.0, "in_position": False})["equity"] == 4_000
     with pytest.raises(ValueError, match="in_position"):

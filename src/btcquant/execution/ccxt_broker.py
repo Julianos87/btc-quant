@@ -26,7 +26,8 @@ from pathlib import Path
 
 import ccxt
 
-from .broker import Broker, BrokerOrderSnapshot, Fill
+from .broker import Broker, BrokerOrderResult, BrokerOrderSnapshot, Fill
+from .order_state import ExternalOrderState
 from .resilience import RetryPolicy
 from .safety import require_live_execution_enabled
 from .units import decimal_notional, decimal_value, exchange_float
@@ -35,6 +36,7 @@ log = logging.getLogger(__name__)
 
 
 class CcxtBroker(Broker):
+    external_execution = True
     supports_stop_orders = True
     supports_order_lookup = True
     supports_position_reconciliation = True
@@ -161,6 +163,70 @@ class CcxtBroker(Broker):
             broker_order_id=broker_order_id,
         )
 
+    def _result_from_order(
+        self,
+        order: dict,
+        fallback_price: float,
+        requested_qty: float,
+    ) -> BrokerOrderResult:
+        """Normalise explicitement statut et reste sans déduire un rejet de ``filled``."""
+
+        fill = self._fill_from_order(order, fallback_price)
+        raw_status = str(order.get("status") or "").lower()
+        exchange_requested = float(order.get("amount") or requested_qty)
+        if exchange_requested <= 0:
+            exchange_requested = requested_qty
+        remaining_raw = order.get("remaining")
+        if remaining_raw is None:
+            remaining = (
+                max(0.0, exchange_requested - fill.qty)
+                if raw_status in ("open", "new", "pending")
+                else 0.0
+            )
+        else:
+            remaining = max(0.0, float(remaining_raw))
+
+        if raw_status == "closed":
+            status = (
+                ExternalOrderState.FILLED
+                if fill.qty >= exchange_requested - 1e-9 and remaining <= 1e-9
+                else ExternalOrderState.PARTIAL_TERMINAL
+                if fill.qty > 0
+                # ``closed`` prouve la terminalité, mais pas sa cause. Sans
+                # fill, l'assimiler à canceled ou rejected inventerait un fait.
+                else ExternalOrderState.UNKNOWN
+            )
+            remaining = 0.0
+        elif raw_status in ("canceled", "cancelled"):
+            status = ExternalOrderState.CANCELED
+            remaining = 0.0
+        elif raw_status == "rejected":
+            status = ExternalOrderState.REJECTED
+            remaining = 0.0
+        elif raw_status == "expired":
+            status = ExternalOrderState.EXPIRED
+            remaining = 0.0
+        elif raw_status in ("open", "new", "pending"):
+            remaining = max(remaining, exchange_requested - fill.qty)
+            if remaining <= 1e-9:
+                # Un exchange qui annonce simultanément ``open`` et aucun
+                # reste fournit un état contradictoire. Ce n'est ni une preuve
+                # de fill terminal ni une preuve de rejet.
+                status = ExternalOrderState.UNKNOWN
+            else:
+                status = (
+                    ExternalOrderState.PARTIAL_OPEN if fill.qty > 0 else ExternalOrderState.OPEN
+                )
+        else:
+            status = ExternalOrderState.UNKNOWN
+
+        return BrokerOrderResult(
+            fill=fill,
+            status=status,
+            requested_qty=requested_qty,
+            remaining_qty=remaining,
+        )
+
     @staticmethod
     def _external_client_order_id(intent_id: str, exchange_id: str = "binance") -> str:
         """Identifiant stable respectant la limite courte des exchanges."""
@@ -169,6 +235,13 @@ class CcxtBroker(Broker):
         if exchange_id == "hyperliquid":
             # Hyperliquid exige exactement un entier hexadécimal 128 bits.
             return f"0x{digest[:32]}"
+        if intent_id.startswith("btq-mkt-"):
+            # Nouvelles intentions : 4 caractères de préfixe + 32 hex = limite
+            # Binance de 36 caractères, soit 128 bits de collision-résistance.
+            return f"btq-{digest[:32]}"
+        # Compatibilité de reprise : les versions <= v4 utilisaient 28 hex.
+        # Modifier leur représentation empêcherait de retrouver un ordre déjà
+        # accepté avant la migration.
         return f"btq-{digest[:28]}"
 
     def _market_order(
@@ -179,11 +252,15 @@ class CcxtBroker(Broker):
         client_order_id: str | None = None,
         *,
         reduce_only: bool = False,
-    ) -> Fill:
+    ) -> BrokerOrderResult:
         qty = self._round_qty(qty)
         self._check_min_notional(qty, ref_price)
         exchange_id = getattr(self, "exchange_id", "binance")
-        local_intent = client_order_id or self._client_order_id(side)
+        if client_order_id is None:
+            raise ValueError(
+                "Un ordre market externe exige un client_order_id réservé par OrderExecutionService"
+            )
+        local_intent = client_order_id
         external_client_id = self._external_client_order_id(local_intent, exchange_id)
         client_key = "clientOrderId" if exchange_id == "hyperliquid" else "newClientOrderId"
         params: dict[str, object] = {client_key: external_client_id}
@@ -194,15 +271,24 @@ class CcxtBroker(Broker):
         price = ref_price if exchange_id == "hyperliquid" else None
         order = self.exchange.create_order(self.symbol, "market", side, qty, price, params)
         order = self._wait_closed(order)
-        fill = self._fill_from_order(order, ref_price)
-        log.info("[LIVE] %s %.6f @ %.2f (frais %.4f)", side.upper(), fill.qty, fill.price, fill.fee)
-        return fill
+        result = self._result_from_order(order, ref_price, qty)
+        fill = result.fill
+        log.info(
+            "[LIVE] %s %s %.6f/%.6f @ %.2f (frais %.4f)",
+            result.status,
+            side.upper(),
+            fill.qty,
+            qty,
+            fill.price,
+            fill.fee,
+        )
+        return result
 
     # ── interface Broker ─────────────────────────────────────────────────────
-    def market_buy(self, qty: float, ref_price: float) -> Fill:
+    def market_buy(self, qty: float, ref_price: float) -> BrokerOrderResult:
         return self._market_order("buy", qty, ref_price)
 
-    def market_sell(self, qty: float, ref_price: float) -> Fill:
+    def market_sell(self, qty: float, ref_price: float) -> BrokerOrderResult:
         return self._market_order("sell", qty, ref_price)
 
     def execute_market(
@@ -216,7 +302,7 @@ class CcxtBroker(Broker):
         available_volume: float | None = None,
         delayed_price: float | None = None,
         volatility_annual: float | None = None,
-    ) -> Fill:
+    ) -> BrokerOrderResult:
         del available_volume, delayed_price, volatility_annual
         normalized_side = side.lower()
         if normalized_side not in ("buy", "sell"):
@@ -241,24 +327,27 @@ class CcxtBroker(Broker):
             order = self._with_retries(self.exchange.fetch_order, external_id, self.symbol, params)
         except ccxt.OrderNotFound:
             return None
-        fill = self._fill_from_order(order, float(order.get("price") or 0.0))
-        raw_status = str(order.get("status") or "").lower()
         requested = float(order.get("amount") or 0.0)
-        if raw_status == "closed":
-            status = "FILLED" if fill.qty >= requested - 1e-12 else "PARTIAL"
-        elif raw_status in ("canceled", "cancelled"):
-            status = "CANCELED"
-        elif raw_status in ("rejected", "expired"):
-            status = raw_status.upper()
-        else:
-            status = "OPEN"
+        if requested <= 0:
+            requested = max(
+                float(order.get("filled") or 0.0) + float(order.get("remaining") or 0.0),
+                1e-12,
+            )
+        result = self._result_from_order(
+            order,
+            float(order.get("price") or 0.0),
+            requested,
+        )
+        fill = result.fill
         return BrokerOrderSnapshot(
             client_order_id=client_order_id,
             broker_order_id=fill.broker_order_id,
-            status=status,
+            status=result.status,
             filled_qty=fill.qty,
             price=fill.price if fill.qty > 0 else None,
             fee=fill.fee,
+            requested_qty=result.requested_qty,
+            remaining_qty=result.remaining_qty,
         )
 
     def place_stop(
@@ -380,12 +469,13 @@ class CcxtBroker(Broker):
         return remote_net
 
     def _wait_closed(self, order: dict, timeout_s: float = 30.0) -> dict:
-        """Attend qu'un ordre market soit intégralement exécuté."""
+        """Attend un statut terminal sans en déduire l'issue financière."""
         deadline = time.time() + timeout_s
-        while order.get("status") not in ("closed", "canceled") and time.time() < deadline:
+        terminal = {"closed", "canceled", "cancelled", "rejected", "expired"}
+        while str(order.get("status") or "").lower() not in terminal and time.time() < deadline:
             time.sleep(1.0)
             order = self._with_retries(self.exchange.fetch_order, order["id"], self.symbol)
-        if order.get("status") != "closed":
+        if str(order.get("status") or "").lower() not in terminal:
             log.error(
                 "Ordre %s non clôturé après %ss : %s",
                 order.get("id"),

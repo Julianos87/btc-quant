@@ -35,6 +35,7 @@ from btcquant.config import (
 from btcquant.data import TIMEFRAME_TO_PANDAS, load_ohlcv, resample
 from btcquant.domain import ExecutionSimulator
 from btcquant.indicators import bars_per_year
+from btcquant.provenance import quantitative_source_sha256
 from btcquant.risk import RiskConfig
 
 CONFIG = ROOT / "environments" / "paper" / "config.yaml"
@@ -53,16 +54,6 @@ def _sha256(path: Path) -> str:
 
 def _git_commit() -> str:
     return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-
-
-def _tree_sha256(paths: list[Path]) -> str:
-    digest = hashlib.sha256()
-    for path in sorted(paths):
-        digest.update(path.relative_to(ROOT).as_posix().encode())
-        digest.update(b"\0")
-        digest.update(_portable_bytes(path))
-        digest.update(b"\0")
-    return digest.hexdigest()
 
 
 def main() -> None:
@@ -149,7 +140,7 @@ def main() -> None:
         "purpose": "Safety Baseline anti-régression; aucune promesse de performance",
         "provenance": {
             "base_git_commit": _git_commit(),
-            "source_tree_sha256": _tree_sha256(list((ROOT / "src").rglob("*.py"))),
+            "source_tree_sha256": quantitative_source_sha256(Path(__file__)),
             "config": {
                 "path": CONFIG.relative_to(ROOT).as_posix(),
                 "sha256": _sha256(CONFIG),

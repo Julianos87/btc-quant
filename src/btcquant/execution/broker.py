@@ -8,15 +8,23 @@ l'ignore et exécute au marché.
 from __future__ import annotations
 
 import logging
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from ..domain.execution import ExecutionConfig, ExecutionSimulator, MarketOrder, OrderSide
+from ..domain.execution import (
+    ExecutionConfig,
+    ExecutionSimulator,
+    FillStatus,
+    MarketOrder,
+    OrderSide,
+)
+from .order_state import ExternalOrderState
 
 log = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(frozen=True)
 class Fill:
     price: float
     qty: float
@@ -25,13 +33,81 @@ class Fill:
 
 
 @dataclass(frozen=True)
+class BrokerOrderResult:
+    """Résultat broker sans inférence locale à partir de la quantité remplie."""
+
+    fill: Fill
+    status: ExternalOrderState
+    requested_qty: float
+    remaining_qty: float
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "status", ExternalOrderState(self.status))
+        for name, value in (
+            ("requested_qty", self.requested_qty),
+            ("remaining_qty", self.remaining_qty),
+            ("filled_qty", self.fill.qty),
+            ("fee", self.fill.fee),
+        ):
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"{name} doit être un nombre fini positif ou nul")
+        if self.requested_qty <= 0:
+            raise ValueError("requested_qty doit être strictement positive")
+        tolerance = max(1e-9, self.requested_qty * 1e-9)
+        if self.fill.qty > self.requested_qty + tolerance:
+            raise ValueError("filled_qty dépasse requested_qty")
+        if self.fill.qty + self.remaining_qty > self.requested_qty + tolerance:
+            raise ValueError("filled_qty + remaining_qty dépasse requested_qty")
+        if self.fill.qty > 0 and (not math.isfinite(self.fill.price) or self.fill.price <= 0):
+            raise ValueError("Un fill positif exige un prix fini strictement positif")
+        if self.status == ExternalOrderState.OPEN and (
+            self.fill.qty > 1e-12 or self.remaining_qty <= 0
+        ):
+            raise ValueError("OPEN exige filled_qty=0 et remaining_qty>0")
+        if self.status == ExternalOrderState.PARTIAL_OPEN and (
+            self.fill.qty <= 0 or self.remaining_qty <= 0
+        ):
+            raise ValueError("PARTIAL_OPEN exige un fill et un reste strictement positifs")
+        if self.status == ExternalOrderState.FILLED and (
+            self.remaining_qty > tolerance or self.fill.qty < self.requested_qty - tolerance
+        ):
+            raise ValueError("FILLED exige la quantité demandée et aucun reste")
+        if self.status == ExternalOrderState.PARTIAL_TERMINAL and (
+            self.fill.qty <= 0
+            or self.fill.qty >= self.requested_qty - tolerance
+            or self.remaining_qty > tolerance
+        ):
+            raise ValueError("PARTIAL_TERMINAL exige un fill incomplet et aucun reste actif")
+        if (
+            self.status
+            in {
+                ExternalOrderState.CANCELED,
+                ExternalOrderState.REJECTED,
+                ExternalOrderState.EXPIRED,
+            }
+            and self.remaining_qty > tolerance
+        ):
+            # Un ordre peut être partiellement exécuté avant que l'exchange ne
+            # confirme son annulation, rejet tardif ou expiration. La cause
+            # terminale reste celle annoncée par l'exchange et le fill est
+            # conservé ; seul un reste encore actif serait contradictoire.
+            raise ValueError(f"{self.status.value} exige un reste nul")
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status.is_terminal
+
+
+@dataclass(frozen=True)
 class BrokerOrderSnapshot:
     client_order_id: str
     broker_order_id: str | None
-    status: str
+    status: ExternalOrderState | str
     filled_qty: float
     price: float | None = None
     fee: float = 0.0
+    requested_qty: float | None = None
+    remaining_qty: float | None = None
 
 
 @dataclass(frozen=True)
@@ -48,6 +124,9 @@ class ProtectiveOrderSnapshot:
 
 
 class Broker(ABC):
+    #: Un adaptateur inconnu est considéré externe par défaut. Seul un broker
+    #: purement local peut déclarer l'absence durable d'effet hors processus.
+    external_execution: bool = True
     #: True si le broker pose de vrais ordres stop côté exchange ;
     #: sinon le runner surveille un stop "logiciel" à chaque tick.
     supports_stop_orders: bool = False
@@ -55,10 +134,10 @@ class Broker(ABC):
     supports_position_reconciliation: bool = False
 
     @abstractmethod
-    def market_buy(self, qty: float, ref_price: float) -> Fill: ...
+    def market_buy(self, qty: float, ref_price: float) -> BrokerOrderResult: ...
 
     @abstractmethod
-    def market_sell(self, qty: float, ref_price: float) -> Fill: ...
+    def market_sell(self, qty: float, ref_price: float) -> BrokerOrderResult: ...
 
     def execute_market(
         self,
@@ -71,9 +150,13 @@ class Broker(ABC):
         available_volume: float | None = None,
         delayed_price: float | None = None,
         volatility_annual: float | None = None,
-    ) -> Fill:
+    ) -> BrokerOrderResult:
         """Point d'entrée commun ; les brokers réels gardent leur implémentation."""
 
+        if self.external_execution:
+            raise NotImplementedError(
+                "Un broker externe doit implémenter execute_market et préserver client_order_id"
+            )
         del client_order_id, reduce_only, available_volume, delayed_price, volatility_annual
         order_side = OrderSide(side)
         if order_side == OrderSide.BUY:
@@ -162,6 +245,7 @@ class PaperBroker(Broker):
     """Adaptateur paper autour du simulateur d'exécution commun."""
 
     supports_stop_orders = False
+    external_execution = False
 
     def __init__(
         self,
@@ -177,10 +261,10 @@ class PaperBroker(Broker):
         self.slippage = self.simulator.config.slippage_bps / 10_000.0
         self._sequence = 0
 
-    def market_buy(self, qty: float, ref_price: float) -> Fill:
+    def market_buy(self, qty: float, ref_price: float) -> BrokerOrderResult:
         return self.execute_market("BUY", qty, ref_price)
 
-    def market_sell(self, qty: float, ref_price: float) -> Fill:
+    def market_sell(self, qty: float, ref_price: float) -> BrokerOrderResult:
         return self.execute_market("SELL", qty, ref_price)
 
     def execute_market(
@@ -194,7 +278,7 @@ class PaperBroker(Broker):
         available_volume: float | None = None,
         delayed_price: float | None = None,
         volatility_annual: float | None = None,
-    ) -> Fill:
+    ) -> BrokerOrderResult:
         del reduce_only
         order_side = OrderSide(side)
         if client_order_id is None:
@@ -220,4 +304,16 @@ class PaperBroker(Broker):
             result.price,
             result.fee,
         )
-        return Fill(price=result.price, qty=result.qty, fee=result.fee)
+        status = {
+            FillStatus.FILLED: ExternalOrderState.FILLED,
+            FillStatus.PARTIAL: ExternalOrderState.PARTIAL_TERMINAL,
+            FillStatus.REJECTED: ExternalOrderState.REJECTED,
+            FillStatus.EXPIRED: ExternalOrderState.EXPIRED,
+        }[result.status]
+        return BrokerOrderResult(
+            fill=Fill(price=result.price, qty=result.qty, fee=result.fee),
+            status=status,
+            requested_qty=result.requested_qty,
+            # Le simulateur paper ne conserve jamais la tranche non remplie.
+            remaining_qty=0.0,
+        )
