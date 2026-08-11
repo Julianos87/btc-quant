@@ -1,0 +1,157 @@
+{
+  "manifest_version": 1,
+  "baseline_id": "HYPERLIQUID_EXECUTION_PARITY_BASELINE_V1",
+  "purpose": "Primary venue-specific backtest to paper and future testnet qualification baseline",
+  "status": "FROZEN_EXECUTION_PARITY_BASELINE",
+  "execution_parity_status": "EXECUTION_PARITY_BASELINE_WITH_DOCUMENTED_PRICE_APPROXIMATIONS",
+  "venue": "hyperliquid",
+  "network": "mainnet",
+  "instrument": "BTC perpetual",
+  "native_coin": "BTC",
+  "ccxt_symbol": "BTC/USDC:USDC",
+  "cutoff": "2026-08-10T20:00:00Z",
+  "ohlcv": {
+    "timeframe": "1h",
+    "start": "2026-01-14T12:00:00Z",
+    "end": "2026-08-10T19:00:00Z",
+    "rows": 5000,
+    "raw_sha256": "894ca7eed7eee5735ad910c56adb7159c13d793207081e7b554f3f356e17ef71",
+    "raw_rows": 5001,
+    "open_observations_excluded": 1,
+    "normalized_sha256": "51d715568cadc0dfd4ed60b7def68bc58d20f8c96e6c7d559e87ee1807d6b4eb",
+    "normalized_bytes": 276974,
+    "compressed_sha256": "9a8a474ed62ceb2e9963c8bb6c457f5029e3b68ab476a3fb2a4295a6f9d98534",
+    "compressed_bytes": 96035,
+    "canonical_file": "audit/baselines/data/hyperliquid_v1/hyperliquid_btc_perp_1h_v1.csv.gz",
+    "schema": ["timestamp", "open", "high", "low", "close", "volume"]
+  },
+  "funding": {
+    "native_frequency": "1h",
+    "start": "2026-01-14T12:00:00Z",
+    "end": "2026-08-10T19:00:00.045Z",
+    "end_slot": "2026-08-10T19:00:00Z",
+    "rows": 5000,
+    "expected_slots": 5000,
+    "raw_native_provenance": {
+      "source": "Hyperliquid fundingHistory",
+      "archive_raw_path": "/tmp/btcquant-hyperliquid-baseline-v1/fundingHistory_pages.json",
+      "archive_raw_sha256": "3cb5c19fa3f7101c209ce36d6f08e5c4a0737d9b29c6eda89d406d41b7727e17",
+      "archive_raw_rows": 27915,
+      "archive_pages": 57,
+      "slice_rule": "native observations whose nearest UTC hour slot is inside the V1 OHLCV window",
+      "slot_tolerance_seconds": 300
+    },
+    "normalized_sha256": "a7f7ff1a9180e090e9bc80a71cedc174cde28c78186accfe9920b12a92cf2e3a",
+    "normalized_bytes": 185747,
+    "compressed_sha256": "c292d9765c1c52c6dcb74fbc02aa7c945f5ab27df79411dedaefc3ea28a4397e",
+    "compressed_bytes": 33566,
+    "canonical_file": "audit/baselines/data/hyperliquid_v1/hyperliquid_btc_funding_v1_window.csv.gz",
+    "schema": ["timestamp", "funding_rate"],
+    "missing_slots": [],
+    "duplicates": 0,
+    "out_of_order": false,
+    "nan": false,
+    "max_timestamp_jitter_seconds": 0.261
+  },
+  "fee_model": "HYPERLIQUID_BASE_PERP_TAKER_V1",
+  "taker_fee": 0.00045,
+  "fee_source": {
+    "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/fees",
+    "interpretation": "protocol base perp taker fee; no account discount, referral or staking benefit"
+  },
+  "slippage_model": "FIXED_BPS_SCENARIO",
+  "slippage_bps": 5.0,
+  "market_impact_model": "FIXED_BPS_SCENARIO",
+  "market_impact_bps": 15.0,
+  "normalization_version": "hyperliquid-canonical-v1",
+  "source_endpoints": {
+    "info_mainnet": "https://api.hyperliquid.xyz/info",
+    "ohlcv_method": "candleSnapshot",
+    "funding_method": "fundingHistory",
+    "ohlcv_symbol": "BTC",
+    "network_for_research": "mainnet",
+    "network_for_execution_qualification": "testnet"
+  },
+  "retrieval": {
+    "ohlcv_retrieved_at": "2026-08-10T20:51:55.964586Z",
+    "funding_retrieved_at": "2026-08-10T20:51:26.582702Z",
+    "pagination": "recorded raw funding pages; 5000 recent candles returned by candleSnapshot",
+    "raw_archive_retained_in_git": false,
+    "raw_archive_manifest": "raw hashes and retrieval metadata are retained here; normalized V1 files are retained in Git"
+  },
+  "funding_regimes": [
+    {
+      "start": "2026-01-14T12:00:00Z",
+      "end": "2026-08-10T19:00:00Z",
+      "expected_frequency": "1h",
+      "source": "native Hyperliquid fundingHistory"
+    }
+  ],
+  "price_semantics": {
+    "signal_trend": "Hyperliquid candleSnapshot OHLCV close",
+    "donchian": "Hyperliquid candleSnapshot OHLCV high/low",
+    "atr": "Hyperliquid candleSnapshot OHLCV high/low/close",
+    "mark_to_market": "OHLCV close approximation in historical backtest",
+    "stop_trigger": "historical backtest OHLC approximation; live execution uses venue order semantics",
+    "fill_simulated": "OHLCV simulator with explicit fee, slippage and market-impact assumptions",
+    "funding_notional_price": "OHLC approximation",
+    "reconciliation_live": "Hyperliquid venue position and order state, not this historical dataset"
+  },
+  "data_integrity": {
+    "ohlcv_expected_frequency": "1h",
+    "ohlcv_expected_rows_if_continuous": 5000,
+    "ohlcv_missing_rows": 0,
+    "ohlcv_gap_groups": [],
+    "ohlcv_duplicates": 0,
+    "ohlcv_out_of_order": false,
+    "ohlcv_unexpected_intervals": [],
+    "ohlcv_partial_windows_removed": 0,
+    "ohlcv_complete_4h_windows": 1250,
+    "funding_expected_slots": 5000,
+    "funding_observed_slots": 5000,
+    "funding_missing_slots": [],
+    "funding_duplicates": 0,
+    "funding_out_of_order": false,
+    "funding_nan": false
+  },
+  "quantitative_source_closure": {
+    "version": "hyperliquid-scoped-source-v1",
+    "files": {
+      "environments/testnet/config.yaml": "6d80033c225bcb08cf63572538d701eff3926d9497d380f3125708640c5e31a6",
+      "pyproject.toml": "469a6006286a5dcb5760390bc328153b6fa0b519c587a27ea11d3d640c14f5fd",
+      "src/btcquant/backtest/engine.py": "424c203ef3b87df3d8f2a133c7b4ac56f79868d783af4094c29053609060b5ad",
+      "src/btcquant/backtest/metrics.py": "8f4226eeafde2201de96abe3c328093a4e9d43b50ea5d4aad61b222363335ad6",
+      "src/btcquant/data.py": "b4757bd221edc27e04cc6beaf48ba70703d1dd772c60b2590063a4f7d7145774",
+      "src/btcquant/data_integrity.py": "f7b85fa0a7591a4a64e5e708eb579221c6bd8538420ede0bb18c1f30b9ebcc0c",
+      "src/btcquant/execution/venue.py": "82815bcde9a061599832ec406ed73130787095e1d3a15a0d45555004cec5eb3e",
+      "src/btcquant/hyperliquid_baseline.py": "4602ee7af11e613a576df2d101054ea885786380a312f8ed0c34eb1c6f3cd3fd",
+      "src/btcquant/indicators.py": "af9f48d76359d2384f955b6e31579241dbcc2a63527537a7087d90c8ffa65eae",
+      "src/btcquant/strategies/base.py": "510e2f4ac12c6e30724dee0b7326c5a3f93095d1cefe1e3001d0bfbea3f3c53a",
+      "src/btcquant/strategies/trend_ls.py": "52e5314f1b23627f2d217b6aef9988f0ba6a8a518c922622bc642aac9185e1da",
+      "uv.lock": "c95dd635305ba32f058b9c4e81ea4f21ecb223efa5654e4626a9b7e576100e46"
+    },
+    "dashboard_and_order_adapters_excluded": true
+  },
+  "config_provenance": {
+    "testnet_config": {
+      "path": "environments/testnet/config.yaml",
+      "sha256": "6d80033c225bcb08cf63572538d701eff3926d9497d380f3125708640c5e31a6"
+    },
+    "pyproject": {
+      "path": "pyproject.toml",
+      "sha256": "469a6006286a5dcb5760390bc328153b6fa0b519c587a27ea11d3d640c14f5fd"
+    },
+    "lock": {
+      "path": "uv.lock",
+      "sha256": "c95dd635305ba32f058b9c4e81ea4f21ecb223efa5654e4626a9b7e576100e46"
+    }
+  },
+  "limitations": [
+    "V1 covers only 5000 recent mainnet 1h candles and is not long-horizon strategy evidence",
+    "Historical funding archive has three documented UNKNOWN slots outside the V1 window",
+    "Funding notional uses an OHLC approximation because historical oracle prices are not retained",
+    "Execution conditions, fills and account-specific fees are simulated, not accounting parity exact",
+    "Testnet is for execution qualification only and must not be used as performance evidence",
+    "No testnet or live orders are authorized by this manifest"
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "manifest_version": 1,
+  "baseline_id": "LEGACY_RESEARCH_BASELINE_BINANCE",
+  "purpose": "Preserve the historical long-horizon Binance research reference",
+  "status": "LEGACY_RESEARCH_BASELINE",
+  "execution_parity": "NOT_EXECUTION_PARITY",
+  "reproducibility": "ORIGINAL_DATA_FILES_NOT_BIT_FOR_BIT_AVAILABLE",
+  "venue": "binance",
+  "market": "BTC perpetual research dataset",
+  "source_artifacts": {
+    "baseline_reference": "audit/baseline_reference.json",
+    "yearly_reference": "dashboard/yearly_reference.json",
+    "historical_code_commit": "f473573895010ba87e61873e5fe84d494c72a31b",
+    "historical_baseline_source_tree_sha256": "605c7dd0cfd5db700c07434107b25ddbc404e912ed0e1d3a3ddbefe3fc8b0288",
+    "historical_yearly_source_tree_sha256": "d182bb3ec7904021432127e6acc1d0dfd589685d9a3c83490af9d7a2df2ef2d0"
+  },
+  "ohlcv": {
+    "path": "data/binance_BTC-USDT_1h.csv",
+    "bytes": 4816785,
+    "sha256": "5dcf7a26d1034ca420526370bf5485ffb438aba2e7732854d80752edbdaa8a99",
+    "rows": 66355,
+    "span": [
+      "2019-01-01T00:00:00+00:00",
+      "2026-07-30T06:00:00+00:00"
+    ]
+  },
+  "funding": {
+    "path": "data/binanceusdm_BTCUSDT_USDT_funding.csv",
+    "bytes": 295173,
+    "sha256": "d288b930976ab66294b15dec55df221308e24c643c2953adffdea051bdea14ae",
+    "rows": 7545,
+    "span": [
+      "2019-09-10T08:00:00+00:00",
+      "2026-07-30T00:00:00+00:00"
+    ]
+  },
+  "historical_results": {
+    "trades": 470,
+    "final_equity": 101221.49020494235,
+    "cagr": 0.471615852998831,
+    "sharpe": 1.1384579592223296,
+    "max_drawdown": -0.5088459640981553,
+    "trades_per_year": 64.29895748798302
+  },
+  "limitations": [
+    "This manifest preserves historical metadata; the original CSV files are not bit-for-bit available here",
+    "The current Lot 3A code is not claimed to reproduce the historical Binance results",
+    "This baseline is not the primary backtest-to-execution qualification reference for Hyperliquid",
+    "No Hyperliquid venue, funding or execution parity should be inferred from these results"
+  ]
+}

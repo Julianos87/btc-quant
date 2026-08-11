@@ -84,13 +84,9 @@ jobs:
       - name: Vérifier le SBOM CycloneDX
         run: uv run python scripts/check_sbom.py
 
-      - name: Vérifier la provenance des références
-        # Les caches data/ sont volontairement non versionnés et propres à
-        # chaque machine. La CI valide code, config et métadonnées ; la
-        # vérification complète des données reste active par défaut en local.
-        env:
-          BTCQUANT_VERIFY_REFERENCE_DATA: "0"
-        run: uv run python scripts/check_reference_provenance.py
+      - name: Vérifier les baselines legacy et Hyperliquid
+        # Le contrôle Hyperliquid est strict et local ; aucune donnée API n'est requise.
+        run: uv run python scripts/check_baseline_provenance.py
 
       - name: Syntaxe des scripts de déploiement
         run: >-
