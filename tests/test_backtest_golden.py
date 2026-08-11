@@ -66,7 +66,7 @@ def synthetic_ohlcv(bars: int = BARS) -> pd.DataFrame:
 def synthetic_funding(bars: int = BARS) -> pd.Series:
     """Paiements 8 h alternant régimes positifs et négatifs, aux heures réelles."""
 
-    index = pd.date_range(START, periods=bars * 2, freq="8h", tz="UTC")
+    index = pd.date_range(START, periods=max(1, bars // 2), freq="8h", tz="UTC")
     values = [0.0001 + 0.0009 * math.sin(i / 53.0) for i in range(len(index))]
     return pd.Series(values, index=index)
 

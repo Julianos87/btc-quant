@@ -29,6 +29,7 @@ import ccxt
 import numpy as np
 import pandas as pd
 
+from .data_integrity import cadence_report
 from .domain.carry_decision import decide_carry_payment
 from .performance import daily_returns, sharpe_ratio
 
@@ -36,6 +37,94 @@ log = logging.getLogger(__name__)
 
 PAYMENTS_PER_DAY = 3  # funding toutes les 8 h
 PAYMENTS_PER_YEAR = PAYMENTS_PER_DAY * 365
+BINANCE_USDM_FUNDING_FREQUENCY = pd.Timedelta("8h")
+BINANCE_USDM_FUNDING_JITTER = pd.Timedelta(seconds=1)
+
+
+@dataclass(frozen=True)
+class FundingResolution:
+    """Funding input with an explicit origin for a quantitative result."""
+
+    series: pd.Series | None
+    source: str
+    rate: float | None = None
+
+
+def _validate_funding_series(
+    series: pd.Series,
+    *,
+    expected_frequency: str | None = None,
+    context: str = "funding",
+) -> pd.Series:
+    index = pd.DatetimeIndex(series.index)
+    if index.tz is None:
+        raise ValueError(f"{context}: index sans fuseau UTC")
+    index = index.tz_convert("UTC")
+    if index.has_duplicates:
+        raise ValueError(f"DUPLICATE dans {context}")
+    if not index.is_monotonic_increasing:
+        raise ValueError(f"OUT_OF_ORDER dans {context}")
+    values = pd.to_numeric(series, errors="raise").astype(float)
+    if not np.isfinite(values.to_numpy()).all():
+        raise ValueError(f"NaN ou infini dans {context}")
+    values.index = index
+    if expected_frequency is not None and len(values) < 2:
+        raise ValueError(f"Durée {context} insuffisante")
+    if expected_frequency is not None:
+        report = cadence_report(index, expected_frequency)
+        if not report.is_valid:
+            raise ValueError(f"Cadence {context} invalide : {', '.join(report.anomalies)}")
+    return values
+
+
+def funding_cache_path(symbol_perp: str, data_dir: str | Path = "data") -> Path:
+    """Return the canonical Binance USDM funding-cache path for a perp symbol."""
+    safe_symbol = symbol_perp.replace("/", "").replace(":", "_")
+    return Path(data_dir) / f"binanceusdm_{safe_symbol}_funding.csv"
+
+
+def _validate_binance_usdm_funding(series: pd.Series, *, context: str) -> pd.Series:
+    """Validate Binance USDM's 8-hour slots while preserving raw timestamps.
+
+    Binance's historical API may publish timestamps a few milliseconds away
+    from the nominal UTC 00:00/08:00/16:00 slots. This venue-specific
+    contract assigns each observation to its nearest slot, but never rewrites
+    the timestamp stored in the returned series.
+    """
+    raw_index = pd.DatetimeIndex(series.index)
+    if raw_index.tz is None:
+        raise ValueError(f"{context}: index sans fuseau UTC")
+    index = raw_index.tz_convert("UTC")
+    if index.has_duplicates:
+        raise ValueError(f"DUPLICATE dans {context}")
+    if not index.is_monotonic_increasing:
+        raise ValueError(f"OUT_OF_ORDER dans {context}")
+    values = pd.to_numeric(series, errors="raise").astype(float)
+    if not np.isfinite(values.to_numpy()).all():
+        raise ValueError(f"NaN ou infini dans {context}")
+    if len(index) < 2:
+        raise ValueError(f"Durée {context} insuffisante")
+
+    epoch_ns = pd.Timestamp("1970-01-01T00:00:00Z").value
+    interval_ns = BINANCE_USDM_FUNDING_FREQUENCY.value
+    timestamp_ns = index.tz_localize(None).to_numpy(dtype="datetime64[ns]").astype(np.int64)
+    offsets = timestamp_ns - epoch_ns
+    slot_ns = epoch_ns + ((offsets + interval_ns // 2) // interval_ns) * interval_ns
+    jitter_ns = np.abs(offsets - (slot_ns - epoch_ns))
+    if np.any(jitter_ns > BINANCE_USDM_FUNDING_JITTER.value):
+        raise ValueError(f"Jitter de timestamp > 1 seconde dans {context}")
+
+    if len(np.unique(slot_ns)) != len(slot_ns):
+        raise ValueError(f"DUPLICATE de slot 8h dans {context}")
+    slot_deltas = np.diff(slot_ns)
+    if np.any(slot_deltas <= 0):
+        raise ValueError(f"OUT_OF_ORDER de slots 8h dans {context}")
+    if np.any(slot_deltas != interval_ns):
+        raise ValueError(f"GAP de slot 8h dans {context}")
+
+    # Keep the observed UTC instants, including their millisecond jitter.
+    values.index = index
+    return values
 
 
 def load_funding(
@@ -44,13 +133,12 @@ def load_funding(
     refresh: bool = True,
 ) -> pd.Series:
     """Historique complet des taux de funding Binance (cache CSV incrémental)."""
-    safe = symbol_perp.replace("/", "").replace(":", "_")
-    path = Path(data_dir) / f"binanceusdm_{safe}_funding.csv"
+    path = funding_cache_path(symbol_perp, data_dir)
     cached: pd.Series | None = None
     if path.exists():
         df = pd.read_csv(path, index_col=0)
         df.index = pd.to_datetime(df.index, utc=True, format="ISO8601")
-        cached = df["rate"]
+        cached = _validate_binance_usdm_funding(df["rate"], context=str(path))
 
     if refresh:
         ex = ccxt.binanceusdm({"enableRateLimit": True, "timeout": 30_000})
@@ -78,12 +166,49 @@ def load_funding(
                 name="rate",
             )
             cached = pd.concat([cached, fresh]) if cached is not None else fresh
-            cached = cached[~cached.index.duplicated(keep="last")].sort_index()
+            cached = _validate_binance_usdm_funding(cached, context=str(path))
             path.parent.mkdir(parents=True, exist_ok=True)
             cached.to_frame().to_csv(path, index_label="ts")
     if cached is None:
         raise FileNotFoundError(f"Aucun cache funding pour {symbol_perp} et refresh=False")
-    return cached
+    return _validate_binance_usdm_funding(cached, context=str(path))
+
+
+def funding_mode_from_cli(mode: str, synthetic_rate: float | None) -> tuple[str, float | None]:
+    """Resolve the explicit CLI funding contract shared by research scripts."""
+    if mode == "synthetic":
+        if synthetic_rate is None:
+            raise ValueError("--synthetic-funding-rate est requis avec --funding-mode synthetic")
+        return "SYNTHETIC_EXPLICIT", synthetic_rate
+    if synthetic_rate is not None:
+        raise ValueError("--synthetic-funding-rate est interdit avec --funding-mode real")
+    return "REAL", None
+
+
+def resolve_funding(
+    symbol_perp: str,
+    *,
+    data_dir: str | Path = "data",
+    refresh: bool,
+    mode: str = "REAL",
+    synthetic_rate: float | None = None,
+) -> FundingResolution:
+    """Resolve REAL funding or an explicitly requested synthetic constant."""
+    normalized = mode.upper()
+    if normalized == "REAL":
+        return FundingResolution(
+            series=load_funding(symbol_perp, data_dir=data_dir, refresh=refresh),
+            source="real",
+        )
+    if normalized != "SYNTHETIC_EXPLICIT":
+        raise ValueError("mode funding doit être REAL ou SYNTHETIC_EXPLICIT")
+    if synthetic_rate is None or not np.isfinite(float(synthetic_rate)):
+        raise ValueError("synthetic_rate doit être fini en mode SYNTHETIC_EXPLICIT")
+    return FundingResolution(
+        series=None,
+        source="synthetic_constant",
+        rate=float(synthetic_rate),
+    )
 
 
 def add_funding_columns(df: pd.DataFrame, funding_8h: pd.Series, pandas_freq: str) -> pd.DataFrame:
@@ -110,7 +235,10 @@ def add_funding_columns(df: pd.DataFrame, funding_8h: pd.Series, pandas_freq: st
     """
     out = df.copy()
     offset = pd.tseries.frequencies.to_offset(pandas_freq)
+    funding_8h = _validate_funding_series(funding_8h, context="funding fourni au backtest")
     funding_index = pd.DatetimeIndex(funding_8h.index)
+    if len(out) and len(funding_8h) and funding_index[-1] > out.index[-1] + offset:
+        raise ValueError("Funding après la dernière bougie OHLCV")
     bucket = funding_index.floor(pandas_freq)
     at_open_mask = funding_index == bucket
     at_open = funding_8h[at_open_mask].groupby(bucket[at_open_mask]).sum()

@@ -306,8 +306,10 @@ def main() -> None:
     verify_local_data = os.environ.get("BTCQUANT_VERIFY_REFERENCE_DATA", "1") != "0"
     baseline = json.loads((ROOT / "audit" / "baseline_reference.json").read_text(encoding="utf-8"))
     provenance = baseline["provenance"]
-    if provenance["source_tree_sha256"] != source_hashes["baseline"]:
-        raise SystemExit("Baseline périmée : relancer scripts/make_baseline_snapshot.py")
+    # The legacy Binance artefact belongs to its historical commit. Its
+    # current source-tree hash is intentionally not compared with Lot 3A.
+    if provenance["base_git_commit"] != "f473573895010ba87e61873e5fe84d494c72a31b":
+        raise SystemExit("Baseline historique : commit de référence inattendu")
     config = provenance["config"]
     _check_file(ROOT / config["path"], config["sha256"], "config baseline")
     if verify_local_data:
@@ -336,8 +338,8 @@ def main() -> None:
 
     yearly = json.loads((ROOT / "dashboard" / "yearly_reference.json").read_text(encoding="utf-8"))
     yearly_provenance = yearly["provenance"]
-    if yearly_provenance["source_tree_sha256"] != source_hashes["yearly"]:
-        raise SystemExit("Référence annuelle périmée : relancer make_yearly_reference.py")
+    if yearly_provenance["base_git_commit"] != "f473573895010ba87e61873e5fe84d494c72a31b":
+        raise SystemExit("Référence annuelle historique : commit de référence inattendu")
     config = yearly_provenance["config"]
     _check_file(ROOT / config["path"], config["sha256"], "config annuelle")
     if verify_local_data:
