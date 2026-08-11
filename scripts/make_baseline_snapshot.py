@@ -25,7 +25,7 @@ import pandas as pd
 
 from btcquant.backtest import BacktestEngine
 from btcquant.backtest.metrics import compute_metrics
-from btcquant.carry import add_funding_columns, load_funding
+from btcquant.carry import add_funding_columns, funding_cache_path, load_funding
 from btcquant.config import (
     build_strategies,
     execution_config_from_config,
@@ -131,14 +131,11 @@ def main() -> None:
     monthly_returns = combined.resample("ME").last().pct_change().dropna()
     elapsed_years = (combined.index[-1] - combined.index[0]).total_seconds() / (365.25 * 86400)
     safe_symbol = cfg["symbol"].replace("/", "-")
-    safe_funding_symbol = f"{cfg['symbol']}:{cfg['quote_currency']}".replace("/", "").replace(
-        ":", "_"
-    )
     data_files = [
         ROOT
         / cfg["data"]["dir"]
         / f"{cfg['exchange']}_{safe_symbol}_{cfg['data']['base_timeframe']}.csv",
-        ROOT / "data" / f"binanceusdm_{safe_funding_symbol}_funding.csv",
+        funding_cache_path(f"{cfg['symbol']}:{cfg['quote_currency']}", ROOT / "data"),
     ]
     ohlcv_provenance = frame_provenance(
         base,

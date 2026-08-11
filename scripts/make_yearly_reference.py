@@ -28,7 +28,13 @@ enable_utf8_output()
 import pandas as pd
 
 from btcquant.backtest import BacktestEngine
-from btcquant.carry import add_funding_columns, backtest_carry, resolve_funding
+from btcquant.carry import (
+    add_funding_columns,
+    backtest_carry,
+    funding_cache_path,
+    funding_mode_from_cli,
+    resolve_funding,
+)
 from btcquant.config import (
     build_strategies,
     carry_policy_from_config,
@@ -60,7 +66,9 @@ def synthetic_funding(start: pd.Timestamp, end: pd.Timestamp, rate: float) -> pd
     return pd.Series(rate, index=index, name="rate", dtype=float)
 
 
-def trend_equity(cfg: dict, base: pd.DataFrame, funding: pd.Series) -> pd.Series:
+def trend_equity(
+    cfg: dict, base: pd.DataFrame, funding: pd.Series, funding_rate_8h: float = 0.0
+) -> pd.Series:
     """Équity du moteur trend : somme des slots du profil paper."""
     risk = risk_from_config(cfg)
     curves = []
@@ -83,7 +91,7 @@ def trend_equity(cfg: dict, base: pd.DataFrame, funding: pd.Series) -> pd.Series
         fee_rate = cfg["costs"]["perp_fee_rate"] if is_perp else cfg["costs"]["fee_rate"]
         engine = BacktestEngine(
             risk=slot_risk,
-            funding_rate_8h=cfg["costs"].get("funding_rate_8h", 0.0) if is_perp else 0.0,
+            funding_rate_8h=funding_rate_8h if is_perp else 0.0,
             allow_short=is_perp,
             execution_simulator=ExecutionSimulator(execution_config_from_config(cfg, fee_rate)),
         )
@@ -123,17 +131,19 @@ def main() -> None:
         help="taux constant 8 h utilisé uniquement en mode synthetic",
     )
     args = parser.parse_args()
+
+    try:
+        funding_mode, synthetic_rate = funding_mode_from_cli(
+            args.funding_mode, args.synthetic_funding_rate
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+
     refresh = not args.no_refresh
 
     logging.basicConfig(level=logging.WARNING)
     cfg = load_config(args.config)
     carry_policy = carry_policy_from_config(cfg)
-    funding_mode = "SYNTHETIC_EXPLICIT" if args.funding_mode == "synthetic" else "REAL"
-    synthetic_rate = (
-        args.synthetic_funding_rate
-        if args.synthetic_funding_rate is not None
-        else cfg["costs"].get("funding_rate_8h", 0.0)
-    )
 
     base = load_ohlcv(
         cfg["exchange"],
@@ -159,7 +169,7 @@ def main() -> None:
         else synthetic_funding(base.index[0], base.index[-1], float(funding_resolution.rate))
     )
     print(f"Funding : {funding_resolution.source}")
-    trend = trend_equity(cfg, base, funding).resample("1D").last().dropna()
+    trend = trend_equity(cfg, base, funding, funding_rate_8h=0.0).resample("1D").last().dropna()
     carry = (
         backtest_carry(
             funding,
@@ -211,11 +221,7 @@ def main() -> None:
             f"{cfg['exchange']}_{cfg['symbol'].replace('/', '-')}_{cfg['data']['base_timeframe']}.csv"
         )
     )
-    funding_path = (
-        ROOT
-        / "data"
-        / (f"binanceusdm_{cfg['symbol'].replace('/', '').replace(':', '_')}_funding.csv")
-    )
+    funding_path = funding_cache_path(f"{cfg['symbol']}:{cfg['quote_currency']}", ROOT / "data")
     ohlcv_provenance = frame_provenance(
         base,
         source="historical_cache",

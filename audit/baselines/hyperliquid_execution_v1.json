@@ -34,12 +34,13 @@
     "expected_slots": 5000,
     "raw_native_provenance": {
       "source": "Hyperliquid fundingHistory",
-      "archive_raw_path": "/tmp/btcquant-hyperliquid-baseline-v1/fundingHistory_pages.json",
-      "archive_raw_sha256": "3cb5c19fa3f7101c209ce36d6f08e5c4a0737d9b29c6eda89d406d41b7727e17",
+      "raw_archive_retained": false,
+      "raw_archive_sha256": "3cb5c19fa3f7101c209ce36d6f08e5c4a0737d9b29c6eda89d406d41b7727e17",
+      "raw_archive_locator": null,
       "archive_raw_rows": 27915,
       "archive_pages": 57,
       "slice_rule": "native observations whose nearest UTC hour slot is inside the V1 OHLCV window",
-      "slot_tolerance_seconds": 300
+      "slot_tolerance_seconds": 1
     },
     "normalized_sha256": "a7f7ff1a9180e090e9bc80a71cedc174cde28c78186accfe9920b12a92cf2e3a",
     "normalized_bytes": 185747,
@@ -76,7 +77,8 @@
     "ohlcv_retrieved_at": "2026-08-10T20:51:55.964586Z",
     "funding_retrieved_at": "2026-08-10T20:51:26.582702Z",
     "pagination": "recorded raw funding pages; 5000 recent candles returned by candleSnapshot",
-    "raw_archive_retained_in_git": false,
+    "raw_archive_retained": false,
+    "raw_archive_locator": null,
     "raw_archive_manifest": "raw hashes and retrieval metadata are retained here; normalized V1 files are retained in Git"
   },
   "funding_regimes": [
@@ -124,7 +126,7 @@
       "src/btcquant/data.py": "b4757bd221edc27e04cc6beaf48ba70703d1dd772c60b2590063a4f7d7145774",
       "src/btcquant/data_integrity.py": "f7b85fa0a7591a4a64e5e708eb579221c6bd8538420ede0bb18c1f30b9ebcc0c",
       "src/btcquant/execution/venue.py": "82815bcde9a061599832ec406ed73130787095e1d3a15a0d45555004cec5eb3e",
-      "src/btcquant/hyperliquid_baseline.py": "4602ee7af11e613a576df2d101054ea885786380a312f8ed0c34eb1c6f3cd3fd",
+      "src/btcquant/hyperliquid_baseline.py": "9a2e7d546091fbf15786967e7ae4cb251afae559b7232214b70150f52c9318dd",
       "src/btcquant/indicators.py": "af9f48d76359d2384f955b6e31579241dbcc2a63527537a7087d90c8ffa65eae",
       "src/btcquant/strategies/base.py": "510e2f4ac12c6e30724dee0b7326c5a3f93095d1cefe1e3001d0bfbea3f3c53a",
       "src/btcquant/strategies/trend_ls.py": "52e5314f1b23627f2d217b6aef9988f0ba6a8a518c922622bc642aac9185e1da",

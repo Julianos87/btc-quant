@@ -40,7 +40,12 @@ from btcquant.config import execution_config_from_config, load_config, risk_from
 from btcquant.data import TIMEFRAME_TO_PANDAS, load_ohlcv, resample
 from btcquant.domain import ExecutionSimulator
 from btcquant.indicators import bars_per_year
-from btcquant.carry import add_funding_columns, resolve_funding
+from btcquant.carry import (
+    add_funding_columns,
+    funding_cache_path,
+    funding_mode_from_cli,
+    resolve_funding,
+)
 from btcquant.provenance import quantitative_source_sha256
 from btcquant.research.strategies import RESEARCH_STRATEGY_REGISTRY
 from btcquant.research.walkforward import walk_forward
@@ -132,8 +137,7 @@ def _write_reference(
         )
     ]
     if market == "perp" and symbol == cfg["symbol"]:
-        funding_symbol = f"{symbol}:{cfg['quote_currency']}".replace("/", "").replace(":", "_")
-        funding_path = ROOT / "data" / f"binanceusdm_{funding_symbol}_funding.csv"
+        funding_path = funding_cache_path(f"{symbol}:{cfg['quote_currency']}", ROOT / "data")
         if (
             funding_resolution is not None
             and funding_resolution.series is not None
@@ -281,14 +285,15 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    try:
+        funding_mode, synthetic_rate = funding_mode_from_cli(
+            args.funding_mode, args.synthetic_funding_rate
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+
     logging.basicConfig(level=logging.WARNING)
     cfg = load_config(args.config)
-    funding_mode = "SYNTHETIC_EXPLICIT" if args.funding_mode == "synthetic" else "REAL"
-    synthetic_rate = (
-        args.synthetic_funding_rate
-        if args.synthetic_funding_rate is not None
-        else cfg["costs"].get("funding_rate_8h", 0.0)
-    )
     spec = _strategy_spec(cfg, args.strategy)
     timeframe = spec.get("timeframe", DEFAULT_TIMEFRAMES[args.strategy])
     market = spec.get("market", "spot")

@@ -3,11 +3,13 @@ from __future__ import annotations
 import gzip
 import json
 import shutil
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 from btcquant.hyperliquid_baseline import (
+    FUNDING_SCHEMA,
     FUNDING_SLOT_TOLERANCE_SECONDS,
     canonical_csv_bytes,
     deterministic_gzip_bytes,
@@ -188,3 +190,30 @@ def test_canonical_csv_and_gzip_are_path_independent(tmp_path: Path) -> None:
     first.write_bytes(deterministic_gzip_bytes(payload))
     second.write_bytes(deterministic_gzip_bytes(payload))
     assert first.read_bytes() == second.read_bytes()
+
+
+@pytest.mark.parametrize(
+    ("timestamp", "valid"),
+    [
+        ("2026-01-14T12:00:00.261Z", True),
+        ("2026-01-14T12:00:00.999Z", True),
+        ("2026-01-14T12:00:01.001Z", False),
+    ],
+)
+def test_funding_slot_tolerance_is_one_second(timestamp: str, valid: bool) -> None:
+    payload = canonical_csv_bytes(
+        FUNDING_SCHEMA,
+        ((timestamp, "0.0000125"),),
+    )
+    kwargs = {
+        "start": datetime.fromisoformat("2026-01-14T12:00:00+00:00"),
+        "end_exclusive": datetime.fromisoformat("2026-01-14T13:00:00+00:00"),
+        "expected_rows": 1,
+        "tolerance_seconds": FUNDING_SLOT_TOLERANCE_SECONDS,
+    }
+    if valid:
+        report = validate_funding_bytes(payload, **kwargs)
+        assert report["max_timestamp_jitter_seconds"] <= 1
+    else:
+        with pytest.raises(ValueError, match="hors tolérance"):
+            validate_funding_bytes(payload, **kwargs)

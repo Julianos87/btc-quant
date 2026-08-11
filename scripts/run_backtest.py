@@ -18,7 +18,7 @@ import pandas as pd
 
 from btcquant.backtest import BacktestEngine
 from btcquant.backtest.metrics import compute_metrics, format_metrics
-from btcquant.carry import add_funding_columns, resolve_funding
+from btcquant.carry import add_funding_columns, funding_mode_from_cli, resolve_funding
 from btcquant.config import (
     build_strategies,
     execution_config_from_config,
@@ -78,16 +78,17 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    try:
+        funding_mode, synthetic_rate = funding_mode_from_cli(
+            args.funding_mode, args.synthetic_funding_rate
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+
     cfg = load_config(args.config)
     if args.execution_profile is not None:
         cfg["execution"]["simulation"]["profile"] = args.execution_profile
     risk = risk_from_config(cfg)
-    funding_mode = "SYNTHETIC_EXPLICIT" if args.funding_mode == "synthetic" else "REAL"
-    synthetic_rate = (
-        args.synthetic_funding_rate
-        if args.synthetic_funding_rate is not None
-        else cfg["costs"].get("funding_rate_8h", 0.0)
-    )
     reports = ROOT / "reports"
     if not args.no_reports:
         reports.mkdir(exist_ok=True)

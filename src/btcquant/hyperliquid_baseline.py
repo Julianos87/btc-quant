@@ -21,7 +21,7 @@ from pathlib import Path
 from collections.abc import Iterable, Mapping, Sequence
 
 NORMALIZATION_VERSION = "hyperliquid-canonical-v1"
-FUNDING_SLOT_TOLERANCE_SECONDS = 300
+FUNDING_SLOT_TOLERANCE_SECONDS = 1
 
 
 OHLCV_SCHEMA = ("timestamp", "open", "high", "low", "close", "volume")
