@@ -4,7 +4,6 @@ Produit dans reports/ : courbes d'équity (PNG), liste des trades (CSV).
 """
 
 import argparse
-import logging
 import sys
 from pathlib import Path
 
@@ -19,7 +18,7 @@ import pandas as pd
 
 from btcquant.backtest import BacktestEngine
 from btcquant.backtest.metrics import compute_metrics, format_metrics
-from btcquant.carry import add_funding_columns, load_funding
+from btcquant.carry import add_funding_columns, resolve_funding
 from btcquant.config import (
     build_strategies,
     execution_config_from_config,
@@ -27,23 +26,24 @@ from btcquant.config import (
     risk_from_config,
 )
 from btcquant.data import TIMEFRAME_TO_PANDAS, load_ohlcv, resample
+from btcquant.data_integrity import GapPolicy
 from btcquant.domain import ExecutionSimulator
 from btcquant.indicators import bars_per_year
 from btcquant.risk import RiskConfig
 
-log = logging.getLogger(__name__)
 
-
-def with_real_funding(df, symbol_perp: str, timeframe: str, refresh: bool):
-    """Ajoute les colonnes `funding_rate` (P&L) et `funding` (filtre d'entrée)
-    à partir du funding réel 8 h. Sur échec de chargement, retourne df inchangé
-    → le moteur retombe sur la constante plate et le filtre reste neutre."""
-    try:
-        fund = load_funding(symbol_perp, data_dir=ROOT / "data", refresh=refresh)
-    except Exception as e:  # cache absent / réseau : on ne bloque pas le backtest
-        log.warning("Funding réel indisponible (%s), constante plate utilisée", e)
-        return df
-    return add_funding_columns(df, fund, TIMEFRAME_TO_PANDAS[timeframe])
+def with_funding(df, symbol_perp: str, timeframe: str, *, refresh: bool, mode: str, rate: float):
+    """Resolve funding explicitly; REAL failures propagate and stop the run."""
+    resolution = resolve_funding(
+        symbol_perp,
+        data_dir=ROOT / "data",
+        refresh=refresh,
+        mode=mode,
+        synthetic_rate=rate,
+    )
+    if resolution.series is not None:
+        df = add_funding_columns(df, resolution.series, TIMEFRAME_TO_PANDAS[timeframe])
+    return df, resolution
 
 
 def main() -> None:
@@ -61,17 +61,33 @@ def main() -> None:
         help="remplace execution.simulation.profile pour comparer les scénarios",
     )
     parser.add_argument(
+        "--funding-mode",
+        choices=("real", "synthetic"),
+        default="real",
+        help="real exige le cache funding ; synthetic doit être demandé explicitement",
+    )
+    parser.add_argument(
+        "--synthetic-funding-rate",
+        type=float,
+        help="taux constant 8 h utilisé uniquement avec --funding-mode synthetic",
+    )
+    parser.add_argument(
         "--no-reports",
         action="store_true",
         help="affiche les métriques sans écrire de CSV ou de graphique",
     )
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.WARNING)
     cfg = load_config(args.config)
     if args.execution_profile is not None:
         cfg["execution"]["simulation"]["profile"] = args.execution_profile
     risk = risk_from_config(cfg)
+    funding_mode = "SYNTHETIC_EXPLICIT" if args.funding_mode == "synthetic" else "REAL"
+    synthetic_rate = (
+        args.synthetic_funding_rate
+        if args.synthetic_funding_rate is not None
+        else cfg["costs"].get("funding_rate_8h", 0.0)
+    )
     reports = ROOT / "reports"
     if not args.no_reports:
         reports.mkdir(exist_ok=True)
@@ -83,6 +99,7 @@ def main() -> None:
         cfg["data"]["since"],
         data_dir=ROOT / cfg["data"]["dir"],
         refresh=not args.no_refresh,
+        gap_policy=GapPolicy.ALLOW_REPORTED,
     )
     print(
         f"Données : {len(base)} bougies {cfg['data']['base_timeframe']}, "
@@ -94,11 +111,16 @@ def main() -> None:
     curves: dict[str, pd.Series] = {}
     trade_count = 0
     timeframes: list[str] = []
+    funding_resolutions = {}
     for strategy, fraction, market in build_strategies(cfg):
         df = (
             base
             if strategy.timeframe == cfg["data"]["base_timeframe"]
-            else resample(base, TIMEFRAME_TO_PANDAS[strategy.timeframe])
+            else resample(
+                base,
+                TIMEFRAME_TO_PANDAS[strategy.timeframe],
+                source_frequency=cfg["data"]["base_timeframe"],
+            )
         )
         slot_risk = RiskConfig(
             **{**risk.__dict__, "initial_capital": risk.initial_capital * fraction}
@@ -106,11 +128,30 @@ def main() -> None:
         is_perp = market == "perp"
         if is_perp:
             symbol_perp = f"{cfg['symbol']}:{cfg['quote_currency']}"
-            df = with_real_funding(df, symbol_perp, strategy.timeframe, refresh=not args.no_refresh)
+            if symbol_perp not in funding_resolutions:
+                df, funding_resolutions[symbol_perp] = with_funding(
+                    df,
+                    symbol_perp,
+                    strategy.timeframe,
+                    refresh=not args.no_refresh,
+                    mode=funding_mode,
+                    rate=synthetic_rate,
+                )
+            else:
+                resolution = funding_resolutions[symbol_perp]
+                if resolution.series is not None:
+                    df = add_funding_columns(
+                        df, resolution.series, TIMEFRAME_TO_PANDAS[strategy.timeframe]
+                    )
+            resolution = funding_resolutions[symbol_perp]
+            print(
+                f"Funding {symbol_perp} : {resolution.source}"
+                + (f" ({resolution.rate:g})" if resolution.rate is not None else "")
+            )
         fee_rate = cfg["costs"]["perp_fee_rate"] if is_perp else cfg["costs"]["fee_rate"]
         engine = BacktestEngine(
             risk=slot_risk,
-            funding_rate_8h=cfg["costs"].get("funding_rate_8h", 0.0) if is_perp else 0.0,
+            funding_rate_8h=(resolution.rate if is_perp and resolution.rate is not None else 0.0),
             allow_short=is_perp,
             execution_simulator=ExecutionSimulator(execution_config_from_config(cfg, fee_rate)),
         )

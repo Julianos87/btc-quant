@@ -33,6 +33,7 @@ from btcquant.config import (
     risk_from_config,
 )
 from btcquant.data import TIMEFRAME_TO_PANDAS, load_ohlcv, resample
+from btcquant.data_integrity import GapPolicy, frame_provenance
 from btcquant.domain import ExecutionSimulator
 from btcquant.indicators import bars_per_year
 from btcquant.provenance import quantitative_source_sha256
@@ -66,6 +67,7 @@ def main() -> None:
         cfg["data"]["since"],
         data_dir=ROOT / cfg["data"]["dir"],
         refresh=False,
+        gap_policy=GapPolicy.ALLOW_REPORTED,
     )
     funding = load_funding(
         f"{cfg['symbol']}:{cfg['quote_currency']}",
@@ -81,7 +83,11 @@ def main() -> None:
         frame = (
             base
             if strategy.timeframe == cfg["data"]["base_timeframe"]
-            else resample(base, TIMEFRAME_TO_PANDAS[strategy.timeframe])
+            else resample(
+                base,
+                TIMEFRAME_TO_PANDAS[strategy.timeframe],
+                source_frequency=cfg["data"]["base_timeframe"],
+            )
         )
         if market == "perp":
             frame = add_funding_columns(frame, funding, TIMEFRAME_TO_PANDAS[strategy.timeframe])
@@ -134,6 +140,15 @@ def main() -> None:
         / f"{cfg['exchange']}_{safe_symbol}_{cfg['data']['base_timeframe']}.csv",
         ROOT / "data" / f"binanceusdm_{safe_funding_symbol}_funding.csv",
     ]
+    ohlcv_provenance = frame_provenance(
+        base,
+        source="historical_cache",
+        expected_frequency=cfg["data"]["base_timeframe"],
+        path=data_files[0],
+    )
+    funding_provenance = frame_provenance(
+        funding, source="real", expected_frequency="8h", path=data_files[1]
+    )
     payload = {
         "schema_version": 1,
         "generated_at_utc": datetime.now(UTC).isoformat(),
@@ -160,6 +175,10 @@ def main() -> None:
                 funding.index[0].isoformat(),
                 funding.index[-1].isoformat(),
             ],
+            "ohlcv": ohlcv_provenance,
+            "funding": funding_provenance,
+            "config_hash": _sha256(CONFIG),
+            "code_provenance": quantitative_source_sha256(Path(__file__)),
         },
         "results": {
             "strategies": strategies,

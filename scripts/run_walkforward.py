@@ -40,11 +40,12 @@ from btcquant.config import execution_config_from_config, load_config, risk_from
 from btcquant.data import TIMEFRAME_TO_PANDAS, load_ohlcv, resample
 from btcquant.domain import ExecutionSimulator
 from btcquant.indicators import bars_per_year
-from btcquant.carry import add_funding_columns, load_funding
+from btcquant.carry import add_funding_columns, resolve_funding
 from btcquant.provenance import quantitative_source_sha256
 from btcquant.research.strategies import RESEARCH_STRATEGY_REGISTRY
 from btcquant.research.walkforward import walk_forward
 from btcquant.strategies import STRATEGY_REGISTRY
+from btcquant.data_integrity import GapPolicy, frame_provenance
 
 log = logging.getLogger(__name__)
 
@@ -118,6 +119,8 @@ def _write_reference(
     test_bars: int,
     result,
     fixed_params: dict,
+    base,
+    funding_resolution,
 ) -> None:
     config_path = Path(args.config).resolve()
     data_files = [
@@ -131,7 +134,11 @@ def _write_reference(
     if market == "perp" and symbol == cfg["symbol"]:
         funding_symbol = f"{symbol}:{cfg['quote_currency']}".replace("/", "").replace(":", "_")
         funding_path = ROOT / "data" / f"binanceusdm_{funding_symbol}_funding.csv"
-        if funding_path.exists():
+        if (
+            funding_resolution is not None
+            and funding_resolution.series is not None
+            and funding_path.exists()
+        ):
             data_files.append(funding_path)
 
     oos_trades = sum(int(fold["oos_trades"] or 0) for fold in result.folds)
@@ -160,6 +167,28 @@ def _write_reference(
                 }
                 for path in data_files
             ],
+            "ohlcv": frame_provenance(
+                base,
+                source="historical_cache",
+                expected_frequency=cfg["data"]["base_timeframe"],
+                path=data_files[0],
+            ),
+            "funding": (
+                frame_provenance(
+                    funding_resolution.series,
+                    source=funding_resolution.source,
+                    expected_frequency="8h",
+                    path=data_files[-1] if len(data_files) > 1 else None,
+                )
+                if funding_resolution is not None and funding_resolution.series is not None
+                else {
+                    "source": funding_resolution.source
+                    if funding_resolution is not None
+                    else "not_applicable"
+                }
+            ),
+            "config_hash": _sha256(config_path),
+            "code_provenance": quantitative_source_sha256(Path(__file__)),
         },
         "experiment": {
             "strategy": args.strategy,
@@ -234,6 +263,17 @@ def main() -> None:
     )
     parser.add_argument("--no-refresh", action="store_true")
     parser.add_argument(
+        "--funding-mode",
+        choices=("real", "synthetic"),
+        default="real",
+        help="real exige le cache funding ; synthetic doit être demandé explicitement",
+    )
+    parser.add_argument(
+        "--synthetic-funding-rate",
+        type=float,
+        help="taux constant 8 h utilisé uniquement en mode synthetic",
+    )
+    parser.add_argument(
         "--no-short",
         action="store_true",
         help="mesure les mêmes règles en long seulement — les signaux short sont "
@@ -243,6 +283,12 @@ def main() -> None:
 
     logging.basicConfig(level=logging.WARNING)
     cfg = load_config(args.config)
+    funding_mode = "SYNTHETIC_EXPLICIT" if args.funding_mode == "synthetic" else "REAL"
+    synthetic_rate = (
+        args.synthetic_funding_rate
+        if args.synthetic_funding_rate is not None
+        else cfg["costs"].get("funding_rate_8h", 0.0)
+    )
     spec = _strategy_spec(cfg, args.strategy)
     timeframe = spec.get("timeframe", DEFAULT_TIMEFRAMES[args.strategy])
     market = spec.get("market", "spot")
@@ -256,24 +302,27 @@ def main() -> None:
         cfg["data"]["since"],
         data_dir=ROOT / cfg["data"]["dir"],
         refresh=not args.no_refresh,
+        gap_policy=GapPolicy.ALLOW_REPORTED,
     )
     df = (
         base
         if timeframe == cfg["data"]["base_timeframe"]
-        else resample(base, TIMEFRAME_TO_PANDAS[timeframe])
+        else resample(
+            base, TIMEFRAME_TO_PANDAS[timeframe], source_frequency=cfg["data"]["base_timeframe"]
+        )
     )
-    if is_perp and symbol == cfg["symbol"]:
-        # Le funding réel n'existe en cache que pour la paire de référence ;
-        # sur un autre actif, le filtre reste neutre et c'est dit explicitement.
-        try:
-            funding = load_funding(
-                f"{symbol}:{cfg['quote_currency']}",
-                data_dir=ROOT / "data",
-                refresh=not args.no_refresh,
-            )
-            df = add_funding_columns(df, funding, TIMEFRAME_TO_PANDAS[timeframe])
-        except Exception as error:  # cache absent : on ne bloque pas la validation
-            log.warning("Funding réel indisponible (%s) : filtre neutre", error)
+    funding_resolution = None
+    if is_perp:
+        funding_resolution = resolve_funding(
+            f"{symbol}:{cfg['quote_currency']}",
+            data_dir=ROOT / "data",
+            refresh=not args.no_refresh,
+            mode=funding_mode,
+            synthetic_rate=synthetic_rate,
+        )
+        if funding_resolution.series is not None:
+            df = add_funding_columns(df, funding_resolution.series, TIMEFRAME_TO_PANDAS[timeframe])
+        print(f"Funding {symbol}:{cfg['quote_currency']} : {funding_resolution.source}")
 
     fee_rate = cfg["costs"]["perp_fee_rate"] if is_perp else cfg["costs"]["fee_rate"]
     # Le spot ne shorte jamais ; `--no-short` retire en plus le côté vendeur du
@@ -281,7 +330,9 @@ def main() -> None:
     allow_short = is_perp and not args.no_short
     engine = BacktestEngine(
         risk=risk_from_config(cfg),
-        funding_rate_8h=cfg["costs"].get("funding_rate_8h", 0.0) if is_perp else 0.0,
+        funding_rate_8h=funding_resolution.rate
+        if is_perp and funding_resolution is not None and funding_resolution.rate is not None
+        else 0.0,
         allow_short=allow_short,
         execution_simulator=ExecutionSimulator(execution_config_from_config(cfg, fee_rate)),
     )
@@ -341,6 +392,8 @@ def main() -> None:
             test_bars=test_bars,
             result=result,
             fixed_params=fixed_params,
+            base=base,
+            funding_resolution=funding_resolution,
         )
 
 

@@ -1,9 +1,4 @@
-"""Téléchargement et cache des données OHLCV via ccxt.
-
-- Pagination automatique (limite exchange ~1000 bougies par appel).
-- Cache CSV incrémental : on ne retélécharge que les bougies manquantes.
-- La dernière bougie (potentiellement incomplète) est toujours écartée.
-"""
+"""Téléchargement, cache et intégrité temporelle des données OHLCV."""
 
 from __future__ import annotations
 
@@ -13,6 +8,8 @@ from pathlib import Path
 
 import ccxt
 import pandas as pd
+
+from .data_integrity import GapPolicy, cadence_report, validate_cadence
 
 log = logging.getLogger(__name__)
 
@@ -50,15 +47,23 @@ def _fetch_paginated(ex: ccxt.Exchange, symbol: str, timeframe: str, since_ms: i
         all_rows.extend(batch)
         last_ts = batch[-1][0]
         if last_ts <= cursor and len(batch) > 1:
-            break  # l'exchange ne progresse plus, on évite la boucle infinie
+            break
         cursor = last_ts + tf_ms
         log.info(
             "  … %s bougies, jusqu'à %s", len(all_rows), pd.Timestamp(last_ts, unit="ms", tz="UTC")
         )
     df = pd.DataFrame(all_rows, columns=["timestamp", *COLUMNS])
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
-    df = df.drop_duplicates("timestamp").set_index("timestamp").sort_index()
-    return df.astype(float)
+    raw_index = pd.DatetimeIndex(df["timestamp"])
+    if raw_index.has_duplicates:
+        raise ValueError("DUPLICATE dans les bougies OHLCV téléchargées")
+    if not raw_index.is_monotonic_increasing:
+        raise ValueError("OUT_OF_ORDER dans les bougies OHLCV téléchargées")
+    df = df.set_index("timestamp")
+    result = df.astype(float)
+    if not result[COLUMNS].notna().all().all():
+        raise ValueError("NaN dans les bougies OHLCV téléchargées")
+    return result
 
 
 def load_ohlcv(
@@ -68,22 +73,23 @@ def load_ohlcv(
     since: str,
     data_dir: str | Path = "data",
     refresh: bool = True,
+    gap_policy: GapPolicy | str = GapPolicy.ALLOW_REPORTED,
 ) -> pd.DataFrame:
-    """Charge les OHLCV depuis le cache, complète depuis l'exchange si besoin.
-
-    Retourne un DataFrame indexé en UTC, colonnes open/high/low/close/volume,
-    dernière bougie incomplète exclue.
-    """
+    """Charge le cache; les appels historiques peuvent exiger une cadence complète."""
     path = _cache_path(data_dir, exchange_id, symbol, timeframe)
     cached: pd.DataFrame | None = None
     if path.exists():
         cached = pd.read_csv(path, index_col="timestamp", parse_dates=True)
         cached_index = pd.DatetimeIndex(cached.index)
-        cached.index = (
-            cached_index.tz_localize("UTC")
-            if cached_index.tz is None
-            else cached_index.tz_convert("UTC")
-        )
+        if cached_index.has_duplicates:
+            raise ValueError("DUPLICATE dans le cache OHLCV")
+        if not cached_index.is_monotonic_increasing:
+            raise ValueError("OUT_OF_ORDER dans le cache OHLCV")
+        if not cached[COLUMNS].notna().all().all():
+            raise ValueError("NaN dans le cache OHLCV")
+        if cached_index.tz is None:
+            raise ValueError("Index OHLCV sans fuseau UTC")
+        cached.index = cached_index.tz_convert("UTC")
 
     if refresh:
         ex = _make_exchange(exchange_id)
@@ -99,8 +105,14 @@ def load_ohlcv(
             pd.Timestamp(start_ms, unit="ms", tz="UTC"),
         )
         fresh = _fetch_paginated(ex, symbol, timeframe, start_ms)
+        if cached is not None and not cached.empty and not fresh.empty:
+            if fresh.index[0] == cached.index[-1]:
+                cached = cached.iloc[:-1]
+            elif fresh.index[0] <= cached.index[-1]:
+                raise ValueError("OVERLAP/OUT_OF_ORDER entre le cache et le téléchargement")
         df = pd.concat([cached, fresh]) if cached is not None else fresh
-        df = df[~df.index.duplicated(keep="last")].sort_index()
+        if not df[COLUMNS].notna().all().all():
+            raise ValueError("NaN dans les bougies OHLCV")
         path.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(path, index_label="timestamp")
     elif cached is not None:
@@ -108,32 +120,86 @@ def load_ohlcv(
     else:
         raise FileNotFoundError(f"Aucun cache pour {symbol} {timeframe} et refresh=False")
 
-    return df.iloc[:-1]  # écarte la bougie en cours, potentiellement incomplète
+    result = df.iloc[:-1]
+    report = validate_cadence(result.index, timeframe, gap_policy=gap_policy)
+    result.attrs["cadence_report"] = report.to_dict()
+    return result
 
 
-def resample(df: pd.DataFrame, rule: str) -> pd.DataFrame:
-    """Rééchantillonne des bougies 1h vers 4h/1d, etc. (`rule` façon pandas : '4h', '1D').
-
-    Le dernier agrégat est écarté s'il ne contient pas toutes ses barres
-    sources. `load_ohlcv` retire déjà la bougie de base en cours, mais une
-    fenêtre 4 h ouverte à 12:00 et alimentée jusqu'à 14:00 produirait sinon
-    une bougie « close » construite sur la moitié de sa durée : exactement la
-    donnée non close que `validate_closed_ohlcv` interdit côté live.
-    """
-    out = df.resample(rule, label="left", closed="left").agg(
-        {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+def resample(
+    df: pd.DataFrame,
+    rule: str,
+    *,
+    source_frequency: str | None = None,
+) -> pd.DataFrame:
+    """Agrège seulement les fenêtres dont toutes les observations sources existent."""
+    if df.empty:
+        result = df.copy()
+        result.attrs["cadence_report"] = cadence_report(
+            df.index, source_frequency or rule
+        ).to_dict()
+        return result
+    index = pd.DatetimeIndex(df.index)
+    if index.tz is None:
+        raise ValueError("Le resampling historique exige un index timezone-aware")
+    if str(index.tz) != "UTC":
+        df = df.copy()
+        df.index = index.tz_convert("UTC")
+        index = pd.DatetimeIndex(df.index)
+    if source_frequency is None:
+        deltas = index.to_series().diff().dropna()
+        positive = deltas[deltas > pd.Timedelta(0)]
+        if positive.empty:
+            raise ValueError("Impossible d'inférer la fréquence source")
+        source_delta = positive.mode().iloc[0]
+        source_frequency = str(source_delta)
+    report = validate_cadence(
+        index,
+        source_frequency,
+        gap_policy=GapPolicy.ALLOW_REPORTED,
     )
-    out = out.dropna(subset=["open", "close"])
-    if out.empty or len(df) < 2:
-        return out
-    # Le critère porte sur le TEMPS couvert, pas sur le nombre de barres : un
-    # trou dans l'historique source ne doit pas faire passer une fenêtre pleine
-    # pour incomplète. La dernière fenêtre est close si la barre source
-    # suivante tomberait déjà au-delà d'elle.
-    source_step = pd.DatetimeIndex(df.index).to_series().diff().min()
-    window_end = out.index[-1] + pd.tseries.frequencies.to_offset(rule)
-    if df.index[-1] + source_step < window_end:
-        return out.iloc[:-1]
+    source_delta = report.expected_delta
+    window_delta = pd.Timedelta(rule)
+    if window_delta.total_seconds() % source_delta.total_seconds() != 0:
+        raise ValueError("La fenêtre de resampling n'est pas multiple de la cadence source")
+    source_bars_per_window = int(window_delta / source_delta)
+    aggregates: list[pd.Series] = []
+    dropped_windows: list[pd.Timestamp] = []
+    first_window = index.min().floor(rule)
+    for window_start in pd.date_range(first_window, index.max(), freq=rule):
+        expected = pd.date_range(
+            window_start,
+            periods=source_bars_per_window,
+            freq=source_delta,
+            tz="UTC",
+        )
+        mask = (index >= window_start) & (index < window_start + window_delta)
+        group = df.loc[mask]
+        if len(group) != source_bars_per_window or not group.index.equals(expected):
+            dropped_windows.append(window_start)
+            continue
+        aggregates.append(
+            pd.Series(
+                {
+                    "open": group["open"].iloc[0],
+                    "high": group["high"].max(),
+                    "low": group["low"].min(),
+                    "close": group["close"].iloc[-1],
+                    "volume": group["volume"].sum(),
+                },
+                name=window_start,
+            )
+        )
+    out = pd.DataFrame(aggregates)
+    anomalies = list(report.anomalies)
+    if dropped_windows:
+        anomalies.append("PARTIAL_WINDOW")
+    report_dict = report.to_dict()
+    report_dict["anomalies"] = sorted(set(anomalies))
+    report_dict["dropped_windows"] = [value.isoformat() for value in dropped_windows]
+    report_dict["source_frequency"] = source_frequency
+    report_dict["window_frequency"] = rule
+    out.attrs["cadence_report"] = report_dict
     return out
 
 

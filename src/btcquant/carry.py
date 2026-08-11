@@ -29,6 +29,7 @@ import ccxt
 import numpy as np
 import pandas as pd
 
+from .data_integrity import cadence_report
 from .domain.carry_decision import decide_carry_payment
 from .performance import daily_returns, sharpe_ratio
 
@@ -36,6 +37,42 @@ log = logging.getLogger(__name__)
 
 PAYMENTS_PER_DAY = 3  # funding toutes les 8 h
 PAYMENTS_PER_YEAR = PAYMENTS_PER_DAY * 365
+
+
+@dataclass(frozen=True)
+class FundingResolution:
+    """Funding input with an explicit origin for a quantitative result."""
+
+    series: pd.Series | None
+    source: str
+    rate: float | None = None
+
+
+def _validate_funding_series(
+    series: pd.Series,
+    *,
+    expected_frequency: str | None = None,
+    context: str = "funding",
+) -> pd.Series:
+    index = pd.DatetimeIndex(series.index)
+    if index.tz is None:
+        raise ValueError(f"{context}: index sans fuseau UTC")
+    index = index.tz_convert("UTC")
+    if index.has_duplicates:
+        raise ValueError(f"DUPLICATE dans {context}")
+    if not index.is_monotonic_increasing:
+        raise ValueError(f"OUT_OF_ORDER dans {context}")
+    values = pd.to_numeric(series, errors="raise").astype(float)
+    if not np.isfinite(values.to_numpy()).all():
+        raise ValueError(f"NaN ou infini dans {context}")
+    values.index = index
+    if expected_frequency is not None and len(values) < 2:
+        raise ValueError(f"Durée {context} insuffisante")
+    if expected_frequency is not None:
+        report = cadence_report(index, expected_frequency)
+        if not report.is_valid:
+            raise ValueError(f"Cadence {context} invalide : {', '.join(report.anomalies)}")
+    return values
 
 
 def load_funding(
@@ -50,7 +87,7 @@ def load_funding(
     if path.exists():
         df = pd.read_csv(path, index_col=0)
         df.index = pd.to_datetime(df.index, utc=True, format="ISO8601")
-        cached = df["rate"]
+        cached = _validate_funding_series(df["rate"], expected_frequency="8h", context=str(path))
 
     if refresh:
         ex = ccxt.binanceusdm({"enableRateLimit": True, "timeout": 30_000})
@@ -78,12 +115,38 @@ def load_funding(
                 name="rate",
             )
             cached = pd.concat([cached, fresh]) if cached is not None else fresh
-            cached = cached[~cached.index.duplicated(keep="last")].sort_index()
+            cached = _validate_funding_series(cached, expected_frequency="8h", context=str(path))
             path.parent.mkdir(parents=True, exist_ok=True)
             cached.to_frame().to_csv(path, index_label="ts")
     if cached is None:
         raise FileNotFoundError(f"Aucun cache funding pour {symbol_perp} et refresh=False")
-    return cached
+    return _validate_funding_series(cached, expected_frequency="8h", context=str(path))
+
+
+def resolve_funding(
+    symbol_perp: str,
+    *,
+    data_dir: str | Path = "data",
+    refresh: bool,
+    mode: str = "REAL",
+    synthetic_rate: float | None = None,
+) -> FundingResolution:
+    """Resolve REAL funding or an explicitly requested synthetic constant."""
+    normalized = mode.upper()
+    if normalized == "REAL":
+        return FundingResolution(
+            series=load_funding(symbol_perp, data_dir=data_dir, refresh=refresh),
+            source="real",
+        )
+    if normalized != "SYNTHETIC_EXPLICIT":
+        raise ValueError("mode funding doit être REAL ou SYNTHETIC_EXPLICIT")
+    if synthetic_rate is None or not np.isfinite(float(synthetic_rate)):
+        raise ValueError("synthetic_rate doit être fini en mode SYNTHETIC_EXPLICIT")
+    return FundingResolution(
+        series=None,
+        source="synthetic_constant",
+        rate=float(synthetic_rate),
+    )
 
 
 def add_funding_columns(df: pd.DataFrame, funding_8h: pd.Series, pandas_freq: str) -> pd.DataFrame:
@@ -110,7 +173,10 @@ def add_funding_columns(df: pd.DataFrame, funding_8h: pd.Series, pandas_freq: st
     """
     out = df.copy()
     offset = pd.tseries.frequencies.to_offset(pandas_freq)
+    funding_8h = _validate_funding_series(funding_8h, context="funding fourni au backtest")
     funding_index = pd.DatetimeIndex(funding_8h.index)
+    if len(out) and len(funding_8h) and funding_index[-1] > out.index[-1] + offset:
+        raise ValueError("Funding après la dernière bougie OHLCV")
     bucket = funding_index.floor(pandas_freq)
     at_open_mask = funding_index == bucket
     at_open = funding_8h[at_open_mask].groupby(bucket[at_open_mask]).sum()

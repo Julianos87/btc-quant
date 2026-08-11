@@ -1,4 +1,4 @@
-"""Métriques de performance calculées sur la courbe d'équity et les trades."""
+"""Métriques de performance calculées sur la courbe d'equity."""
 
 from __future__ import annotations
 
@@ -12,6 +12,26 @@ from ..performance import (
     sortino_ratio,
 )
 
+SECONDS_PER_CALENDAR_YEAR = 365.25 * 24.0 * 60.0 * 60.0
+
+
+def _utc_index(equity: pd.Series) -> pd.DatetimeIndex:
+    if not isinstance(equity.index, pd.DatetimeIndex):
+        raise TypeError("l'equity doit utiliser un DatetimeIndex")
+    if equity.index.tz is None:
+        raise ValueError("l'equity doit utiliser des timestamps UTC explicites")
+    index = equity.index.tz_convert("UTC")
+    if not index.is_monotonic_increasing:
+        raise ValueError("l'equity doit être ordonnée chronologiquement")
+    return index
+
+
+def _elapsed_years(index: pd.DatetimeIndex) -> float:
+    if len(index) < 2:
+        return float("nan")
+    elapsed_seconds = (index[-1] - index[0]).total_seconds()
+    return elapsed_seconds / SECONDS_PER_CALENDAR_YEAR
+
 
 def compute_metrics(
     equity: pd.Series,
@@ -21,12 +41,30 @@ def compute_metrics(
     *,
     exposure_bars: int | None = None,
 ) -> dict:
+    """Calcule les ratios sans confondre observations et durée calendrier.
+
+    Contrat Sharpe/volatilité inchangé : rendements des clôtures journalières
+    observées, sans remplissage des jours absents, annualisés à 365 périodes.
+    Le CAGR et la durée publiée utilisent exclusivement le span UTC réel.
+    ``bars_per_year`` reste accepté pour compatibilité des appelants et ne sert
+    plus à fabriquer une durée historique.
+    """
+    index = _utc_index(equity)
     performance_returns = daily_returns(equity)
     n_bars = len(equity)
-    years = n_bars / bars_per_year if bars_per_year else np.nan
+    elapsed_years = _elapsed_years(index)
+    first_day = index[0].normalize()
+    last_day = index[-1].normalize()
+    calendar_days = (last_day - first_day).days + 1
+    observed_days = len(index.normalize().unique())
+    missing_calendar_days = max(0, calendar_days - observed_days)
 
     total_return = equity.iloc[-1] / equity.iloc[0] - 1.0
-    cagr = (equity.iloc[-1] / equity.iloc[0]) ** (1.0 / years) - 1.0 if years > 0 else np.nan
+    cagr = (
+        (equity.iloc[-1] / equity.iloc[0]) ** (1.0 / elapsed_years) - 1.0
+        if elapsed_years > 0
+        else np.nan
+    )
 
     vol = annualized_volatility(performance_returns)
     sharpe = sharpe_ratio(performance_returns)
@@ -48,16 +86,21 @@ def compute_metrics(
             raise ValueError("exposure_bars doit être compris entre 0 et le nombre de barres")
         exposure = exposure_bars / n_bars if n_bars else np.nan
     elif trades:
-        # Compatibilité pour les appelants historiques. Le moteur fournit le
-        # compte exact afin que plusieurs fills partiels d'une même position
-        # ne puissent plus compter les mêmes barres plusieurs fois.
         bars_in_pos = min(n_bars, sum(t.bars_held for t in trades))
         exposure = bars_in_pos / n_bars
 
     out = {
         "start": str(equity.index[0]),
         "end": str(equity.index[-1]),
-        "years": round(years, 2),
+        "years": round(elapsed_years, 2),
+        "elapsed_years": elapsed_years,
+        "calendar_duration_days": (index[-1] - index[0]).total_seconds() / 86_400.0,
+        "observed_points": n_bars,
+        "observed_calendar_days": observed_days,
+        "missing_calendar_days": missing_calendar_days,
+        "return_frequency": "calendar_day_close",
+        "annualization_periods_per_year": 365.0,
+        "data_gaps_imputed": False,
         "total_return": total_return,
         "cagr": cagr,
         "volatility": vol,
