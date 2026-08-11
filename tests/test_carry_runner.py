@@ -56,6 +56,18 @@ class StubVenue:
         self.requested_since.append(pd.Timestamp(since))
         return self.funding[self.funding.index >= pd.Timestamp(since)]
 
+    def funding_notional_prices_since(
+        self,
+        since: pd.Timestamp,
+        until: pd.Timestamp | None = None,
+    ) -> pd.Series:
+        index = self.funding.index[self.funding.index >= pd.Timestamp(since)]
+        if until is not None:
+            index = index[index <= pd.Timestamp(until)]
+        prices = pd.Series(100_000.0, index=index, dtype=float)
+        prices.attrs["source"] = "PAPER_RECENT_PRICE_APPROXIMATION"
+        return prices
+
 
 def _funding(n: int, rate: float, end: pd.Timestamp | None = None) -> pd.Series:
     end = end or pd.Timestamp.now(tz="UTC").floor("h")
@@ -78,12 +90,19 @@ def _mark_open(runner: CarryRunner, checkpoint: pd.Timestamp) -> None:
     runner.execution_state = "OPEN"
     runner.entry_equity = runner.equity
     runner.entry_timestamp = checkpoint
+    runner.entry_price = 100_000.0
     runner.spot_notional = runner.equity * runner.leverage
     runner.perp_notional = runner.spot_notional
+    runner.perp_qty = runner.perp_notional / runner.entry_price
+    runner.qty = runner.perp_qty
     runner.borrow_principal = runner.equity * (runner.leverage - 1.0)
     runner.position_generation = (
         funding_event_id(runner.venue.exchange_id, runner.symbol, checkpoint) + "|position"
     )
+    runner.last_funding_ts = checkpoint
+    runner.funding_notional_price = runner.entry_price
+    runner.funding_notional_price_source = "PAPER_RECENT_PRICE_APPROXIMATION"
+    runner.funding_notional_price_timestamp = checkpoint
     runner.last_funding_ts = checkpoint
 
 
@@ -137,6 +156,16 @@ def test_halted_engine_never_reopens(tmp_path):
     runner = _runner(tmp_path, _funding(60, 0.0002), smooth_days=1)
     runner.halted = True
     runner._tick()
+    assert not runner.in_position
+
+
+def test_entry_is_blocked_when_smoothing_history_is_insufficient(tmp_path):
+    runner = _runner(tmp_path, _funding(2, 0.0002), smooth_days=1)
+
+    runner._tick()
+
+    assert runner.accounting_uncertain
+    assert "insuffisant" in runner.accounting_uncertainty_reason.lower()
     assert not runner.in_position
 
 

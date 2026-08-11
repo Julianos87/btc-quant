@@ -51,10 +51,13 @@ class CarryStatePayload(TypedDict):
     spot_qty: float
     entry_equity: NotRequired[float | None]
     entry_timestamp: NotRequired[str | None]
+    entry_price: NotRequired[float | None]
     spot_notional: NotRequired[float]
     perp_notional: NotRequired[float]
     borrow_principal: NotRequired[float]
     position_generation: NotRequired[str | None]
+    funding_notional_price_source: NotRequired[str | None]
+    funding_notional_price_timestamp: NotRequired[str | None]
     funding_notional_price: NotRequired[float | None]
     perp_qty: float
     last_funding_ts: str | None

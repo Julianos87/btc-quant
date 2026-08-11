@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from btcquant.carry import (  # noqa: E402
     backtest_carry,
+    _carry_fixed_position_amounts,
     PAPER_CARRY_POLICY,
     SECONDS_PER_YEAR,
     borrow_cost_for_intervals,
@@ -41,6 +42,18 @@ class _Venue:
     def funding_history_since(self, since: pd.Timestamp) -> pd.Series:
         return self.funding[self.funding.index >= pd.Timestamp(since)]
 
+    def funding_notional_prices_since(
+        self,
+        since: pd.Timestamp,
+        until: pd.Timestamp | None = None,
+    ) -> pd.Series:
+        index = self.funding.index[self.funding.index >= pd.Timestamp(since)]
+        if until is not None:
+            index = index[index <= pd.Timestamp(until)]
+        prices = pd.Series(100_000.0, index=index, dtype=float)
+        prices.attrs["source"] = "PAPER_RECENT_PRICE_APPROXIMATION"
+        return prices
+
 
 def _hourly(periods: int, rate: float = 0.001) -> pd.Series:
     index = pd.date_range("2030-01-01T00:00:00Z", periods=periods, freq="h")
@@ -52,12 +65,19 @@ def _mark_open(runner: CarryRunner, checkpoint: pd.Timestamp) -> None:
     runner.execution_state = "OPEN"
     runner.entry_equity = runner.equity
     runner.entry_timestamp = checkpoint
+    runner.entry_price = 100_000.0
     runner.spot_notional = runner.equity * runner.leverage
     runner.perp_notional = runner.spot_notional
+    runner.perp_qty = runner.perp_notional / runner.entry_price
+    runner.qty = runner.perp_qty
     runner.borrow_principal = runner.equity * (runner.leverage - 1.0)
     runner.position_generation = (
         funding_event_id(runner.venue.exchange_id, runner.symbol, checkpoint) + "|position"
     )
+    runner.last_funding_ts = checkpoint
+    runner.funding_notional_price = runner.entry_price
+    runner.funding_notional_price_source = "PAPER_RECENT_PRICE_APPROXIMATION"
+    runner.funding_notional_price_timestamp = checkpoint
     runner.last_funding_ts = checkpoint
 
 
@@ -250,6 +270,25 @@ def test_jittered_hourly_events_are_kept_without_forward_fill() -> None:
     assert result.coverage.iloc[-1]["observed_events"] == 14 * 24
 
 
+@pytest.mark.parametrize("offset", [0.999, 0.261])
+def test_funding_event_jitter_within_one_second_is_allowed(offset: float) -> None:
+    base = pd.date_range("2030-01-01T00:00:00Z", periods=4, freq="h")
+    report = funding_event_gaps(
+        pd.Series(0.001, index=base + pd.to_timedelta(offset, unit="s")),
+        funding_interval="1h",
+    )
+    assert report["cadence_anomalies"] == []
+
+
+def test_funding_event_jitter_over_one_second_is_reported() -> None:
+    base = pd.date_range("2030-01-01T00:00:00Z", periods=4, freq="h")
+    report = funding_event_gaps(
+        pd.Series(0.001, index=base + pd.to_timedelta(1.001, unit="s")),
+        funding_interval="1h",
+    )
+    assert len(report["cadence_anomalies"]) == 4
+
+
 def test_funding_is_applied_only_while_position_is_open(tmp_path: Path) -> None:
     funding = _hourly(6)
     runner = _runner(tmp_path, funding)
@@ -298,6 +337,21 @@ def test_missing_funding_is_fail_closed_and_survives_restart(tmp_path: Path) -> 
     assert revived.equity == pytest.approx(initial_equity)
 
 
+def test_historical_backlog_without_price_history_fails_closed(tmp_path: Path) -> None:
+    funding = _hourly(4)
+    runner = _runner(tmp_path, funding)
+    _mark_open(runner, funding.index[0])
+    runner.venue.funding_notional_prices_since = None
+    initial_equity = runner.equity
+
+    runner._apply_funding(funding)
+
+    assert runner.accounting_uncertain
+    assert "PRICE_HISTORY_UNAVAILABLE" in runner.accounting_uncertainty_reason
+    assert runner.equity == pytest.approx(initial_equity)
+    assert runner.store.read_funding_ledger() == []
+
+
 def test_runner_does_not_releverage_when_equity_changes_mid_position(tmp_path: Path) -> None:
     funding = _hourly(3, rate=0.001)
     runner = _runner(tmp_path, funding)
@@ -315,12 +369,45 @@ def test_runner_does_not_releverage_when_equity_changes_mid_position(tmp_path: P
     assert len(ledger) == 2
     assert runner.perp_qty == 1.0
     assert [row["funding_notional"] for row in ledger] == [100_000.0, 100_000.0]
+    assert [row["funding_notional_price"] for row in ledger] == [100_000.0, 100_000.0]
+    assert [row["funding_notional_price_source"] for row in ledger] == [
+        "PAPER_RECENT_PRICE_APPROXIMATION",
+        "PAPER_RECENT_PRICE_APPROXIMATION",
+    ]
     assert [row["borrow_principal"] for row in ledger] == [20_000.0, 20_000.0]
     expected_borrow = 20_000.0 * 0.10 * 3_600.0 / SECONDS_PER_YEAR
     assert [row["funding_pnl"] for row in ledger] == [100.0, 100.0]
     assert [row["borrow_cost"] for row in ledger] == pytest.approx(
         [expected_borrow, expected_borrow]
     )
+
+
+def test_paper_open_and_close_costs_use_actual_execution_notionals(tmp_path: Path) -> None:
+    funding = _hourly(2)
+    runner = _runner(tmp_path, funding)
+    fee_rate = runner.policy.fee_rate
+    slippage_rate = runner.policy.slippage_bps / 10_000.0
+    runner._open_position(
+        0.0,
+        100_000.0,
+        "PAPER_RECENT_PRICE_APPROXIMATION",
+        funding.index[0],
+    )
+    open_notional = runner.perp_qty * 100_000.0
+    expected_after_open = runner.policy.capital - open_notional * 2.0 * (fee_rate + slippage_rate)
+    assert runner.equity == pytest.approx(expected_after_open)
+
+    runner._close_position(
+        0.0,
+        reason="test",
+        exit_price=120_000.0,
+        price_source="PAPER_RECENT_PRICE_APPROXIMATION",
+        price_timestamp=funding.index[1],
+    )
+    close_notional = (runner.policy.capital * runner.leverage / 100_000.0) * 120_000.0
+    expected = expected_after_open - close_notional * 2.0 * (fee_rate + slippage_rate)
+    assert runner.equity == pytest.approx(expected)
+    assert not runner.in_position
 
 
 def test_backtest_funding_notional_uses_fixed_entry_quantity_and_price() -> None:
@@ -345,9 +432,49 @@ def test_backtest_funding_notional_uses_fixed_entry_quantity_and_price() -> None
         initial_capital=1_000.0,
         funding_notional_price=prices,
     )
-    entry_qty = 1_000.0 * 2.0 / prices.iloc[25]
-    expected = float((entry_qty * prices.iloc[25:] * 0.0001).sum())
+    entry_timestamp = pd.Timestamp(result["entry_timestamps"][0])
+    entry_price = float(prices.loc[entry_timestamp])
+    entry_qty = 1_000.0 * 2.0 / entry_price
+    expected = float(
+        (entry_qty * prices.loc[entry_timestamp + pd.Timedelta(hours=1) :] * 0.0001).sum()
+    )
+    assert entry_timestamp == funding.index[24]
     assert result["funding_notional_mode"] == "perp_qty_times_price"
-    assert result["funding_notional_price_source"] == "funding_notional_price"
+    assert result["funding_notional_price_source"] == "OHLC_APPROXIMATION"
     assert result["basis_mode"] == "synthetic_zero"
     assert result["funding_pnl"] == pytest.approx(expected)
+
+
+def test_backtest_entry_and_exit_follow_funding_event_timeline() -> None:
+    index = pd.date_range("2030-01-01T00:00:00Z", periods=4, freq="h")
+    funding = pd.Series([0.01, 0.02, 0.03, 0.04], index=index)
+    decision = pd.Series([True, True, False, False], index=index)
+    exposure = pd.Series([False, True, True, False], index=index)
+    prices = pd.Series([100.0, 110.0, 120.0, 130.0], index=index)
+    result = _carry_fixed_position_amounts(
+        funding,
+        decision,
+        exposure,
+        initial_capital=1_000.0,
+        leverage=2.0,
+        fee_rate=0.001,
+        slippage_bps=0.0,
+        borrow_rates=pd.Series(0.10, index=index),
+        basis_return=pd.Series(0.0, index=index),
+        funding_notional_price=prices,
+    )
+    _, funding_amounts, borrow_amounts, _, fee_amounts, _, _, _, entries, exits = result
+    quantity = 2_000.0 / 100.0
+    assert entries == [index[0]]
+    assert exits == [index[2]]
+    assert funding_amounts.iloc[0] == 0.0
+    assert funding_amounts.iloc[1] == pytest.approx(quantity * 110.0 * 0.02)
+    assert funding_amounts.iloc[2] == pytest.approx(quantity * 120.0 * 0.03)
+    assert funding_amounts.iloc[3] == 0.0
+    one_hour_borrow = 1_000.0 * 0.10 / SECONDS_PER_YEAR * 3_600.0
+    assert borrow_amounts.iloc[0] == 0.0
+    assert borrow_amounts.iloc[1] == pytest.approx(one_hour_borrow)
+    assert borrow_amounts.iloc[2] == pytest.approx(one_hour_borrow)
+    assert borrow_amounts.iloc[3] == 0.0
+    assert fee_amounts.iloc[0] == pytest.approx(2.0 * 0.001 * 2_000.0)
+    assert fee_amounts.iloc[2] == pytest.approx(2.0 * 0.001 * 2_400.0)

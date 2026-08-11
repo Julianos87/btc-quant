@@ -2,7 +2,6 @@
 funding horaire en équivalent 8 h, annualisation du carry, prix via bougie."""
 
 import sys
-import time
 from pathlib import Path
 
 import pandas as pd
@@ -30,7 +29,7 @@ class _StubExchange:
         self.funding_rate = funding_rate
         self.price = price
         self.periods = periods
-        self.now_ms = int(time.time() * 1000)
+        self.now_ms = int(pd.Timestamp.now(tz="UTC").floor("h").timestamp() * 1000)
 
     def fetch_funding_rate_history(self, symbol, since=None, limit=None):
         rows = [
@@ -42,7 +41,15 @@ class _StubExchange:
         return rows[:limit]
 
     def fetch_ohlcv(self, symbol, timeframe, since=None, limit=None):
-        return [[int(time.time() * 1000), self.price, self.price, self.price, self.price, 1.0]]
+        del symbol, timeframe
+        rows = [
+            [self.now_ms - i * 3_600_000, self.price, self.price, self.price, self.price, 1.0]
+            for i in range(self.periods + 1)
+        ]
+        rows.reverse()
+        if since is not None:
+            rows = [row for row in rows if row[0] >= since]
+        return rows[:limit] if limit is not None else rows
 
 
 def _stub_venue(v: Venue, **kw) -> Venue:

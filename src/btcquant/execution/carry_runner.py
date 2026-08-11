@@ -45,7 +45,7 @@ from .ports import MarketDataPort, Notifier
 from .risk_service import PortfolioRiskService, PortfolioRiskState
 from .state_contract import CarryStatePayload, validate_carry_state
 from .state_store import StateStore, database_path
-from .venue import Venue
+from .venue import NETWORK_ERRORS, Venue
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +53,7 @@ TICK_SECONDS = 300
 #: Marge de rattrapage au premier tick d'une base neuve : sans checkpoint, on
 #: ne réclame que de quoi amorcer le lissage, jamais tout l'historique.
 BOOTSTRAP_MARGIN_DAYS = 1
+FUNDING_PRICE_PAGE_LIMIT = 1000
 #: Coupe-circuits du carry. Le drawdown historique du profil x3 financé à 10 %/an
 #: est de -11,6 % : un halt à 25 % est une protection catastrophe, qui ne coupe
 #: pas un creux normal. La limite journalière est délibérément serrée — une
@@ -119,6 +120,9 @@ class CarryRunner:
         self.spot_qty = 0.0
         self.perp_qty = 0.0
         self.entry_equity: float | None = None
+        self.entry_price: float | None = None
+        self.funding_notional_price_source: str | None = None
+        self.funding_notional_price_timestamp: pd.Timestamp | None = None
         self.entry_timestamp: pd.Timestamp | None = None
         self.spot_notional = 0.0
         self.perp_notional = 0.0
@@ -165,6 +169,13 @@ class CarryRunner:
         self.execution_state = raw.get("execution_state", "OPEN" if self.in_position else "FLAT")
         self.qty = raw.get("qty", 0.0)
         self.spot_qty = raw.get("spot_qty", self.qty)
+        entry_price = raw.get("entry_price")
+        self.entry_price = float(entry_price) if entry_price is not None else None
+        self.funding_notional_price_source = raw.get("funding_notional_price_source")
+        price_timestamp = raw.get("funding_notional_price_timestamp")
+        self.funding_notional_price_timestamp = (
+            pd.Timestamp(price_timestamp) if price_timestamp else None
+        )
         self.perp_qty = raw.get("perp_qty", self.qty)
         self.entry_equity = raw.get("entry_equity")
         entry_timestamp = raw.get("entry_timestamp")
@@ -187,9 +198,11 @@ class CarryRunner:
             required = (
                 self.entry_equity,
                 self.entry_timestamp,
+                self.entry_price,
                 self.position_generation,
                 self.perp_notional,
                 self.borrow_principal,
+                self.perp_qty,
                 self.last_funding_ts,
             )
             valid_timestamp = all(
@@ -197,9 +210,11 @@ class CarryRunner:
                 for value in (self.entry_timestamp, self.last_funding_ts)
             )
             valid_notional = isinstance(self.perp_notional, (int, float)) and self.perp_notional > 0
+            valid_quantity = isinstance(self.perp_qty, (int, float)) and self.perp_qty > 0
             if (
                 not valid_timestamp
                 or not valid_notional
+                or not valid_quantity
                 or any(value is None for value in required)
             ):
                 self._mark_accounting_uncertain(
@@ -219,6 +234,13 @@ class CarryRunner:
             "entry_equity": self.entry_equity,
             "entry_timestamp": (
                 str(self.entry_timestamp) if self.entry_timestamp is not None else None
+            ),
+            "entry_price": self.entry_price,
+            "funding_notional_price_source": self.funding_notional_price_source,
+            "funding_notional_price_timestamp": (
+                str(self.funding_notional_price_timestamp)
+                if self.funding_notional_price_timestamp is not None
+                else None
             ),
             "spot_notional": self.spot_notional,
             "perp_notional": self.perp_notional,
@@ -298,22 +320,133 @@ class CarryRunner:
         required = (
             self.entry_equity,
             self.entry_timestamp,
+            self.entry_price,
             self.position_generation,
             self.perp_notional,
             self.borrow_principal,
+            self.perp_qty,
         )
         valid_timestamp = all(
             isinstance(value, pd.Timestamp) and value.tzinfo is not None
             for value in (self.entry_timestamp, self.last_funding_ts)
         )
         valid_notional = isinstance(self.perp_notional, (int, float)) and self.perp_notional > 0
-        if not valid_timestamp or not valid_notional or any(value is None for value in required):
+        valid_quantity = isinstance(self.perp_qty, (int, float)) and self.perp_qty > 0
+        if (
+            not valid_timestamp
+            or not valid_notional
+            or not valid_quantity
+            or any(value is None for value in required)
+        ):
             self._mark_accounting_uncertain(
                 "Position ouverte sans économie de position ni checkpoint fiable",
                 {"classification": "ACCOUNTING_UNCERTAIN"},
             )
             return False
         return True
+
+    def _funding_notional_prices_from_exchange(
+        self,
+        since: pd.Timestamp,
+        until: pd.Timestamp | None = None,
+    ) -> pd.Series:
+        """Fetch historical OHLC closes without using the current ticker."""
+        start = pd.Timestamp(since)
+        start = start.tz_localize("UTC") if start.tzinfo is None else start.tz_convert("UTC")
+        end = None if until is None else pd.Timestamp(until)
+        if end is not None:
+            end = end.tz_localize("UTC") if end.tzinfo is None else end.tz_convert("UTC")
+        exchange = getattr(self.venue, "exchange", None)
+        fetch = getattr(exchange, "fetch_ohlcv", None)
+        if not callable(fetch):
+            raise ValueError("PRICE_HISTORY_UNAVAILABLE")
+        retry = getattr(self.venue, "_retry", None)
+        cursor_ms = int(start.timestamp() * 1000)
+        prices: dict[int, float] = {}
+        while True:
+            kwargs = {
+                "since": cursor_ms,
+                "limit": FUNDING_PRICE_PAGE_LIMIT,
+            }
+            rows = (
+                fetch(self.symbol, "1h", **kwargs)
+                if retry is None
+                else retry.call(fetch, self.symbol, "1h", retry_on=NETWORK_ERRORS, **kwargs)
+            )
+            if not rows:
+                break
+            latest_ms = max(int(row[0]) for row in rows)
+            for row in rows:
+                timestamp_ms = int(row[0])
+                timestamp = pd.Timestamp(timestamp_ms, unit="ms", tz="UTC")
+                if timestamp >= start and (end is None or timestamp <= end):
+                    close = float(row[4])
+                    if not pd.notna(close) or close <= 0:
+                        raise ValueError("Prix OHLC funding invalide")
+                    prices[timestamp_ms] = close
+            next_cursor_ms = latest_ms + 1
+            if next_cursor_ms <= cursor_ms or (
+                end is not None and latest_ms >= int(end.timestamp() * 1000)
+            ):
+                break
+            cursor_ms = next_cursor_ms
+        timestamps = sorted(prices)
+        result = pd.Series(
+            [prices[timestamp] for timestamp in timestamps],
+            index=pd.DatetimeIndex(
+                [pd.Timestamp(timestamp, unit="ms", tz="UTC") for timestamp in timestamps]
+            ),
+            dtype=float,
+        )
+        result.attrs["source"] = "PAPER_RECENT_PRICE_APPROXIMATION"
+        return result
+
+    def _funding_price_context(
+        self,
+        events: pd.Series,
+    ) -> tuple[pd.Series, pd.Series, str]:
+        """Resolve chaque événement vers un prix historique observable.
+
+        L'absence de série historique est une incertitude comptable : le prix
+        courant ne peut jamais être utilisé pour revaloriser un backlog.
+        """
+        provider = getattr(self.venue, "funding_notional_prices_since", None)
+        if not callable(provider):
+            provider = self._funding_notional_prices_from_exchange
+        raw = provider(events.index[0], events.index[-1])
+        prices = pd.Series(raw, dtype=float)
+        index = pd.DatetimeIndex(prices.index)
+        if index.tz is None:
+            raise ValueError("PRICE_HISTORY_NAIVE_TIMESTAMP")
+        index = index.tz_convert("UTC")
+        prices.index = index
+        if prices.empty or index.has_duplicates or not index.is_monotonic_increasing:
+            raise ValueError("PRICE_HISTORY_INVALID")
+        if prices.isna().any() or not pd.Series(prices).map(pd.api.types.is_number).all():
+            raise ValueError("PRICE_HISTORY_INVALID")
+        if (prices <= 0).any():
+            raise ValueError("PRICE_HISTORY_INVALID")
+        positions = index.get_indexer(
+            pd.DatetimeIndex(events.index),
+            method="nearest",
+            tolerance=pd.Timedelta(seconds=1),
+        )
+        if (positions < 0).any():
+            raise ValueError("PRICE_HISTORY_GAP")
+        event_prices = pd.Series(
+            prices.to_numpy()[positions],
+            index=events.index,
+            dtype=float,
+        )
+        event_timestamps = pd.Series(
+            [index[int(position)] for position in positions],
+            index=events.index,
+            dtype="datetime64[ns, UTC]",
+        )
+        source = str(getattr(raw, "attrs", {}).get("source", "UNKNOWN"))
+        if source == "UNKNOWN":
+            raise ValueError("PRICE_HISTORY_SOURCE_UNKNOWN")
+        return event_prices, event_timestamps, source
 
     def _apply_funding_atomic(self, funding: pd.Series) -> None:
         """Applique les événements et leur checkpoint dans une transaction unique."""
@@ -328,12 +461,13 @@ class CarryRunner:
                 funding,
                 funding_interval=funding_interval,
             )
-            if gap_report["missing_events"]:
+            if gap_report["missing_events"] or gap_report["cadence_anomalies"]:
                 self._mark_accounting_uncertain(
                     "Funding manquant : P&L historique non reconstructible",
                     {
                         "classification": "MISSING_SOURCE_DATA",
                         "gap_groups": gap_report["gap_groups"],
+                        "cadence_anomalies": gap_report["cadence_anomalies"],
                         "missing_events": gap_report["missing_events"],
                     },
                 )
@@ -378,6 +512,27 @@ class CarryRunner:
                     },
                 )
                 return
+        payment_prices: pd.Series | None = None
+        payment_price_timestamps: pd.Series | None = None
+        payment_price_source: str | None = None
+        if len(payments) and self.in_position:
+            try:
+                (
+                    payment_prices,
+                    payment_price_timestamps,
+                    payment_price_source,
+                ) = self._funding_price_context(payments)
+            except (ValueError, KeyError, TypeError) as error:
+                self._mark_accounting_uncertain(
+                    f"Prix historique funding non reconstructible ({error})",
+                    {
+                        "classification": str(error) or "PRICE_HISTORY_UNAVAILABLE",
+                        "detail": str(error),
+                        "first_event": payments.index[0].isoformat(),
+                        "last_event": payments.index[-1].isoformat(),
+                    },
+                )
+                return
         for payment_ts, raw_rate in zip(
             pd.DatetimeIndex(payments.index), payments.to_numpy(), strict=True
         ):
@@ -391,7 +546,27 @@ class CarryRunner:
             previous_checkpoint = checkpoint
             elapsed_seconds = max(0.0, (payment_ts - checkpoint).total_seconds())
             elapsed_years = elapsed_years_between(checkpoint, payment_ts)
-            funding_notional = self.perp_notional if self.in_position else 0.0
+            funding_price = None
+            funding_price_timestamp = None
+            funding_price_source = None
+            if self.in_position:
+                if payment_prices is None or payment_price_timestamps is None:
+                    raise RuntimeError("PRICE_HISTORY_UNAVAILABLE")
+                funding_price = float(payment_prices.loc[payment_ts])
+                funding_price_timestamp = pd.Timestamp(
+                    payment_price_timestamps.loc[payment_ts]
+                ).isoformat()
+                funding_price_source = payment_price_source
+                self.funding_notional_price = funding_price
+                self.funding_notional_price_source = funding_price_source
+                self.funding_notional_price_timestamp = pd.Timestamp(
+                    payment_price_timestamps.loc[payment_ts]
+                )
+            if self.in_position:
+                assert funding_price is not None
+                funding_notional = abs(self.perp_qty * funding_price)
+            else:
+                funding_notional = 0.0
             borrow_principal = self.borrow_principal if self.in_position else 0.0
             funding_gain = funding_notional * rate
             borrow_cost = borrow_principal * self.borrow_rate_ann * elapsed_years
@@ -406,6 +581,9 @@ class CarryRunner:
                 "native_funding_rate": rate,
                 "position_generation": self.position_generation or "FLAT",
                 "funding_notional": funding_notional,
+                "funding_notional_price": funding_price,
+                "funding_notional_price_source": funding_price_source,
+                "funding_notional_price_timestamp": funding_price_timestamp,
                 "funding_pnl": funding_gain,
                 "borrow_principal": borrow_principal,
                 "borrow_rate_ann": self.borrow_rate_ann,
@@ -423,7 +601,9 @@ class CarryRunner:
                 "gain": gain,
                 "elapsed_seconds": elapsed_seconds,
                 "elapsed_years": elapsed_years,
-                "funding_notional_price": self.funding_notional_price,
+                "funding_notional_price": funding_price,
+                "funding_notional_price_source": funding_price_source,
+                "funding_notional_price_timestamp": funding_price_timestamp,
                 "position_generation": self.position_generation or "FLAT",
             }
             try:
@@ -473,6 +653,9 @@ class CarryRunner:
 
     def _reset_position_accounting(self) -> None:
         self.entry_equity = None
+        self.entry_price = None
+        self.funding_notional_price_source = None
+        self.funding_notional_price_timestamp = None
         self.entry_timestamp = None
         self.spot_notional = 0.0
         self.perp_notional = 0.0
@@ -480,15 +663,26 @@ class CarryRunner:
         self.position_generation = None
         self.funding_notional_price = None
 
-    def _open_position(self, smooth_ann: float) -> None:
+    def _open_position(
+        self,
+        smooth_ann: float,
+        entry_price: float | None,
+        price_source: str,
+        price_timestamp: pd.Timestamp,
+    ) -> None:
         previous_checkpoint = self.last_funding_ts
         entry_equity = self.equity
-        entry_timestamp = pd.Timestamp.now(tz="UTC")
+        entry_timestamp = pd.Timestamp(price_timestamp)
+        if self.live_broker is None and (entry_price is None or entry_price <= 0):
+            raise ValueError("entry_price doit être strictement positif")
         entry_notional = entry_equity * self.leverage
         self.entry_equity = entry_equity
         self.entry_timestamp = entry_timestamp
+        self.entry_price = float(entry_price) if entry_price is not None else None
         self.spot_notional = entry_notional
         self.perp_notional = entry_notional
+        self.perp_qty = entry_notional / float(entry_price) if entry_price is not None else 0.0
+        self.qty = self.perp_qty
         self.borrow_principal = entry_equity * max(0.0, self.leverage - 1.0)
         self.position_generation = (
             funding_event_id(
@@ -498,10 +692,13 @@ class CarryRunner:
             )
             + "|position"
         )
-        self.funding_notional_price = None
+        self.funding_notional_price = float(entry_price) if entry_price is not None else None
+        self.funding_notional_price_source = price_source
+        self.funding_notional_price_timestamp = pd.Timestamp(price_timestamp)
         self.last_funding_ts = entry_timestamp
         order_id = None
         fill_price = None
+        entry_cost = 0.0
         if self.live_broker is not None:
             intent_id = f"carry-open-{uuid.uuid4().hex}"
             self.execution_state = "OPENING"
@@ -557,17 +754,22 @@ class CarryRunner:
             fill_price = result.spot_fill.average_price if result.spot_fill is not None else None
             perp_fill = result.perp_fill
             if perp_fill is not None and perp_fill.average_price is not None:
-                self.funding_notional_price = float(perp_fill.average_price)
-                self.perp_notional = abs(float(perp_fill.filled_qty) * self.funding_notional_price)
+                self.entry_price = float(perp_fill.average_price)
+                self.perp_notional = abs(float(perp_fill.filled_qty) * self.entry_price)
             elif fill_price is not None and self.perp_qty > 0:
-                self.funding_notional_price = float(fill_price)
-                self.perp_notional = abs(float(self.perp_qty) * self.funding_notional_price)
+                self.entry_price = float(fill_price)
+                self.perp_notional = abs(float(self.perp_qty) * self.entry_price)
             if result.spot_fill is not None and result.spot_fill.average_price is not None:
                 self.spot_notional = abs(
                     float(result.spot_fill.filled_qty) * float(result.spot_fill.average_price)
                 )
         else:
-            self.equity *= 1.0 - self.switch_cost
+            assert self.entry_price is not None
+            open_notional = abs(self.perp_qty * self.entry_price)
+            entry_cost = (
+                open_notional * 2.0 * (self.policy.fee_rate + self.policy.slippage_bps / 10_000.0)
+            )
+            self.equity -= entry_cost
 
         self.in_position = True
         self.execution_state = "OPEN"
@@ -583,7 +785,7 @@ class CarryRunner:
         log.info(
             "[CARRY] ENTRÉE (funding lissé %.1f%%/an) — coût %.2f%%, équity %.2f",
             smooth_ann * 100,
-            self.switch_cost * 100,
+            entry_cost,
             self.equity,
         )
         self.notifier(
@@ -591,7 +793,16 @@ class CarryRunner:
             f"équity {self.equity:,.2f} $"
         )
 
-    def _close_position(self, smooth_ann: float, reason: str = "funding_exit") -> None:
+    def _close_position(
+        self,
+        smooth_ann: float,
+        *,
+        reason: str = "funding_exit",
+        exit_price: float | None,
+        price_source: str,
+        price_timestamp: pd.Timestamp,
+    ) -> None:
+        exit_cost = 0.0
         if self.live_broker is not None:
             intent_id = f"carry-close-{uuid.uuid4().hex}"
             previous_qty = self.qty
@@ -646,7 +857,14 @@ class CarryRunner:
             closed_qty = previous_qty
             self.qty = self.spot_qty = self.perp_qty = 0.0
         else:
-            self.equity *= 1.0 - self.switch_cost
+            exit_notional = exit_price
+            if exit_notional is None or exit_notional <= 0:
+                raise ValueError("exit_price doit être strictement positif")
+            close_notional = abs(self.perp_qty * exit_notional)
+            exit_cost = (
+                close_notional * 2.0 * (self.policy.fee_rate + self.policy.slippage_bps / 10_000.0)
+            )
+            self.equity -= exit_cost
         self._reset_position_accounting()
 
         self.in_position = False
@@ -741,15 +959,18 @@ class CarryRunner:
             funding_interval=self._native_funding_interval(),
         )
         latest = smoothing.coverage.iloc[-1]
-        if int(latest["missing_events"]) > 0:
+        if int(latest["missing_events"]) > 0 or str(latest["status"]) != "OK":
             self._mark_accounting_uncertain(
-                "Fenêtre de smoothing funding incomplète",
+                "Entry bloquée : historique funding insuffisant"
+                if not self.in_position
+                else "Signal carry incertain",
                 {
-                    "classification": "MISSING_SOURCE_DATA",
+                    "classification": str(latest["status"]),
                     "window_start": str(latest["window_start"]),
                     "window_end": str(latest["window_end"]),
                     "missing_events": int(latest["missing_events"]),
                     "coverage_ratio": float(latest["coverage_ratio"]),
+                    "status": str(latest["status"]),
                 },
             )
             return
@@ -762,10 +983,42 @@ class CarryRunner:
             halted=self.halted,
             entry_blocked=self.daily_lockout,
         )
-        if decision.action is CarryAction.OPEN:
-            self._open_position(smooth_ann)
-        elif decision.action is CarryAction.CLOSE:
-            self._close_position(smooth_ann, reason=decision.reason or "funding_exit")
+        if decision.action in (CarryAction.OPEN, CarryAction.CLOSE):
+            if self.live_broker is not None:
+                action_price = None
+                action_price_timestamp = pd.Timestamp(funding.index[-1])
+                action_source = "LIVE_FILL_PRICE"
+            else:
+                try:
+                    action_prices, action_timestamps, action_source = self._funding_price_context(
+                        funding.iloc[-1:]
+                    )
+                    action_price = float(action_prices.iloc[0])
+                    action_price_timestamp = pd.Timestamp(action_timestamps.iloc[0])
+                except (ValueError, KeyError, TypeError) as error:
+                    self._mark_accounting_uncertain(
+                        "Prix historique de transition carry non reconstructible",
+                        {
+                            "classification": str(error) or "PRICE_HISTORY_UNAVAILABLE",
+                            "detail": str(error),
+                        },
+                    )
+                    return
+            if decision.action is CarryAction.OPEN:
+                self._open_position(
+                    smooth_ann,
+                    action_price,
+                    action_source,
+                    action_price_timestamp,
+                )
+            else:
+                self._close_position(
+                    smooth_ann,
+                    reason=decision.reason or "funding_exit",
+                    exit_price=action_price,
+                    price_source=action_source,
+                    price_timestamp=action_price_timestamp,
+                )
         elif self.halted and not self._halt_notified:
             log.error("Kill-switch carry actif et position fermée : moteur en veille")
             self._halt_notified = True

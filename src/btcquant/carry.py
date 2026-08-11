@@ -180,9 +180,37 @@ def funding_event_gaps(
     values = normalize_funding_events(series)
     interval_seconds = _interval_seconds(pd.DatetimeIndex(values.index), funding_interval)
     gaps: list[dict[str, object]] = []
+    cadence_anomalies: list[dict[str, object]] = []
+    interval_ns = int(round(interval_seconds * 1_000_000_000))
+    epoch_ns = pd.Timestamp("1970-01-01T00:00:00Z").value
+    timestamp_ns = np.asarray([timestamp.value for timestamp in values.index], dtype=np.int64)
+    slot_ns = (
+        epoch_ns + np.rint((timestamp_ns - epoch_ns) / interval_ns).astype(np.int64) * interval_ns
+    )
+    for timestamp, slot in zip(values.index, slot_ns, strict=True):
+        jitter_seconds = abs(timestamp.value - int(slot)) / 1_000_000_000
+        if jitter_seconds > tolerance_seconds:
+            cadence_anomalies.append(
+                {
+                    "timestamp": timestamp.isoformat(),
+                    "jitter_seconds": jitter_seconds,
+                }
+            )
     for left, right in zip(values.index[:-1], values.index[1:], strict=True):
         delta_seconds = (right - left).total_seconds()
         slots = max(1, int(round(delta_seconds / interval_seconds)))
+        expected_seconds = slots * interval_seconds
+        jitter_seconds = abs(delta_seconds - expected_seconds)
+        if jitter_seconds > tolerance_seconds:
+            cadence_anomalies.append(
+                {
+                    "start": left.isoformat(),
+                    "end": right.isoformat(),
+                    "actual_seconds": delta_seconds,
+                    "expected_seconds": expected_seconds,
+                    "jitter_seconds": jitter_seconds,
+                }
+            )
         missing = max(0, slots - 1)
         if missing and delta_seconds > interval_seconds + tolerance_seconds:
             gaps.append(
@@ -196,6 +224,7 @@ def funding_event_gaps(
     return {
         "expected_interval_seconds": interval_seconds,
         "gap_groups": gaps,
+        "cadence_anomalies": cadence_anomalies,
         "missing_events": sum(cast(int, gap["missing_events"]) for gap in gaps),
     }
 
@@ -575,13 +604,13 @@ def _carry_applied_positions(
     enter_ann: float,
     exit_ann: float,
     funding_interval: str | pd.Timedelta | None = None,
-) -> tuple[pd.Series, FundingSmoothingResult]:
+) -> tuple[pd.Series, pd.Series, FundingSmoothingResult]:
     smoothing = smooth_funding_events(
         funding,
         smooth_days=smooth_days,
         funding_interval=funding_interval,
     )
-    in_position = pd.Series(False, index=funding.index)
+    decision_state = pd.Series(False, index=funding.index)
     state = False
     for i, value in enumerate(smoothing.annualized):
         decision = decide_carry_payment(
@@ -591,13 +620,15 @@ def _carry_applied_positions(
             exit_ann=exit_ann,
         )
         state = decision.in_position
-        in_position.iloc[i] = state
-    return in_position.shift(1, fill_value=False), smoothing
+        decision_state.iloc[i] = state
+    exposure_state = decision_state.shift(1, fill_value=False)
+    return decision_state, exposure_state, smoothing
 
 
 def _carry_fixed_position_amounts(
     funding: pd.Series,
-    applied: pd.Series,
+    decision_state: pd.Series,
+    exposure_state: pd.Series,
     *,
     initial_capital: float,
     leverage: float,
@@ -606,8 +637,25 @@ def _carry_fixed_position_amounts(
     borrow_rates: pd.Series,
     basis_return: pd.Series,
     funding_notional_price: pd.Series | None,
-) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series, pd.Series, pd.Series, pd.Series, str]:
-    """Calcule le P&L sur une position fixée à l'entrée, jamais re-levierisée."""
+) -> tuple[
+    pd.Series,
+    pd.Series,
+    pd.Series,
+    pd.Series,
+    pd.Series,
+    pd.Series,
+    pd.Series,
+    str,
+    list[pd.Timestamp],
+    list[pd.Timestamp],
+]:
+    """Calcule le P&L avec décision et exposition séparées.
+
+    Une décision à t est exécutée après le paiement de t. La position est donc
+    exposée sur (t, t+1] : elle ne reçoit pas le funding de son entrée, mais
+    reçoit celui de l'événement suivant. Le borrow est facturé sur le même
+    intervalle réel.
+    """
     index = funding.index
     dt_seconds = pd.Series(0.0, index=index)
     if len(index) > 1:
@@ -631,23 +679,23 @@ def _carry_fixed_position_amounts(
     entry_notional = 0.0
     borrow_principal = 0.0
     perp_qty = 0.0
-    previous_active = False
+    previous_decision = False
+    entry_timestamps: list[pd.Timestamp] = []
+    exit_timestamps: list[pd.Timestamp] = []
 
     for timestamp in index:
-        active = bool(applied.loc[timestamp])
-        if active and not previous_active:
-            entry_notional = equity * leverage
-            borrow_principal = equity * max(0.0, leverage - 1.0)
-            if prices is not None:
-                perp_qty = entry_notional / float(prices.loc[timestamp])
+        decision_active = bool(decision_state.loc[timestamp])
+        exposed = bool(exposure_state.loc[timestamp])
+        opened = decision_active and not previous_decision
+        closed = not decision_active and previous_decision
         current_notional = (
             abs(perp_qty * float(prices.loc[timestamp]))
-            if active and prices is not None
+            if exposed and prices is not None
             else entry_notional
-            if active
+            if exposed
             else 0.0
         )
-        if active:
+        if exposed:
             funding_amounts.loc[timestamp] = current_notional * float(funding.loc[timestamp])
             borrow_amounts.loc[timestamp] = (
                 borrow_principal
@@ -655,17 +703,33 @@ def _carry_fixed_position_amounts(
                 * float(dt_years.loc[timestamp])
             )
             basis_amounts.loc[timestamp] = current_notional * float(basis_return.loc[timestamp])
-        if active != previous_active:
-            switch_notional = entry_notional
-            fee_amounts.loc[timestamp] = 2.0 * fee_rate * switch_notional
-            slippage_amounts.loc[timestamp] = 2.0 * slippage_bps / 10_000.0 * switch_notional
-        net_amount = (
+
+        recurring_amount = (
             funding_amounts.loc[timestamp]
             - borrow_amounts.loc[timestamp]
             + basis_amounts.loc[timestamp]
-            - fee_amounts.loc[timestamp]
-            - slippage_amounts.loc[timestamp]
         )
+        equity_after_event = equity + recurring_amount
+
+        if opened:
+            entry_timestamps.append(timestamp)
+            entry_notional = max(0.0, equity_after_event) * leverage
+            borrow_principal = max(0.0, equity_after_event) * max(0.0, leverage - 1.0)
+            if prices is not None:
+                perp_qty = entry_notional / float(prices.loc[timestamp])
+            fee_amounts.loc[timestamp] = 2.0 * fee_rate * entry_notional
+            slippage_amounts.loc[timestamp] = 2.0 * slippage_bps / 10_000.0 * entry_notional
+        elif closed:
+            exit_timestamps.append(timestamp)
+            close_notional = (
+                abs(perp_qty * float(prices.loc[timestamp]))
+                if prices is not None
+                else entry_notional
+            )
+            fee_amounts.loc[timestamp] = 2.0 * fee_rate * close_notional
+            slippage_amounts.loc[timestamp] = 2.0 * slippage_bps / 10_000.0 * close_notional
+
+        net_amount = recurring_amount - fee_amounts.loc[timestamp] - slippage_amounts.loc[timestamp]
         equity_before = equity
         if equity_before <= 0:
             pnl.loc[timestamp] = -1.0
@@ -673,11 +737,12 @@ def _carry_fixed_position_amounts(
         else:
             pnl.loc[timestamp] = net_amount / equity_before
             equity += net_amount
-        if not active:
+
+        if closed:
             entry_notional = 0.0
             borrow_principal = 0.0
             perp_qty = 0.0
-        previous_active = active
+        previous_decision = decision_active
 
     return (
         pnl,
@@ -688,6 +753,8 @@ def _carry_fixed_position_amounts(
         slippage_amounts,
         dt_seconds,
         notional_mode,
+        entry_timestamps,
+        exit_timestamps,
     )
 
 
@@ -739,6 +806,7 @@ def backtest_carry(
     borrow_rate_ann: float = PAPER_CARRY_POLICY.borrow_rate_ann,
     borrow_rate_ann_series: pd.Series | None = None,
     funding_notional_price: pd.Series | None = None,
+    funding_notional_price_source: str = "OHLC_APPROXIMATION",
     spot_price: pd.Series | None = None,
     perp_price: pd.Series | None = None,
     collateral_haircut: float = 0.0,
@@ -780,7 +848,7 @@ def backtest_carry(
         spot_price=spot_price,
         perp_price=perp_price,
     )
-    applied, smoothing = _carry_applied_positions(
+    decision_state, exposure_state, smoothing = _carry_applied_positions(
         funding,
         smooth_days=smooth_days,
         enter_ann=enter_ann,
@@ -797,9 +865,12 @@ def backtest_carry(
         slippage_amounts,
         dt_seconds,
         funding_notional_mode,
+        entry_timestamps,
+        exit_timestamps,
     ) = _carry_fixed_position_amounts(
         funding,
-        applied,
+        decision_state,
+        exposure_state,
         initial_capital=initial_capital,
         leverage=leverage,
         fee_rate=fee_rate,
@@ -810,9 +881,9 @@ def backtest_carry(
             funding_notional_price if funding_notional_price is not None else perp_price
         ),
     )
-    pnl, equity, applied, liquidated, liquidation_ts = _apply_carry_liquidation(
+    pnl, equity, exposure_state, liquidated, liquidation_ts = _apply_carry_liquidation(
         pnl.copy(),
-        applied.copy(),
+        exposure_state.copy(),
         initial_capital=initial_capital,
         leverage=leverage,
         collateral_haircut=collateral_haircut,
@@ -821,6 +892,7 @@ def backtest_carry(
     )
     if liquidated and liquidation_ts is not None:
         post_liquidation = funding.index > cast(pd.Timestamp, liquidation_ts)
+        decision_state.loc[post_liquidation] = False
         for component in (
             funding_amounts,
             borrow_amounts,
@@ -829,7 +901,7 @@ def backtest_carry(
             slippage_amounts,
         ):
             component.loc[post_liquidation] = 0.0
-    switches = applied != applied.shift(1, fill_value=False)
+    switches = decision_state != decision_state.shift(1, fill_value=False)
 
     years = elapsed_years_between(funding.index[0], funding.index[-1])
     component_total = (
@@ -842,7 +914,7 @@ def backtest_carry(
     liquidation_adjustment = float(equity.iloc[-1] - initial_capital - component_total)
     fees_total = float(fee_amounts.sum())
     total_pnl = float(equity.iloc[-1] - initial_capital)
-    active_seconds = float((dt_seconds * applied.astype(float)).sum())
+    active_seconds = float((dt_seconds * exposure_state.astype(float)).sum())
     elapsed_seconds = float(dt_seconds.sum())
     dd = (equity / equity.cummax() - 1.0).min()
     ann_all = float(pnl.sum() / years) if years > 0 else float("nan")
@@ -867,12 +939,16 @@ def backtest_carry(
         "basis_mode": basis_mode,
         "funding_notional_mode": funding_notional_mode,
         "funding_notional_price_source": (
-            "funding_notional_price"
+            funding_notional_price_source
             if funding_notional_price is not None
             else "perp_price"
             if perp_price is not None
             else "fixed_entry_notional"
         ),
+        "decision_state": decision_state,
+        "exposure_state": exposure_state,
+        "entry_timestamps": [timestamp.isoformat() for timestamp in entry_timestamps],
+        "exit_timestamps": [timestamp.isoformat() for timestamp in exit_timestamps],
         "basis_return_ann": (
             float(basis_amounts.sum() / initial_capital / years) if years > 0 else float("nan")
         ),

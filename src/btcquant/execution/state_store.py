@@ -467,6 +467,9 @@ class StateStore:
                 native_funding_rate REAL NOT NULL,
                 position_generation TEXT NOT NULL,
                 funding_notional REAL NOT NULL CHECK(funding_notional >= 0),
+                funding_notional_price REAL,
+                funding_notional_price_source TEXT,
+                funding_notional_price_timestamp TEXT,
                 funding_pnl REAL NOT NULL,
                 borrow_principal REAL NOT NULL CHECK(borrow_principal >= 0),
                 borrow_rate_ann REAL NOT NULL CHECK(borrow_rate_ann >= 0),
@@ -476,6 +479,21 @@ class StateStore:
             )
             """
         )
+        columns = {
+            item["name"]
+            for item in connection.execute("PRAGMA table_info(funding_ledger)").fetchall()
+        }
+        for name, definition in (
+            ("funding_notional_price", "REAL"),
+            ("funding_notional_price_source", "TEXT"),
+            ("funding_notional_price_timestamp", "TEXT"),
+        ):
+            if name not in columns:
+                connection.execute(f"ALTER TABLE funding_ledger ADD COLUMN {name} {definition}")
+        columns = {
+            item["name"]
+            for item in connection.execute("PRAGMA table_info(funding_ledger)").fetchall()
+        }
         required = {
             "event_key",
             "venue",
@@ -484,6 +502,9 @@ class StateStore:
             "native_funding_rate",
             "position_generation",
             "funding_notional",
+            "funding_notional_price",
+            "funding_notional_price_source",
+            "funding_notional_price_timestamp",
             "funding_pnl",
             "borrow_principal",
             "borrow_rate_ann",
@@ -835,9 +856,11 @@ class StateStore:
             INSERT INTO funding_ledger(
                 event_key, venue, instrument, funding_timestamp,
                 native_funding_rate, position_generation, funding_notional,
+                funding_notional_price, funding_notional_price_source,
+                funding_notional_price_timestamp,
                 funding_pnl, borrow_principal, borrow_rate_ann,
                 borrow_dt_seconds, borrow_cost, applied_at
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 ledger["event_key"],
@@ -847,6 +870,9 @@ class StateStore:
                 ledger["native_funding_rate"],
                 ledger["position_generation"],
                 ledger["funding_notional"],
+                ledger["funding_notional_price"],
+                ledger["funding_notional_price_source"],
+                ledger["funding_notional_price_timestamp"],
                 ledger["funding_pnl"],
                 ledger["borrow_principal"],
                 ledger["borrow_rate_ann"],
@@ -879,6 +905,9 @@ class StateStore:
             "native_funding_rate",
             "position_generation",
             "funding_notional",
+            "funding_notional_price",
+            "funding_notional_price_source",
+            "funding_notional_price_timestamp",
             "funding_pnl",
             "borrow_principal",
             "borrow_rate_ann",
@@ -901,12 +930,15 @@ class StateStore:
                 identity_fields = (
                     "venue",
                     "instrument",
+                    "funding_notional_price_source",
+                    "funding_notional_price_timestamp",
                     "funding_timestamp",
                     "native_funding_rate",
                     "position_generation",
                 )
                 numeric_fields = (
                     "funding_notional",
+                    "funding_notional_price",
                     "funding_pnl",
                     "borrow_principal",
                     "borrow_rate_ann",
@@ -917,11 +949,16 @@ class StateStore:
                     if str(existing[field]) != str(ledger[field]):
                         raise AccountingIdentityCollision(event_key, field)
                 for field in numeric_fields:
-                    if not math.isclose(
-                        float(existing[field]),
-                        float(ledger[field]),
-                        rel_tol=0.0,
-                        abs_tol=1e-15,
+                    existing_value = existing[field]
+                    ledger_value = ledger[field]
+                    if existing_value is None and ledger_value is None:
+                        continue
+                    if (
+                        existing_value is None
+                        or ledger_value is None
+                        or not math.isclose(
+                            float(existing_value), float(ledger_value), rel_tol=0.0, abs_tol=1e-15
+                        )
                     ):
                         raise AccountingIdentityCollision(event_key, field)
                 return "replayed"
@@ -938,6 +975,9 @@ class StateStore:
                 value = float(ledger[field])
                 if not math.isfinite(value):
                     raise ValueError(f"{field} funding doit être fini")
+            price = ledger["funding_notional_price"]
+            if price is not None and (not math.isfinite(float(price)) or float(price) <= 0):
+                raise ValueError("funding_notional_price doit être fini et positif")
             self._insert_funding_ledger(connection, ledger)
             now = str(ledger.get("applied_at") or utc_now())
             connection.execute(

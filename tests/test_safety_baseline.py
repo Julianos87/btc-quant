@@ -390,10 +390,25 @@ def test_carry_close_failure_marks_unbalanced(tmp_path, monkeypatch):
         funding_event_id(runner.venue.exchange_id, runner.symbol, runner.entry_timestamp)
         + "|position"
     )
+    runner.entry_price = 100_000.0
+    runner.perp_qty = 1.0
+    runner.funding_notional_price = runner.entry_price
+    runner.funding_notional_price_source = "PAPER_RECENT_PRICE_APPROXIMATION"
+    runner.funding_notional_price_timestamp = runner.entry_timestamp
     funding = pd.Series(
         [-0.001] * (14 * 24 + 1),
         index=pd.date_range("2026-01-01", periods=14 * 24 + 1, freq="h", tz="UTC"),
     )
+
+    def price_history(since, until=None):
+        index = funding.index[funding.index >= since]
+        if until is not None:
+            index = index[index <= until]
+        prices = pd.Series(100_000.0, index=index, dtype=float)
+        prices.attrs["source"] = "PAPER_RECENT_PRICE_APPROXIMATION"
+        return prices
+
+    runner.venue.funding_notional_prices_since = price_history
     monkeypatch.setattr(runner, "_recent_funding", lambda: funding)
 
     runner.last_funding_ts = runner.entry_timestamp
