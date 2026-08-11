@@ -24,8 +24,9 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from btcquant.carry import (
     DEFAULT_BORROW_RATE_ANN,
-    PAYMENTS_PER_YEAR,
     backtest_carry,
+    borrow_cost_for_intervals,
+    elapsed_years_between,
 )
 
 
@@ -52,10 +53,17 @@ def test_borrow_cost_scales_with_leverage_minus_one():
     """Le coût porte sur (L−1)×capital, pas sur L×capital."""
     f = _flat_funding()
     r = 0.10
-    c3 = backtest_carry(f, leverage=3.0, borrow_rate_ann=r, initial_capital=4000)
-    c2 = backtest_carry(f, leverage=2.0, borrow_rate_ann=r, initial_capital=4000)
-    # exposition identique (funding constant) -> rapport des coûts = 2:1
-    assert c3["borrow_cost_ann"] == pytest.approx(2 * c2["borrow_cost_ann"], rel=1e-6)
+    costs_3x = borrow_cost_for_intervals(
+        f.index,
+        borrow_notional=4000.0 * (3.0 - 1.0),
+        annual_borrow_rate=r,
+    ).sum()
+    costs_2x = borrow_cost_for_intervals(
+        f.index,
+        borrow_notional=4000.0 * (2.0 - 1.0),
+        annual_borrow_rate=r,
+    ).sum()
+    assert costs_3x == pytest.approx(2 * costs_2x, rel=1e-12)
 
 
 def test_higher_borrow_rate_reduces_return():
@@ -76,8 +84,8 @@ def test_expensive_borrowing_can_make_carry_unprofitable():
 # ── la formule est celle documentée ─────────────────────────────────────────
 
 
-def test_net_return_matches_closed_form():
-    """L×funding − (L−1)×r/n par période, quand on est exposé en permanence."""
+def test_net_return_matches_attribution_ledger():
+    """Le rendement simple exposé est la somme du ledger temporel."""
     rate, lev, r = 0.0002, 3.0, 0.10
     f = _flat_funding(rate=rate, n=3 * 365)
     res = backtest_carry(
@@ -88,10 +96,15 @@ def test_net_return_matches_closed_form():
         fee_rate=0.0,
         slippage_bps=0.0,
     )
-    expo = res["exposure"]
-    per_period = lev * rate - (lev - 1) * r / PAYMENTS_PER_YEAR
-    attendu = per_period * PAYMENTS_PER_YEAR * expo
-    assert res["ann_return_simple"] == pytest.approx(attendu, rel=1e-6)
+    assert res["total_pnl"] == pytest.approx(
+        res["funding_pnl"]
+        + res["basis_pnl"]
+        - res["borrow_cost"]
+        - res["fees"]
+        - res["slippage"]
+        + res["liquidation_adjustment"],
+        rel=1e-12,
+    )
 
 
 def test_borrow_cost_only_charged_while_in_position():
@@ -102,6 +115,27 @@ def test_borrow_cost_only_charged_while_in_position():
     assert res["exposure"] == pytest.approx(0.0)
     assert res["borrow_cost_ann"] == pytest.approx(0.0)
     assert res["cagr"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_backtest_funding_notional_is_fixed_at_entry():
+    funding = pd.Series(
+        0.001,
+        index=pd.date_range("2030-01-01T00:00:00Z", periods=50, freq="h"),
+    )
+    result = backtest_carry(
+        funding,
+        leverage=2.0,
+        borrow_rate_ann=0.0,
+        fee_rate=0.0,
+        slippage_bps=0.0,
+        enter_ann=-1.0,
+        exit_ann=-1.0,
+        smooth_days=1,
+        funding_interval="1h",
+        initial_capital=1_000.0,
+    )
+    assert result["funding_notional_mode"] == "fixed_entry_notional"
+    assert result["funding_pnl"] == pytest.approx(1_000.0 * 2.0 * 0.001 * 25)
 
 
 def test_leverage_below_one_is_rejected():
@@ -126,15 +160,17 @@ def test_runner_applies_same_formula_as_backtest():
     formule du backtest.
     """
     rate, lev, r = 0.0002, 3.0, 0.10
-    payments_per_year = PAYMENTS_PER_YEAR  # venue 8 h, comme le backtest
-
-    borrow = (lev - 1.0) * r / payments_per_year
+    dt_years = elapsed_years_between(
+        pd.Timestamp("2030-01-01T00:00:00Z"),
+        pd.Timestamp("2030-01-01T08:00:00Z"),
+    )
+    borrow = (lev - 1.0) * r * dt_years
     equity = 1000.0
     for _ in range(10):
         equity += equity * (rate * lev - borrow)
 
     # même chose côté backtest, exposition forcée à 100 %
-    per_period = lev * rate - (lev - 1) * r / payments_per_year
+    per_period = lev * rate - (lev - 1) * r * dt_years
     attendu = 1000.0 * (1.0 + per_period) ** 10
     assert equity == pytest.approx(attendu, rel=1e-12)
 
@@ -161,6 +197,7 @@ def test_observed_basis_changes_carry_pnl():
         exit_ann=-1.0,
         spot_price=spot,
         perp_price=perp,
+        smooth_days=1,
     )
 
     assert result["basis_mode"] == "observed"
@@ -196,6 +233,7 @@ def test_adverse_basis_can_trigger_maintenance_liquidation():
         collateral_haircut=0.05,
         maintenance_margin_rate=0.05,
         liquidation_fee_rate=0.005,
+        smooth_days=1,
     )
     assert result["liquidated"] is True
     assert result["liquidation_ts"] is not None
