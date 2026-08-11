@@ -49,6 +49,13 @@ class CarryStatePayload(TypedDict):
     execution_state: str
     qty: float
     spot_qty: float
+    entry_equity: NotRequired[float | None]
+    entry_timestamp: NotRequired[str | None]
+    spot_notional: NotRequired[float]
+    perp_notional: NotRequired[float]
+    borrow_principal: NotRequired[float]
+    position_generation: NotRequired[str | None]
+    funding_notional_price: NotRequired[float | None]
     perp_qty: float
     last_funding_ts: str | None
     peak_equity: float
@@ -56,6 +63,8 @@ class CarryStatePayload(TypedDict):
     day_start_equity: float
     halted: bool
     daily_lockout: bool
+    accounting_uncertain: NotRequired[bool]
+    accounting_uncertainty_reason: NotRequired[str | None]
 
 
 def _mapping(payload: object, label: str) -> Mapping[str, Any]:

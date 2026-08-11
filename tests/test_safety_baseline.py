@@ -15,6 +15,7 @@ from btcquant.execution.carry_contract import (
 )
 from btcquant.execution.carry_runner import CarryRunner
 from btcquant.execution.ccxt_broker import CcxtBroker
+from btcquant.carry import funding_event_id
 from btcquant.execution.order_state import ExternalOrderState
 from btcquant.execution.reconcile import reconcile
 from btcquant.execution.runner import LiveRunner, ReconciliationRequired, StrategySlot
@@ -380,12 +381,22 @@ def test_carry_close_failure_marks_unbalanced(tmp_path, monkeypatch):
     runner.in_position = True
     runner.execution_state = "OPEN"
     runner.qty = 1.0
+    runner.entry_equity = runner.equity
+    runner.entry_timestamp = pd.Timestamp("2026-01-01T00:00:00Z")
+    runner.spot_notional = runner.equity * runner.leverage
+    runner.perp_notional = runner.spot_notional
+    runner.borrow_principal = runner.equity * (runner.leverage - 1.0)
+    runner.position_generation = (
+        funding_event_id(runner.venue.exchange_id, runner.symbol, runner.entry_timestamp)
+        + "|position"
+    )
     funding = pd.Series(
-        [-0.001],
-        index=pd.DatetimeIndex([pd.Timestamp("2026-01-01", tz="UTC")]),
+        [-0.001] * (14 * 24 + 1),
+        index=pd.date_range("2026-01-01", periods=14 * 24 + 1, freq="h", tz="UTC"),
     )
     monkeypatch.setattr(runner, "_recent_funding", lambda: funding)
 
+    runner.last_funding_ts = runner.entry_timestamp
     runner._tick()
 
     assert runner.execution_state == "UNBALANCED"

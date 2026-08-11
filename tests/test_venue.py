@@ -21,15 +21,21 @@ from btcquant.execution.venue import Venue
 class _StubExchange:
     """Réponses ccxt minimales, sans réseau."""
 
-    def __init__(self, funding_rate: float = 1.25e-5, price: float = 60_000.0):
+    def __init__(
+        self,
+        funding_rate: float = 1.25e-5,
+        price: float = 60_000.0,
+        periods: int = 5,
+    ):
         self.funding_rate = funding_rate
         self.price = price
+        self.periods = periods
         self.now_ms = int(time.time() * 1000)
 
     def fetch_funding_rate_history(self, symbol, since=None, limit=None):
         rows = [
             {"fundingRate": self.funding_rate, "timestamp": self.now_ms - i * 3_600_000}
-            for i in range(5, 0, -1)
+            for i in range(self.periods, 0, -1)
         ]
         if since is not None:
             rows = [row for row in rows if row["timestamp"] >= since]
@@ -129,10 +135,10 @@ def test_carry_annualizes_hourly_funding(tmp_path):
     (seuil 3 %) et payer le coût de bascule, avec l'annualisation ×24×365
     (l'ancienne convention 8 h, ×3×365, n'aurait vu que ~1,4 % → jamais entré)."""
     runner = CarryRunner(
-        policy=replace(PAPER_CARRY_POLICY, capital=4000.0, leverage=3.0),
+        policy=replace(PAPER_CARRY_POLICY, capital=4000.0, leverage=3.0, smooth_days=1),
         state_file=tmp_path / "carry_state.json",
     )
-    _stub_venue(runner.venue, funding_rate=1.25e-5)
+    _stub_venue(runner.venue, funding_rate=1.25e-5, periods=25)
     assert not runner.in_position
     runner._tick()
     assert runner.in_position
