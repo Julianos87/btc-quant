@@ -86,7 +86,12 @@ sudo systemctl stop btcquant-carry btcquant-trend btcquant-dashboard \
   btcquant-watchdog.timer btcquant-hyperliquid-watchdog.timer \
   btcquant-compact.timer btcquant-backup.timer \
   btcquant-rebalance.timer btcquant-rebalance-pending.timer
-sudo bash /opt/btcquant/current/deploy/update.sh \
+sudo env \
+  DEPLOY_REMOTE=origin \
+  DEPLOY_BRANCH=main \
+  BTCQUANT_CANONICAL_REPOSITORY=github.com/Julianos87/btc-quant.git \
+  BTCQUANT_CANONICAL_REMOTE_ALIASES='github-backup=github.com' \
+  bash /opt/btcquant/current/deploy/update.sh \
   --sha <FULL_GIT_SHA> --migration --engines
 ```
 
