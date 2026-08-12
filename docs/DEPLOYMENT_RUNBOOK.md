@@ -113,19 +113,26 @@ URL correspondant à `BTCQUANT_CANONICAL_REPOSITORY`. Un clone dirty, un fichier
 non suivi pertinent ou une résolution de dépendances implicite sont bloquants :
 
 ```bash
-export DEPLOY_REMOTE=origin             # nom réel dans le clone de production
-export DEPLOY_BRANCH=main
-export BTCQUANT_CANONICAL_REPOSITORY=github.com/Julianos87/btc-quant.git
-# Requis uniquement si la remote utilise cet alias SSH local.
-export BTCQUANT_CANONICAL_REMOTE_ALIASES=github-backup=github.com
-sudo bash /opt/btcquant/current/deploy/update.sh --sha <FULL_GIT_SHA>
+sudo env \
+  DEPLOY_REMOTE=origin \
+  DEPLOY_BRANCH=main \
+  BTCQUANT_CANONICAL_REPOSITORY=github.com/Julianos87/btc-quant.git \
+  BTCQUANT_CANONICAL_REMOTE_ALIASES='github-backup=github.com' \
+  bash /opt/btcquant/current/deploy/update.sh \
+  --sha <FULL_GIT_SHA>
 ```
 
 Le redémarrage des moteurs est une décision distincte pendant une fenêtre de
 maintenance :
 
 ```bash
-sudo bash /opt/btcquant/current/deploy/update.sh --sha <FULL_GIT_SHA> --engines
+sudo env \
+  DEPLOY_REMOTE=origin \
+  DEPLOY_BRANCH=main \
+  BTCQUANT_CANONICAL_REPOSITORY=github.com/Julianos87/btc-quant.git \
+  BTCQUANT_CANONICAL_REMOTE_ALIASES='github-backup=github.com' \
+  bash /opt/btcquant/current/deploy/update.sh \
+  --sha <FULL_GIT_SHA> --engines
 ```
 
 La séquence code-only est : lock non bloquant, vérification Git canonique,

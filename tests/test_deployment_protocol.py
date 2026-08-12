@@ -249,7 +249,7 @@ def test_deployment_scripts_expose_fail_closed_guards():
     assert "DEPLOY_REMOTE" in update
     assert "merge-base --is-ancestor" in update
     assert "--untracked-files=all" in update
-    assert "sync --frozen" in create
+    assert "--frozen" in create
     assert "validate-release.sh" in create
     assert "release-manifest.json" in create
     assert "pytest" in validate

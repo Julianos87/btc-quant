@@ -65,7 +65,12 @@ REMOTE_URL="$(git -C "${SOURCE}" remote get-url "${DEPLOY_REMOTE}" 2>/dev/null |
   echo "Refus: remote ${DEPLOY_REMOTE} absente." >&2
   exit 1
 }
-PYTHONPATH="${SOURCE}/src" /usr/bin/python3 -c   "from btcquant.deployment import validate_canonical_repository; validate_canonical_repository('${REMOTE_URL}', '${CANONICAL_REPOSITORY}')"
+PYTHONPATH="${SOURCE}/src" /usr/bin/python3 -c '
+import sys
+from btcquant.deployment import validate_canonical_repository
+
+validate_canonical_repository(sys.argv[1], sys.argv[2])
+' "${REMOTE_URL}" "${CANONICAL_REPOSITORY}"
 git -C "${SOURCE}" fetch "${DEPLOY_REMOTE}" --prune
 REMOTE_REF="${DEPLOY_REMOTE}/${DEPLOY_BRANCH}"
 [ "$(git -C "${SOURCE}" rev-parse "${REMOTE_REF}")" = "${RELEASE_ID}" ] || {

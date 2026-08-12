@@ -50,8 +50,9 @@ if [ -e "${TARGET}" ]; then
   exit 0
 fi
 
-UV_BIN="${UV_BIN:-uv}"
-command -v "${UV_BIN}" >/dev/null
+UV_BIN="$(
+  UV_BIN="${UV_BIN:-}" bash "${SOURCE}/deploy/resolve-uv.sh"
+)"
 echo "Construction staging pour ${RELEASE_ID}" >&2
 mkdir -p "${RELEASES}" "${ROOT}/state" "${ROOT}/backups" "${ROOT}/data"
 STAGING="${RELEASES}/.${RELEASE_ID}.$$"
@@ -77,23 +78,16 @@ ln -s ../../backups-repo "${STAGING}/backups-repo"
 
 # Le lockfile est la source de vérité; aucune résolution ni mise à niveau
 # implicite n'est autorisée pendant un build de release.
-UV_PROJECT_ENVIRONMENT="${STAGING}/venv" "${UV_BIN}" sync --frozen --no-dev --python 3.12 --directory "${STAGING}"
+UV_PROJECT_ENVIRONMENT="${STAGING}/venv" "${UV_BIN}" sync \
+  --frozen --no-dev --no-editable --python 3.12 --directory "${STAGING}"
 
 # Les scripts console d'un virtualenv contiennent un shebang absolu. Comme la
 # release est construite sous STAGING puis renommée atomiquement, ces shebangs
 # doivent viser TARGET avant le mv final.
-while IFS= read -r launcher; do
-  sed -i \
-    "1s|^#!${STAGING}/venv/bin/python|#!${TARGET}/venv/bin/python|" \
-    "${launcher}"
-done < <(
-  find "${STAGING}/venv/bin" -maxdepth 1 -type f \
-    -exec grep -Il "^#!${STAGING}/venv/bin/python" {} +
-)
-if grep -RIl "^#!${STAGING}/" "${STAGING}/venv/bin" | grep -q .; then
-  echo "Un lanceur de virtualenv référence encore le staging." >&2
-  exit 1
-fi
+"${STAGING}/venv/bin/python" "${STAGING}/scripts/relocate_venv_launchers.py" \
+  --venv "${STAGING}/venv" \
+  --old-prefix "${STAGING}" \
+  --new-prefix "${TARGET}"
 
 "${STAGING}/venv/bin/python" -m compileall -q "${STAGING}/src" "${STAGING}/dashboard"
 bash "${STAGING}/deploy/validate-release.sh" "${STAGING}" "${UV_BIN}"
@@ -108,7 +102,7 @@ bash "${STAGING}/deploy/validate-release.sh" "${STAGING}" "${UV_BIN}"
   --git-tree "${GIT_TREE}" \
   --origin "${ORIGIN}" \
   --python-version "$(${STAGING}/venv/bin/python --version)" \
-  --uv-version "$(${UV_BIN} --version)"
+  --uv-version "$("${UV_BIN}" --version)"
 
 if [ ! -f "${STAGING}/release-manifest.json" ]; then
   echo "Manifeste de release absent après génération." >&2

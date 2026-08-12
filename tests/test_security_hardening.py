@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import logging
+import os
+import shutil
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
+
+import pytest
 
 from btcquant import notify
 
@@ -104,13 +110,16 @@ def test_runtime_services_use_installed_entrypoints():
     assert "/venv/bin/btcquant-shadow " in shadow
     assert "EnvironmentFile=" not in shadow
     assert "HYPERLIQUID_PRIVATE_KEY" not in shadow
-    assert "sync --frozen" in release
+    assert "--frozen" in release
+    assert "--no-editable" in release
+    assert "resolve-uv.sh" in release
     assert "release-manifest.json" in release
     assert '[ "${#RELEASE_ID}" -ne 40 ]' in release
     assert 'chown -R root:btcquant "${STAGING}"' in release
     assert 'chown -R root:root "${STAGING}"' not in release
-    assert '"1s|^#!${STAGING}/venv/bin/python|#!${TARGET}/venv/bin/python|"' in release
-    assert 'grep -RIl "^#!${STAGING}/" "${STAGING}/venv/bin"' in release
+    assert "relocate_venv_launchers.py" in release
+    assert "--old-prefix" in release
+    assert "--new-prefix" in release
 
 
 def test_production_requirements_are_pinned_with_hashes():
@@ -184,3 +193,160 @@ def test_host_preflight_blocks_bad_clock_permissions_disk_and_database():
     assert "root:btcquant:640" in script
     assert "1048576" in script
     assert "PRAGMA integrity_check" in script
+
+
+def _run_uv_resolver(tmp_path, *, uv_bin=None, include_uv=True):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(parents=True)
+    if include_uv:
+        command = fake_bin / "uv"
+        command.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        command.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = str(fake_bin)
+    if uv_bin is None:
+        env.pop("UV_BIN", None)
+    else:
+        env["UV_BIN"] = uv_bin
+    return subprocess.run(
+        ["/bin/bash", str(ROOT / "deploy" / "resolve-uv.sh")],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_uv_resolution_is_absolute_and_fail_closed(tmp_path):
+    resolved = _run_uv_resolver(tmp_path / "default")
+    assert resolved.returncode == 0
+    assert resolved.stdout.strip() == str((tmp_path / "default" / "bin" / "uv").resolve())
+
+    named = _run_uv_resolver(tmp_path / "named", uv_bin="uv")
+    assert named.returncode == 0
+    assert named.stdout.strip().endswith("/named/bin/uv")
+
+    absent = _run_uv_resolver(tmp_path / "absent", include_uv=False)
+    assert absent.returncode != 0
+
+    invalid = tmp_path / "invalid-uv"
+    invalid.write_text("#!/bin/sh\n", encoding="utf-8")
+    invalid.chmod(0o644)
+    invalid_result = _run_uv_resolver(tmp_path / "invalid", uv_bin=str(invalid), include_uv=False)
+    assert invalid_result.returncode != 0
+
+
+def test_runtime_venv_relocates_without_staging_dependency(tmp_path):
+    uv = shutil.which("uv") or os.environ.get("BTCQUANT_TEST_UV") or "/tmp/uv-0.11.19"
+    if not Path(uv).is_file() or not os.access(uv, os.X_OK):
+        pytest.fail("uv is required for the release relocation integration test")
+
+    staging = tmp_path / "staging"
+    final = tmp_path / "releases" / ("a" * 40)
+    staging.mkdir()
+    (tmp_path / "releases").mkdir()
+    for name in ("pyproject.toml", "uv.lock", "README.md"):
+        shutil.copy2(ROOT / name, staging / name)
+    shutil.copytree(ROOT / "src", staging / "src")
+    shutil.copytree(ROOT / "dashboard", staging / "dashboard")
+    shutil.copytree(ROOT / "environments", staging / "environments")
+    shutil.copy2(
+        ROOT / "scripts" / "relocate_venv_launchers.py", staging / "relocate_venv_launchers.py"
+    )
+
+    env = os.environ.copy()
+    env["UV_PROJECT_ENVIRONMENT"] = str(staging / "venv")
+    subprocess.run(
+        [
+            uv,
+            "sync",
+            "--frozen",
+            "--no-dev",
+            "--no-editable",
+            "--python",
+            "3.12",
+            "--directory",
+            str(staging),
+        ],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(staging / "relocate_venv_launchers.py"),
+            "--venv",
+            str(staging / "venv"),
+            "--old-prefix",
+            str(staging),
+            "--new-prefix",
+            str(final),
+        ],
+        check=True,
+    )
+    staging.rename(final)
+    assert not staging.exists()
+
+    runtime_python = final / "venv" / "bin" / "python"
+    imported = subprocess.run(
+        [str(runtime_python), "-c", "import btcquant; import dashboard.app"],
+        cwd=final,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert imported.returncode == 0, imported.stderr
+
+    entrypoint = final / "venv" / "bin" / "btcquant-readiness"
+    help_run = subprocess.run(
+        [str(entrypoint), "--help"],
+        cwd=final,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert help_run.returncode == 0, help_run.stderr
+
+    assert entrypoint.read_text(encoding="utf-8").splitlines()[0] == f"#!{runtime_python}"
+    for launcher in (final / "venv" / "bin").iterdir():
+        if launcher.is_file() and not launcher.is_symlink():
+            first_line = launcher.read_text(encoding="utf-8", errors="ignore").splitlines()[0]
+            assert str(staging) not in first_line
+
+
+def test_remote_url_is_passed_as_data_not_python_source(tmp_path):
+    marker = tmp_path / "injected"
+    payload = (
+        "github.com/foo/bar.git'); "
+        f"__import__('pathlib').Path('{marker}').write_text('INJECTED'); #"
+    )
+    code = """
+import sys
+from btcquant.deployment import validate_canonical_repository
+validate_canonical_repository(sys.argv[1], sys.argv[2])
+"""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ROOT / "src")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            code,
+            payload,
+            "github.com/Julianos87/btc-quant.git",
+        ],
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert not marker.exists()
+
+    for name in ("update.sh", "install.sh", "create-release.sh", "migrate.sh"):
+        script = (ROOT / "deploy" / name).read_text(encoding="utf-8")
+        assert "validate_canonical_repository('${REMOTE_URL}'" not in script
+        assert 'validate_canonical_repository("${REMOTE_URL}"' not in script

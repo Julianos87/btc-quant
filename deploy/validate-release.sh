@@ -9,6 +9,7 @@ fi
 RELEASE="$(readlink -f "$1")"
 UV_BIN="$2"
 [ -d "${RELEASE}" ] || { echo "Release staging absente." >&2; exit 1; }
+[ "${UV_BIN#/}" != "${UV_BIN}" ] || { echo "uv doit être un chemin absolu résolu." >&2; exit 1; }
 [ -x "${UV_BIN}" ] || { echo "uv absent ou non exécutable." >&2; exit 1; }
 
 VALIDATION_ENV="${RELEASE}/.validation-venv"
@@ -36,6 +37,7 @@ node --check dashboard/static/dashboard.js
 node --check dashboard/static/effects.js
 bash -n deploy/install.sh deploy/update.sh deploy/create-release.sh \
   deploy/preflight.sh deploy/migrate.sh deploy/rebalance-root.sh \
+  deploy/resolve-uv.sh \
   deploy/start-hyperliquid-testnet.sh deploy/stop-hyperliquid-testnet.sh \
   scripts/backup_state.sh
 "${UV_BIN}" export --locked --no-default-groups --group exchange --group dashboard \

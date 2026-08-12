@@ -113,10 +113,19 @@ restore_pre_migration_and_old_code() {
     return 1
   fi
   stop_all_writer_processes
-  "${TARGET}/venv/bin/python" -c \
-    "from btcquant.deployment import restore_sqlite_database; result=restore_sqlite_database('${MIGRATION_BACKUP}', '${ROOT}/state/btcquant.db'); assert result['integrity_check'] == 'ok' and int(result['schema_version']) < 6, result"
-  "${TARGET}/venv/bin/python" -c \
-    "from btcquant.deployment import atomic_switch_release; atomic_switch_release('${ROOT}', '${old_target}')"
+  "${TARGET}/venv/bin/python" -c '
+import sys
+from btcquant.deployment import restore_sqlite_database
+
+result = restore_sqlite_database(sys.argv[1], sys.argv[2])
+assert result["integrity_check"] == "ok" and int(result["schema_version"]) < 6, result
+' "${MIGRATION_BACKUP}" "${ROOT}/state/btcquant.db"
+  "${TARGET}/venv/bin/python" -c '
+import sys
+from btcquant.deployment import atomic_switch_release
+
+atomic_switch_release(sys.argv[1], sys.argv[2])
+' "${ROOT}" "${old_target}"
   install_units
   systemctl restart btcquant-dashboard
   wait_for_dashboard
@@ -179,14 +188,30 @@ if [ "${TARGET_SHA}" = rollback ]; then
   RELEASE_ID="$(basename "${TARGET}")"
   [[ "${RELEASE_ID}" =~ ^[0-9a-f]{40}$ ]] || { echo "Rollback refusé: previous invalide." >&2; exit 1; }
   [ -f "${TARGET}/release-manifest.json" ] || { echo "Rollback refusé: manifeste absent." >&2; exit 1; }
-  DB_SCHEMA="$(${OLD_TARGET}/venv/bin/python -c "import sqlite3; c=sqlite3.connect('file:${ROOT}/state/btcquant.db?mode=ro', uri=True); r=c.execute(\"SELECT value FROM metadata WHERE key='schema_version'\").fetchone(); print(r[0] if r else 'UNKNOWN')")"
-  REQUIRED_SCHEMA="$(${TARGET}/venv/bin/python -c "import json; print(json.load(open('${TARGET}/release-manifest.json'))['schema_version_required'])")"
+  DB_SCHEMA="$(${OLD_TARGET}/venv/bin/python -c '
+import sqlite3
+import sys
+
+connection = sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True)
+row = connection.execute("SELECT value FROM metadata WHERE key = ?", ("schema_version",)).fetchone()
+print(row[0] if row else "UNKNOWN")
+' "${ROOT}/state/btcquant.db")"
+  REQUIRED_SCHEMA="$(${TARGET}/venv/bin/python -c '
+import json
+import sys
+
+print(json.loads(open(sys.argv[1], encoding="utf-8").read())["schema_version_required"])
+' "${TARGET}/release-manifest.json")"
   if [ "${DB_SCHEMA}" = UNKNOWN ] || [ "${DB_SCHEMA}" -gt "${REQUIRED_SCHEMA}" ]; then
     echo "Rollback code refusé contre une DB plus récente; récupération manuelle requise." >&2
     exit 1
   fi
-  "${OLD_TARGET}/venv/bin/python" -c \
-    "from btcquant.deployment import atomic_switch_release; atomic_switch_release('${ROOT}', '${TARGET}')"
+  "${OLD_TARGET}/venv/bin/python" -c '
+import sys
+from btcquant.deployment import atomic_switch_release
+
+atomic_switch_release(sys.argv[1], sys.argv[2])
+' "${ROOT}" "${TARGET}"
   install_units
   configure_pending_rebalance_timer
   configure_shadow_service
@@ -221,8 +246,12 @@ fi
 [ -d "${CLONE}/.git" ] || { echo "Refus: clone source absent." >&2; exit 1; }
 REMOTE_URL="$(sudo -u btcquant git -C "${CLONE}" remote get-url "${DEPLOY_REMOTE}" 2>/dev/null || true)"
 [ -n "${REMOTE_URL}" ] || { echo "Refus: remote ${DEPLOY_REMOTE} absente." >&2; exit 1; }
-PYTHONPATH="${CLONE}/src" /usr/bin/python3 -c \
-  "from btcquant.deployment import validate_canonical_repository; validate_canonical_repository('${REMOTE_URL}', '${CANONICAL_REPOSITORY}')"
+PYTHONPATH="${CLONE}/src" /usr/bin/python3 -c '
+import sys
+from btcquant.deployment import validate_canonical_repository
+
+validate_canonical_repository(sys.argv[1], sys.argv[2])
+' "${REMOTE_URL}" "${CANONICAL_REPOSITORY}"
 sudo -u btcquant git -C "${CLONE}" fetch "${DEPLOY_REMOTE}" --prune
 REMOTE_REF="${DEPLOY_REMOTE}/${DEPLOY_BRANCH}"
 REMOTE_SHA="$(sudo -u btcquant git -C "${CLONE}" rev-parse "${REMOTE_REF}")"
@@ -241,9 +270,18 @@ OLD_TARGET="$(readlink -f "${CURRENT}")"
 OLD_PREVIOUS="$(readlink -f "${PREVIOUS}" 2>/dev/null || true)"
 
 TARGET="$(bash "${CLONE}/deploy/create-release.sh" "${CLONE}" "${RELEASE_ID}")"
-"${TARGET}/venv/bin/python" -c \
-  "from btcquant.deployment import validate_release_manifest; validate_release_manifest('${TARGET}', '${RELEASE_ID}')"
-APP_SCHEMA="$(${TARGET}/venv/bin/python -c "from btcquant.deployment import inspect_sqlite; print(inspect_sqlite('${ROOT}/state/btcquant.db').metadata_schema_version or 'UNKNOWN')")"
+"${TARGET}/venv/bin/python" -c '
+import sys
+from btcquant.deployment import validate_release_manifest
+
+validate_release_manifest(sys.argv[1], sys.argv[2])
+' "${TARGET}" "${RELEASE_ID}"
+APP_SCHEMA="$(${TARGET}/venv/bin/python -c '
+import sys
+from btcquant.deployment import inspect_sqlite
+
+print(inspect_sqlite(sys.argv[1]).metadata_schema_version or "UNKNOWN")
+' "${ROOT}/state/btcquant.db")"
 if [ "${APP_SCHEMA}" = UNKNOWN ]; then
   echo "Refus: app_schema_version inconnue." >&2
   exit 1
@@ -313,8 +351,12 @@ rollback_on_error() {
   fi
   echo "Échec code-only; retour à ${OLD_TARGET}." >&2
   stop_all_writer_processes
-  "${TARGET}/venv/bin/python" -c \
-    "from btcquant.deployment import atomic_switch_release; atomic_switch_release('${ROOT}', '${OLD_TARGET}')" || true
+  "${TARGET}/venv/bin/python" -c '
+import sys
+from btcquant.deployment import atomic_switch_release
+
+atomic_switch_release(sys.argv[1], sys.argv[2])
+' "${ROOT}" "${OLD_TARGET}" || true
   install_units || true
   systemctl daemon-reload || true
   systemctl restart btcquant-dashboard || true
@@ -322,8 +364,12 @@ rollback_on_error() {
 }
 trap rollback_on_error ERR
 
-"${TARGET}/venv/bin/python" -c \
-  "from btcquant.deployment import atomic_switch_release; atomic_switch_release('${ROOT}', '${TARGET}')"
+"${TARGET}/venv/bin/python" -c '
+import sys
+from btcquant.deployment import atomic_switch_release
+
+atomic_switch_release(sys.argv[1], sys.argv[2])
+' "${ROOT}" "${TARGET}"
 install_units
 
 if ${MIGRATION_MODE}; then
