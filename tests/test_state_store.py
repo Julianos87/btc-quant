@@ -7,7 +7,7 @@ import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from btcquant.execution.errors import AccountingIdentityCollision
+from btcquant.execution.errors import AccountingIdentityCollision, MigrationRequiredError
 
 from btcquant.execution.order_state import ExternalOrderState, LocalOrderState
 from btcquant.execution.state_store import StateStore
@@ -298,7 +298,7 @@ def test_schema_v1_is_migrated_with_execution_observability(tmp_path):
             """
         )
 
-    store = StateStore(database)
+    store = StateStore(database, allow_migration=True)
     with sqlite3.connect(database) as connection:
         columns = {row[1] for row in connection.execute("PRAGMA table_info(orders)").fetchall()}
         version = connection.execute(
@@ -315,6 +315,40 @@ def test_schema_v1_is_migrated_with_execution_observability(tmp_path):
     assert version == "6"
     assert store.read_deposits() == []
     assert store.read_incidents() == []
+
+
+def test_existing_legacy_database_requires_explicit_migration(tmp_path):
+    database = tmp_path / "legacy-v4-no-auto-migration.db"
+    with sqlite3.connect(database) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO metadata VALUES('schema_version', '4');
+            CREATE TABLE marker(value TEXT NOT NULL);
+            INSERT INTO marker VALUES('untouched');
+            """
+        )
+
+    with pytest.raises(MigrationRequiredError, match="Migration explicite requise"):
+        StateStore(database)
+
+    with sqlite3.connect(database) as connection:
+        assert (
+            connection.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()[
+                0
+            ]
+            == "4"
+        )
+        assert connection.execute("SELECT value FROM marker").fetchone()[0] == "untouched"
+
+    StateStore(database, allow_migration=True)
+    with sqlite3.connect(database) as connection:
+        assert (
+            connection.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()[
+                0
+            ]
+            == "6"
+        )
 
 
 def test_schema_v4_migration_is_idempotent_and_never_invents_market_terminality(
@@ -365,7 +399,7 @@ def test_schema_v4_migration_is_idempotent_and_never_invents_market_terminality(
             ],
         )
 
-    StateStore(database)
+    StateStore(database, allow_migration=True)
     store = StateStore(database)  # deuxième passage : migration idempotente
     orders = {order["intent_id"]: order for order in store.read_orders("trend")}
 
@@ -437,7 +471,7 @@ def test_schema_migration_rejects_wrongly_named_non_unique_index_and_rolls_back(
         )
 
     with pytest.raises(RuntimeError, match="sans garantir l'unicité"):
-        StateStore(database)
+        StateStore(database, allow_migration=True)
 
     with sqlite3.connect(database) as connection:
         version = connection.execute(
@@ -495,7 +529,7 @@ def test_v5_to_v6_funding_ledger_migration_is_additive_and_idempotent(tmp_path):
         connection.execute("UPDATE metadata SET value='5' WHERE key='schema_version'")
         connection.commit()
 
-    StateStore(database)
+    StateStore(database, allow_migration=True)
     StateStore(database)
     with sqlite3.connect(database) as connection:
         version = connection.execute(

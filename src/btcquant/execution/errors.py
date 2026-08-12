@@ -48,3 +48,17 @@ class InvalidOrderStateTransition(ExecutionError):
 
 class EngineInstanceAlreadyRunning(ExecutionError):
     """Le verrou OS indique qu'une autre instance du moteur est active."""
+
+
+class MigrationRequiredError(ExecutionError):
+    """La base est ancienne et exige une migration explicitement autorisée."""
+
+    def __init__(self, database: str, current_version: int | None, target_version: int) -> None:
+        self.database = database
+        self.current_version = current_version
+        self.target_version = target_version
+        current = "inconnue" if current_version is None else str(current_version)
+        super().__init__(
+            f"Migration explicite requise pour {database}: "
+            f"schéma actuel={current}, cible={target_version}"
+        )

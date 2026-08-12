@@ -2,15 +2,15 @@
 # Contrôles bloquants de l'hôte avant activation ou mise à jour.
 set -euo pipefail
 
-ROOT=/opt/btcquant
-CURRENT="${ROOT}/current"
+ROOT="${BTCQUANT_ROOT:-/opt/btcquant}"
+CURRENT="${BTCQUANT_CURRENT:-${ROOT}/current}"
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "Le preflight doit être exécuté par root." >&2
   exit 1
 fi
-if [ ! -L "${CURRENT}" ] || [ ! -x "${CURRENT}/venv/bin/python" ]; then
-  echo "Release current ou virtualenv absent." >&2
+if [ ! -d "${CURRENT}" ] || [ ! -x "${CURRENT}/venv/bin/python" ]; then
+  echo "Release cible ou virtualenv absent." >&2
   exit 1
 fi
 if [ ! -f "${ROOT}/.env" ] ||
@@ -36,13 +36,23 @@ if [ "${AVAILABLE_KB:-0}" -lt 1048576 ]; then
 fi
 
 if [ -f "${ROOT}/state/btcquant.db" ]; then
-  RESULT="$(
+  DB_REPORT="$(
     "${CURRENT}/venv/bin/python" -c \
-      "import sqlite3; c=sqlite3.connect('file:/opt/btcquant/state/btcquant.db?mode=ro', uri=True); print(c.execute('PRAGMA integrity_check').fetchone()[0])"
+      "import sqlite3; c=sqlite3.connect('file:${ROOT}/state/btcquant.db?mode=ro', uri=True); integrity=c.execute('PRAGMA integrity_check').fetchone()[0]; row=c.execute(\"SELECT value FROM metadata WHERE key='schema_version'\").fetchone(); print(integrity, row[0] if row else 'UNKNOWN')"
   )"
+  RESULT="${DB_REPORT%% *}"
+  APP_SCHEMA_VERSION="${DB_REPORT##* }"
   if [ "${RESULT}" != "ok" ]; then
     echo "SQLite integrity_check a échoué : ${RESULT}" >&2
     exit 1
+  fi
+  if [ "${APP_SCHEMA_VERSION}" != "6" ]; then
+    if [ "${BTCQUANT_MIGRATION_PENDING:-false}" = true ] && [ "${APP_SCHEMA_VERSION}" -lt 6 ] 2>/dev/null; then
+      echo "Preflight hôte : migration explicite encore requise (app_schema_version=${APP_SCHEMA_VERSION}, cible=6)."
+    else
+      echo "Migration explicite requise avant démarrage (app_schema_version=${APP_SCHEMA_VERSION}, cible=6)." >&2
+      exit 1
+    fi
   fi
 fi
 

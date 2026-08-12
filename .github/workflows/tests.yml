@@ -91,6 +91,7 @@ jobs:
       - name: Syntaxe des scripts de déploiement
         run: >-
           bash -n deploy/install.sh deploy/update.sh deploy/create-release.sh
-          deploy/preflight.sh deploy/rebalance-root.sh
+          deploy/preflight.sh deploy/migrate.sh deploy/validate-release.sh
+          deploy/rebalance-root.sh
           deploy/start-hyperliquid-testnet.sh deploy/stop-hyperliquid-testnet.sh
           scripts/backup_state.sh

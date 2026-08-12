@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Construit une release immuable sans modifier le lien /opt/btcquant/current.
+# Construit une release immuable sans modifier current/previous.
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -13,8 +13,9 @@ fi
 
 SOURCE="$(readlink -f "$1")"
 RELEASE_ID="$2"
-ROOT=/opt/btcquant
+ROOT="${BTCQUANT_ROOT:-/opt/btcquant}"
 RELEASES="${ROOT}/releases"
+DEPLOY_REMOTE="${DEPLOY_REMOTE:-}"
 
 case "${RELEASE_ID}" in
   *[!0-9a-f]*|"")
@@ -22,22 +23,42 @@ case "${RELEASE_ID}" in
     exit 2
     ;;
 esac
-if [ "${#RELEASE_ID}" -lt 7 ] || [ ! -d "${SOURCE}" ]; then
-  echo "Source ou identifiant de release invalide." >&2
+if [ "${#RELEASE_ID}" -ne 40 ] || [ ! -d "${SOURCE}" ]; then
+  echo "Source ou identifiant de release invalide : SHA complet requis." >&2
   exit 2
 fi
 
+SOURCE_HEAD="$(git -C "${SOURCE}" rev-parse HEAD)"
+if [ "${SOURCE_HEAD}" != "${RELEASE_ID}" ]; then
+  echo "Le clone source ne correspond pas au SHA demandé." >&2
+  exit 1
+fi
+git -C "${SOURCE}" diff-tree --check -r "${RELEASE_ID}"
+if [ -z "${DEPLOY_REMOTE}" ]; then
+  echo "Refus: DEPLOY_REMOTE doit identifier la remote canonique." >&2
+  exit 1
+fi
+GIT_TREE="$(git -C "${SOURCE}" rev-parse "${RELEASE_ID}^{tree}")"
+ORIGIN="$(git -C "${SOURCE}" remote get-url "${DEPLOY_REMOTE}")"
 TARGET="${RELEASES}/${RELEASE_ID}"
-if [ -d "${TARGET}" ]; then
+if [ -e "${TARGET}" ]; then
+  if [ ! -f "${TARGET}/release-manifest.json" ]; then
+    echo "Release existante sans manifeste : refus de la réutiliser." >&2
+    exit 1
+  fi
   echo "${TARGET}"
   exit 0
 fi
 
+UV_BIN="$(
+  UV_BIN="${UV_BIN:-}" bash "${SOURCE}/deploy/resolve-uv.sh"
+)"
+echo "Construction staging pour ${RELEASE_ID}" >&2
 mkdir -p "${RELEASES}" "${ROOT}/state" "${ROOT}/backups" "${ROOT}/data"
 STAGING="${RELEASES}/.${RELEASE_ID}.$$"
 cleanup() {
   case "${STAGING}" in
-    /opt/btcquant/releases/.*) rm -rf -- "${STAGING}" ;;
+    "${RELEASES}"/.*) rm -rf -- "${STAGING}" ;;
     *) echo "Refus de nettoyer un chemin inattendu : ${STAGING}" >&2 ;;
   esac
 }
@@ -55,33 +76,38 @@ ln -s ../../backups "${STAGING}/backups"
 ln -s ../../data "${STAGING}/data"
 ln -s ../../backups-repo "${STAGING}/backups-repo"
 
-python3 -m venv "${STAGING}/venv"
-"${STAGING}/venv/bin/pip" install --quiet --upgrade pip
-"${STAGING}/venv/bin/pip" install --quiet -r "${STAGING}/requirements.txt"
-"${STAGING}/venv/bin/pip" install --quiet --no-deps "${STAGING}"
+# Le lockfile est la source de vérité; aucune résolution ni mise à niveau
+# implicite n'est autorisée pendant un build de release.
+UV_PROJECT_ENVIRONMENT="${STAGING}/venv" "${UV_BIN}" sync \
+  --frozen --no-dev --no-editable --python 3.12 --directory "${STAGING}"
 
 # Les scripts console d'un virtualenv contiennent un shebang absolu. Comme la
 # release est construite sous STAGING puis renommée atomiquement, ces shebangs
 # doivent viser TARGET avant le mv final.
-while IFS= read -r launcher; do
-  sed -i \
-    "1s|^#!${STAGING}/venv/bin/python|#!${TARGET}/venv/bin/python|" \
-    "${launcher}"
-done < <(
-  find "${STAGING}/venv/bin" -maxdepth 1 -type f \
-    -exec grep -Il "^#!${STAGING}/venv/bin/python" {} +
-)
-if grep -RIl "^#!${STAGING}/" "${STAGING}/venv/bin" | grep -q .; then
-  echo "Un lanceur de virtualenv référence encore le staging." >&2
-  exit 1
-fi
+"${STAGING}/venv/bin/python" "${STAGING}/scripts/relocate_venv_launchers.py" \
+  --venv "${STAGING}/venv" \
+  --old-prefix "${STAGING}" \
+  --new-prefix "${TARGET}"
 
 "${STAGING}/venv/bin/python" -m compileall -q "${STAGING}/src" "${STAGING}/dashboard"
+bash "${STAGING}/deploy/validate-release.sh" "${STAGING}" "${UV_BIN}"
 (
   cd "${STAGING}"
   "${STAGING}/venv/bin/python" -c \
     "import dashboard.app; from btcquant.config import load_config; load_config('environments/paper/config.yaml')"
 )
+"${STAGING}/venv/bin/python" "${STAGING}/scripts/create_release_manifest.py" \
+  --release "${STAGING}" \
+  --git-sha "${RELEASE_ID}" \
+  --git-tree "${GIT_TREE}" \
+  --origin "${ORIGIN}" \
+  --python-version "$(${STAGING}/venv/bin/python --version)" \
+  --uv-version "$("${UV_BIN}" --version)"
+
+if [ ! -f "${STAGING}/release-manifest.json" ]; then
+  echo "Manifeste de release absent après génération." >&2
+  exit 1
+fi
 
 # Le code reste détenu par root (release immuable), mais les services systemd
 # s'exécutent sous btcquant et doivent pouvoir traverser/lire la release.

@@ -90,8 +90,9 @@ def main(argv: list[str] | None = None) -> None:
     if not database.exists():
         notify("⚠ Watchdog : base btcquant.db introuvable — moteurs jamais démarrés ?")
         return
-    # Le watchdog écrit/actualise les incidents ; il peut donc aussi appliquer
-    # la migration de schéma avant les premiers runners après un déploiement.
+    # Le watchdog écrit/actualise les incidents. Il est donc un writer à
+    # arrêter avant toute sauvegarde ou migration de la base partagée; le code
+    # refuse désormais une migration implicite.
     store = StateStore(database)
     checks = (
         [("trend", args.max_age, args.service)]
