@@ -9,6 +9,17 @@ fi
 
 SOURCE="$(pwd -P)"
 ROOT=/opt/btcquant
+DEPLOY_REMOTE="${DEPLOY_REMOTE:-}"
+DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
+CANONICAL_REPOSITORY="${BTCQUANT_CANONICAL_REPOSITORY:-github.com/Julianos87/btc-quant.git}"
+# Optional SSH aliases must be explicitly mapped, e.g. github-backup=github.com.
+CANONICAL_REMOTE_ALIASES="${BTCQUANT_CANONICAL_REMOTE_ALIASES:-}"
+export BTCQUANT_CANONICAL_REMOTE_ALIASES="${CANONICAL_REMOTE_ALIASES}"
+
+if [ -z "${DEPLOY_REMOTE}" ] || [ -z "${DEPLOY_BRANCH}" ]; then
+  echo "Refus: DEPLOY_REMOTE et DEPLOY_BRANCH doivent être configurés." >&2
+  exit 1
+fi
 
 echo "── Dépendances système ──"
 apt-get update -y
@@ -36,15 +47,43 @@ chown root:btcquant "${ROOT}/.env"
 chmod 640 "${ROOT}/.env"
 
 echo "── Construction de la release ──"
-if git -C "${SOURCE}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  RELEASE_ID="$(git -C "${SOURCE}" rev-parse HEAD)"
-else
-  RELEASE_ID="$(date -u +%Y%m%d%H%M%S)"
-fi
+git -C "${SOURCE}" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+  echo "Refus: une source Git vérifiable est obligatoire." >&2
+  exit 1
+}
+[ -z "$(git -C "${SOURCE}" status --porcelain --untracked-files=all)" ] || {
+  echo "Refus: source Git dirty ou contenant un fichier non suivi." >&2
+  exit 1
+}
+RELEASE_ID="${BTCQUANT_TARGET_SHA:-$(git -C "${SOURCE}" rev-parse HEAD)}"
+[[ "${RELEASE_ID}" =~ ^[0-9a-f]{40}$ ]] || {
+  echo "Refus: SHA Git complet requis." >&2
+  exit 1
+}
+REMOTE_URL="$(git -C "${SOURCE}" remote get-url "${DEPLOY_REMOTE}" 2>/dev/null || true)"
+[ -n "${REMOTE_URL}" ] || {
+  echo "Refus: remote ${DEPLOY_REMOTE} absente." >&2
+  exit 1
+}
+PYTHONPATH="${SOURCE}/src" /usr/bin/python3 -c   "from btcquant.deployment import validate_canonical_repository; validate_canonical_repository('${REMOTE_URL}', '${CANONICAL_REPOSITORY}')"
+git -C "${SOURCE}" fetch "${DEPLOY_REMOTE}" --prune
+REMOTE_REF="${DEPLOY_REMOTE}/${DEPLOY_BRANCH}"
+[ "$(git -C "${SOURCE}" rev-parse "${REMOTE_REF}")" = "${RELEASE_ID}" ] || {
+  echo "Refus: la cible doit être exactement ${REMOTE_REF} canonique." >&2
+  exit 1
+}
+git -C "${SOURCE}" merge-base --is-ancestor "${RELEASE_ID}" "${REMOTE_REF}" || {
+  echo "Refus: SHA cible non atteignable depuis ${REMOTE_REF}." >&2
+  exit 1
+}
+command -v uv >/dev/null || {
+  echo "Refus: uv est requis pour un build --frozen." >&2
+  exit 1
+}
 TARGET="$(bash "${SOURCE}/deploy/create-release.sh" "${SOURCE}" "${RELEASE_ID}")"
+BTCQUANT_ROOT="${ROOT}" BTCQUANT_CURRENT="${TARGET}" bash "${TARGET}/deploy/preflight.sh"
 ln -sfn "${TARGET}" "${ROOT}/.current-next"
 mv -Tf "${ROOT}/.current-next" "${ROOT}/current"
-bash "${ROOT}/current/deploy/preflight.sh"
 
 echo "── Vérification et activation systemd ──"
 systemd-analyze verify "${ROOT}/current/deploy/"*.service \

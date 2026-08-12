@@ -20,7 +20,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .errors import AccountingIdentityCollision, InvalidOrderStateTransition, OrderIdentityCollision
+from .errors import (
+    AccountingIdentityCollision,
+    InvalidOrderStateTransition,
+    MigrationRequiredError,
+    OrderIdentityCollision,
+)
 from .order_state import ExternalOrderState, LocalOrderState, LogicalOrderIdentity
 
 SCHEMA_VERSION = 6
@@ -77,8 +82,15 @@ def database_path(state_path: str | Path) -> Path:
 
 
 class StateStore:
-    def __init__(self, path: str | Path, *, initialize: bool = True) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        initialize: bool = True,
+        allow_migration: bool = False,
+    ) -> None:
         self.path = Path(path)
+        self.allow_migration = allow_migration
         if initialize:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self._initialize()
@@ -107,6 +119,18 @@ class StateStore:
             connection.close()
 
     def _initialize(self) -> None:
+        existing_version, has_schema = self._existing_schema()
+        if (
+            has_schema
+            and (existing_version is None or existing_version < SCHEMA_VERSION)
+            and not self.allow_migration
+        ):
+            raise MigrationRequiredError(str(self.path), existing_version, SCHEMA_VERSION)
+        if existing_version is not None and existing_version > SCHEMA_VERSION:
+            raise RuntimeError(
+                f"Base SQLite version {existing_version} plus récente que le code "
+                f"(version {SCHEMA_VERSION})"
+            )
         with self._transaction() as connection:
             connection.executescript(
                 """
@@ -330,6 +354,31 @@ class StateStore:
             # certaines versions SQLite ; l'échec est sans impact fonctionnel.
         with self._connect() as connection:
             connection.execute("PRAGMA journal_mode = WAL")
+
+    def _existing_schema(self) -> tuple[int | None, bool]:
+        """Inspecte une base existante sans l'ouvrir en écriture."""
+
+        if not self.path.exists() or self.path.stat().st_size == 0:
+            return None, False
+        uri = f"file:{self.path.resolve()}?mode=ro"
+        try:
+            with sqlite3.connect(uri, uri=True) as connection:
+                tables = {
+                    str(row[0])
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )
+                }
+                if not tables:
+                    return None, False
+                row = connection.execute(
+                    "SELECT value FROM metadata WHERE key = 'schema_version'"
+                ).fetchone()
+                return (int(row[0]) if row is not None else None), True
+        except sqlite3.OperationalError as error:
+            if "no such table" in str(error).lower():
+                return None, True
+            raise
 
     @staticmethod
     def _ensure_order_safety_schema(connection: sqlite3.Connection) -> None:

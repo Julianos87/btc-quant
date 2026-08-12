@@ -104,7 +104,9 @@ def test_runtime_services_use_installed_entrypoints():
     assert "/venv/bin/btcquant-shadow " in shadow
     assert "EnvironmentFile=" not in shadow
     assert "HYPERLIQUID_PRIVATE_KEY" not in shadow
-    assert 'pip" install --quiet --no-deps "${STAGING}"' in release
+    assert "sync --frozen" in release
+    assert "release-manifest.json" in release
+    assert '[ "${#RELEASE_ID}" -ne 40 ]' in release
     assert 'chown -R root:btcquant "${STAGING}"' in release
     assert 'chown -R root:root "${STAGING}"' not in release
     assert '"1s|^#!${STAGING}/venv/bin/python|#!${TARGET}/venv/bin/python|"' in release
@@ -142,9 +144,16 @@ def test_watchdog_monitors_shadow_every_two_minutes():
 def test_update_has_atomic_activation_backup_healthcheck_and_rollback():
     script = (ROOT / "deploy" / "update.sh").read_text(encoding="utf-8")
 
-    assert 'sudo -u btcquant env BACKUP_ENCRYPTION_KEY="${BACKUP_ENCRYPTION_KEY}"' in script
-    assert 'cd "${CURRENT}"' in script
-    assert "./scripts/backup_state.sh" in script
+    assert "flock -n 9" in script
+    assert "--sha" in script
+    assert "DEPLOY_REMOTE" in script
+    assert "DEPLOY_BRANCH" in script
+    assert "--untracked-files=all" in script
+    assert "merge-base --is-ancestor" in script
+    assert "--migration" in script
+    assert "pre-migration-${TARGET_SHA}.db" in script
+    assert "migration_abort_on_error" in script
+    assert "MANUAL RECOVERY REQUIRED" in script
     assert "systemctl enable --now btcquant-compact.timer" in script
     assert "configure_pending_rebalance_timer" in script
     pending_timer = (ROOT / "deploy" / "btcquant-rebalance-pending.timer").read_text(
@@ -155,17 +164,17 @@ def test_update_has_atomic_activation_backup_healthcheck_and_rollback():
     )
     assert "OnCalendar=*-*-* 04:30:00 UTC" in pending_timer
     assert "--pending-only" in pending_service
-    assert 'mv -Tf "${ROOT}/.current-next" "${CURRENT}"' in script
+    assert "atomic_switch_release" in script
     assert "rollback_on_error" in script
+    assert "TARGET_WRITES_STARTED=true" in script
+    assert "restart_target_dashboard" in script
+    assert "stop_all_writer_processes" in script
     assert "http://127.0.0.1:8666/healthz" in script
     assert "wait_for_dashboard" in script
     assert "for attempt in {1..15}" in script
     assert "systemd-analyze verify" in script
     assert "configure_shadow_service" in script
     assert 'systemd-analyze verify "${CURRENT}/deploy/"*.service' in script
-    assert script.index('mv -Tf "${ROOT}/.current-next" "${CURRENT}"') < script.rindex(
-        'systemd-analyze verify "${CURRENT}/deploy/"*.service'
-    )
 
 
 def test_host_preflight_blocks_bad_clock_permissions_disk_and_database():

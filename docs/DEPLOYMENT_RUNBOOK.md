@@ -5,7 +5,7 @@ Hyperliquid**. Toute exécution mainnet reste verrouillée par la Safety Baselin
 
 ## Architecture des releases
 
-- `/opt/btcquant/releases/<commit>` : code et virtualenv immuables ;
+- `/opt/btcquant/releases/<FULL_GIT_SHA>` : code et virtualenv immuables ;
 - `/opt/btcquant/current` : lien atomique vers la release active ;
 - `/opt/btcquant/previous` : release de rollback ;
 - `/opt/btcquant/state`, `backups`, `data` et `.env` : données partagées,
@@ -66,25 +66,73 @@ d’ordres, positions, trades, événements et incidents avec
 `scripts/inspect_state.py`. Supprimer uniquement le répertoire temporaire
 explicitement créé après validation.
 
+## Migration SQLite explicite
+
+Un démarrage de service ne migre jamais une base ancienne. Le code v6 refuse une
+base v4/v5 tant qu'une migration explicite n'a pas été effectuée. Le numéro
+`app_schema_version` vient de `metadata.schema_version`; `PRAGMA schema_version`
+reste seulement un cookie interne SQLite et ne sert jamais de gate applicatif.
+
+Le chemin migration est distinct du code-only. Après acquisition du lock, la
+release cible est construite et validée, puis **tous** les writers et timers sont
+arrêtés et vérifiés : carry, trend, dashboard, watchdog, compact, backup,
+rebalance, shadow et testnet. Le script refuse tout état actif ou inconnu :
+
+```bash
+sudo systemctl stop btcquant-carry btcquant-trend btcquant-dashboard \
+  btcquant-watchdog btcquant-compact btcquant-backup \
+  btcquant-rebalance btcquant-rebalance-pending btcquant-shadow \
+  btcquant-hyperliquid-testnet btcquant-hyperliquid-watchdog \
+  btcquant-watchdog.timer btcquant-hyperliquid-watchdog.timer \
+  btcquant-compact.timer btcquant-backup.timer \
+  btcquant-rebalance.timer btcquant-rebalance-pending.timer
+sudo bash /opt/btcquant/current/deploy/update.sh \
+  --sha <FULL_GIT_SHA> --migration --engines
+```
+
+Le gate appelle SQLite pour consolider le WAL, crée ensuite le backup vérifié,
+puis exécute `python -m btcquant.entrypoints.migrate --confirm-migration`.
+La DB est revalidée avant le switch atomique. Après le switch, le démarrage du
+premier service du writer set — y compris le dashboard, qui reste writer-capable
+via son chemin readiness — franchit la frontière irréversible. Une panne avant
+ce démarrage peut restaurer ce backup vérifié puis repasser à l'ancien code. Dès
+que ce premier writer est démarré, même sans écriture métier observée, aucune
+restauration automatique ni démarrage de l'ancien binaire n'est permis :
+`MANUAL RECOVERY REQUIRED`.
+
+Le chemin code-only (`update.sh --sha ...`) refuse toute DB sous le schéma cible
+et ne touche pas à la DB; il peut donc faire un rollback de code automatique si
+le health check échoue. Une DB v6 ne doit jamais être utilisée avec un ancien
+binaire v5.
+
 ## Mise à jour
 
-La mise à jour standard ne redémarre que le dashboard :
+La mise à jour exige un SHA complet exactement égal à la branche canonique
+configurée (`DEPLOY_REMOTE`/`DEPLOY_BRANCH`, sans nom de remote implicite) et une
+URL correspondant à `BTCQUANT_CANONICAL_REPOSITORY`. Un clone dirty, un fichier
+non suivi pertinent ou une résolution de dépendances implicite sont bloquants :
 
 ```bash
-sudo bash /opt/btcquant/current/deploy/update.sh
+export DEPLOY_REMOTE=origin             # nom réel dans le clone de production
+export DEPLOY_BRANCH=main
+export BTCQUANT_CANONICAL_REPOSITORY=github.com/Julianos87/btc-quant.git
+# Requis uniquement si la remote utilise cet alias SSH local.
+export BTCQUANT_CANONICAL_REMOTE_ALIASES=github-backup=github.com
+sudo bash /opt/btcquant/current/deploy/update.sh --sha <FULL_GIT_SHA>
 ```
 
-Le redémarrage des moteurs doit être une décision explicite pendant une fenêtre
-de maintenance :
+Le redémarrage des moteurs est une décision distincte pendant une fenêtre de
+maintenance :
 
 ```bash
-sudo bash /opt/btcquant/current/deploy/update.sh --engines
+sudo bash /opt/btcquant/current/deploy/update.sh --sha <FULL_GIT_SHA> --engines
 ```
 
-La séquence est : pull fast-forward, refus d’un clone modifié, sauvegarde,
-construction isolée, compilation/import, validation systemd, bascule atomique,
-redémarrage, sonde HTTP. Toute erreur après la bascule restaure automatiquement
-la release précédente.
+La séquence code-only est : lock non bloquant, vérification Git canonique,
+staging, `uv sync --frozen`, tests et manifeste, preflight de schéma, switch
+atomique, redémarrage borné et health check. Toute erreur restaure `current` et
+`previous`. La séquence migration est celle décrite ci-dessus et ne restaure la
+DB automatiquement que tant que l'absence d'écriture cible est démontrée.
 
 ## Rollback
 
@@ -92,11 +140,10 @@ la release précédente.
 sudo bash /opt/btcquant/current/deploy/update.sh --rollback
 ```
 
-Le rollback manuel rebascule le code et redémarre le dashboard. Si les moteurs
-avaient été redémarrés pendant la release défectueuse, les arrêter puis vérifier
-l’état SQLite et les ordres avant de les relancer. Une migration SQLite est
-additive, mais un rollback de code ne constitue jamais à lui seul un rollback
-de données.
+Le rollback refuse une release sans manifeste ou un ancien code incompatible
+avec le schéma courant. Une migration SQLite n'est jamais annulée implicitement
+par un rollback de code : restaurer uniquement un backup vérifié et après
+quiescence des writers, sinon `MANUAL RECOVERY REQUIRED`.
 
 ## Go/no-go production paper
 
