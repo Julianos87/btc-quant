@@ -30,6 +30,7 @@ from btcquant.carry import (
     backtest_carry,
     elapsed_years_between,
     funding_event_id,
+    funding_slot,
 )
 from btcquant.execution.carry_runner import CarryRunner
 
@@ -61,16 +62,25 @@ class StubVenue:
         since: pd.Timestamp,
         until: pd.Timestamp | None = None,
     ) -> pd.Series:
-        index = self.funding.index[self.funding.index >= pd.Timestamp(since)]
+        index = pd.DatetimeIndex(
+            [
+                funding_slot(ts, interval=self.native_funding_interval) - pd.Timedelta(hours=1)
+                for ts in self.funding.index
+            ]
+        )
+        index = index[index >= pd.Timestamp(since)]
         if until is not None:
             index = index[index <= pd.Timestamp(until)]
         prices = pd.Series(100_000.0, index=index, dtype=float)
-        prices.attrs["source"] = "PAPER_RECENT_PRICE_APPROXIMATION"
+        prices.attrs["source"] = "HYPERLIQUID_PREVIOUS_1H_CLOSE_APPROXIMATION"
         return prices
 
 
 def _funding(n: int, rate: float, end: pd.Timestamp | None = None) -> pd.Series:
-    end = end or pd.Timestamp.now(tz="UTC").floor("h")
+    end = end or (
+        pd.Timestamp.now(tz="UTC").normalize()
+        + pd.Timedelta(hours=(pd.Timestamp.now(tz="UTC").hour // 8) * 8)
+    )
     index = pd.date_range(end=end, periods=n, freq="8h", tz="UTC")
     return pd.Series([rate] * n, index=index)
 
@@ -101,7 +111,7 @@ def _mark_open(runner: CarryRunner, checkpoint: pd.Timestamp) -> None:
     )
     runner.last_funding_ts = checkpoint
     runner.funding_notional_price = runner.entry_price
-    runner.funding_notional_price_source = "PAPER_RECENT_PRICE_APPROXIMATION"
+    runner.funding_notional_price_source = "HYPERLIQUID_PREVIOUS_1H_CLOSE_APPROXIMATION"
     runner.funding_notional_price_timestamp = checkpoint
     runner.last_funding_ts = checkpoint
 
@@ -200,7 +210,9 @@ def test_kill_switch_state_survives_a_restart(tmp_path):
 def test_funding_window_starts_at_the_checkpoint_after_a_long_outage(tmp_path):
     """Une fenêtre fixe de `smooth_days` perdait sans alerte tous les paiements
     d'un arrêt plus long qu'elle. Le runner doit repartir du checkpoint."""
-    now = pd.Timestamp.now(tz="UTC").floor("h")
+    now = pd.Timestamp.now(tz="UTC").normalize() + pd.Timedelta(
+        hours=(pd.Timestamp.now(tz="UTC").hour // 8) * 8
+    )
     funding = _funding(300, 0.0002, end=now)  # 100 jours
     runner = _runner(tmp_path, funding)
     outage_start = now - pd.Timedelta(days=60)
@@ -213,7 +225,9 @@ def test_funding_window_starts_at_the_checkpoint_after_a_long_outage(tmp_path):
 
 
 def test_no_payment_is_counted_twice_across_ticks(tmp_path):
-    now = pd.Timestamp.now(tz="UTC").floor("h")
+    now = pd.Timestamp.now(tz="UTC").normalize() + pd.Timedelta(
+        hours=(pd.Timestamp.now(tz="UTC").hour // 8) * 8
+    )
     runner = _runner(tmp_path, _funding(90, 0.0002, end=now), smooth_days=1)
     runner._tick()
     equity_after_entry = runner.equity
@@ -224,7 +238,9 @@ def test_no_payment_is_counted_twice_across_ticks(tmp_path):
 
 
 def test_backlog_is_credited_once_when_the_engine_restarts_in_position(tmp_path):
-    now = pd.Timestamp.now(tz="UTC").floor("h")
+    now = pd.Timestamp.now(tz="UTC").normalize() + pd.Timedelta(
+        hours=(pd.Timestamp.now(tz="UTC").hour // 8) * 8
+    )
     rate = 0.0002
     funding = _funding(90, rate, end=now)
     runner = _runner(tmp_path, funding, smooth_days=1)

@@ -21,6 +21,8 @@ from btcquant.carry import (  # noqa: E402
     elapsed_years_between,
     funding_event_gaps,
     funding_event_id,
+    funding_notional_prices_asof,
+    funding_slot,
     normalize_funding_events,
     smooth_funding_events,
 )
@@ -47,11 +49,17 @@ class _Venue:
         since: pd.Timestamp,
         until: pd.Timestamp | None = None,
     ) -> pd.Series:
-        index = self.funding.index[self.funding.index >= pd.Timestamp(since)]
+        index = pd.DatetimeIndex(
+            [
+                funding_slot(ts, interval=self.native_funding_interval) - pd.Timedelta(hours=1)
+                for ts in self.funding.index
+            ]
+        )
+        index = index[index >= pd.Timestamp(since)]
         if until is not None:
             index = index[index <= pd.Timestamp(until)]
         prices = pd.Series(100_000.0, index=index, dtype=float)
-        prices.attrs["source"] = "PAPER_RECENT_PRICE_APPROXIMATION"
+        prices.attrs["source"] = "HYPERLIQUID_PREVIOUS_1H_CLOSE_APPROXIMATION"
         return prices
 
 
@@ -76,7 +84,7 @@ def _mark_open(runner: CarryRunner, checkpoint: pd.Timestamp) -> None:
     )
     runner.last_funding_ts = checkpoint
     runner.funding_notional_price = runner.entry_price
-    runner.funding_notional_price_source = "PAPER_RECENT_PRICE_APPROXIMATION"
+    runner.funding_notional_price_source = "HYPERLIQUID_PREVIOUS_1H_CLOSE_APPROXIMATION"
     runner.funding_notional_price_timestamp = checkpoint
     runner.last_funding_ts = checkpoint
 
@@ -371,8 +379,8 @@ def test_runner_does_not_releverage_when_equity_changes_mid_position(tmp_path: P
     assert [row["funding_notional"] for row in ledger] == [100_000.0, 100_000.0]
     assert [row["funding_notional_price"] for row in ledger] == [100_000.0, 100_000.0]
     assert [row["funding_notional_price_source"] for row in ledger] == [
-        "PAPER_RECENT_PRICE_APPROXIMATION",
-        "PAPER_RECENT_PRICE_APPROXIMATION",
+        "HYPERLIQUID_PREVIOUS_1H_CLOSE_APPROXIMATION",
+        "HYPERLIQUID_PREVIOUS_1H_CLOSE_APPROXIMATION",
     ]
     assert [row["borrow_principal"] for row in ledger] == [20_000.0, 20_000.0]
     expected_borrow = 20_000.0 * 0.10 * 3_600.0 / SECONDS_PER_YEAR
@@ -390,7 +398,7 @@ def test_paper_open_and_close_costs_use_actual_execution_notionals(tmp_path: Pat
     runner._open_position(
         0.0,
         100_000.0,
-        "PAPER_RECENT_PRICE_APPROXIMATION",
+        "HYPERLIQUID_PREVIOUS_1H_CLOSE_APPROXIMATION",
         funding.index[0],
     )
     open_notional = runner.perp_qty * 100_000.0
@@ -401,7 +409,7 @@ def test_paper_open_and_close_costs_use_actual_execution_notionals(tmp_path: Pat
         0.0,
         reason="test",
         exit_price=120_000.0,
-        price_source="PAPER_RECENT_PRICE_APPROXIMATION",
+        price_source="HYPERLIQUID_PREVIOUS_1H_CLOSE_APPROXIMATION",
         price_timestamp=funding.index[1],
     )
     close_notional = (runner.policy.capital * runner.leverage / 100_000.0) * 120_000.0
@@ -433,14 +441,14 @@ def test_backtest_funding_notional_uses_fixed_entry_quantity_and_price() -> None
         funding_notional_price=prices,
     )
     entry_timestamp = pd.Timestamp(result["entry_timestamps"][0])
-    entry_price = float(prices.loc[entry_timestamp])
+    asof_prices = prices.reindex(funding.index - pd.Timedelta(hours=1))
+    asof_prices.index = funding.index
+    entry_price = float(asof_prices.loc[entry_timestamp])
     entry_qty = 1_000.0 * 2.0 / entry_price
-    expected = float(
-        (entry_qty * prices.loc[entry_timestamp + pd.Timedelta(hours=1) :] * 0.0001).sum()
-    )
+    expected = float((entry_qty * asof_prices.loc[funding.index[25:]] * 0.0001).sum())
     assert entry_timestamp == funding.index[24]
     assert result["funding_notional_mode"] == "perp_qty_times_price"
-    assert result["funding_notional_price_source"] == "OHLC_APPROXIMATION"
+    assert result["funding_notional_price_source"] == "HYPERLIQUID_PREVIOUS_1H_CLOSE_APPROXIMATION"
     assert result["basis_mode"] == "synthetic_zero"
     assert result["funding_pnl"] == pytest.approx(expected)
 
@@ -478,3 +486,99 @@ def test_backtest_entry_and_exit_follow_funding_event_timeline() -> None:
     assert borrow_amounts.iloc[3] == 0.0
     assert fee_amounts.iloc[0] == pytest.approx(2.0 * 0.001 * 2_000.0)
     assert fee_amounts.iloc[2] == pytest.approx(2.0 * 0.001 * 2_400.0)
+
+
+@pytest.mark.parametrize("jitter_seconds", [0.261, 0.999])
+def test_funding_price_asof_uses_previous_completed_candle_for_jittered_event(
+    jitter_seconds: float,
+) -> None:
+    candle_index = pd.date_range("2030-01-01T11:00:00Z", periods=3, freq="h")
+    candles = pd.Series([111.0, 999_999.0, 113.0], index=candle_index)
+    funding = pd.Series(
+        [0.001], index=pd.DatetimeIndex([f"2030-01-01T12:00:{jitter_seconds:05.3f}Z"])
+    )
+
+    prices, provenance = funding_notional_prices_asof(funding, candles)
+
+    assert prices.iloc[0] == 111.0
+    assert provenance.iloc[0] == candle_index[0]
+    assert prices.attrs["source"] == "HYPERLIQUID_PREVIOUS_1H_CLOSE_APPROXIMATION"
+
+
+def test_runner_price_context_aligns_request_before_jittered_funding(tmp_path: Path) -> None:
+    funding = pd.Series([0.001], index=pd.DatetimeIndex(["2030-01-01T12:00:00.261Z"]))
+    candles = pd.Series(
+        [111.0, 999_999.0, 113.0],
+        index=pd.date_range("2030-01-01T11:00:00Z", periods=3, freq="h"),
+    )
+    candles.attrs["source"] = "HYPERLIQUID_PREVIOUS_1H_CLOSE_APPROXIMATION"
+    runner = _runner(tmp_path, funding)
+    requests: list[tuple[pd.Timestamp, pd.Timestamp | None]] = []
+
+    def provider(since: pd.Timestamp, until: pd.Timestamp | None = None) -> pd.Series:
+        requests.append((pd.Timestamp(since), until))
+        return candles
+
+    runner.venue.funding_notional_prices_since = provider
+    prices, provenance, source = runner._funding_price_context(funding)
+
+    assert prices.iloc[0] == 111.0
+    assert provenance.iloc[0] == pd.Timestamp("2030-01-01T11:00:00Z")
+    assert source == "HYPERLIQUID_PREVIOUS_1H_CLOSE_APPROXIMATION"
+    assert requests[0][0] == pd.Timestamp("2030-01-01T11:00:00Z")
+
+
+def test_funding_price_asof_rejects_jitter_over_one_second() -> None:
+    candles = pd.Series(111.0, index=pd.date_range("2030-01-01T11:00:00Z", periods=2, freq="h"))
+    funding = pd.Series([0.001], index=pd.DatetimeIndex(["2030-01-01T12:00:01.001Z"]))
+
+    with pytest.raises(ValueError, match="jitter exceeds"):
+        funding_notional_prices_asof(funding, candles)
+
+
+def test_funding_price_asof_is_not_lookahead_biased() -> None:
+    candle_index = pd.date_range("2030-01-01T11:00:00Z", periods=3, freq="h")
+    funding = pd.Series([0.001], index=pd.DatetimeIndex(["2030-01-01T12:00:00.261Z"]))
+    normal = pd.Series([111.0, 222.0, 113.0], index=candle_index)
+    hostile = normal.copy()
+    hostile.iloc[1] = 10_000_000.0
+
+    normal_price, _ = funding_notional_prices_asof(funding, normal)
+    hostile_price, _ = funding_notional_prices_asof(funding, hostile)
+
+    assert normal_price.iloc[0] == hostile_price.iloc[0] == 111.0
+
+
+def test_funding_price_asof_prefix_invariance() -> None:
+    funding_index = pd.date_range("2030-01-01T00:00:00Z", periods=36, freq="h")
+    funding = pd.Series(0.001, index=funding_index)
+    candle_index = pd.date_range(funding_index[0] - pd.Timedelta(hours=1), periods=37, freq="h")
+    candles = pd.Series(100.0 + candle_index.hour.to_numpy(), index=candle_index)
+    cutoff = funding_index[30]
+
+    prefix = backtest_carry(
+        funding.loc[:cutoff],
+        enter_ann=-1.0,
+        exit_ann=-2.0,
+        smooth_days=1,
+        funding_interval="1h",
+        initial_capital=1_000.0,
+        fee_rate=0.0,
+        slippage_bps=0.0,
+        borrow_rate_ann=0.0,
+        funding_notional_price=candles.loc[:cutoff],
+    )
+    full = backtest_carry(
+        funding,
+        enter_ann=-1.0,
+        exit_ann=-2.0,
+        smooth_days=1,
+        funding_interval="1h",
+        initial_capital=1_000.0,
+        fee_rate=0.0,
+        slippage_bps=0.0,
+        borrow_rate_ann=0.0,
+        funding_notional_price=candles,
+    )
+
+    pd.testing.assert_series_equal(prefix["equity"], full["equity"].loc[:cutoff])

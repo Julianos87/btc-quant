@@ -44,6 +44,9 @@ PAYMENTS_PER_YEAR = PAYMENTS_PER_DAY * 365
 SECONDS_PER_YEAR = 365.25 * 24.0 * 60.0 * 60.0
 BINANCE_USDM_FUNDING_FREQUENCY = pd.Timedelta("8h")
 BINANCE_USDM_FUNDING_JITTER = pd.Timedelta(seconds=1)
+FUNDING_PRICE_ASOF_INTERVAL = pd.Timedelta("1h")
+FUNDING_PRICE_ASOF_TOLERANCE = pd.Timedelta(seconds=1)
+FUNDING_PRICE_ASOF_SOURCE = "HYPERLIQUID_PREVIOUS_1H_CLOSE_APPROXIMATION"
 
 
 @dataclass(frozen=True)
@@ -112,6 +115,77 @@ def funding_event_id(
     ts = pd.Timestamp(timestamp)
     ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
     return f"{venue.lower()}|{instrument}|{ts.isoformat()}"
+
+
+def funding_slot(
+    timestamp: pd.Timestamp,
+    *,
+    interval: str | pd.Timedelta = FUNDING_PRICE_ASOF_INTERVAL,
+    tolerance: pd.Timedelta = FUNDING_PRICE_ASOF_TOLERANCE,
+) -> pd.Timestamp:
+    """Return the nominal UTC funding slot without changing the raw timestamp."""
+
+    value = pd.Timestamp(timestamp)
+    if value.tzinfo is None:
+        raise ValueError("funding timestamp must be timezone-aware")
+    value = value.tz_convert("UTC")
+    interval_ns = pd.Timedelta(interval).value
+    if interval_ns <= 0:
+        raise ValueError("funding interval must be strictly positive")
+    epoch_ns = pd.Timestamp("1970-01-01T00:00:00Z").value
+    timestamp_ns = value.value
+    slot_ns = epoch_ns + round((timestamp_ns - epoch_ns) / interval_ns) * interval_ns
+    jitter = abs(timestamp_ns - slot_ns)
+    if jitter > pd.Timedelta(tolerance).value:
+        raise ValueError(
+            f"funding timestamp jitter exceeds {pd.Timedelta(tolerance).total_seconds():g}s"
+        )
+    return pd.Timestamp(slot_ns, unit="ns", tz="UTC")
+
+
+def funding_notional_prices_asof(
+    funding: pd.Series,
+    candle_closes: pd.Series,
+    *,
+    funding_interval: str | pd.Timedelta | None = None,
+    tolerance: pd.Timedelta = FUNDING_PRICE_ASOF_TOLERANCE,
+) -> tuple[pd.Series, pd.Series]:
+    """Resolve funding prices from the previous completed candle only.
+
+    Candle indexes are their opening timestamps. For a funding event in slot t,
+    the selected value is the close of the candle opened at t-1h. This keeps
+    the funding timestamp raw while making the price provenance explicitly
+    as-of and prevents the close of the current, still-forming candle from
+    leaking into the calculation.
+    """
+
+    events = normalize_funding_events(funding, context="funding price events")
+    raw_index = pd.DatetimeIndex(candle_closes.index)
+    if raw_index.tz is None:
+        raise ValueError("funding price candles: index sans fuseau UTC")
+    price_index = raw_index.tz_convert("UTC")
+    if price_index.has_duplicates or not price_index.is_monotonic_increasing:
+        raise ValueError("funding price candles must be unique and ordered")
+    prices = pd.to_numeric(candle_closes, errors="raise").astype(float)
+    prices.index = price_index
+    if prices.isna().any() or not np.isfinite(prices.to_numpy()).all() or (prices <= 0).any():
+        raise ValueError("funding price candles must be finite and strictly positive")
+    interval = pd.Timedelta(funding_interval or FUNDING_PRICE_ASOF_INTERVAL)
+    if interval <= pd.Timedelta(0):
+        raise ValueError("funding price interval must be strictly positive")
+
+    resolved = pd.Series(np.nan, index=events.index, dtype=float)
+    provenance = pd.Series(pd.NaT, index=events.index, dtype="datetime64[ns, UTC]")
+    for event_timestamp in events.index:
+        slot = funding_slot(
+            event_timestamp, interval=funding_interval or pd.Timedelta("1h"), tolerance=tolerance
+        )
+        completed_open = slot - FUNDING_PRICE_ASOF_INTERVAL
+        if completed_open in prices.index:
+            resolved.loc[event_timestamp] = float(prices.loc[completed_open])
+            provenance.loc[event_timestamp] = completed_open
+    resolved.attrs["source"] = FUNDING_PRICE_ASOF_SOURCE
+    return resolved, provenance
 
 
 def elapsed_years_between(start: pd.Timestamp, end: pd.Timestamp) -> float:
@@ -662,12 +736,23 @@ def _carry_fixed_position_amounts(
         dt_seconds.iloc[1:] = index.to_series().diff().dt.total_seconds().iloc[1:].to_numpy()
     dt_years = dt_seconds / SECONDS_PER_YEAR
     prices = (
-        _aligned_series("funding_notional_price", funding_notional_price, index)
+        funding_notional_price.astype(float).reindex(index)
         if funding_notional_price is not None
         else None
     )
-    if prices is not None and (prices <= 0).any():
-        raise ValueError("funding_notional_price doit être strictement positif")
+    if prices is not None and (prices.dropna() < 0).any():
+        raise ValueError("funding_notional_price doit être positif ou absent")
+    if prices is not None and not np.isfinite(prices.dropna().to_numpy()).all():
+        raise ValueError("funding_notional_price doit être fini ou absent")
+
+    def price_at(timestamp: pd.Timestamp) -> float | None:
+        if prices is None:
+            return None
+        value = float(prices.loc[timestamp])
+        if not np.isfinite(value) or value <= 0:
+            raise ValueError(f"funding_notional_price indisponible as-of {timestamp.isoformat()}")
+        return value
+
     notional_mode = "perp_qty_times_price" if prices is not None else "fixed_entry_notional"
     funding_amounts = pd.Series(0.0, index=index)
     borrow_amounts = pd.Series(0.0, index=index)
@@ -688,9 +773,12 @@ def _carry_fixed_position_amounts(
         exposed = bool(exposure_state.loc[timestamp])
         opened = decision_active and not previous_decision
         closed = not decision_active and previous_decision
+        event_price = (
+            price_at(timestamp) if prices is not None and (exposed or opened or closed) else None
+        )
         current_notional = (
-            abs(perp_qty * float(prices.loc[timestamp]))
-            if exposed and prices is not None
+            abs(perp_qty * event_price)
+            if exposed and event_price is not None
             else entry_notional
             if exposed
             else 0.0
@@ -715,16 +803,14 @@ def _carry_fixed_position_amounts(
             entry_timestamps.append(timestamp)
             entry_notional = max(0.0, equity_after_event) * leverage
             borrow_principal = max(0.0, equity_after_event) * max(0.0, leverage - 1.0)
-            if prices is not None:
-                perp_qty = entry_notional / float(prices.loc[timestamp])
+            if event_price is not None:
+                perp_qty = entry_notional / event_price
             fee_amounts.loc[timestamp] = 2.0 * fee_rate * entry_notional
             slippage_amounts.loc[timestamp] = 2.0 * slippage_bps / 10_000.0 * entry_notional
         elif closed:
             exit_timestamps.append(timestamp)
             close_notional = (
-                abs(perp_qty * float(prices.loc[timestamp]))
-                if prices is not None
-                else entry_notional
+                abs(perp_qty * event_price) if event_price is not None else entry_notional
             )
             fee_amounts.loc[timestamp] = 2.0 * fee_rate * close_notional
             slippage_amounts.loc[timestamp] = 2.0 * slippage_bps / 10_000.0 * close_notional
@@ -856,6 +942,20 @@ def backtest_carry(
         funding_interval=funding_interval,
     )
 
+    raw_price_candles = funding_notional_price
+    resolved_funding_price = None
+    funding_price_timestamps = None
+    resolved_funding_price_source = "fixed_entry_notional"
+    if raw_price_candles is not None:
+        resolved_funding_price, funding_price_timestamps = funding_notional_prices_asof(
+            funding,
+            raw_price_candles,
+            funding_interval=funding_interval or FUNDING_PRICE_ASOF_INTERVAL,
+        )
+        resolved_funding_price_source = str(
+            resolved_funding_price.attrs.get("source", FUNDING_PRICE_ASOF_SOURCE)
+        )
+
     (
         pnl,
         funding_amounts,
@@ -877,9 +977,7 @@ def backtest_carry(
         slippage_bps=slippage_bps,
         borrow_rates=borrow_rates,
         basis_return=basis_return,
-        funding_notional_price=(
-            funding_notional_price if funding_notional_price is not None else perp_price
-        ),
+        funding_notional_price=resolved_funding_price,
     )
     pnl, equity, exposure_state, liquidated, liquidation_ts = _apply_carry_liquidation(
         pnl.copy(),
@@ -938,13 +1036,8 @@ def backtest_carry(
         "borrow_rate_ann_mean": float(borrow_rates.mean()),
         "basis_mode": basis_mode,
         "funding_notional_mode": funding_notional_mode,
-        "funding_notional_price_source": (
-            funding_notional_price_source
-            if funding_notional_price is not None
-            else "perp_price"
-            if perp_price is not None
-            else "fixed_entry_notional"
-        ),
+        "funding_notional_price_source": resolved_funding_price_source,
+        "funding_notional_price_timestamps": funding_price_timestamps,
         "decision_state": decision_state,
         "exposure_state": exposure_state,
         "entry_timestamps": [timestamp.isoformat() for timestamp in entry_timestamps],

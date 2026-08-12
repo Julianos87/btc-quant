@@ -33,6 +33,10 @@ from ..carry import (
     elapsed_years_between,
     funding_event_gaps,
     funding_event_id,
+    funding_notional_prices_asof,
+    funding_slot,
+    FUNDING_PRICE_ASOF_INTERVAL,
+    FUNDING_PRICE_ASOF_SOURCE,
     normalize_funding_events,
     smooth_funding_events,
 )
@@ -350,24 +354,23 @@ class CarryRunner:
         since: pd.Timestamp,
         until: pd.Timestamp | None = None,
     ) -> pd.Series:
-        """Fetch historical OHLC closes without using the current ticker."""
+        """Fetch completed 1h candle closes far enough before the funding slot for as-of pricing."""
         start = pd.Timestamp(since)
         start = start.tz_localize("UTC") if start.tzinfo is None else start.tz_convert("UTC")
         end = None if until is None else pd.Timestamp(until)
         if end is not None:
             end = end.tz_localize("UTC") if end.tzinfo is None else end.tz_convert("UTC")
+        price_start = start
+        price_end = end
         exchange = getattr(self.venue, "exchange", None)
         fetch = getattr(exchange, "fetch_ohlcv", None)
         if not callable(fetch):
             raise ValueError("PRICE_HISTORY_UNAVAILABLE")
         retry = getattr(self.venue, "_retry", None)
-        cursor_ms = int(start.timestamp() * 1000)
+        cursor_ms = int(price_start.timestamp() * 1000)
         prices: dict[int, float] = {}
         while True:
-            kwargs = {
-                "since": cursor_ms,
-                "limit": FUNDING_PRICE_PAGE_LIMIT,
-            }
+            kwargs = {"since": cursor_ms, "limit": FUNDING_PRICE_PAGE_LIMIT}
             rows = (
                 fetch(self.symbol, "1h", **kwargs)
                 if retry is None
@@ -379,14 +382,14 @@ class CarryRunner:
             for row in rows:
                 timestamp_ms = int(row[0])
                 timestamp = pd.Timestamp(timestamp_ms, unit="ms", tz="UTC")
-                if timestamp >= start and (end is None or timestamp <= end):
+                if timestamp >= price_start and (price_end is None or timestamp <= price_end):
                     close = float(row[4])
                     if not pd.notna(close) or close <= 0:
                         raise ValueError("Prix OHLC funding invalide")
                     prices[timestamp_ms] = close
             next_cursor_ms = latest_ms + 1
             if next_cursor_ms <= cursor_ms or (
-                end is not None and latest_ms >= int(end.timestamp() * 1000)
+                price_end is not None and latest_ms >= int(price_end.timestamp() * 1000)
             ):
                 break
             cursor_ms = next_cursor_ms
@@ -398,55 +401,35 @@ class CarryRunner:
             ),
             dtype=float,
         )
-        result.attrs["source"] = "PAPER_RECENT_PRICE_APPROXIMATION"
+        result.attrs["source"] = FUNDING_PRICE_ASOF_SOURCE
         return result
 
     def _funding_price_context(
         self,
         events: pd.Series,
     ) -> tuple[pd.Series, pd.Series, str]:
-        """Resolve chaque événement vers un prix historique observable.
-
-        L'absence de série historique est une incertitude comptable : le prix
-        courant ne peut jamais être utilisé pour revaloriser un backlog.
-        """
+        """Resolve funding events to the previous completed 1h close."""
+        native_interval = self._native_funding_interval() or FUNDING_PRICE_ASOF_INTERVAL
         provider = getattr(self.venue, "funding_notional_prices_since", None)
         if not callable(provider):
             provider = self._funding_notional_prices_from_exchange
-        raw = provider(events.index[0], events.index[-1])
-        prices = pd.Series(raw, dtype=float)
-        index = pd.DatetimeIndex(prices.index)
-        if index.tz is None:
-            raise ValueError("PRICE_HISTORY_NAIVE_TIMESTAMP")
-        index = index.tz_convert("UTC")
-        prices.index = index
-        if prices.empty or index.has_duplicates or not index.is_monotonic_increasing:
-            raise ValueError("PRICE_HISTORY_INVALID")
-        if prices.isna().any() or not pd.Series(prices).map(pd.api.types.is_number).all():
-            raise ValueError("PRICE_HISTORY_INVALID")
-        if (prices <= 0).any():
-            raise ValueError("PRICE_HISTORY_INVALID")
-        positions = index.get_indexer(
-            pd.DatetimeIndex(events.index),
-            method="nearest",
-            tolerance=pd.Timedelta(seconds=1),
+        start = funding_slot(events.index[0], interval=native_interval)
+        end = funding_slot(events.index[-1], interval=native_interval)
+        raw = provider(
+            start - FUNDING_PRICE_ASOF_INTERVAL,
+            end - FUNDING_PRICE_ASOF_INTERVAL,
         )
-        if (positions < 0).any():
+        prices, provenance = funding_notional_prices_asof(
+            events,
+            pd.Series(raw, dtype=float),
+            funding_interval=native_interval,
+        )
+        if prices.isna().any() or provenance.isna().any():
             raise ValueError("PRICE_HISTORY_GAP")
-        event_prices = pd.Series(
-            prices.to_numpy()[positions],
-            index=events.index,
-            dtype=float,
-        )
-        event_timestamps = pd.Series(
-            [index[int(position)] for position in positions],
-            index=events.index,
-            dtype="datetime64[ns, UTC]",
-        )
         source = str(getattr(raw, "attrs", {}).get("source", "UNKNOWN"))
         if source == "UNKNOWN":
             raise ValueError("PRICE_HISTORY_SOURCE_UNKNOWN")
-        return event_prices, event_timestamps, source
+        return prices, provenance, source
 
     def _apply_funding_atomic(self, funding: pd.Series) -> None:
         """Applique les événements et leur checkpoint dans une transaction unique."""
@@ -669,10 +652,11 @@ class CarryRunner:
         entry_price: float | None,
         price_source: str,
         price_timestamp: pd.Timestamp,
+        event_timestamp: pd.Timestamp | None = None,
     ) -> None:
         previous_checkpoint = self.last_funding_ts
         entry_equity = self.equity
-        entry_timestamp = pd.Timestamp(price_timestamp)
+        entry_timestamp = pd.Timestamp(event_timestamp or price_timestamp)
         if self.live_broker is None and (entry_price is None or entry_price <= 0):
             raise ValueError("entry_price doit être strictement positif")
         entry_notional = entry_equity * self.leverage
@@ -1010,6 +994,7 @@ class CarryRunner:
                     action_price,
                     action_source,
                     action_price_timestamp,
+                    event_timestamp=pd.Timestamp(funding.index[-1]),
                 )
             else:
                 self._close_position(

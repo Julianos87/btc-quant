@@ -197,6 +197,7 @@ def test_observed_basis_changes_carry_pnl():
         exit_ann=-1.0,
         spot_price=spot,
         perp_price=perp,
+        funding_notional_price=pd.Series(perp.to_numpy(), index=perp.index - pd.Timedelta(hours=1)),
         smooth_days=1,
     )
 
@@ -230,6 +231,7 @@ def test_adverse_basis_can_trigger_maintenance_liquidation():
         exit_ann=-1.0,
         spot_price=spot,
         perp_price=perp,
+        funding_notional_price=pd.Series(perp.to_numpy(), index=perp.index - pd.Timedelta(hours=1)),
         collateral_haircut=0.05,
         maintenance_margin_rate=0.05,
         liquidation_fee_rate=0.005,
@@ -248,5 +250,8 @@ def test_real_market_inputs_are_explicitly_qualified():
         borrow_rate_ann_series=rates,
         spot_price=prices,
         perp_price=prices,
+        funding_notional_price=pd.Series(
+            prices.to_numpy(), index=prices.index - pd.Timedelta(hours=1)
+        ),
     )
     assert result["real_market_inputs_complete"] is True
