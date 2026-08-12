@@ -20,10 +20,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .errors import InvalidOrderStateTransition, OrderIdentityCollision
+from .errors import AccountingIdentityCollision, InvalidOrderStateTransition, OrderIdentityCollision
 from .order_state import ExternalOrderState, LocalOrderState, LogicalOrderIdentity
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 DEPOSIT_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}")
 
 
@@ -315,7 +315,13 @@ class StateStore:
                 if current_version < 4:
                     current_version = 4
             self._ensure_order_safety_schema(connection)
-            current_version = SCHEMA_VERSION
+            if current_version < 5:
+                current_version = 5
+            if current_version < 6:
+                self._migrate_v6(connection)
+                current_version = 6
+            else:
+                self._ensure_funding_accounting_schema(connection)
             connection.execute(
                 "UPDATE metadata SET value = ? WHERE key = 'schema_version'",
                 (str(current_version),),
@@ -447,6 +453,82 @@ class StateStore:
                 "Migration v5 refusée : idx_orders_logical_order_key existe "
                 "sans garantir l'unicité partielle attendue"
             )
+
+    @staticmethod
+    def _ensure_funding_accounting_schema(connection: sqlite3.Connection) -> None:
+        """Crée le journal v6 sans réécriture des tables existantes."""
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS funding_ledger (
+                event_key TEXT PRIMARY KEY,
+                venue TEXT NOT NULL,
+                instrument TEXT NOT NULL,
+                funding_timestamp TEXT NOT NULL,
+                native_funding_rate REAL NOT NULL,
+                position_generation TEXT NOT NULL,
+                funding_notional REAL NOT NULL CHECK(funding_notional >= 0),
+                funding_notional_price REAL,
+                funding_notional_price_source TEXT,
+                funding_notional_price_timestamp TEXT,
+                funding_pnl REAL NOT NULL,
+                borrow_principal REAL NOT NULL CHECK(borrow_principal >= 0),
+                borrow_rate_ann REAL NOT NULL CHECK(borrow_rate_ann >= 0),
+                borrow_dt_seconds REAL NOT NULL CHECK(borrow_dt_seconds >= 0),
+                borrow_cost REAL NOT NULL CHECK(borrow_cost >= 0),
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        columns = {
+            item["name"]
+            for item in connection.execute("PRAGMA table_info(funding_ledger)").fetchall()
+        }
+        for name, definition in (
+            ("funding_notional_price", "REAL"),
+            ("funding_notional_price_source", "TEXT"),
+            ("funding_notional_price_timestamp", "TEXT"),
+        ):
+            if name not in columns:
+                connection.execute(f"ALTER TABLE funding_ledger ADD COLUMN {name} {definition}")
+        columns = {
+            item["name"]
+            for item in connection.execute("PRAGMA table_info(funding_ledger)").fetchall()
+        }
+        required = {
+            "event_key",
+            "venue",
+            "instrument",
+            "funding_timestamp",
+            "native_funding_rate",
+            "position_generation",
+            "funding_notional",
+            "funding_notional_price",
+            "funding_notional_price_source",
+            "funding_notional_price_timestamp",
+            "funding_pnl",
+            "borrow_principal",
+            "borrow_rate_ann",
+            "borrow_dt_seconds",
+            "borrow_cost",
+            "applied_at",
+        }
+        columns = {
+            item["name"]
+            for item in connection.execute("PRAGMA table_info(funding_ledger)").fetchall()
+        }
+        if not required <= columns:
+            raise RuntimeError(f"Migration v6 incomplète : {sorted(required - columns)}")
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_funding_ledger_instrument_ts
+            ON funding_ledger(venue, instrument, funding_timestamp)
+            """
+        )
+
+    @classmethod
+    def _migrate_v6(cls, connection: sqlite3.Connection) -> None:
+        """Migration additive, idempotente, de v5 vers le ledger funding v6."""
+        cls._ensure_funding_accounting_schema(connection)
 
     @staticmethod
     def _json(payload: Any) -> str:
@@ -741,6 +823,8 @@ class StateStore:
         *,
         event_type: str = "checkpoint",
         event_payload: dict[str, Any] | None = None,
+        event_aggregate_type: str | None = None,
+        event_aggregate_id: str | None = None,
     ) -> None:
         now = utc_now()
         with self._transaction() as connection:
@@ -758,9 +842,181 @@ class StateStore:
                 engine,
                 event_type,
                 self._state_event(payload, event_payload),
-                aggregate_type="engine",
-                aggregate_id=engine,
+                aggregate_type=event_aggregate_type or "engine",
+                aggregate_id=event_aggregate_id or engine,
             )
+
+    def _insert_funding_ledger(
+        self,
+        connection: sqlite3.Connection,
+        ledger: Mapping[str, Any],
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO funding_ledger(
+                event_key, venue, instrument, funding_timestamp,
+                native_funding_rate, position_generation, funding_notional,
+                funding_notional_price, funding_notional_price_source,
+                funding_notional_price_timestamp,
+                funding_pnl, borrow_principal, borrow_rate_ann,
+                borrow_dt_seconds, borrow_cost, applied_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ledger["event_key"],
+                ledger["venue"],
+                ledger["instrument"],
+                ledger["funding_timestamp"],
+                ledger["native_funding_rate"],
+                ledger["position_generation"],
+                ledger["funding_notional"],
+                ledger["funding_notional_price"],
+                ledger["funding_notional_price_source"],
+                ledger["funding_notional_price_timestamp"],
+                ledger["funding_pnl"],
+                ledger["borrow_principal"],
+                ledger["borrow_rate_ann"],
+                ledger["borrow_dt_seconds"],
+                ledger["borrow_cost"],
+                ledger["applied_at"],
+            ),
+        )
+
+    def read_funding_ledger(self) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM funding_ledger ORDER BY funding_timestamp"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def apply_carry_accounting_event_and_checkpoint(
+        self,
+        ledger: Mapping[str, Any],
+        state: Mapping[str, Any],
+        *,
+        event_payload: dict[str, Any] | None = None,
+        engine: str = "carry",
+    ) -> str:
+        required = {
+            "event_key",
+            "venue",
+            "instrument",
+            "funding_timestamp",
+            "native_funding_rate",
+            "position_generation",
+            "funding_notional",
+            "funding_notional_price",
+            "funding_notional_price_source",
+            "funding_notional_price_timestamp",
+            "funding_pnl",
+            "borrow_principal",
+            "borrow_rate_ann",
+            "borrow_dt_seconds",
+            "borrow_cost",
+            "applied_at",
+        }
+        missing = required - ledger.keys()
+        if missing:
+            raise ValueError(f"Événement funding incomplet : {sorted(missing)}")
+        event_key = str(ledger["event_key"])
+        if not event_key:
+            raise ValueError("event_key funding vide")
+        with self._transaction() as connection:
+            existing = connection.execute(
+                "SELECT * FROM funding_ledger WHERE event_key = ?",
+                (event_key,),
+            ).fetchone()
+            if existing is not None:
+                identity_fields = (
+                    "venue",
+                    "instrument",
+                    "funding_notional_price_source",
+                    "funding_notional_price_timestamp",
+                    "funding_timestamp",
+                    "native_funding_rate",
+                    "position_generation",
+                )
+                numeric_fields = (
+                    "funding_notional",
+                    "funding_notional_price",
+                    "funding_pnl",
+                    "borrow_principal",
+                    "borrow_rate_ann",
+                    "borrow_dt_seconds",
+                    "borrow_cost",
+                )
+                for field in identity_fields:
+                    if str(existing[field]) != str(ledger[field]):
+                        raise AccountingIdentityCollision(event_key, field)
+                for field in numeric_fields:
+                    existing_value = existing[field]
+                    ledger_value = ledger[field]
+                    if existing_value is None and ledger_value is None:
+                        continue
+                    if (
+                        existing_value is None
+                        or ledger_value is None
+                        or not math.isclose(
+                            float(existing_value), float(ledger_value), rel_tol=0.0, abs_tol=1e-15
+                        )
+                    ):
+                        raise AccountingIdentityCollision(event_key, field)
+                return "replayed"
+            numeric_validation_fields = (
+                "native_funding_rate",
+                "funding_notional",
+                "funding_pnl",
+                "borrow_principal",
+                "borrow_rate_ann",
+                "borrow_dt_seconds",
+                "borrow_cost",
+            )
+            for field in numeric_validation_fields:
+                value = float(ledger[field])
+                if not math.isfinite(value):
+                    raise ValueError(f"{field} funding doit être fini")
+            price = ledger["funding_notional_price"]
+            if price is not None and (not math.isfinite(float(price)) or float(price) <= 0):
+                raise ValueError("funding_notional_price doit être fini et positif")
+            self._insert_funding_ledger(connection, ledger)
+            now = str(ledger.get("applied_at") or utc_now())
+            connection.execute(
+                """
+                INSERT INTO engine_state(engine, payload, updated_at) VALUES(?, ?, ?)
+                ON CONFLICT(engine) DO UPDATE SET
+                    payload=excluded.payload, updated_at=excluded.updated_at
+                """,
+                (engine, self._json(state), now),
+            )
+            self._sync_positions(connection, engine, state, now)
+            self._insert_event(
+                connection,
+                engine,
+                "funding_payment",
+                self._state_event(state, event_payload),
+                aggregate_type="funding_event",
+                aggregate_id=event_key,
+            )
+            return "applied"
+
+    def has_event(
+        self,
+        engine: str,
+        event_type: str,
+        aggregate_id: str,
+    ) -> bool:
+        """Recherche idempotente d'un événement métier déjà journalisé."""
+
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM events
+                WHERE engine = ? AND event_type = ? AND aggregate_id = ?
+                LIMIT 1
+                """,
+                (engine, event_type, aggregate_id),
+            ).fetchone()
+        return row is not None
 
     def save_states_and_flows(
         self,

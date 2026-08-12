@@ -33,6 +33,15 @@ class OrderIdentityCollision(ExecutionError):
     """Une empreinte d'intention désigne deux clés logiques différentes."""
 
 
+class AccountingIdentityCollision(ExecutionError):
+    """Une clé de funding existante désigne des données comptables différentes."""
+
+    def __init__(self, event_key: str, detail: str) -> None:
+        self.event_key = event_key
+        self.detail = detail
+        super().__init__(f"Collision d'identité comptable pour {event_key}: {detail}")
+
+
 class InvalidOrderStateTransition(ExecutionError):
     """Une mise à jour tenterait d'inventer ou de perdre un état externe."""
 

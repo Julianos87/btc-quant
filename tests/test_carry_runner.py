@@ -24,7 +24,14 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from btcquant.carry import PAPER_CARRY_POLICY, CarryPolicy, backtest_carry
+from btcquant.carry import (
+    PAPER_CARRY_POLICY,
+    CarryPolicy,
+    backtest_carry,
+    elapsed_years_between,
+    funding_event_id,
+    funding_slot,
+)
 from btcquant.execution.carry_runner import CarryRunner
 
 
@@ -32,6 +39,8 @@ class StubVenue:
     """Venue de funding déterministe, sans réseau."""
 
     payments_per_day = 3
+    native_funding_interval = pd.Timedelta("8h")
+    exchange_id = "binance"
 
     def __init__(self, funding: pd.Series) -> None:
         self.funding = funding
@@ -48,9 +57,30 @@ class StubVenue:
         self.requested_since.append(pd.Timestamp(since))
         return self.funding[self.funding.index >= pd.Timestamp(since)]
 
+    def funding_notional_prices_since(
+        self,
+        since: pd.Timestamp,
+        until: pd.Timestamp | None = None,
+    ) -> pd.Series:
+        index = pd.DatetimeIndex(
+            [
+                funding_slot(ts, interval=self.native_funding_interval) - pd.Timedelta(hours=1)
+                for ts in self.funding.index
+            ]
+        )
+        index = index[index >= pd.Timestamp(since)]
+        if until is not None:
+            index = index[index <= pd.Timestamp(until)]
+        prices = pd.Series(100_000.0, index=index, dtype=float)
+        prices.attrs["source"] = "HYPERLIQUID_PREVIOUS_1H_CLOSE_APPROXIMATION"
+        return prices
+
 
 def _funding(n: int, rate: float, end: pd.Timestamp | None = None) -> pd.Series:
-    end = end or pd.Timestamp.now(tz="UTC").floor("h")
+    end = end or (
+        pd.Timestamp.now(tz="UTC").normalize()
+        + pd.Timedelta(hours=(pd.Timestamp.now(tz="UTC").hour // 8) * 8)
+    )
     index = pd.date_range(end=end, periods=n, freq="8h", tz="UTC")
     return pd.Series([rate] * n, index=index)
 
@@ -63,6 +93,27 @@ def _runner(tmp_path, funding: pd.Series, **policy_kwargs) -> CarryRunner:
         venue=StubVenue(funding),
         notifier=lambda _message: True,
     )
+
+
+def _mark_open(runner: CarryRunner, checkpoint: pd.Timestamp) -> None:
+    runner.in_position = True
+    runner.execution_state = "OPEN"
+    runner.entry_equity = runner.equity
+    runner.entry_timestamp = checkpoint
+    runner.entry_price = 100_000.0
+    runner.spot_notional = runner.equity * runner.leverage
+    runner.perp_notional = runner.spot_notional
+    runner.perp_qty = runner.perp_notional / runner.entry_price
+    runner.qty = runner.perp_qty
+    runner.borrow_principal = runner.equity * (runner.leverage - 1.0)
+    runner.position_generation = (
+        funding_event_id(runner.venue.exchange_id, runner.symbol, checkpoint) + "|position"
+    )
+    runner.last_funding_ts = checkpoint
+    runner.funding_notional_price = runner.entry_price
+    runner.funding_notional_price_source = "HYPERLIQUID_PREVIOUS_1H_CLOSE_APPROXIMATION"
+    runner.funding_notional_price_timestamp = checkpoint
+    runner.last_funding_ts = checkpoint
 
 
 # ── 1. politique unique backtest / runner ───────────────────────────────────
@@ -118,6 +169,16 @@ def test_halted_engine_never_reopens(tmp_path):
     assert not runner.in_position
 
 
+def test_entry_is_blocked_when_smoothing_history_is_insufficient(tmp_path):
+    runner = _runner(tmp_path, _funding(2, 0.0002), smooth_days=1)
+
+    runner._tick()
+
+    assert runner.accounting_uncertain
+    assert "insuffisant" in runner.accounting_uncertainty_reason.lower()
+    assert not runner.in_position
+
+
 def test_daily_loss_lockout_blocks_entry_without_halting(tmp_path):
     runner = _runner(tmp_path, _funding(60, 0.0002), smooth_days=1)
     runner.day = str(pd.Timestamp.now(tz="UTC").date())
@@ -149,7 +210,9 @@ def test_kill_switch_state_survives_a_restart(tmp_path):
 def test_funding_window_starts_at_the_checkpoint_after_a_long_outage(tmp_path):
     """Une fenêtre fixe de `smooth_days` perdait sans alerte tous les paiements
     d'un arrêt plus long qu'elle. Le runner doit repartir du checkpoint."""
-    now = pd.Timestamp.now(tz="UTC").floor("h")
+    now = pd.Timestamp.now(tz="UTC").normalize() + pd.Timedelta(
+        hours=(pd.Timestamp.now(tz="UTC").hour // 8) * 8
+    )
     funding = _funding(300, 0.0002, end=now)  # 100 jours
     runner = _runner(tmp_path, funding)
     outage_start = now - pd.Timedelta(days=60)
@@ -162,7 +225,9 @@ def test_funding_window_starts_at_the_checkpoint_after_a_long_outage(tmp_path):
 
 
 def test_no_payment_is_counted_twice_across_ticks(tmp_path):
-    now = pd.Timestamp.now(tz="UTC").floor("h")
+    now = pd.Timestamp.now(tz="UTC").normalize() + pd.Timedelta(
+        hours=(pd.Timestamp.now(tz="UTC").hour // 8) * 8
+    )
     runner = _runner(tmp_path, _funding(90, 0.0002, end=now), smooth_days=1)
     runner._tick()
     equity_after_entry = runner.equity
@@ -173,25 +238,25 @@ def test_no_payment_is_counted_twice_across_ticks(tmp_path):
 
 
 def test_backlog_is_credited_once_when_the_engine_restarts_in_position(tmp_path):
-    now = pd.Timestamp.now(tz="UTC").floor("h")
+    now = pd.Timestamp.now(tz="UTC").normalize() + pd.Timedelta(
+        hours=(pd.Timestamp.now(tz="UTC").hour // 8) * 8
+    )
     rate = 0.0002
     funding = _funding(90, rate, end=now)
     runner = _runner(tmp_path, funding, smooth_days=1)
-    runner.in_position = True
-    runner.execution_state = "OPEN"
     missed = funding.index[-4]
-    runner.last_funding_ts = missed
+    _mark_open(runner, missed)
     start_equity = runner.equity
 
     runner._apply_funding(runner._recent_funding())
 
-    borrow = (
-        (PAPER_CARRY_POLICY.leverage - 1.0)
-        * PAPER_CARRY_POLICY.borrow_rate_ann
-        / runner.venue.payments_per_year
+    dt_years = elapsed_years_between(funding.index[-4], funding.index[-3])
+    entry_notional = start_equity * PAPER_CARRY_POLICY.leverage
+    borrow_principal = start_equity * (PAPER_CARRY_POLICY.leverage - 1.0)
+    event_pnl = entry_notional * rate - (
+        borrow_principal * PAPER_CARRY_POLICY.borrow_rate_ann * dt_years
     )
-    period_return = rate * PAPER_CARRY_POLICY.leverage - borrow
-    expected = start_equity * (1.0 + period_return) ** 3  # les 3 paiements manqués
+    expected = start_equity + 3 * event_pnl
     assert runner.equity == pytest.approx(expected, rel=1e-9)
     assert runner.last_funding_ts == funding.index[-1]
 
@@ -199,12 +264,10 @@ def test_backlog_is_credited_once_when_the_engine_restarts_in_position(tmp_path)
 def test_backlog_checkpoint_survives_a_crash_between_payments(tmp_path, monkeypatch):
     funding = _funding(12, 0.0002)
     runner = _runner(tmp_path, funding, smooth_days=1)
-    runner.in_position = True
-    runner.execution_state = "OPEN"
-    runner.last_funding_ts = funding.index[-4]
+    _mark_open(runner, funding.index[-4])
     runner._save_state()
 
-    original_save = runner.store.save_engine_state
+    original_apply = runner.store.apply_carry_accounting_event_and_checkpoint
     calls = 0
 
     def crash_on_second_payment(*args, **kwargs):
@@ -212,9 +275,13 @@ def test_backlog_checkpoint_survives_a_crash_between_payments(tmp_path, monkeypa
         calls += 1
         if calls == 2:
             raise RuntimeError("crash simulé")
-        return original_save(*args, **kwargs)
+        return original_apply(*args, **kwargs)
 
-    monkeypatch.setattr(runner.store, "save_engine_state", crash_on_second_payment)
+    monkeypatch.setattr(
+        runner.store,
+        "apply_carry_accounting_event_and_checkpoint",
+        crash_on_second_payment,
+    )
     with pytest.raises(RuntimeError, match="crash simulé"):
         runner._apply_funding(funding)
 
@@ -222,13 +289,13 @@ def test_backlog_checkpoint_survives_a_crash_between_payments(tmp_path, monkeypa
     assert revived.last_funding_ts == funding.index[-3]
     revived._apply_funding(funding)
 
-    borrow = (
-        (PAPER_CARRY_POLICY.leverage - 1.0)
-        * PAPER_CARRY_POLICY.borrow_rate_ann
-        / revived.venue.payments_per_year
+    dt_years = elapsed_years_between(funding.index[-4], funding.index[-3])
+    entry_notional = PAPER_CARRY_POLICY.capital * PAPER_CARRY_POLICY.leverage
+    borrow_principal = PAPER_CARRY_POLICY.capital * (PAPER_CARRY_POLICY.leverage - 1.0)
+    event_pnl = entry_notional * 0.0002 - (
+        borrow_principal * PAPER_CARRY_POLICY.borrow_rate_ann * dt_years
     )
-    period_return = 0.0002 * PAPER_CARRY_POLICY.leverage - borrow
-    expected = PAPER_CARRY_POLICY.capital * (1.0 + period_return) ** 3
+    expected = PAPER_CARRY_POLICY.capital + 3 * event_pnl
     assert revived.equity == pytest.approx(expected, rel=1e-9)
     assert revived.last_funding_ts == funding.index[-1]
 
@@ -242,6 +309,8 @@ def test_missing_checkpoint_initializes_without_crediting_legacy_history(tmp_pat
     runner._apply_funding(funding)
 
     assert runner.equity == initial_equity
-    assert runner.last_funding_ts == funding.index[-1]
+    assert runner.accounting_uncertain
+    assert runner.last_funding_ts is None
     revived = _runner(tmp_path, funding, smooth_days=1)
-    assert revived.last_funding_ts == funding.index[-1]
+    assert revived.accounting_uncertain
+    assert revived.last_funding_ts is None

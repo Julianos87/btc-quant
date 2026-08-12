@@ -7,6 +7,7 @@ import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from btcquant.execution.errors import AccountingIdentityCollision
 
 from btcquant.execution.order_state import ExternalOrderState, LocalOrderState
 from btcquant.execution.state_store import StateStore
@@ -311,7 +312,7 @@ def test_schema_v1_is_migrated_with_execution_observability(tmp_path):
         "external_state",
         "remaining_qty",
     } <= columns
-    assert version == "5"
+    assert version == "6"
     assert store.read_deposits() == []
     assert store.read_incidents() == []
 
@@ -398,7 +399,7 @@ def test_schema_v4_migration_is_idempotent_and_never_invents_market_terminality(
             )
         connection.rollback()
 
-    assert version == "5"
+    assert version == "6"
     assert indexes["idx_orders_logical_order_key"][2] == 1
     assert indexes["idx_orders_logical_order_key"][4] == 1
     assert store.integrity_check()
@@ -452,6 +453,144 @@ def test_schema_migration_rejects_wrongly_named_non_unique_index_and_rolls_back(
     assert version == "4"
     assert "local_state" not in columns
     assert index[2] == 0
+
+
+def _funding_ledger(event_key: str = "hyperliquid|BTC/USDC:USDC|2030-01-01T01:00:00+00:00") -> dict:
+    return {
+        "event_key": event_key,
+        "venue": "hyperliquid",
+        "instrument": "BTC/USDC:USDC",
+        "funding_timestamp": "2030-01-01T01:00:00+00:00",
+        "native_funding_rate": 0.001,
+        "position_generation": "hyperliquid|position-1",
+        "funding_notional": 30_000.0,
+        "funding_notional_price": 30_000.0,
+        "funding_notional_price_source": "OHLC_APPROXIMATION",
+        "funding_notional_price_timestamp": "2030-01-01T01:00:00+00:00",
+        "funding_pnl": 30.0,
+        "borrow_principal": 20_000.0,
+        "borrow_rate_ann": 0.10,
+        "borrow_dt_seconds": 3_600.0,
+        "borrow_cost": 0.228,
+        "applied_at": "2030-01-01T01:00:01+00:00",
+    }
+
+
+def _carry_checkpoint(equity: float = 10_000.0) -> dict:
+    return {
+        "equity": equity,
+        "in_position": True,
+        "execution_state": "OPEN",
+        "qty": 1.0,
+        "spot_qty": 1.0,
+        "perp_qty": 1.0,
+    }
+
+
+def test_v5_to_v6_funding_ledger_migration_is_additive_and_idempotent(tmp_path):
+    database = tmp_path / "v5.db"
+    StateStore(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE funding_ledger")
+        connection.execute("UPDATE metadata SET value='5' WHERE key='schema_version'")
+        connection.commit()
+
+    StateStore(database)
+    StateStore(database)
+    with sqlite3.connect(database) as connection:
+        version = connection.execute(
+            "SELECT value FROM metadata WHERE key='schema_version'"
+        ).fetchone()[0]
+        tables = {
+            row[0]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(funding_ledger)")}
+
+    assert version == "6"
+    assert "funding_ledger" in tables
+    assert {
+        "event_key",
+        "funding_timestamp",
+        "native_funding_rate",
+        "position_generation",
+        "borrow_cost",
+    } <= columns
+
+
+def test_funding_ledger_replay_is_exact_and_collision_is_fail_closed(tmp_path):
+    store = StateStore(tmp_path / "ledger.db")
+    ledger = _funding_ledger()
+    state = _carry_checkpoint()
+    assert (
+        store.apply_carry_accounting_event_and_checkpoint(
+            ledger, state, event_payload={"classification": "APPLIED"}
+        )
+        == "applied"
+    )
+    persisted_state = store.load_engine_state("carry")
+    event_count = len(store.read_events("carry"))
+
+    assert (
+        store.apply_carry_accounting_event_and_checkpoint(ledger, {**state, "equity": 9_999.0})
+        == "replayed"
+    )
+    assert store.load_engine_state("carry") == persisted_state
+    assert len(store.read_events("carry")) == event_count
+
+    changed = {**ledger, "native_funding_rate": 0.002}
+    with pytest.raises(AccountingIdentityCollision):
+        store.apply_carry_accounting_event_and_checkpoint(changed, state)
+    assert len(store.read_funding_ledger()) == 1
+    assert store.load_engine_state("carry") == persisted_state
+
+
+@pytest.mark.parametrize("failure_point", ["before_insert", "after_ledger", "before_commit"])
+def test_funding_ledger_and_checkpoint_roll_back_together(tmp_path, monkeypatch, failure_point):
+    store = StateStore(tmp_path / f"{failure_point}.db")
+    ledger = _funding_ledger()
+    state = _carry_checkpoint()
+
+    if failure_point == "before_insert":
+
+        def fail(*args, **kwargs):
+            raise RuntimeError("crash before ledger")
+
+        monkeypatch.setattr(store, "_insert_funding_ledger", fail)
+    elif failure_point == "after_ledger":
+
+        def fail(*args, **kwargs):
+            raise RuntimeError("crash after ledger")
+
+        monkeypatch.setattr(store, "_sync_positions", fail)
+    else:
+
+        def fail(*args, **kwargs):
+            raise RuntimeError("crash before commit")
+
+        monkeypatch.setattr(store, "_insert_event", fail)
+
+    with pytest.raises(RuntimeError, match="crash"):
+        store.apply_carry_accounting_event_and_checkpoint(ledger, state)
+
+    assert store.read_funding_ledger() == []
+    assert store.load_engine_state("carry") is None
+    assert store.read_events("carry") == []
+
+
+def test_concurrent_funding_replay_has_one_owner(tmp_path):
+    store = StateStore(tmp_path / "concurrent.db")
+    ledger = _funding_ledger()
+    state = _carry_checkpoint()
+
+    def apply() -> str:
+        return store.apply_carry_accounting_event_and_checkpoint(ledger, state)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: apply(), range(2)))
+
+    assert sorted(results) == ["applied", "replayed"]
+    assert len(store.read_funding_ledger()) == 1
 
 
 # ── rétention du journal ────────────────────────────────────────────────────

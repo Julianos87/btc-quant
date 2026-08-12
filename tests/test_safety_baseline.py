@@ -15,6 +15,7 @@ from btcquant.execution.carry_contract import (
 )
 from btcquant.execution.carry_runner import CarryRunner
 from btcquant.execution.ccxt_broker import CcxtBroker
+from btcquant.carry import funding_event_id
 from btcquant.execution.order_state import ExternalOrderState
 from btcquant.execution.reconcile import reconcile
 from btcquant.execution.runner import LiveRunner, ReconciliationRequired, StrategySlot
@@ -380,12 +381,38 @@ def test_carry_close_failure_marks_unbalanced(tmp_path, monkeypatch):
     runner.in_position = True
     runner.execution_state = "OPEN"
     runner.qty = 1.0
-    funding = pd.Series(
-        [-0.001],
-        index=pd.DatetimeIndex([pd.Timestamp("2026-01-01", tz="UTC")]),
+    runner.entry_equity = runner.equity
+    runner.entry_timestamp = pd.Timestamp("2026-01-01T00:00:00Z")
+    runner.spot_notional = runner.equity * runner.leverage
+    runner.perp_notional = runner.spot_notional
+    runner.borrow_principal = runner.equity * (runner.leverage - 1.0)
+    runner.position_generation = (
+        funding_event_id(runner.venue.exchange_id, runner.symbol, runner.entry_timestamp)
+        + "|position"
     )
+    runner.entry_price = 100_000.0
+    runner.perp_qty = 1.0
+    runner.funding_notional_price = runner.entry_price
+    runner.funding_notional_price_source = "HYPERLIQUID_PREVIOUS_1H_CLOSE_APPROXIMATION"
+    runner.funding_notional_price_timestamp = runner.entry_timestamp
+    funding = pd.Series(
+        [-0.001] * (14 * 24 + 1),
+        index=pd.date_range("2026-01-01", periods=14 * 24 + 1, freq="h", tz="UTC"),
+    )
+
+    def price_history(since, until=None):
+        index = funding.index - pd.Timedelta(hours=1)
+        index = index[index >= since]
+        if until is not None:
+            index = index[index <= until]
+        prices = pd.Series(100_000.0, index=index, dtype=float)
+        prices.attrs["source"] = "HYPERLIQUID_PREVIOUS_1H_CLOSE_APPROXIMATION"
+        return prices
+
+    runner.venue.funding_notional_prices_since = price_history
     monkeypatch.setattr(runner, "_recent_funding", lambda: funding)
 
+    runner.last_funding_ts = runner.entry_timestamp
     runner._tick()
 
     assert runner.execution_state == "UNBALANCED"

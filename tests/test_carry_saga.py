@@ -37,8 +37,8 @@ class RunnerBrokerStub:
 
 def positive_funding():
     return pd.Series(
-        [0.001],
-        index=pd.DatetimeIndex([pd.Timestamp("2026-01-01", tz="UTC")]),
+        [0.001] * 25,
+        index=pd.date_range("2026-01-01", periods=25, freq="h", tz="UTC"),
     )
 
 
