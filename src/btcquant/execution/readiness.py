@@ -7,6 +7,7 @@ observation déjà commencée.
 
 from __future__ import annotations
 
+import os
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
@@ -39,6 +40,231 @@ class ReadinessPolicy:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class ServiceComponentProfile:
+    """Operational components required by the configured service profile."""
+
+    required: tuple[str, ...] = ("trend",)
+    optional: tuple[str, ...] = ("carry", "shadow")
+    reason_codes: tuple[str, ...] = ()
+
+
+def service_component_profile() -> ServiceComponentProfile:
+    """Resolve one readiness profile for dashboard and operational probes.
+
+    The default follows the documented standard campaign: trend is required;
+    carry and shadow are observable but optional until an explicit profile
+    enables them.  A deployment may opt in with a comma-separated environment
+    variable, which is configuration rather than a dashboard-local threshold.
+    """
+
+    configured = os.environ.get("BTCQUANT_REQUIRED_ENGINES")
+    if not configured:
+        return ServiceComponentProfile()
+    names = tuple(
+        dict.fromkeys(item.strip().lower() for item in configured.split(",") if item.strip())
+    )
+    allowed = {"trend", "carry", "shadow"}
+    if not names or any(item not in allowed for item in names):
+        return ServiceComponentProfile(reason_codes=("INVALID_REQUIRED_ENGINE_PROFILE",))
+    optional = tuple(item for item in ("trend", "carry", "shadow") if item not in names)
+    return ServiceComponentProfile(required=names, optional=optional)
+
+
+SERVICE_ENGINE_MAX_AGE_SECONDS = {"trend": 600.0, "carry": 1200.0}
+SERVICE_SHADOW_MAX_AGE_SECONDS = 300.0
+
+
+def evaluate_service_readiness(
+    database: str,
+    shadow_database: str | None = None,
+    *,
+    now: datetime | None = None,
+    profile: ServiceComponentProfile | None = None,
+) -> dict[str, Any]:
+    """Read-only service readiness, distinct from campaign qualification."""
+
+    from pathlib import Path
+
+    from ..observability import Freshness
+    from .health import execution_health
+    from .shadow import ShadowStore
+
+    current = now or datetime.now(UTC)
+    cfg = profile or service_component_profile()
+    database_path = Path(database)
+    shadow_path = Path(shadow_database) if shadow_database is not None else None
+    components: list[dict[str, Any]] = []
+    checks: dict[str, bool] = {}
+    details: dict[str, Any] = {}
+    reasons = list(cfg.reason_codes)
+
+    if not database_path.exists():
+        checks = {"database": False, "shadow_database": bool(shadow_path and shadow_path.exists())}
+        reasons.append("DATABASE_UNAVAILABLE")
+        return {
+            "api_schema_version": 2,
+            "kind": "SERVICE_READINESS",
+            "status": "not_ready",
+            "ready": False,
+            "generated_at": current.isoformat(),
+            "required_components": list(cfg.required),
+            "optional_components": list(cfg.optional),
+            "checks": checks,
+            "details": details,
+            "components": components,
+            "reason_codes": reasons,
+            "campaign_qualification": "SEPARATE",
+        }
+
+    try:
+        store = StateStore(database_path, initialize=False, read_only=True)
+        checks["database"] = bool(store.integrity_check())
+        if not checks["database"]:
+            reasons.append("DATABASE_CORRUPT")
+        incidents = store.read_incidents(open_only=True)
+        critical_count = sum(item["severity"] == "CRITICAL" for item in incidents)
+        details["open_incidents"] = len(incidents)
+        details["open_critical_incidents"] = critical_count
+        checks["no_critical_incident"] = critical_count == 0
+        if critical_count:
+            reasons.append("CRITICAL_INCIDENT_OPEN")
+        safety: dict[str, Any] = {}
+        safety_pass = True
+        try:
+            for engine in ("trend", "carry"):
+                health = execution_health(store, engine)
+                safety[engine] = {
+                    "status": "PASS"
+                    if not (
+                        health.unresolved_order_ids
+                        or health.unbalanced_order_ids
+                        or health.unprotected_slots
+                        or health.stop_transition_slots
+                        or health.reconciliation_required
+                    )
+                    else "FAIL",
+                    "unresolved_orders": len(health.unresolved_order_ids),
+                    "unbalanced_orders": len(health.unbalanced_order_ids),
+                    "unprotected_slots": len(health.unprotected_slots),
+                    "stop_transition_slots": len(health.stop_transition_slots),
+                    "reconciliation_required": health.reconciliation_required,
+                    "orders_analyzed": health.orders_analyzed,
+                }
+                if engine in cfg.required and safety[engine]["status"] != "PASS":
+                    safety_pass = False
+        except Exception:
+            safety = {"status": "UNKNOWN"}
+            safety_pass = False
+            reasons.append("EXECUTION_SAFETY_UNKNOWN")
+        details["execution_safety"] = safety
+        checks["execution_safety"] = safety_pass
+        for engine in ("trend", "carry"):
+            age = store.engine_age_seconds(engine, now=current)
+            observed_at = store.engine_updated_at(engine)
+            limit = SERVICE_ENGINE_MAX_AGE_SECONDS[engine]
+            status = (
+                Freshness.UNAVAILABLE.value
+                if age is None
+                else Freshness.FRESH.value
+                if age <= limit
+                else Freshness.STALE.value
+            )
+            item = {
+                "name": engine,
+                "required": engine in cfg.required,
+                "status": status,
+                "age_seconds": age,
+                "observed_at": observed_at.isoformat() if observed_at else None,
+                "max_age_seconds": limit,
+            }
+            components.append(item)
+            details[f"{engine}_age_seconds"] = age
+            if engine in cfg.required:
+                checks[f"{engine}_fresh"] = status == Freshness.FRESH.value
+                if status != Freshness.FRESH.value:
+                    reasons.append(f"REQUIRED_{engine.upper()}_{status}")
+    except Exception:
+        checks["database"] = False
+        reasons.append("DATABASE_UNAVAILABLE")
+        return {
+            "api_schema_version": 2,
+            "kind": "SERVICE_READINESS",
+            "status": "not_ready",
+            "ready": False,
+            "generated_at": current.isoformat(),
+            "required_components": list(cfg.required),
+            "optional_components": list(cfg.optional),
+            "checks": checks,
+            "details": details,
+            "components": components,
+            "reason_codes": sorted(set(reasons)),
+            "campaign_qualification": "SEPARATE",
+        }
+
+    shadow_exists = bool(shadow_path and shadow_path.exists())
+    checks["shadow_database"] = shadow_exists
+    shadow_item: dict[str, Any] = {
+        "name": "shadow",
+        "required": "shadow" in cfg.required,
+        "status": Freshness.UNAVAILABLE.value,
+        "age_seconds": None,
+        "max_age_seconds": SERVICE_SHADOW_MAX_AGE_SECONDS,
+    }
+    if shadow_exists and shadow_path is not None:
+        try:
+            runtime = ShadowStore(shadow_path, read_only=True).runtime_health(now=current)
+            age = runtime["last_success_age_seconds"]
+            status = (
+                Freshness.UNAVAILABLE.value
+                if age is None
+                else Freshness.FRESH.value
+                if age <= SERVICE_SHADOW_MAX_AGE_SECONDS
+                else Freshness.STALE.value
+            )
+            shadow_item.update(
+                status=status,
+                age_seconds=age,
+                observed_at=runtime.get("last_success_at"),
+                consecutive_failures=runtime.get("consecutive_failures"),
+            )
+            details["shadow_age_seconds"] = age
+        except Exception:
+            reasons.append("SHADOW_SOURCE_UNAVAILABLE")
+    components.append(shadow_item)
+    if shadow_item["required"] and shadow_item["status"] != Freshness.FRESH.value:
+        reasons.append(f"REQUIRED_SHADOW_{shadow_item['status']}")
+
+    required_checks = ["database", "no_critical_incident", "execution_safety"]
+    required_checks.extend(f"{engine}_fresh" for engine in cfg.required if engine != "shadow")
+    if "shadow" in cfg.required:
+        required_checks.append("shadow_fresh")
+    ready = (
+        bool(required_checks)
+        and all(checks.get(key, False) for key in required_checks)
+        and not cfg.reason_codes
+        and not any(
+            reason.startswith("REQUIRED_")
+            or reason in {"DATABASE_CORRUPT", "DATABASE_UNAVAILABLE", "CRITICAL_INCIDENT_OPEN"}
+            for reason in reasons
+        )
+    )
+    return {
+        "api_schema_version": 2,
+        "kind": "SERVICE_READINESS",
+        "status": "ready" if ready else "not_ready",
+        "ready": ready,
+        "generated_at": current.isoformat(),
+        "required_components": list(cfg.required),
+        "optional_components": list(cfg.optional),
+        "checks": checks,
+        "details": details,
+        "components": components,
+        "reason_codes": sorted(set(reasons)),
+        "campaign_qualification": "SEPARATE",
+    }
 
 
 def testnet_p1_policy() -> ReadinessPolicy:

@@ -11,13 +11,17 @@ traiter. La reprise reste une décision humaine, guidée par l'incident ouvert.
 """
 
 import argparse
+import logging
 import os
 from pathlib import Path
 
 from btcquant.execution.health import execution_health, sync_execution_incidents
+from btcquant.execution.readiness import service_component_profile
 from btcquant.execution.shadow import ShadowStore
 from btcquant.execution.state_store import StateStore
 from btcquant.notify import notify
+
+log = logging.getLogger(__name__)
 
 ROOT = Path(os.environ.get("BTCQUANT_ROOT", Path.cwd())).resolve()
 STATE = ROOT / "state"
@@ -51,8 +55,21 @@ def _sync_shadow_incident(
             context={"database": str(database)},
         )
     else:
-        health = ShadowStore(database).runtime_health()
-        age = health["last_success_age_seconds"]
+        try:
+            health = ShadowStore(database, read_only=True).runtime_health()
+            age = health["last_success_age_seconds"]
+        except Exception as error:
+            incident = store.record_incident(
+                "watchdog:shadow:check_failed",
+                engine="shadow",
+                severity="CRITICAL",
+                kind="watchdog_check_failed",
+                message="Lecture de santé shadow impossible ; état UNKNOWN",
+                context={"error_type": type(error).__name__},
+            )
+            if incident["is_new_or_reopened"]:
+                notify(f"Watchdog shadow : {incident['message']}")
+            return
         if age is not None and age <= max_age:
             store.resolve_incident(fingerprint)
             return
@@ -88,20 +105,53 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     database = Path(args.database)
     if not database.exists():
-        notify("⚠ Watchdog : base btcquant.db introuvable — moteurs jamais démarrés ?")
-        return
+        message = "Watchdog: database unavailable; source state is UNKNOWN"
+        log.critical(message)
+        notify(message)
+        raise SystemExit(2)
     # Le watchdog écrit/actualise les incidents. Il est donc un writer à
     # arrêter avant toute sauvegarde ou migration de la base partagée; le code
     # refuse désormais une migration implicite.
-    store = StateStore(database)
-    checks = (
-        [("trend", args.max_age, args.service)]
-        if args.database != str(STATE / "btcquant.db") or args.service != "btcquant-trend"
-        else CHECKS
-    )
+    try:
+        store = StateStore(database)
+    except Exception as error:
+        message = (
+            "CRITICAL Watchdog: database read failed; source state is UNKNOWN "
+            f"({type(error).__name__})"
+        )
+        log.critical(message)
+        notify(message)
+        raise SystemExit(2) from error
+    default_database = args.database == str(STATE / "btcquant.db")
+    default_service = args.service == "btcquant-trend"
+    if default_database and default_service:
+        profile = service_component_profile()
+        if profile.reason_codes:
+            message = "CRITICAL Watchdog: invalid required-engine profile; source state is UNKNOWN"
+            log.critical(message)
+            notify(message)
+            raise SystemExit(2)
+        checks = [check for check in CHECKS if check[0] in profile.required]
+    else:
+        checks = [("trend", args.max_age, args.service)]
     for engine, max_age, service in checks:
-        age = store.engine_age_seconds(engine)
         fingerprint = f"engine:{engine}:stale"
+        try:
+            age = store.engine_age_seconds(engine)
+            health = execution_health(store, engine)
+        except Exception as error:
+            incident = store.record_incident(
+                f"watchdog:{engine}:check_failed",
+                engine=engine,
+                severity="CRITICAL",
+                kind="watchdog_check_failed",
+                message=f"Lecture de santé {engine} impossible ; état UNKNOWN",
+                context={"error_type": type(error).__name__},
+            )
+            if incident["is_new_or_reopened"]:
+                notify(f"CRITICAL Watchdog : {incident['message']}")
+            continue
+
         if age is None:
             incident = store.record_incident(
                 fingerprint,
@@ -129,7 +179,6 @@ def main(argv: list[str] | None = None) -> None:
         else:
             store.resolve_incident(fingerprint)
 
-        health = execution_health(store, engine)
         for incident in sync_execution_incidents(store, health):
             icon = "⛔" if incident["severity"] == "CRITICAL" else "⚠"
             notify(f"{icon} Exécution {engine} : {incident['message']}")

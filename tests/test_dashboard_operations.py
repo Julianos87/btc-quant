@@ -180,6 +180,7 @@ def test_readyz_checks_engines_incidents_and_shadow_freshness(tmp_path, monkeypa
 
     assert response.status_code == 200
     assert response.get_json()["status"] == "ready"
+    assert "checks" not in response.get_json()
 
     store.record_incident(
         "test:critical",
@@ -188,7 +189,7 @@ def test_readyz_checks_engines_incidents_and_shadow_freshness(tmp_path, monkeypa
         kind="test",
         message="critical test incident",
     )
-    response = client.get("/readyz")
+    response = client.get("/api/operational-health")
 
     assert response.status_code == 503
     assert response.get_json()["checks"]["no_critical_incident"] is False
@@ -202,4 +203,6 @@ def test_readyz_reports_missing_operational_state_without_business_data(tmp_path
     assert response.status_code == 503
     payload = response.get_json()
     assert payload["status"] == "not_ready"
-    assert payload["checks"] == {"database": False, "shadow_database": False}
+    assert payload["kind"] == "SERVICE_READINESS"
+    assert payload["ready"] is False
+    assert "checks" not in payload

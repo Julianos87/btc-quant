@@ -86,6 +86,7 @@ def test_watchdog_monitors_the_carry_engine(tmp_path, monkeypatch):
     """Le carry était absent de CHECKS : un moteur carry figé n'était jamais
     détecté, alors qu'il porte 40 % du portefeuille."""
     monkeypatch.setattr(watchdog, "STATE", tmp_path)
+    monkeypatch.setenv("BTCQUANT_REQUIRED_ENGINES", "trend,carry")
     messages: list[str] = []
     monkeypatch.setattr(watchdog, "notify", messages.append)
 
@@ -104,6 +105,7 @@ def test_watchdog_monitors_the_carry_engine(tmp_path, monkeypatch):
 
 def test_watchdog_resolves_the_carry_alert_once_the_engine_writes(tmp_path, monkeypatch):
     monkeypatch.setattr(watchdog, "STATE", tmp_path)
+    monkeypatch.setenv("BTCQUANT_REQUIRED_ENGINES", "trend,carry")
     monkeypatch.setattr(watchdog, "notify", lambda _message: None)
 
     store = StateStore(tmp_path / "btcquant.db")

@@ -46,17 +46,24 @@ class ReportingRepository:
         return value
 
     def read_json(self, path: Path) -> dict | None:
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
+        if not path.exists():
             return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ReportingReadError(f"JSON de reporting illisible: {path.name}") from exc
+        if not isinstance(payload, dict):
+            raise ReportingReadError(f"JSON de reporting invalide: {path.name}")
+        return payload
 
     def read_engine_state(self, engine: str, legacy_path: Path | None = None) -> dict | None:
         """Lit explicitement un moteur SQLite, puis son éventuel fallback JSON."""
 
         if self.database.exists():
             try:
-                state = StateStore(self.database, initialize=False).load_engine_state(engine)
+                state = StateStore(
+                    self.database, initialize=False, read_only=True
+                ).load_engine_state(engine)
                 if state is not None:
                     return state
             except Exception as exc:
@@ -71,7 +78,9 @@ class ReportingRepository:
 
         if self.database.exists():
             try:
-                return StateStore(self.database, initialize=False).engine_age_seconds(engine)
+                return StateStore(
+                    self.database, initialize=False, read_only=True
+                ).engine_age_seconds(engine)
             except Exception as exc:
                 raise ReportingReadError(f"horodatage SQLite illisible pour {engine}") from exc
         return self.age_seconds(legacy_path) if legacy_path is not None else None
@@ -85,7 +94,9 @@ class ReportingRepository:
 
         if self.database.exists():
             try:
-                rows = StateStore(self.database, initialize=False).read_equity(engine)
+                rows = StateStore(self.database, initialize=False, read_only=True).read_equity(
+                    engine
+                )
                 if rows:
                     frame = pd.DataFrame(rows)
                     index = pd.to_datetime(frame["ts"], utc=True, format="ISO8601")
@@ -101,17 +112,25 @@ class ReportingRepository:
         if not path.exists():
             return pd.Series(dtype=float)
         try:
-            frame = pd.read_csv(path, on_bad_lines="skip")
-            index = pd.to_datetime(frame["ts"], utc=True, format="ISO8601", errors="coerce")
-            series = pd.Series(frame["equity"].values, index=index)
-            return series[series.index.notna()].sort_index()
-        except Exception:
+            frame = pd.read_csv(path, on_bad_lines="error")
+        except (OSError, UnicodeError, ValueError, pd.errors.ParserError) as exc:
+            raise ReportingReadError(f"equity CSV illisible: {path.name}") from exc
+        required = {"ts", "equity"}
+        if not required.issubset(frame.columns):
+            raise ReportingReadError(f"equity CSV invalide: {path.name}")
+        if frame.empty:
             return pd.Series(dtype=float)
+        index = pd.to_datetime(frame["ts"], utc=True, format="ISO8601", errors="coerce")
+        values = pd.to_numeric(frame["equity"], errors="coerce")
+        valid = index.notna() & values.notna()
+        if not valid.any():
+            raise ReportingReadError(f"equity CSV sans observation valide: {path.name}")
+        return pd.Series(values[valid].to_numpy(), index=index[valid]).sort_index()
 
     def read_trades(self) -> pd.DataFrame:
         if self.database.exists():
             try:
-                rows = StateStore(self.database, initialize=False).read_trades()
+                rows = StateStore(self.database, initialize=False, read_only=True).read_trades()
                 if rows:
                     return pd.DataFrame(rows).drop(columns=["id"], errors="ignore")
             except Exception as exc:
@@ -120,15 +139,17 @@ class ReportingRepository:
 
     @staticmethod
     def _parse_trades(path: Path) -> pd.DataFrame:
-        try:
-            return pd.read_csv(path, on_bad_lines="skip") if path.exists() else pd.DataFrame()
-        except Exception:
+        if not path.exists():
             return pd.DataFrame()
+        try:
+            return pd.read_csv(path, on_bad_lines="error")
+        except (OSError, UnicodeError, ValueError, pd.errors.ParserError) as exc:
+            raise ReportingReadError(f"trades CSV illisible: {path.name}") from exc
 
     def read_flows(self) -> pd.DataFrame:
         if self.database.exists():
             try:
-                rows = StateStore(self.database, initialize=False).read_flows()
+                rows = StateStore(self.database, initialize=False, read_only=True).read_flows()
                 if rows:
                     frame = pd.DataFrame(rows).drop(columns=["id"], errors="ignore")
                     frame["ts"] = pd.to_datetime(frame["ts"], utc=True, format="ISO8601")
@@ -144,8 +165,11 @@ class ReportingRepository:
             return empty
         try:
             frame = pd.read_csv(path, on_bad_lines="skip")
-            frame["ts"] = pd.to_datetime(frame["ts"], utc=True, format="ISO8601", errors="coerce")
-            valid = frame["ts"].notna() & frame["trend_flow"].notna() & frame["carry_flow"].notna()
-            return frame[valid].sort_values("ts")
-        except Exception:
-            return empty
+        except (OSError, UnicodeError, ValueError, pd.errors.ParserError) as exc:
+            raise ReportingReadError(f"flows CSV illisible: {path.name}") from exc
+        required = {"ts", "kind", "trend_flow", "carry_flow"}
+        if not required.issubset(frame.columns):
+            raise ReportingReadError(f"flows CSV invalide: {path.name}")
+        frame["ts"] = pd.to_datetime(frame["ts"], utc=True, format="ISO8601", errors="coerce")
+        valid = frame["ts"].notna() & frame["trend_flow"].notna() & frame["carry_flow"].notna()
+        return frame[valid].sort_values("ts")

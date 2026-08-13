@@ -13,6 +13,7 @@ import os
 import re
 import threading
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import ccxt
@@ -33,16 +34,28 @@ from btcquant.reporting.analytics import (
 from btcquant.reporting.repository import ReportingReadError, ReportingRepository
 from btcquant.reporting.prometheus import render_prometheus
 from btcquant.execution.health import execution_health
-from btcquant.execution.readiness import evaluate_readiness
+from btcquant.execution.readiness import (
+    SERVICE_ENGINE_MAX_AGE_SECONDS,
+    SERVICE_SHADOW_MAX_AGE_SECONDS,
+    evaluate_readiness,
+    evaluate_service_readiness,
+)
 from btcquant.execution.shadow import ShadowStore
 from btcquant.execution.state_store import StateStore
+from btcquant.observability import (
+    BoundedReadCache,
+    CachePolicy,
+    Freshness,
+    SourceSnapshot,
+    temporal_skew,
+)
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 ROOT = Path(__file__).resolve().parents[1]
 log = logging.getLogger(__name__)
 STATE = ROOT / "state"
 repository = ReportingRepository(STATE)
-START_TIME = time.time()  # démarrage du serveur dashboard (uptime)
+START_TIME = time.monotonic()  # uptime: horloge monotone, jamais l'horloge murale
 
 app = Flask(__name__)
 app.register_blueprint(web)
@@ -67,8 +80,9 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 AUTH_TOKEN = os.environ.get("DASHBOARD_TOKEN")
 COOKIE_NAME = "tandem_session"
 COOKIE_MAX_AGE = 12 * 3600
-ENGINE_MAX_AGE_SECONDS = {"trend": 600.0, "carry": 1200.0}
-SHADOW_MAX_AGE_SECONDS = 300.0
+ENGINE_MAX_AGE_SECONDS = SERVICE_ENGINE_MAX_AGE_SECONDS
+SHADOW_MAX_AGE_SECONDS = SERVICE_SHADOW_MAX_AGE_SECONDS
+TEMPORAL_SKEW_MAX_SECONDS = max(*ENGINE_MAX_AGE_SECONDS.values(), SHADOW_MAX_AGE_SECONDS)
 authenticator = DashboardAuthenticator(
     lambda: AUTH_TOKEN,
     cookie_name=COOKIE_NAME,
@@ -101,129 +115,155 @@ def _guard():
 
 @app.get("/healthz")
 def healthz():
-    """Sonde minimale sans donnée métier ni accès exchange."""
-
-    return jsonify({"status": "ok"})
+    # Process liveness only: no database, cache or exchange dependency.
+    return jsonify({"api_schema_version": 2, "kind": "PROCESS_LIVENESS", "status": "ok"})
 
 
 def _readiness_snapshot() -> tuple[dict, int]:
-    checks: dict[str, bool] = {}
-    details: dict[str, float | int | None] = {}
-    database = STATE / "btcquant.db"
-    checks["database"] = database.exists()
-    if database.exists():
-        try:
-            store = StateStore(database, initialize=False)
-            for engine, max_age in ENGINE_MAX_AGE_SECONDS.items():
-                age = store.engine_age_seconds(engine)
-                details[f"{engine}_age_seconds"] = age
-                checks[f"{engine}_fresh"] = age is not None and age <= max_age
-            incidents = store.read_incidents(open_only=True)
-            critical_count = sum(item["severity"] == "CRITICAL" for item in incidents)
-            details["open_incidents"] = len(incidents)
-            details["open_critical_incidents"] = critical_count
-            checks["no_critical_incident"] = critical_count == 0
-        except Exception:
-            app.logger.exception("Readiness database check failed")
-            checks["database"] = False
-
-    shadow_database = STATE / "execution-shadow.db"
-    checks["shadow_database"] = shadow_database.exists()
-    if shadow_database.exists():
-        try:
-            runtime = ShadowStore(shadow_database).runtime_health()
-            shadow_age = runtime["last_success_age_seconds"]
-            details["shadow_age_seconds"] = shadow_age
-            details["shadow_consecutive_failures"] = runtime["consecutive_failures"]
-            checks["shadow_fresh"] = shadow_age is not None and shadow_age <= SHADOW_MAX_AGE_SECONDS
-        except Exception:
-            app.logger.exception("Readiness shadow check failed")
-            checks["shadow_database"] = False
-
-    ready = bool(checks) and all(checks.values())
-    return {
-        "status": "ready" if ready else "not_ready",
-        "checks": checks,
-        "details": details,
-    }, (200 if ready else 503)
+    # Operational readiness with one read-only, profile-driven contract.
+    payload = evaluate_service_readiness(
+        str(STATE / "btcquant.db"),
+        str(STATE / "execution-shadow.db"),
+    )
+    return payload, (200 if payload["ready"] else 503)
 
 
 @app.get("/readyz")
 def readyz():
-    """Readiness opérationnelle sans exposition de données de portefeuille."""
+    """Public minimal probe; details remain authenticated/local."""
 
+    payload, status = _readiness_snapshot()
+    return jsonify(
+        {
+            "api_schema_version": 2,
+            "kind": "SERVICE_READINESS",
+            "status": payload["status"],
+            "ready": payload["ready"],
+        }
+    ), status
+
+
+@app.get("/api/operational-health")
+def operational_health():
+    # Detailed service readiness; liveness remains intentionally separate.
     payload, status = _readiness_snapshot()
     return jsonify(payload), status
 
 
 @app.get("/metrics/prometheus")
 def prometheus_metrics():
-    """Métriques locales destinées au scraper Prometheus du serveur."""
-
-    combined = _combined_equity(net_of_flows=True)
+    # Metrics are a local read surface. Source failures become explicit
+    # UNKNOWN/availability metrics; they never become a false zero.
     metrics: dict[str, int | float | None] = {
         "btcquant_dashboard_up": 1,
-        "btcquant_dashboard_uptime_seconds": max(0.0, time.time() - START_TIME),
-        "btcquant_portfolio_equity": float(combined.iloc[-1]) if len(combined) else None,
-        "btcquant_trend_state_age_seconds": _engine_age_seconds("trend", "live_state_4x.json"),
-        "btcquant_carry_state_age_seconds": _engine_age_seconds("carry", "carry_state.json"),
+        "btcquant_dashboard_uptime_seconds": max(0.0, time.monotonic() - START_TIME),
     }
-    for key, value in _live_metrics().items():
-        metrics[f"btcquant_portfolio_{key}"] = value
+    safety_unknown = False
+    try:
+        combined = _combined_equity(net_of_flows=True)
+        metrics["btcquant_portfolio_equity"] = float(combined.iloc[-1]) if len(combined) else None
+        for key, value in _live_metrics().items():
+            metrics[f"btcquant_portfolio_{key}"] = value
+    except Exception:
+        app.logger.exception("Portfolio metrics source unavailable")
+        metrics["btcquant_portfolio_source_available"] = 0
+        safety_unknown = True
+
+    for engine, legacy_name in (
+        ("trend", "live_state_4x.json"),
+        ("carry", "carry_state.json"),
+    ):
+        try:
+            metrics[f"btcquant_{engine}_state_age_seconds"] = _engine_age_seconds(
+                engine, legacy_name
+            )
+        except Exception:
+            app.logger.exception("%s state age source unavailable", engine)
+            metrics[f"btcquant_{engine}_state_age_seconds"] = None
+            safety_unknown = True
     database = STATE / "btcquant.db"
+    metrics["btcquant_trading_db_available"] = int(database.exists())
     if database.exists():
-        store = StateStore(database, initialize=False)
-        incidents = store.read_incidents(open_only=True)
-        metrics["btcquant_open_incidents"] = len(incidents)
-        metrics["btcquant_open_critical_incidents"] = sum(
-            item["severity"] == "CRITICAL" for item in incidents
-        )
-        pending_deposits = store.read_deposits(status="PENDING")
-        metrics["btcquant_pending_deposit_count"] = len(pending_deposits)
-        metrics["btcquant_pending_deposit_amount"] = sum(
-            float(item["amount"]) for item in pending_deposits
-        )
-        for engine in ("trend", "carry"):
-            health = execution_health(store, engine)
-            prefix = f"btcquant_execution_{engine}"
+        try:
+            store = StateStore(database, initialize=False, read_only=True)
+            metrics["btcquant_trading_db_available"] = int(store.integrity_check())
+            incidents = store.read_incidents(open_only=True)
+            metrics["btcquant_open_incidents"] = len(incidents)
+            metrics["btcquant_open_critical_incidents"] = sum(
+                item["severity"] == "CRITICAL" for item in incidents
+            )
+            pending_deposits = store.read_deposits(status="PENDING")
+            metrics["btcquant_pending_deposit_count"] = len(pending_deposits)
+            metrics["btcquant_pending_deposit_amount"] = sum(
+                float(item["amount"]) for item in pending_deposits
+            )
+            for engine in ("trend", "carry"):
+                health = execution_health(store, engine)
+                prefix = f"btcquant_execution_{engine}"
+                metrics.update(
+                    {
+                        f"{prefix}_orders_analyzed": health.orders_analyzed,
+                        f"{prefix}_unresolved_orders": len(health.unresolved_order_ids),
+                        f"{prefix}_stale_pending_orders": len(health.stale_pending_order_ids),
+                        f"{prefix}_unbalanced_orders": len(health.unbalanced_order_ids),
+                        f"{prefix}_fill_ratio": health.fill_ratio,
+                        f"{prefix}_rejection_rate": health.rejection_rate,
+                        f"{prefix}_partial_rate": health.partial_rate,
+                        f"{prefix}_average_slippage_bps": health.average_slippage_bps,
+                        f"{prefix}_p95_slippage_bps": health.p95_slippage_bps,
+                    }
+                )
+            if not metrics["btcquant_trading_db_available"]:
+                safety_unknown = True
+        except Exception:
+            app.logger.exception("Trading metrics source unavailable")
+            metrics["btcquant_trading_db_available"] = 0
+            safety_unknown = True
+    else:
+        safety_unknown = True
+
+    shadow_database = STATE / "execution-shadow.db"
+    metrics["btcquant_shadow_db_available"] = int(shadow_database.exists())
+    if shadow_database.exists():
+        try:
+            shadow = ShadowStore(shadow_database, read_only=True).summary()
+            evidence = shadow["evidence"]
+            runtime = shadow["runtime"]
             metrics.update(
                 {
-                    f"{prefix}_orders_analyzed": health.orders_analyzed,
-                    f"{prefix}_unresolved_orders": len(health.unresolved_order_ids),
-                    f"{prefix}_stale_pending_orders": len(health.stale_pending_order_ids),
-                    f"{prefix}_unbalanced_orders": len(health.unbalanced_order_ids),
-                    f"{prefix}_fill_ratio": health.fill_ratio,
-                    f"{prefix}_rejection_rate": health.rejection_rate,
-                    f"{prefix}_partial_rate": health.partial_rate,
-                    f"{prefix}_average_slippage_bps": health.average_slippage_bps,
-                    f"{prefix}_p95_slippage_bps": health.p95_slippage_bps,
+                    "btcquant_shadow_observation_days": evidence["observation_days"],
+                    "btcquant_shadow_eligible_intents": evidence["eligible_intents"],
+                    "btcquant_shadow_pending_quotes": shadow["pending_quotes"],
+                    "btcquant_shadow_touch_proxy_rate": shadow["touch_proxy_rate"],
+                    "btcquant_shadow_fallback_rate": shadow["fallback_rate"],
+                    "btcquant_shadow_p95_touch_seconds": evidence["p95_fill_seconds"],
+                    "btcquant_shadow_mean_all_in_cost_bps": evidence["mean_all_in_cost_bps"],
+                    "btcquant_shadow_p95_all_in_cost_bps": evidence["p95_slippage_bps"],
+                    "btcquant_shadow_mean_markout_bps": shadow["mean_markout_bps"],
+                    "btcquant_shadow_proxy_qualified": int(shadow["proxy_qualification"]["passed"]),
+                    "btcquant_shadow_last_success_age_seconds": runtime["last_success_age_seconds"],
+                    "btcquant_shadow_consecutive_failures": runtime["consecutive_failures"],
+                    "btcquant_shadow_total_failures": runtime["total_failures"],
+                    "btcquant_shadow_outage_age_seconds": runtime["outage_age_seconds"],
                 }
             )
-    shadow_database = STATE / "execution-shadow.db"
-    if shadow_database.exists():
-        shadow = ShadowStore(shadow_database).summary()
-        evidence = shadow["evidence"]
-        runtime = shadow["runtime"]
-        metrics.update(
-            {
-                "btcquant_shadow_observation_days": evidence["observation_days"],
-                "btcquant_shadow_eligible_intents": evidence["eligible_intents"],
-                "btcquant_shadow_pending_quotes": shadow["pending_quotes"],
-                "btcquant_shadow_touch_proxy_rate": shadow["touch_proxy_rate"],
-                "btcquant_shadow_fallback_rate": shadow["fallback_rate"],
-                "btcquant_shadow_p95_touch_seconds": evidence["p95_fill_seconds"],
-                "btcquant_shadow_mean_all_in_cost_bps": evidence["mean_all_in_cost_bps"],
-                "btcquant_shadow_p95_all_in_cost_bps": evidence["p95_slippage_bps"],
-                "btcquant_shadow_mean_markout_bps": shadow["mean_markout_bps"],
-                "btcquant_shadow_proxy_qualified": int(shadow["proxy_qualification"]["passed"]),
-                "btcquant_shadow_last_success_age_seconds": runtime["last_success_age_seconds"],
-                "btcquant_shadow_consecutive_failures": runtime["consecutive_failures"],
-                "btcquant_shadow_total_failures": runtime["total_failures"],
-                "btcquant_shadow_outage_age_seconds": runtime["outage_age_seconds"],
-            }
-        )
+        except Exception:
+            app.logger.exception("Shadow metrics source unavailable")
+            metrics["btcquant_shadow_db_available"] = 0
+            safety_unknown = True
+
+    for key, snapshot in _cache_snapshots.items():
+        prefix = f"btcquant_source_{key}"
+        metrics[f"{prefix}_available"] = int(snapshot.freshness is not Freshness.UNAVAILABLE)
+        metrics[f"{prefix}_fresh"] = int(snapshot.freshness is Freshness.FRESH)
+        if snapshot.age_seconds is not None:
+            metrics[f"{prefix}_age_seconds"] = snapshot.age_seconds
+        if snapshot.freshness in {Freshness.UNAVAILABLE, Freshness.UNKNOWN}:
+            safety_unknown = True
+
     readiness, _status = _readiness_snapshot()
     metrics["btcquant_ready"] = int(readiness["status"] == "ready")
+    metrics["btcquant_execution_safety_unknown"] = int(safety_unknown)
     return Response(
         render_prometheus(metrics),
         content_type="text/plain; version=0.0.4; charset=utf-8",
@@ -300,6 +340,8 @@ def _gzip_response(resp: Response) -> Response:
 
 
 _cache: dict = {}
+_cache_snapshots: dict[str, SourceSnapshot] = {}
+_observation_cache: BoundedReadCache = BoundedReadCache()
 _warm_thread: threading.Thread | None = None
 _warm_thread_lock = threading.Lock()
 
@@ -352,29 +394,105 @@ def _fx_ex():
     return _cache["fx_binance"]
 
 
+_CACHE_MAX_STALE_SECONDS = {
+    "price": 120.0,
+    "ohlcv1h": 900.0,
+    "ohlcv4h": 1_800.0,
+    "funding": 1_800.0,
+    "fx_eur": 7_200.0,
+    "buyhold": 1_800.0,
+}
+_CACHE_MAX_AGE_SECONDS = {
+    "price": 90.0,
+    "ohlcv1h": 600.0,
+    "ohlcv4h": 1_200.0,
+    "funding": 900.0,
+    "fx_eur": 3_600.0,
+    "buyhold": 1_200.0,
+}
+_CACHE_SOURCES = {
+    "price": "HYPERLIQUID",
+    "ohlcv1h": "HYPERLIQUID_OHLCV_1H",
+    "ohlcv4h": "HYPERLIQUID_OHLCV_4H",
+    "funding": "HYPERLIQUID_FUNDING",
+    "fx_eur": "BINANCE_FX_DISPLAY_ONLY",
+    "buyhold": "HYPERLIQUID_OHLCV",
+}
+
+
+def _cache_observed_at(value):
+    if isinstance(value, dict) and value.get("__dashboard_value__") is not None:
+        raw = value.get("timestamp")
+    elif isinstance(value, dict):
+        raw = value.get("timestamp") or value.get("ts")
+    elif isinstance(value, list) and value and isinstance(value[-1], (list, tuple)):
+        raw = value[-1][0] if value[-1] else None
+    else:
+        raw = None
+    if raw is None:
+        return None
+    try:
+        numeric = float(raw)
+        if numeric > 10_000_000_000:
+            numeric /= 1000.0
+        return datetime.fromtimestamp(numeric, tz=UTC)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+
+def _cache_value(value):
+    if isinstance(value, dict) and "__dashboard_value__" in value:
+        return value["__dashboard_value__"]
+    return value
+
+
 def _cached(key: str, ttl: float, fn):
-    now = time.time()
-    hit = _cache.get(key)
-    if hit and now - hit[0] < ttl:
-        return hit[1]
+    policy = CachePolicy(
+        ttl_seconds=ttl,
+        max_stale_seconds=_CACHE_MAX_STALE_SECONDS.get(key, max(ttl * 3.0, ttl + 60.0)),
+        max_age_seconds=_CACHE_MAX_AGE_SECONDS.get(key, ttl),
+    )
     try:
         with _ex_lock:
-            value = fn()
-        _cache[key] = (now, value)
+            snapshot = _observation_cache.get(
+                key,
+                policy,
+                fn,
+                source=_CACHE_SOURCES.get(key, key),
+                observed_at=_cache_observed_at,
+            )
+        value = _cache_value(snapshot.value)
+        if snapshot.value is not value:
+            snapshot = SourceSnapshot(
+                value=value,
+                source=snapshot.source,
+                observed_at=snapshot.observed_at,
+                received_at=snapshot.received_at,
+                age_seconds=snapshot.age_seconds,
+                freshness=snapshot.freshness,
+                error=snapshot.error,
+                last_success_at=snapshot.last_success_at,
+            )
+        _cache_snapshots[key] = snapshot
         return value
     except Exception as error:
-        log.warning(
-            "Source réseau dashboard indisponible pour %s (%s)",
-            key,
-            type(error).__name__,
-        )
-        return hit[1] if hit else None
+        log.warning("Source réseau dashboard indisponible pour %s (%s)", key, type(error).__name__)
+        return None
+
+
+def _cache_snapshot(key: str) -> SourceSnapshot:
+    snapshot = _cache_snapshots.get(key)
+    if snapshot is None:
+        return SourceSnapshot.unavailable(source=_CACHE_SOURCES.get(key, key))
+    max_age = _CACHE_MAX_AGE_SECONDS.get(key)
+    max_stale = _CACHE_MAX_STALE_SECONDS.get(key)
+    return snapshot.at(max_age_seconds=max_age, max_stale_seconds=max_stale)
 
 
 # ── fetchers réseau (appelés via _cached ; préchauffés par _warm_loop) ──────
-def _get_price() -> float | None:
+def _get_price() -> dict | None:
     c = _hl().fetch_ohlcv(SYMBOL, "1m", limit=1)
-    return float(c[-1][4]) if c else None
+    return {"__dashboard_value__": float(c[-1][4]), "timestamp": c[-1][0]} if c else None
 
 
 def _get_candles_1h() -> list[list]:
@@ -396,12 +514,21 @@ def _get_funding() -> dict | None:
     if not hist:
         return None
     rate = float(hist[-1]["fundingRate"])
-    return {"rate": rate, "annualized": rate * 24 * 365}
+    return {
+        "rate": rate,
+        "annualized": rate * 24 * 365,
+        "timestamp": hist[-1].get("timestamp"),
+    }
 
 
-def _get_fx_eur() -> float | None:
+def _get_fx_eur() -> dict | None:
     t = _fx_ex().fetch_ticker("EUR/USDT")
-    return float(t["last"]) if t and t.get("last") else None
+    if not t or not t.get("last") or not t.get("timestamp"):
+        return None
+    return {
+        "__dashboard_value__": float(t["last"]),
+        "timestamp": t["timestamp"],
+    }
 
 
 #     (clé cache, TTL endpoint, TTL préchauffage, fetch)
@@ -539,6 +666,10 @@ def summary():
     funding = _cached("funding", 300, _get_funding)
     # taux EUR/USDT pour l'affichage optionnel en euros (1 EUR = X USDT)
     eur_usd = _cached("fx_eur", 3600, _get_fx_eur)
+    price_snapshot = _cache_snapshot("price")
+    candles_snapshot = _cache_snapshot("ohlcv1h")
+    funding_snapshot = _cache_snapshot("funding")
+    fx_snapshot = _cache_snapshot("fx_eur")
 
     # variation 24 h : clôture d'il y a 24 bougies 1h vs prix courant
     change_24h = None
@@ -555,6 +686,14 @@ def summary():
     trend_age = _engine_age_seconds("trend", "live_state_4x.json")
     carry_age = _engine_age_seconds("carry", "carry_state.json")
 
+    def _engine_freshness(age: float | None, limit: float) -> str:
+        if age is None:
+            return Freshness.UNAVAILABLE.value
+        return Freshness.FRESH.value if age <= limit else Freshness.STALE.value
+
+    trend_freshness = _engine_freshness(trend_age, ENGINE_MAX_AGE_SECONDS["trend"])
+    carry_freshness = _engine_freshness(carry_age, ENGINE_MAX_AGE_SECONDS["carry"])
+
     trend_equity = (
         float(trend_eq.iloc[-1])
         if len(trend_eq)
@@ -564,9 +703,41 @@ def summary():
         float(carry_eq.iloc[-1]) if len(carry_eq) else float(carry_state.get("equity", 0.0))
     )
     total = trend_equity + carry_equity
+    accounting_available = (
+        bool(trend_state)
+        and bool(carry_state)
+        and (bool(len(trend_eq)) or bool(trend_state.get("slots")))
+    )
     initial_total = INITIAL_CAPITAL
     database = STATE / "btcquant.db"
-    store = StateStore(database, initialize=False) if database.exists() else None
+    store = StateStore(database, initialize=False, read_only=True) if database.exists() else None
+    accounting_status = (
+        "FRESH"
+        if accounting_available
+        else "EMPTY_BUT_VALID"
+        if database.exists()
+        else "SOURCE_UNAVAILABLE"
+    )
+    trend_observed_at = store.engine_updated_at("trend") if store is not None else None
+    carry_observed_at = store.engine_updated_at("carry") if store is not None else None
+    state_price_temporal = temporal_skew(
+        {"state": trend_observed_at, "price": price_snapshot.observed_at},
+        max_skew_seconds=TEMPORAL_SKEW_MAX_SECONDS,
+    )
+    if (
+        price_snapshot.freshness in (Freshness.UNAVAILABLE, Freshness.UNKNOWN)
+        or trend_freshness in (Freshness.UNAVAILABLE.value, Freshness.UNKNOWN.value)
+        or state_price_temporal["freshness_status"] == Freshness.UNKNOWN.value
+    ):
+        market_valuation_status = "UNKNOWN"
+    elif (
+        price_snapshot.freshness is Freshness.STALE
+        or trend_freshness == Freshness.STALE.value
+        or state_price_temporal["freshness_status"] == Freshness.STALE.value
+    ):
+        market_valuation_status = "STALE_MARK_TO_MARKET_ESTIMATE"
+    else:
+        market_valuation_status = "MARK_TO_MARKET_ESTIMATE"
     pending_deposits = store.read_deposits(status="PENDING") if store is not None else []
     pending_deposit_amount = sum(float(item["amount"]) for item in pending_deposits)
     flows = _read_flows()
@@ -600,7 +771,7 @@ def summary():
         if pos:
             direction = pos.get("direction", 1)
             upnl = None
-            if price:
+            if price and market_valuation_status != "UNKNOWN":
                 upnl = direction * pos["qty"] * (price - pos["entry_price"])
             row.update(
                 state="LONG" if direction == 1 else "SHORT",
@@ -609,6 +780,15 @@ def summary():
                 stop=pos["stop_price"],
                 bars=pos.get("bars_held"),
                 upnl=upnl,
+                position_as_of=trend_observed_at.isoformat() if trend_observed_at else None,
+                market_price_as_of=price_snapshot.observed_at.isoformat()
+                if price_snapshot.observed_at
+                else None,
+                price_source=price_snapshot.source,
+                state_age=trend_age,
+                price_age=price_snapshot.age_seconds,
+                source_skew=state_price_temporal["max_source_skew_seconds"],
+                valuation_status=market_valuation_status,
             )
         slots.append(row)
 
@@ -618,7 +798,7 @@ def summary():
     # exposition brute / levier effectif (somme des notionnels / équity totale)
     trend_notional = 0.0
     for sl in slots:
-        if sl.get("qty") and price:
+        if sl.get("qty") and price and market_valuation_status != "UNKNOWN":
             trend_notional += abs(sl["qty"]) * price
     carry_notional = carry_equity * CARRY_POLICY.leverage if carry_state.get("in_position") else 0.0
     gross_notional = trend_notional + carry_notional
@@ -634,23 +814,66 @@ def summary():
         }
         operational["open_incidents"] = store.read_incidents(open_only=True)
 
+    source_observations = {
+        "price": price_snapshot.observed_at,
+        "candles_1h": candles_snapshot.observed_at,
+        "funding": funding_snapshot.observed_at,
+        "fx_eur": fx_snapshot.observed_at,
+        "trend_state": trend_observed_at,
+        "carry_state": carry_observed_at,
+    }
+    required_source_fresh = (
+        price_snapshot.freshness is Freshness.FRESH
+        and trend_freshness == Freshness.FRESH.value
+        and state_price_temporal["freshness_status"] == Freshness.FRESH.value
+    )
     return jsonify(
         {
-            "now": pd.Timestamp.now(tz="UTC").isoformat(),
+            "api_schema_version": 2,
+            "generated_at": pd.Timestamp.now(tz="UTC").isoformat(),
+            "data_as_of": price_snapshot.observed_at.isoformat()
+            if price_snapshot.observed_at
+            else None,
             "mode": "PAPER",
+            "sources": {
+                "price": price_snapshot.to_dict(),
+                "candles_1h": candles_snapshot.to_dict(),
+                "funding": funding_snapshot.to_dict(),
+                "fx_eur": fx_snapshot.to_dict(),
+            },
+            "temporal": temporal_skew(
+                source_observations,
+                max_skew_seconds=TEMPORAL_SKEW_MAX_SECONDS,
+            ),
             "btc": {
                 "price": price,
                 "change24h": change_24h,
+                "source": price_snapshot.source,
+                "observed_at": price_snapshot.observed_at.isoformat()
+                if price_snapshot.observed_at
+                else None,
+                "received_at": price_snapshot.received_at.isoformat(),
+                "age_seconds": price_snapshot.age_seconds,
+                "freshness": price_snapshot.freshness.value,
+                "valuation_status": market_valuation_status,
             },
             "funding": {
                 "rate": funding["rate"] if funding else None,
                 "annualized": funding["annualized"] if funding else None,
                 "next_ts": next_funding,
+                "source": funding_snapshot.source,
+                "observed_at": funding_snapshot.observed_at.isoformat()
+                if funding_snapshot.observed_at
+                else None,
+                "age_seconds": funding_snapshot.age_seconds,
+                "freshness": funding_snapshot.freshness.value,
             },
             "trend": {
                 "alive": trend_age is not None and trend_age < 240,
+                "freshness": trend_freshness,
+                "observed_at": trend_observed_at.isoformat() if trend_observed_at else None,
                 "age_s": trend_age,
-                "equity": trend_equity,
+                "equity": trend_equity if accounting_available else None,
                 "initial": PORTFOLIO.trend_capital,
                 "halted": trend_state.get("halted", False),
                 "daily_lockout": trend_state.get("daily_lockout", False),
@@ -659,8 +882,10 @@ def summary():
             },
             "carry": {
                 "alive": carry_age is not None and carry_age < 900,
+                "freshness": carry_freshness,
+                "observed_at": carry_observed_at.isoformat() if carry_observed_at else None,
                 "age_s": carry_age,
-                "equity": carry_equity,
+                "equity": carry_equity if accounting_available else None,
                 "initial": PORTFOLIO.carry_capital,
                 "in_position": carry_state.get("in_position", False),
                 "last_funding_ts": carry_state.get("last_funding_ts"),
@@ -672,25 +897,44 @@ def summary():
                 "peak_equity": carry_state.get("peak_equity"),
             },
             "totals": {
-                "equity": total,
+                "equity": total if accounting_available else None,
+                "status": accounting_status,
                 "initial": initial_total,
                 "deposits": deposits,
                 "pending_deposits": pending_deposit_amount,
                 "pending_deposit_count": len(pending_deposits),
-                "pnl": total - invested,
-                "pnl_pct": total / invested - 1.0 if invested > 0 else None,
+                "pnl": total - invested if accounting_available else None,
+                "pnl_pct": total / invested - 1.0
+                if accounting_available and invested > 0
+                else None,
                 "day_pnl_pct": day_pnl_pct,
-                "allocation_trend": trend_equity / total if total else None,
-                "gross_notional": gross_notional,
-                "leverage": leverage,
+                "allocation_trend": trend_equity / total
+                if accounting_available and total
+                else None,
+                "gross_notional": gross_notional if accounting_available else None,
+                "leverage": leverage if accounting_available else None,
             },
             "health": {
-                "server_uptime_s": time.time() - START_TIME,
+                "server_uptime_s": max(0.0, time.monotonic() - START_TIME),
                 "api_latency_ms": _cache.get("api_ms"),
                 "next_bar_ts": int(next_bar.timestamp() * 1000),
+                "safety_status": (
+                    "PASS" if required_source_fresh and accounting_status == "FRESH" else "UNKNOWN"
+                ),
+                "valuation_status": market_valuation_status,
+                "source_skew": state_price_temporal["max_source_skew_seconds"],
                 **operational,
             },
-            "fx": {"eur_usd": eur_usd},
+            "fx": {
+                "eur_usd": eur_usd,
+                "source": fx_snapshot.source,
+                "observed_at": fx_snapshot.observed_at.isoformat()
+                if fx_snapshot.observed_at
+                else None,
+                "age_seconds": fx_snapshot.age_seconds,
+                "freshness": fx_snapshot.freshness.value,
+                "display_only": True,
+            },
         }
     )
 
@@ -699,18 +943,42 @@ def summary():
 def operations():
     database = STATE / "btcquant.db"
     if not database.exists():
-        return jsonify({"execution": {}, "incidents": [], "deposits": []})
-    store = StateStore(database, initialize=False)
-    incidents = store.read_incidents()
-    for incident in incidents:
-        incident["context"] = json.loads(incident["context"])
+        return jsonify(
+            {
+                "status": "SOURCE_UNAVAILABLE",
+                "source": "trading_db",
+                "execution": None,
+                "incidents": None,
+                "deposits": None,
+            }
+        ), 503
+    try:
+        store = StateStore(database, initialize=False, read_only=True)
+        incidents = store.read_incidents()
+        for incident in incidents:
+            incident["context"] = json.loads(incident["context"])
+        execution = {
+            engine: execution_health(store, engine).to_dict() for engine in ("trend", "carry")
+        }
+        deposits = store.read_deposits()
+    except Exception:
+        app.logger.exception("Operational source unavailable")
+        return jsonify(
+            {
+                "status": "SOURCE_CORRUPT",
+                "source": "trading_db",
+                "execution": None,
+                "incidents": None,
+                "deposits": None,
+            }
+        ), 503
     return jsonify(
         {
-            "execution": {
-                engine: execution_health(store, engine).to_dict() for engine in ("trend", "carry")
-            },
+            "status": "OK",
+            "source": "trading_db",
+            "execution": execution,
             "incidents": incidents,
-            "deposits": store.read_deposits(),
+            "deposits": deposits,
         }
     )
 
@@ -725,10 +993,21 @@ def execution_shadow():
             {
                 "schema_version": 1,
                 "status": "NOT_STARTED",
+                "source_status": "EMPTY_BUT_VALID",
                 "warning": "aucune observation shadow disponible",
             }
         )
-    return jsonify(ShadowStore(database).summary())
+    try:
+        return jsonify(ShadowStore(database, read_only=True).summary())
+    except Exception:
+        app.logger.exception("Shadow source unavailable")
+        return jsonify(
+            {
+                "schema_version": 1,
+                "status": "SOURCE_CORRUPT",
+                "source_status": "SOURCE_CORRUPT",
+            }
+        ), 503
 
 
 @app.route("/api/equity")
@@ -742,10 +1021,14 @@ def equity():
         return [[int(ts.timestamp() * 1000), round(float(v), 2)] for ts, v in s.items()]
 
     combined = _combined_equity()
+    if not (STATE / "btcquant.db").exists() and (not len(trend) or not len(carry)):
+        return jsonify({"status": "SOURCE_UNAVAILABLE", "source": "reporting"}), 503
     buyhold = _cached("buyhold", 600, _get_buyhold) or []
 
     return jsonify(
         {
+            "status": "OK" if len(trend) and len(carry) else "EMPTY_BUT_VALID",
+            "source": "reporting",
             "trend": pack(trend),
             "carry": pack(carry),
             "combined": pack(combined),
@@ -896,10 +1179,18 @@ def conformity():
 
 @app.route("/api/readiness")
 def readiness():
-    """Évaluation du protocole transactionnel paper → testnet."""
+    # Campaign qualification is separate from operational service readiness.
     database = STATE / "btcquant.db"
-    store = StateStore(database)
-    return jsonify(evaluate_readiness(store, persist=False))
+    if not database.exists():
+        return jsonify({"status": "SOURCE_UNAVAILABLE", "campaign_qualification": "UNKNOWN"}), 503
+    try:
+        store = StateStore(database, initialize=False, read_only=True)
+        payload = evaluate_readiness(store, persist=False)
+    except Exception:
+        app.logger.exception("Campaign readiness source unavailable")
+        return jsonify({"status": "SOURCE_UNAVAILABLE", "campaign_qualification": "UNKNOWN"}), 503
+    payload["campaign_qualification"] = "SEPARATE"
+    return jsonify(payload)
 
 
 @app.route("/api/yearly")

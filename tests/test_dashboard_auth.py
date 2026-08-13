@@ -11,7 +11,11 @@ def test_health_probe_never_exposes_business_data(monkeypatch):
     response = dashboard.app.test_client().get("/healthz")
 
     assert response.status_code == 200
-    assert response.get_json() == {"status": "ok"}
+    assert response.get_json() == {
+        "api_schema_version": 2,
+        "kind": "PROCESS_LIVENESS",
+        "status": "ok",
+    }
 
 
 def test_url_token_is_rejected_and_redirects_to_login(monkeypatch):

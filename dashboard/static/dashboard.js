@@ -214,10 +214,28 @@ document.querySelectorAll("#dashboard-view [data-view]").forEach(button => butto
   if (PREFS.view === "performance") setChartUnit("pct");
 });
 
+function markSummaryUnavailable() {
+  const freshness = $("data-freshness");
+  freshness.classList.remove("stale");
+  freshness.classList.add("unknown");
+  $("data-age").textContent = "source indisponible — UNKNOWN";
+  setState($("trend-state"), false, "UNKNOWN");
+  setState($("carry-state"), false, "UNKNOWN");
+  $("alert").style.display = "flex";
+  $("alert").className = "";
+  $("alert-msg").textContent = "Données opérationnelles indisponibles — aucun état LIVE confirmé";
+}
+
+let summaryRequestSequence = 0;
 async function refreshSummary() {
-  const s = await (await fetch("/api/summary")).json();
-  btcPrice = s.btc.price; if (s.fx) fx = s.fx; lastSummary = s; lastSummaryUpdatedAt = Date.now();
-  $("h-price").textContent = s.btc.price ? s.btc.price.toLocaleString(LOCALE(), {maximumFractionDigits:0}) + " $" : "—";
+  const requestSequence = ++summaryRequestSequence;
+  try {
+    const response = await fetch("/api/summary");
+    if (!response.ok) throw new Error("summary_http_" + response.status);
+    const s = await response.json();
+    if (requestSequence !== summaryRequestSequence) return;
+    btcPrice = s.btc.price; if (s.fx) fx = s.fx; lastSummary = s; lastSummaryUpdatedAt = Date.now();
+    $("h-price").textContent = s.btc.price ? s.btc.price.toLocaleString(LOCALE(), {maximumFractionDigits:0}) + " $" : "—";
   $("h-change").textContent = fmtPct(s.btc.change24h); cls($("h-change"), s.btc.change24h);
   $("h-funding").textContent = fmtPct(s.funding.annualized, 1); cls($("h-funding"), s.funding.annualized);
 
@@ -247,8 +265,8 @@ async function refreshSummary() {
     ? `${t("pending_deposit")} : ${fmt$(pendingDeposit)} · ${s.totals.pending_deposit_count}`
     : "";
 
-  setState($("trend-state"), s.trend.alive);
-  setState($("carry-state"), s.carry.alive);
+  setState($("trend-state"), s.trend.alive, s.trend.freshness);
+  setState($("carry-state"), s.carry.alive, s.carry.freshness);
   $("trend-beat").textContent = beat(s.trend.age_s);
   $("carry-beat").textContent = beat(s.carry.age_s);
 
@@ -256,8 +274,11 @@ async function refreshSummary() {
   const issues = [];
   // Les commandes affichées ici sont celles réellement exécutables sur le VPS :
   // les moteurs tournent sous systemd, pas via un script Python.
-  if (!s.trend.alive) issues.push(["crit", "le moteur Trend ne répond plus — sur le VPS : sudo systemctl restart btcquant-trend"]);
-  if (!s.carry.alive) issues.push(["crit", "le moteur Carry ne répond plus — sur le VPS : sudo systemctl restart btcquant-carry"]);
+  if (!s.trend.alive || s.trend.freshness === "UNKNOWN" || s.trend.freshness === "UNAVAILABLE") issues.push(["crit", "état Trend non confirmé"]);
+  else if (s.trend.freshness === "STALE") issues.push(["warn", "données Trend périmées"]);
+  if (!s.carry.alive || s.carry.freshness === "UNKNOWN" || s.carry.freshness === "UNAVAILABLE") issues.push(["crit", "état Carry non confirmé"]);
+  else if (s.carry.freshness === "STALE") issues.push(["warn", "données Carry périmées"]);
+  if (s.btc.freshness !== "FRESH") issues.push([s.btc.freshness === "STALE" ? "warn" : "crit", "prix BTC non frais — valorisation non LIVE"]);
   if (s.trend.halted) issues.push(["crit", "KILL-SWITCH Trend déclenché : drawdown maximal atteint, positions liquidées"]);
   if (s.carry.halted) issues.push(["crit", "KILL-SWITCH Carry déclenché : drawdown maximal atteint, position fermée"]);
   if (s.carry.daily_lockout) issues.push(["warn", "Carry : limite de perte journalière atteinte — plus d'entrées avant demain (UTC)"]);
@@ -301,6 +322,11 @@ async function refreshSummary() {
   checkAlerts(s);
   updateDataFreshness();
   $("f-updated").textContent = (PREFS.lang==="en"?"updated ":"mis à jour ") + new Date().toLocaleTimeString(LOCALE());
+  } catch (error) {
+    console.error(error);
+    if (requestSequence === summaryRequestSequence) markSummaryUnavailable();
+    throw error;
+  }
 }
 
 // ── exposition + santé + countdowns ────────────────────────
@@ -338,9 +364,12 @@ function updateCountdowns() {
   if ($("pulse-next-funding")) $("pulse-next-funding").textContent = cdText(nextFundingTs);
 }
 setInterval(() => { updateCountdowns(); updateDataFreshness(); }, 1000);
-function setState(el, alive) {
-  el.className = "estate " + (alive ? "on" : "off");
-  el.innerHTML = '<span class="dot"></span>' + (alive ? t("online") : t("offline"));
+function setState(el, alive, freshness) {
+  const state = freshness || (alive ? "FRESH" : "UNAVAILABLE");
+  const fresh = state === "FRESH";
+  const stale = state === "STALE";
+  el.className = "estate " + (fresh ? "on" : stale ? "warn" : "off");
+  el.innerHTML = '<span class="dot"></span>' + (fresh ? t("online") : stale ? "STALE" : "UNKNOWN");
 }
 function beat(age) {
   if (age == null) return "";
@@ -352,8 +381,10 @@ function beat(age) {
 function renderCockpitStatus(s) {
   const critical = [], warnings = [];
   const incidents = (s.health && s.health.open_incidents) || [];
-  if (!s.trend.alive) critical.push(t("status_trend_down"));
-  if (!s.carry.alive) critical.push(t("status_carry_down"));
+  if (!s.trend.alive || ["UNKNOWN", "UNAVAILABLE"].includes(s.trend.freshness)) critical.push("Trend state UNKNOWN");
+  else if (s.trend.freshness === "STALE") warnings.push("Trend state STALE");
+  if (!s.carry.alive || ["UNKNOWN", "UNAVAILABLE"].includes(s.carry.freshness)) critical.push("Carry state UNKNOWN");
+  else if (s.carry.freshness === "STALE") warnings.push("Carry state STALE");
   if (s.trend.halted) critical.push(t("status_kill"));
   if (s.trend.daily_lockout) warnings.push(t("status_lockout"));
   for (const incident of incidents) {
@@ -380,7 +411,10 @@ function updateDataFreshness() {
   }
   stamp.textContent = elapsed;
   const staleAfter = PREFS.refresh ? Math.max(45, PREFS.refresh / 1000 + 15) : 90;
-  freshness.classList.toggle("stale", age > staleAfter);
+  const sourceStatus = lastSummary?.btc?.freshness || "UNKNOWN";
+  freshness.classList.toggle("stale", sourceStatus === "STALE" || age > staleAfter);
+  freshness.classList.toggle("unknown", sourceStatus === "UNKNOWN" || sourceStatus === "UNAVAILABLE");
+  if (sourceStatus !== "FRESH") stamp.textContent += " · " + sourceStatus;
 }
 
 function focusMetric(label, value, note = "", tone = "") {
@@ -413,7 +447,10 @@ function renderPerformanceBrief(s) {
 function renderRiskRadar(s) {
   const profile = trendStopProfile(s), m = lastMetrics || {};
   const lev = s.totals.leverage || 0;
-  const engineDown = !s.trend.alive || !s.carry.alive;
+  const engineDown = !s.trend.alive
+    || !s.carry.alive
+    || s.trend.freshness !== "FRESH"
+    || s.carry.freshness !== "FRESH";
   const protection = engineDown ? t("risk_engine_down") : s.trend.halted ? t("risk_halted") : s.trend.daily_lockout ? t("risk_lockout") : t("risk_armed");
   const protectionTone = engineDown || s.trend.halted ? "crit" : s.trend.daily_lockout ? "warn" : "";
   const margin = profile.nearest == null ? "—" : fmtPct(profile.nearest, 1);
@@ -427,13 +464,30 @@ function renderRiskRadar(s) {
 
 function renderMonitorPulse(s) {
   const h = s.health || {};
-  const engine = (label, alive, age) => `<div class="ops-item ${alive ? "" : "crit"}"><span class="ops-dot"></span><div class="ops-copy"><div class="ops-label">${label}</div><div class="ops-value">${alive ? t("monitor_ready") : t("monitor_silent")}</div><div class="ops-note">${beat(age).replace(/^·\s*/, "") || "—"}</div></div></div>`;
+  const engine = (label, alive, age, freshness) => {
+    const fresh = freshness === "FRESH" && alive;
+    const stale = freshness === "STALE";
+    const status = fresh ? t("monitor_ready") : stale ? "STALE" : "UNKNOWN";
+    const tone = fresh ? "" : stale ? "warn" : "crit";
+    return '<div class="ops-item ' + tone + '"><span class="ops-dot"></span><div class="ops-copy"><div class="ops-label">'
+      + label + '</div><div class="ops-value">' + status + '</div><div class="ops-note">'
+      + (beat(age).replace(/^·\s*/, "") || "—") + '</div></div></div>';
+  };
   $("monitor-pulse").innerHTML =
-    engine(t("monitor_trend"), s.trend.alive, s.trend.age_s) +
-    engine(t("monitor_carry"), s.carry.alive, s.carry.age_s) +
-    `<div class="ops-item"><span class="ops-dot"></span><div class="ops-copy"><div class="ops-label">${t("monitor_next_bar")}</div><div class="ops-value num" id="pulse-next-bar">${cdText(h.next_bar_ts)}</div><div class="ops-note">${t("next_bar")}</div></div></div>` +
-    `<div class="ops-item ${h.api_latency_ms > 1000 ? "warn" : ""}"><span class="ops-dot"></span><div class="ops-copy"><div class="ops-label">${t("monitor_binance")}</div><div class="ops-value num">${h.api_latency_ms != null ? Math.round(h.api_latency_ms) + " ms" : "—"}</div><div class="ops-note">${t("monitor_funding")} · <span id="pulse-next-funding">${cdText(s.funding.next_ts)}</span></div></div></div>`;
-}
+    engine(t("monitor_trend"), s.trend.alive, s.trend.age_s, s.trend.freshness) +
+    engine(t("monitor_carry"), s.carry.alive, s.carry.age_s, s.carry.freshness) +
+    '<div class="ops-item"><span class="ops-dot"></span><div class="ops-copy"><div class="ops-label">'
+      + t("monitor_next_bar") + '</div><div class="ops-value num" id="pulse-next-bar">'
+      + cdText(h.next_bar_ts) + '</div><div class="ops-note">' + t("next_bar")
+      + '</div></div></div>' +
+    '<div class="ops-item ' + (h.api_latency_ms > 1000 ? "warn" : "")
+      + '"><span class="ops-dot"></span><div class="ops-copy"><div class="ops-label">'
+      + t("monitor_binance") + '</div><div class="ops-value num">'
+      + (h.api_latency_ms != null ? Math.round(h.api_latency_ms) + " ms" : "—")
+      + '</div><div class="ops-note">' + t("monitor_funding")
+      + ' · <span id="pulse-next-funding">' + cdText(s.funding.next_ts)
+      + '</span></div></div></div>';
+  }
 
 function renderViewFocus(s) {
   renderPerformanceBrief(s);
@@ -556,7 +610,9 @@ function drawFunding(pts) {
 })();
 
 async function refreshEquity() {
-  chartData = await (await fetch("/api/equity")).json();
+  const response = await fetch("/api/equity");
+  if (!response.ok) throw new Error("equity_http_" + response.status);
+  chartData = await response.json();
   drawChart(); drawSpark();
 }
 
@@ -605,8 +661,16 @@ function kvRow(k, v, note, status) {
 
 // ── critères go/no-go paper → testnet (évalués côté serveur) ──
 async function refreshReadiness() {
-  const r = await (await fetch("/api/readiness")).json();
   const badge = $("rdy-badge");
+  try {
+    const response = await fetch("/api/readiness");
+    const r = await response.json();
+  if (!response.ok || !Array.isArray(r.checks)) {
+    badge.textContent = "?";
+    badge.style.color = "var(--crit)";
+    $("readiness").innerHTML = `<div class="kv"><span class="k">Source de readiness</span><span class="num" style="color:var(--crit)">${esc(r.status || "UNKNOWN")}</span></div>`;
+    return;
+  }
   badge.textContent = `${r.n_ok}/${r.n_total}`;
   badge.style.color = r.ready ? "var(--good-text)" : "var(--ink-2)";
   const dot = s => s === "ok" ? "var(--good)" : s === "warn" ? "var(--warn)" : "var(--muted)";
@@ -616,6 +680,12 @@ async function refreshReadiness() {
     ${c.note ? `<div style="flex-basis:100%;font-size:11.5px;color:var(--muted);padding:2px 0 0 15px">${esc(c.note)}</div>` : ""}
   </div>`).join("")
   + (r.ready ? `<div style="margin-top:8px;font-size:12px;color:var(--good-text);font-weight:700">✓ Tous les critères sont au vert — décision testnet à prendre.</div>` : "");
+  } catch (error) {
+    console.error(error);
+    badge.textContent = "?";
+    badge.style.color = "var(--crit)";
+    $("readiness").innerHTML = "<div class=\"kv\"><span class=\"k\">Source de readiness</span><span class=\"num\" style=\"color:var(--crit)\">UNKNOWN</span></div>";
+  }
 }
 
 // ── années précédentes (backtest) : barres annuelles portefeuille vs BTC ──
@@ -1186,8 +1256,8 @@ function notify(title, body, tag) {
 }
 let alertState = {trendAlive:true, carryAlive:true, halted:false, ddNotified:false, posKeys:new Set()};
 function checkAlerts(s) {
-  if (alertState.trendAlive && !s.trend.alive) notify("⚠ Moteur Trend arrêté", "Le runner Trend ne répond plus.", "trend-down");
-  if (alertState.carryAlive && !s.carry.alive) notify("⚠ Moteur Carry arrêté", "Le runner Carry ne répond plus.", "carry-down");
+  if (alertState.trendAlive && (!s.trend.alive || s.trend.freshness !== "FRESH")) notify("⚠ Moteur Trend non confirmé", "Le runner Trend est arrêté ou ses données sont périmées.", "trend-down");
+  if (alertState.carryAlive && (!s.carry.alive || s.carry.freshness !== "FRESH")) notify("⚠ Moteur Carry non confirmé", "Le runner Carry est arrêté ou ses données sont périmées.", "carry-down");
   alertState.trendAlive = s.trend.alive; alertState.carryAlive = s.carry.alive;
   if (!alertState.halted && s.trend.halted) notify("⛔ KILL-SWITCH", "Drawdown maximal atteint, positions liquidées.", "kill");
   alertState.halted = s.trend.halted;
