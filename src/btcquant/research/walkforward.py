@@ -19,6 +19,7 @@ import pandas as pd
 from ..backtest.engine import BacktestEngine
 from ..backtest.metrics import compute_metrics
 from ..strategies.base import Strategy
+from .governance import GovernanceError
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +51,9 @@ def walk_forward(
     bars_per_year_value: float | None = None,
     fixed_params: dict | None = None,
 ) -> WalkForwardResult:
+    raise GovernanceError(
+        "legacy walk-forward désactivé; utiliser governed_walk_forward avec ExperimentSpec"
+    )
     fixed = dict(fixed_params or {})
     combos = _param_combos(param_grid)
     warmup = strategy_cls(**fixed).warmup_bars()

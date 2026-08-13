@@ -27,6 +27,7 @@ from btcquant.console import enable_utf8_output
 
 enable_utf8_output()
 
+from btcquant.research.search_gates import require_diagnostic_label
 from btcquant.backtest.engine import BacktestEngine
 from btcquant.backtest.metrics import compute_metrics
 from btcquant.carry import add_funding_columns, load_funding
@@ -129,7 +130,9 @@ def load_all() -> dict[str, pd.DataFrame]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, default=REFERENCE)
+    parser.add_argument("--diagnostic-label")
     args = parser.parse_args()
+    require_diagnostic_label(args.diagnostic_label)
     dfs = load_all()
     common_start = max(df.index[0] for df in dfs.values())
     common_end = min(df.index[-1] for df in dfs.values())

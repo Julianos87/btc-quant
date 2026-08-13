@@ -180,6 +180,9 @@ def _candidate_for_rule(
 
 
 def main() -> None:
+    from btcquant.research.search_gates import refuse_ungoverned_search
+
+    refuse_ungoverned_search(__file__)
     funding = load_funding(data_dir=ROOT / "data", refresh=False)
     policy = PAPER_CARRY_POLICY
     baseline = _evaluate(

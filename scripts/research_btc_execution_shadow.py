@@ -93,6 +93,9 @@ def _arguments() -> argparse.Namespace:
 
 
 def main() -> None:
+    from btcquant.research.search_gates import refuse_ungoverned_search
+
+    refuse_ungoverned_search(__file__)
     args = _arguments()
     if args.samples < 1 or args.interval_seconds < 0:
         raise ValueError("samples doit être >= 1 et interval-seconds >= 0")

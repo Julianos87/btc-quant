@@ -95,6 +95,9 @@ def _combine_equity(
 
 
 def main() -> None:
+    from btcquant.research.search_gates import refuse_ungoverned_search
+
+    refuse_ungoverned_search(__file__)
     cfg = load_config(CONFIG)
     from btcquant.carry import add_funding_columns, load_funding
     from btcquant.data import TIMEFRAME_TO_PANDAS, load_ohlcv, resample
