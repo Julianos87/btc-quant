@@ -141,7 +141,9 @@ class GovernanceStore:
     """SQLite store with a separate schema and transaction boundary."""
 
     def __init__(self, path: str | Path | None = None) -> None:
-        configured = path or os.environ.get("BTCQUANT_GOVERNANCE_DB")
+        configured_from_env = os.environ.get("BTCQUANT_GOVERNANCE_DB")
+        configured = path or configured_from_env
+        self.path_is_explicit = path is not None or configured_from_env is not None
         self.path = Path(configured or DEFAULT_GOVERNANCE_DB)
         resolved = self.path.expanduser().resolve()
         if resolved.name in _TRADING_DB_NAMES:
@@ -162,6 +164,11 @@ class GovernanceStore:
 
     def __exit__(self, *_: object) -> None:
         self.close()
+
+    def resolved_path(self) -> Path:
+        """Absolute path used by this store, for audit and operator reports."""
+
+        return self.path.expanduser().resolve()
 
     def _configure_connection(self) -> None:
         self._connection.execute("PRAGMA foreign_keys=ON")
@@ -352,6 +359,15 @@ class GovernanceStore:
 
         key = f"policy:{policy_version}"
         with self._transaction():
+            if status == "FROZEN":
+                payloads = self._policy_transition_payloads(policy_version)
+                states = tuple(
+                    state
+                    for payload in payloads
+                    for state in (payload.get("previous_state"), payload.get("new_state"))
+                )
+                if states != ("PROPOSED", "APPROVED", "APPROVED", "FROZEN"):
+                    raise GovernanceStoreError("FROZEN policy requires the complete lifecycle")
             row = self._connection.execute(
                 "SELECT value FROM governance_metadata WHERE key=?", (key,)
             ).fetchone()
@@ -373,6 +389,20 @@ class GovernanceStore:
                 {"fingerprint": fingerprint, "status": status},
             )
 
+    def _policy_transition_payloads(self, policy_version: str) -> list[dict[str, Any]]:
+        rows = self._connection.execute(
+            "SELECT payload_json FROM governance_events "
+            "WHERE event_type=? AND entity_type=? AND entity_id=? ORDER BY event_id",
+            ("POLICY_LIFECYCLE_TRANSITION", "policy", policy_version),
+        ).fetchall()
+        payloads: list[dict[str, Any]] = []
+        for row in rows:
+            payload = json.loads(str(row[0]))
+            if not isinstance(payload, dict):
+                raise GovernanceStoreError("invalid policy lifecycle event")
+            payloads.append(payload)
+        return payloads
+
     def record_policy_transition(
         self,
         *,
@@ -384,12 +414,13 @@ class GovernanceStore:
         new_state: str,
         base_git_sha: str,
     ) -> None:
-        """Persist an auditable policy lifecycle transition."""
+        """Persist only the exact PROPOSED->APPROVED->FROZEN chain."""
 
+        allowed = {("PROPOSED", "APPROVED"), ("APPROVED", "FROZEN")}
+        if (previous_state, new_state) not in allowed:
+            raise GovernanceStoreError("invalid policy lifecycle transition")
         if not base_git_sha or len(base_git_sha) != 40:
             raise GovernanceStoreError("base_git_sha must be a full Git SHA")
-        if previous_state == new_state:
-            raise GovernanceStoreError("policy lifecycle state must change")
         payload = {
             "policy_version": policy_version,
             "trend_fingerprint": trend_fingerprint,
@@ -401,7 +432,50 @@ class GovernanceStore:
             "base_git_sha": base_git_sha,
         }
         with self._transaction():
+            existing = self._policy_transition_payloads(policy_version)
+            if not existing:
+                if previous_state != "PROPOSED":
+                    raise GovernanceStoreError("policy lifecycle must start at PROPOSED")
+            elif existing[-1].get("new_state") != previous_state:
+                raise GovernanceStoreError("policy lifecycle transition is out of order")
             self._event("POLICY_LIFECYCLE_TRANSITION", "policy", policy_version, payload)
+
+    def verify_policy_freeze(
+        self,
+        *,
+        policy_version: str,
+        trend_fingerprint: str,
+        carry_fingerprint: str,
+        combined_fingerprint: str,
+        base_git_sha: str,
+    ) -> None:
+        """Verify the durable seal and exact two-step lifecycle chain."""
+
+        payloads = self._policy_transition_payloads(policy_version)
+        if len(payloads) != 2:
+            raise GovernanceStoreError("policy lifecycle is not exactly PROPOSED->APPROVED->FROZEN")
+        expected_common = {
+            "policy_version": policy_version,
+            "trend_fingerprint": trend_fingerprint,
+            "carry_fingerprint": carry_fingerprint,
+            "combined_fingerprint": combined_fingerprint,
+            "base_git_sha": base_git_sha,
+        }
+        states = tuple(
+            state
+            for payload in payloads
+            for state in (payload.get("previous_state"), payload.get("new_state"))
+        )
+        if states != ("PROPOSED", "APPROVED", "APPROVED", "FROZEN"):
+            raise GovernanceStoreError("invalid durable policy lifecycle")
+        if any(
+            any(payload.get(key) != value for key, value in expected_common.items())
+            for payload in payloads
+        ):
+            raise GovernanceStoreError("policy lifecycle fingerprint or base mismatch")
+        sealed = self.get_policy_fingerprint(policy_version)
+        if sealed != {"fingerprint": combined_fingerprint, "status": "FROZEN"}:
+            raise GovernanceStoreError("policy freeze seal missing or mismatched")
 
     def get_policy_fingerprint(self, policy_version: str) -> dict[str, str] | None:
         row = self._connection.execute(

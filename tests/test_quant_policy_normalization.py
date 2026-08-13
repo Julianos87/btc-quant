@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 import pytest
 from dataclasses import replace
 
@@ -20,6 +21,8 @@ from btcquant.research.quant_policy import (
     passes_probability_gate,
     trend_governance_policy_v1_proposal,
     carry_governance_policy_v1_proposal,
+    freeze_artifact_payload,
+    frozen_policy_v1,
     validate_policy_shape,
 )
 from btcquant.research.quant_statistics import (
@@ -375,3 +378,102 @@ def test_frozen_policy_changes_require_a_new_version() -> None:
     for mutation in changes:
         with pytest.raises(Exception, match="immutable"):
             frozen.derive_new_version(frozen.policy_version, **mutation)
+
+
+def test_frozen_policy_loader_requires_exact_portable_artifact() -> None:
+    frozen = frozen_policy_v1()
+    assert frozen.status.value == "FROZEN"
+    assert frozen.family_fingerprint("Trend") == (
+        "d2a7fbd2e215d3db375dcfa0d30ec6c42e809c6eee624c1d4c0496ac2d42e5a8"
+    )
+    assert frozen.family_fingerprint("Carry") == (
+        "ba1030b3cc206605654b1ab8e6e563acbef47e7ce311b8527a021bf7c6545083"
+    )
+    assert frozen.fingerprint == "50c0c8a7c2f08fec705456567df7fb4a9de79e6a940ae04d0bc39886cbfb57e4"
+
+
+def test_freeze_artifact_contains_no_runtime_paths() -> None:
+    artifact = freeze_artifact_payload(proposed_policy_v1().approve())
+    dumped = json.dumps(artifact, sort_keys=True)
+    assert "state/research" not in dumped
+    assert "/tmp/" not in dumped
+    assert "governance.sqlite3" not in dumped
+    assert artifact["status"] == "FROZEN"
+
+
+def test_real_search_requires_frozen_artifact_and_matching_durable_store(tmp_path) -> None:
+    from btcquant.research.governance import GovernanceIncomplete
+    from btcquant.research.governance_store import GovernanceStore
+
+    base = "9924bd9182375f9d247dfcd6cb7931b5adc10e17"
+    proposed = proposed_policy_v1()
+    with pytest.raises(GovernanceIncomplete, match="FROZEN"):
+        proposed.validate_for_real_search()
+    approved = proposed.approve()
+    with pytest.raises(GovernanceIncomplete, match="FROZEN"):
+        approved.validate_for_real_search()
+    memory_frozen = approved.freeze()
+    with pytest.raises(GovernanceIncomplete, match="store"):
+        memory_frozen.validate_for_real_search()
+
+    with GovernanceStore(tmp_path / "governance.sqlite3") as empty_store:
+        with pytest.raises(GovernanceIncomplete, match="durable freeze"):
+            memory_frozen.validate_for_real_search(empty_store, expected_base_git_sha=base)
+
+    with GovernanceStore(tmp_path / "valid.sqlite3") as store:
+        durable_approved = proposed.approve(store, base_git_sha=base)
+        durable_frozen = durable_approved.freeze(store, base_git_sha=base)
+        durable_frozen.validate_for_real_search(store, expected_base_git_sha=base)
+
+
+def test_frozen_artifact_and_runtime_store_mismatch_fail_closed(tmp_path) -> None:
+    from btcquant.research.governance import GovernanceIncomplete
+    from btcquant.research.governance_store import GovernanceStore
+
+    base = "9924bd9182375f9d247dfcd6cb7931b5adc10e17"
+    artifact = json.loads(
+        Path("audit/governance/quant_policy_v1.freeze.json").read_text(encoding="utf-8")
+    )
+    artifact["carry_fingerprint"] = "0" * 64
+    bad_artifact = tmp_path / "bad.freeze.json"
+    bad_artifact.write_text(json.dumps(artifact), encoding="utf-8")
+    with GovernanceStore(tmp_path / "artifact-mismatch.sqlite3") as store:
+        approved = proposed_policy_v1().approve(store, base_git_sha=base)
+        frozen = approved.freeze(store, base_git_sha=base)
+        with pytest.raises(GovernanceIncomplete, match="durable freeze"):
+            frozen.validate_for_real_search(
+                store, expected_base_git_sha=base, freeze_artifact_path=bad_artifact
+            )
+
+    with GovernanceStore(tmp_path / "db-mismatch.sqlite3") as store:
+        approved = proposed_policy_v1().approve(store, base_git_sha=base)
+        frozen = approved.freeze(store, base_git_sha=base)
+        store._connection.execute(
+            "UPDATE governance_metadata SET value=? WHERE key=?",
+            (json.dumps({"fingerprint": "0" * 64, "status": "FROZEN"}), "policy:QUANT_POLICY_V1"),
+        )
+        with pytest.raises(GovernanceIncomplete, match="durable freeze"):
+            frozen.validate_for_real_search(store, expected_base_git_sha=base)
+
+
+def test_policy_lifecycle_transitions_are_strict(tmp_path) -> None:
+    from btcquant.research.governance_store import GovernanceStore, GovernanceStoreError
+
+    kwargs = {
+        "policy_version": "QUANT_POLICY_V1",
+        "trend_fingerprint": "a" * 64,
+        "carry_fingerprint": "b" * 64,
+        "combined_fingerprint": "c" * 64,
+        "base_git_sha": "9924bd9182375f9d247dfcd6cb7931b5adc10e17",
+    }
+    with GovernanceStore(tmp_path / "lifecycle.sqlite3") as store:
+        with pytest.raises(GovernanceStoreError, match="invalid"):
+            store.record_policy_transition(**kwargs, previous_state="PROPOSED", new_state="FROZEN")
+        store.record_policy_transition(**kwargs, previous_state="PROPOSED", new_state="APPROVED")
+        with pytest.raises(GovernanceStoreError, match="invalid"):
+            store.record_policy_transition(
+                **kwargs, previous_state="APPROVED", new_state="APPROVED"
+            )
+        store.record_policy_transition(**kwargs, previous_state="APPROVED", new_state="FROZEN")
+        with pytest.raises(GovernanceStoreError, match="invalid"):
+            store.record_policy_transition(**kwargs, previous_state="FROZEN", new_state="APPROVED")

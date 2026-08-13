@@ -117,6 +117,114 @@ def test_dsr_uses_expected_max_formula_and_raw_attempt_count() -> None:
     assert isclose(result.expected_max_sharpe_per_period, expected_max, rel_tol=0, abs_tol=1e-15)
 
 
+def test_dsr_scale_equivalence_per_period_vs_annualized_365() -> None:
+    periods = 365
+    observed = 1.13
+    trials = (0.17, 0.43, 0.91, 1.27)
+    common = {
+        "raw_attempted_trials": 7,
+        "n_observations": 365,
+        "skewness": -0.21,
+        "raw_kurtosis": 4.8,
+        "return_sampling_frequency": "1D_UTC",
+    }
+    per_period = deflated_sharpe_ratio(
+        observed_sharpe=observed,
+        trial_sharpes=trials,
+        sharpe_scale=SharpeScale.PER_PERIOD,
+        periods_per_year=None,
+        **common,
+    )
+    annualized = deflated_sharpe_ratio(
+        observed_sharpe=observed * sqrt(periods),
+        trial_sharpes=tuple(value * sqrt(periods) for value in trials),
+        sharpe_scale=SharpeScale.ANNUALIZED,
+        periods_per_year=periods,
+        **common,
+    )
+
+    assert per_period.probability is not None
+    assert annualized.probability is not None
+    assert isclose(per_period.probability, annualized.probability, rel_tol=0, abs_tol=1e-15)
+    assert isclose(
+        per_period.expected_max_sharpe_per_period,
+        annualized.expected_max_sharpe_per_period,
+        rel_tol=0,
+        abs_tol=1e-15,
+    )
+    assert isclose(
+        per_period.observed_sharpe_per_period,
+        annualized.observed_sharpe_per_period,
+        rel_tol=0,
+        abs_tol=1e-15,
+    )
+    assert isclose(
+        per_period.benchmark_sharpe_per_period,
+        annualized.benchmark_sharpe_per_period,
+        rel_tol=0,
+        abs_tol=1e-15,
+    )
+
+
+def test_dsr_periods_per_year_changes_only_annualized_conversion() -> None:
+    periods = 365
+    observed = 0.88
+    trials = (0.11, 0.39, 0.73)
+    common = {
+        "raw_attempted_trials": 5,
+        "n_observations": 120,
+        "skewness": 0.12,
+        "raw_kurtosis": 3.7,
+        "return_sampling_frequency": "1D_UTC",
+        "sharpe_scale": SharpeScale.ANNUALIZED,
+    }
+    correct = deflated_sharpe_ratio(
+        observed_sharpe=observed * sqrt(periods),
+        trial_sharpes=tuple(value * sqrt(periods) for value in trials),
+        periods_per_year=periods,
+        **common,
+    )
+    wrong_periods = deflated_sharpe_ratio(
+        observed_sharpe=observed * sqrt(periods),
+        trial_sharpes=tuple(value * sqrt(periods) for value in trials),
+        periods_per_year=252,
+        **common,
+    )
+
+    assert correct.expected_max_sharpe_per_period is not None
+    assert wrong_periods.expected_max_sharpe_per_period is not None
+    assert not isclose(
+        correct.expected_max_sharpe_per_period,
+        wrong_periods.expected_max_sharpe_per_period,
+        rel_tol=0,
+        abs_tol=1e-12,
+    )
+    assert not isclose(
+        correct.observed_sharpe_per_period,
+        wrong_periods.observed_sharpe_per_period,
+        rel_tol=0,
+        abs_tol=1e-12,
+    )
+
+
+def test_dsr_annualized_invalid_periods_fail_closed() -> None:
+    common = {
+        "observed_sharpe": 1.0,
+        "trial_sharpes": (0.2, 0.7),
+        "raw_attempted_trials": 3,
+        "n_observations": 100,
+        "skewness": 0.0,
+        "raw_kurtosis": 3.0,
+        "return_sampling_frequency": "1D_UTC",
+        "sharpe_scale": SharpeScale.ANNUALIZED,
+    }
+    for periods in (None, 0, -1, float("nan")):
+        assert (
+            deflated_sharpe_ratio(periods_per_year=periods, **common).status
+            is StatisticalStatus.NOT_QUALIFIABLE
+        )
+
+
 def test_dsr_never_maps_failed_trials_to_zero_and_requires_dispersion() -> None:
     result = deflated_sharpe_ratio(
         observed_sharpe=1.0,

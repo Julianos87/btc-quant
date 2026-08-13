@@ -1,0 +1,11 @@
+{
+  "artifact_schema_version": 1,
+  "base_git_sha": "9924bd9182375f9d247dfcd6cb7931b5adc10e17",
+  "carry_fingerprint": "ba1030b3cc206605654b1ab8e6e563acbef47e7ce311b8527a021bf7c6545083",
+  "combined_fingerprint": "50c0c8a7c2f08fec705456567df7fb4a9de79e6a940ae04d0bc39886cbfb57e4",
+  "freeze_lifecycle_version": "PROPOSED_APPROVED_FROZEN_V1",
+  "policy_version": "QUANT_POLICY_V1",
+  "semantic_policy_hash_algorithm": "SHA256_CANONICAL_JSON_V1",
+  "status": "FROZEN",
+  "trend_fingerprint": "d2a7fbd2e215d3db375dcfa0d30ec6c42e809c6eee624c1d4c0496ac2d42e5a8"
+}

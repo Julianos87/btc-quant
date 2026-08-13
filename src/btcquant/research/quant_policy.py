@@ -17,6 +17,7 @@ import json
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from math import isclose, isfinite
+from pathlib import Path
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
@@ -33,6 +34,13 @@ QUANT_POLICY_VERSION = "QUANT_POLICY_V1"
 PSR_BENCHMARK_SHARPE = 0.0
 RETURN_SAMPLING_FREQUENCY = "1D_UTC"
 DSR_N_CONVENTION = "CONSERVATIVE_RAW_TRIAL_UPPER_BOUND"
+FREEZE_ARTIFACT_SCHEMA_VERSION = 1
+FREEZE_LIFECYCLE_VERSION = "PROPOSED_APPROVED_FROZEN_V1"
+SEMANTIC_POLICY_HASH_ALGORITHM = "SHA256_CANONICAL_JSON_V1"
+FROZEN_POLICY_BASE_GIT_SHA = "9924bd9182375f9d247dfcd6cb7931b5adc10e17"
+DEFAULT_FREEZE_ARTIFACT = (
+    Path(__file__).resolve().parents[3] / "audit" / "governance" / "quant_policy_v1.freeze.json"
+)
 
 
 class PolicyStatus(StrEnum):
@@ -521,18 +529,55 @@ class QuantGovernancePolicy:
             raise GovernanceError("FROZEN policy is immutable; use a new policy version")
         return replace(self, policy_version=policy_version, status=PolicyStatus.PROPOSED, **changes)
 
-    def validate_for_real_search(self) -> None:
-        """Fail closed unless independent review has approved the policy."""
+    def validate_for_real_search(
+        self,
+        governance_store: Any | None = None,
+        *,
+        expected_base_git_sha: str | None = None,
+        freeze_artifact_path: str | Path | None = None,
+    ) -> None:
+        """Authorize real search only with a portable and durable freeze proof."""
 
         placeholders = self.placeholder_paths()
         if placeholders:
             raise GovernanceIncomplete(
                 "GOVERNANCE_INCOMPLETE: policy placeholders at " + ", ".join(placeholders)
             )
-        if self.status not in {PolicyStatus.APPROVED, PolicyStatus.FROZEN}:
+        if self.status is not PolicyStatus.FROZEN:
             raise GovernanceIncomplete(
-                "GOVERNANCE_INCOMPLETE: quantitative policy is not approved/frozen"
+                "GOVERNANCE_INCOMPLETE: policy not approved/frozen; REAL_SEARCH requires FROZEN policy"
             )
+        if governance_store is None:
+            raise GovernanceIncomplete("GOVERNANCE_INCOMPLETE: durable governance store required")
+        if expected_base_git_sha is None:
+            raise GovernanceIncomplete("GOVERNANCE_INCOMPLETE: expected base Git SHA required")
+        if not getattr(governance_store, "path_is_explicit", False):
+            raise GovernanceIncomplete(
+                "GOVERNANCE_INCOMPLETE: REAL_SEARCH requires an explicitly configured governance DB"
+            )
+        try:
+            artifact_policy = frozen_policy_v1(
+                freeze_artifact_path,
+                expected_base_git_sha=expected_base_git_sha,
+            )
+            if (
+                self.policy_version != artifact_policy.policy_version
+                or self.fingerprint != artifact_policy.fingerprint
+                or self.family_fingerprint("Trend") != artifact_policy.family_fingerprint("Trend")
+                or self.family_fingerprint("Carry") != artifact_policy.family_fingerprint("Carry")
+            ):
+                raise GovernanceError("policy object does not match freeze artifact")
+            governance_store.verify_policy_freeze(
+                policy_version=self.policy_version,
+                trend_fingerprint=self.family_fingerprint("Trend"),
+                carry_fingerprint=self.family_fingerprint("Carry"),
+                combined_fingerprint=self.fingerprint,
+                base_git_sha=expected_base_git_sha,
+            )
+        except GovernanceError as exc:
+            raise GovernanceIncomplete(
+                "GOVERNANCE_INCOMPLETE: durable freeze verification failed"
+            ) from exc
         if not self.dsr_required:
             raise GovernanceIncomplete("GOVERNANCE_INCOMPLETE: DSR required policy missing")
         if self.pbo_status_is_placeholder:
@@ -938,6 +983,54 @@ def proposed_policy_v1() -> QuantGovernancePolicy:
             "venue/data availability context only: EMPIRICAL_SEEN_DATA_CONTEXT",
         ),
     )
+
+
+def freeze_artifact_payload(
+    policy: QuantGovernancePolicy,
+    *,
+    base_git_sha: str = FROZEN_POLICY_BASE_GIT_SHA,
+) -> dict[str, Any]:
+    """Build the portable, non-runtime freeze artifact payload."""
+
+    if policy.status not in {PolicyStatus.APPROVED, PolicyStatus.FROZEN}:
+        raise GovernanceError("only an approved or frozen policy can be sealed")
+    return {
+        "artifact_schema_version": FREEZE_ARTIFACT_SCHEMA_VERSION,
+        "policy_version": policy.policy_version,
+        "status": PolicyStatus.FROZEN.value,
+        "base_git_sha": base_git_sha,
+        "trend_fingerprint": policy.family_fingerprint("Trend"),
+        "carry_fingerprint": policy.family_fingerprint("Carry"),
+        "combined_fingerprint": policy.fingerprint,
+        "freeze_lifecycle_version": FREEZE_LIFECYCLE_VERSION,
+        "semantic_policy_hash_algorithm": SEMANTIC_POLICY_HASH_ALGORITHM,
+    }
+
+
+def _read_freeze_artifact(path: str | Path | None) -> dict[str, Any]:
+    artifact_path = Path(path) if path is not None else DEFAULT_FREEZE_ARTIFACT
+    try:
+        payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise GovernanceError(f"freeze artifact unavailable or invalid: {artifact_path}") from exc
+    if not isinstance(payload, dict):
+        raise GovernanceError("freeze artifact must be a JSON object")
+    return payload
+
+
+def frozen_policy_v1(
+    artifact_path: str | Path | None = None,
+    *,
+    expected_base_git_sha: str = FROZEN_POLICY_BASE_GIT_SHA,
+) -> QuantGovernancePolicy:
+    """Load QUANT_POLICY_V1 only after validating its committed freeze artifact."""
+
+    proposed = proposed_policy_v1()
+    artifact = _read_freeze_artifact(artifact_path)
+    expected = freeze_artifact_payload(proposed.approve(), base_git_sha=expected_base_git_sha)
+    if artifact != expected:
+        raise GovernanceError("freeze artifact does not match QUANT_POLICY_V1")
+    return replace(proposed, status=PolicyStatus.FROZEN)
 
 
 def trend_governance_policy_v1_proposal() -> str:

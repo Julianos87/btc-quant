@@ -357,6 +357,9 @@ def deflated_sharpe_ratio(
             reason="population de trials incohérente ou Sharpe non fini",
         )
     try:
+        observed_per_period = _scale_sharpe(
+            observed_sharpe, scale=sharpe_scale, periods_per_year=periods_per_year
+        )
         scaled_trials = [
             _scale_sharpe(float(value), scale=sharpe_scale, periods_per_year=periods_per_year)
             for value in trial_sharpes
@@ -387,14 +390,17 @@ def deflated_sharpe_ratio(
         (1.0 - EULER_MASCHERONI) * quantile_a + EULER_MASCHERONI * quantile_b
     )
     psr = probabilistic_sharpe_ratio(
-        observed_sharpe=observed_sharpe,
+        observed_sharpe=observed_per_period,
         benchmark_sharpe=expected_max,
         n_observations=n_observations,
         skewness=skewness,
         raw_kurtosis=raw_kurtosis,
         return_sampling_frequency=return_sampling_frequency,
-        sharpe_scale=sharpe_scale,
-        periods_per_year=periods_per_year,
+        # DSR has already normalized both observed and trial Sharpe values.
+        # The inner PSR must therefore remain in PER_PERIOD scale to avoid
+        # annualizing the expected-maximum benchmark a second time.
+        sharpe_scale=SharpeScale.PER_PERIOD,
+        periods_per_year=None,
         dependence_status=dependence_status,
     )
     return DeflatedSharpeQualification(
