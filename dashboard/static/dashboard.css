@@ -146,6 +146,7 @@
   }
   .mode .blink { width:7px; height:7px; border-radius:99px; background:var(--warn);
     box-shadow:0 0 10px var(--warn); animation:pulse 2.2s ease-in-out infinite; }
+  .estate.warn { color:var(--warn); background:var(--warn-bg); }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.2} }
   header .spacer { flex:1; }
   .hm { text-align:right; padding-left:22px; }
@@ -184,6 +185,7 @@
   .data-freshness { display:flex; align-items:center; gap:7px; margin-left:auto; color:var(--muted); font-size:11.5px; white-space:nowrap; }
   .fresh-dot { width:6px; height:6px; border-radius:99px; background:var(--s1); box-shadow:0 0 8px var(--s1); animation:pulse 1.8s ease-in-out infinite; }
   .data-freshness.stale .fresh-dot { background:var(--warn); box-shadow:0 0 8px var(--warn); animation:none; }
+  .data-freshness.unknown .fresh-dot { background:var(--crit); box-shadow:0 0 8px var(--crit); animation:none; }
   @media (max-width:780px) {
     .cockpitbar { align-items:stretch; flex-wrap:wrap; gap:10px; }
     .cockpit-status { order:3; width:100%; padding:10px 0 0; border-left:0; border-top:1px solid var(--grid); }

@@ -88,9 +88,15 @@ class StateStore:
         *,
         initialize: bool = True,
         allow_migration: bool = False,
+        read_only: bool = False,
     ) -> None:
         self.path = Path(path)
         self.allow_migration = allow_migration
+        self.read_only = read_only
+        if read_only:
+            if not self.path.exists():
+                raise FileNotFoundError(self.path)
+            return
         if initialize:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self._initialize()
@@ -98,11 +104,17 @@ class StateStore:
             raise FileNotFoundError(self.path)
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path, timeout=15.0)
+        if self.read_only:
+            uri = f"{self.path.resolve().as_uri()}?mode=ro"
+            connection = sqlite3.connect(uri, uri=True, timeout=15.0)
+            connection.execute("PRAGMA query_only = ON")
+        else:
+            connection = sqlite3.connect(self.path, timeout=15.0)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA busy_timeout = 15000")
-        connection.execute("PRAGMA synchronous = FULL")
+        if not self.read_only:
+            connection.execute("PRAGMA synchronous = FULL")
         return connection
 
     @contextmanager
@@ -360,9 +372,10 @@ class StateStore:
 
         if not self.path.exists() or self.path.stat().st_size == 0:
             return None, False
-        uri = f"file:{self.path.resolve()}?mode=ro"
+        uri = f"{self.path.resolve().as_uri()}?mode=ro"
         try:
             with sqlite3.connect(uri, uri=True) as connection:
+                connection.execute("PRAGMA query_only = ON")
                 tables = {
                     str(row[0])
                     for row in connection.execute(
@@ -2360,6 +2373,18 @@ class StateStore:
             return None
         updated = datetime.fromisoformat(row["updated_at"])
         return ((now or datetime.now(UTC)) - updated).total_seconds()
+
+    def engine_updated_at(self, engine: str) -> datetime | None:
+        """Return the persisted engine timestamp without filesystem inference."""
+
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT updated_at FROM engine_state WHERE engine = ?", (engine,)
+            ).fetchone()
+        if row is None:
+            return None
+        parsed = datetime.fromisoformat(str(row["updated_at"]))
+        return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
 
     def integrity_check(self) -> bool:
         with self._connect() as connection:

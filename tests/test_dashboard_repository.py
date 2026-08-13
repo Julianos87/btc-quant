@@ -71,3 +71,19 @@ def test_dashboard_never_hides_corrupt_operational_database(tmp_path: Path, monk
 
     assert response.status_code == 503
     assert response.get_json() == {"error": "reporting_unavailable"}
+
+
+def test_corrupt_legacy_json_is_not_reported_as_empty(tmp_path: Path):
+    path = tmp_path / "yearly_reference.json"
+    path.write_text("{broken", encoding="utf-8")
+
+    with pytest.raises(ReportingReadError, match="JSON de reporting illisible"):
+        ReportingRepository(tmp_path).read_json(path)
+
+
+def test_corrupt_legacy_equity_csv_is_not_reported_as_empty(tmp_path: Path):
+    path = tmp_path / "equity_trend.csv"
+    path.write_text("not,a,valid,equity,source\n", encoding="utf-8")
+
+    with pytest.raises(ReportingReadError, match="equity CSV"):
+        ReportingRepository(tmp_path).read_engine_equity("trend", path)
