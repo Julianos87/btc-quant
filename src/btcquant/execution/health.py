@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from ..observability import SafetyStatus
 from .quality_metrics import percentile, slippages_bps
 from .state_store import StateStore
 
@@ -37,6 +38,24 @@ class ExecutionHealth:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class ExecutionSafetyHealth:
+    """Authoritative safety verdict shared by operational read surfaces."""
+
+    status: SafetyStatus
+    engines: dict[str, ExecutionHealth]
+    reasons: tuple[str, ...] = ()
+    open_critical_incidents: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status.value,
+            "engines": {name: health.to_dict() for name, health in self.engines.items()},
+            "reasons": list(self.reasons),
+            "open_critical_incidents": list(self.open_critical_incidents),
+        }
 
 
 @dataclass(frozen=True)
@@ -111,6 +130,56 @@ def execution_health(
         partial_rate=partial_count / len(terminal) if terminal else None,
         average_slippage_bps=(sum(slippages) / len(slippages) if slippages else None),
         p95_slippage_bps=percentile(slippages, 0.95),
+    )
+
+
+def execution_safety_health(
+    store: StateStore,
+    engines: tuple[str, ...] = ("trend", "carry"),
+    *,
+    now: datetime | None = None,
+) -> ExecutionSafetyHealth:
+    """Return one fail-closed safety verdict for all known execution state.
+
+    Component optionality belongs to availability/readiness. A known unsafe
+    position, order or reconciliation state remains unsafe regardless of the
+    component's required flag.
+    """
+
+    try:
+        health_by_engine = {engine: execution_health(store, engine, now=now) for engine in engines}
+        open_critical = tuple(
+            str(item["fingerprint"])
+            for item in store.read_incidents(open_only=True)
+            if item.get("severity") == "CRITICAL"
+            and str(item.get("fingerprint", "")).startswith("execution:")
+        )
+    except Exception:
+        return ExecutionSafetyHealth(
+            status=SafetyStatus.UNKNOWN,
+            engines={},
+            reasons=("EXECUTION_SAFETY_UNKNOWN",),
+        )
+
+    reasons: list[str] = []
+    for engine, health in health_by_engine.items():
+        if health.unresolved_order_ids:
+            reasons.append(f"{engine.upper()}_UNRESOLVED_ORDER")
+        if health.unbalanced_order_ids:
+            reasons.append(f"{engine.upper()}_UNBALANCED")
+        if health.unprotected_slots:
+            reasons.append(f"{engine.upper()}_UNPROTECTED_POSITION")
+        if health.stop_transition_slots:
+            reasons.append(f"{engine.upper()}_STOP_TRANSITION_PENDING")
+        if health.reconciliation_required:
+            reasons.append(f"{engine.upper()}_RECONCILIATION_REQUIRED")
+    if open_critical:
+        reasons.append("OPEN_CRITICAL_EXECUTION_INCIDENT")
+    return ExecutionSafetyHealth(
+        status=SafetyStatus.FAIL if reasons else SafetyStatus.PASS,
+        engines=health_by_engine,
+        reasons=tuple(sorted(set(reasons))),
+        open_critical_incidents=open_critical,
     )
 
 

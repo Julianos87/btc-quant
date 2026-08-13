@@ -54,6 +54,8 @@ class SourceSnapshot(Generic[T]):
     freshness: Freshness
     error: str | None = None
     last_success_at: datetime | None = None
+    expected_interval_seconds: float | None = None
+    freshness_lateness_seconds: float | None = None
 
     @classmethod
     def success(
@@ -64,6 +66,7 @@ class SourceSnapshot(Generic[T]):
         observed_at: datetime | None,
         received_at: datetime | None = None,
         max_age_seconds: float | None = None,
+        expected_interval_seconds: float | None = None,
     ) -> SourceSnapshot[T]:
         received = as_utc(received_at) or utc_now()
         observed = as_utc(observed_at)
@@ -71,6 +74,10 @@ class SourceSnapshot(Generic[T]):
         future = delta is not None and delta < -MAX_FUTURE_SKEW_SECONDS
         missing_timestamp = observed is None
         age = None if missing_timestamp or future else max(0.0, delta or 0.0)
+        expected = expected_interval_seconds
+        lateness = (
+            None if age is None else max(0.0, age - expected) if expected is not None else age
+        )
         freshness = Freshness.UNKNOWN if missing_timestamp or future else Freshness.FRESH
         error = (
             "OBSERVATION_TIMESTAMP_UNAVAILABLE"
@@ -81,9 +88,9 @@ class SourceSnapshot(Generic[T]):
         )
         if (
             freshness is Freshness.FRESH
-            and age is not None
+            and lateness is not None
             and max_age_seconds is not None
-            and age > max_age_seconds
+            and lateness > max_age_seconds
         ):
             freshness = Freshness.STALE
         return cls(
@@ -95,6 +102,8 @@ class SourceSnapshot(Generic[T]):
             freshness,
             error=error,
             last_success_at=received,
+            expected_interval_seconds=expected,
+            freshness_lateness_seconds=lateness,
         )
 
     @classmethod
@@ -128,19 +137,32 @@ class SourceSnapshot(Generic[T]):
         max_age_seconds: float | None = None,
         max_stale_seconds: float | None = None,
         error: str | None = None,
+        expected_interval_seconds: float | None = None,
     ) -> SourceSnapshot[T]:
         current = as_utc(now) or utc_now()
+        expected = (
+            self.expected_interval_seconds
+            if expected_interval_seconds is None
+            else expected_interval_seconds
+        )
         reference = self.observed_at or self.received_at
         delta = (current - reference).total_seconds()
         future = self.observed_at is not None and delta < -MAX_FUTURE_SKEW_SECONDS
         age = None if future else max(0.0, delta)
+        lateness = (
+            None if age is None else max(0.0, age - expected) if expected is not None else age
+        )
         if self.value is None:
             status = Freshness.UNAVAILABLE
         elif future:
             status = Freshness.UNKNOWN
-        elif age is not None and max_stale_seconds is not None and age > max_stale_seconds:
+        elif self.freshness is Freshness.UNKNOWN:
+            status = Freshness.UNKNOWN
+        elif (
+            lateness is not None and max_stale_seconds is not None and lateness > max_stale_seconds
+        ):
             status = Freshness.UNAVAILABLE
-        elif age is not None and max_age_seconds is not None and age > max_age_seconds:
+        elif lateness is not None and max_age_seconds is not None and lateness > max_age_seconds:
             status = Freshness.STALE
         else:
             status = self.freshness
@@ -149,6 +171,8 @@ class SourceSnapshot(Generic[T]):
             age_seconds=age,
             freshness=status,
             error=error if error is not None else ("CLOCK_SKEW" if future else self.error),
+            expected_interval_seconds=expected,
+            freshness_lateness_seconds=lateness,
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -157,6 +181,9 @@ class SourceSnapshot(Generic[T]):
             "observed_at": self.observed_at.isoformat() if self.observed_at else None,
             "received_at": self.received_at.isoformat(),
             "age_seconds": self.age_seconds,
+            "observation_age_seconds": self.age_seconds,
+            "lateness_seconds": self.freshness_lateness_seconds,
+            "expected_interval_seconds": self.expected_interval_seconds,
             "freshness": self.freshness.value,
             "error": self.error,
             "last_success_at": self.last_success_at.isoformat() if self.last_success_at else None,
@@ -170,6 +197,7 @@ class CachePolicy:
     ttl_seconds: float
     max_stale_seconds: float
     max_age_seconds: float
+    expected_interval_seconds: float | None = None
 
 
 @dataclass
@@ -213,6 +241,7 @@ class BoundedReadCache(Generic[T]):
                 now=current,
                 max_age_seconds=policy.max_age_seconds,
                 max_stale_seconds=policy.max_stale_seconds,
+                expected_interval_seconds=policy.expected_interval_seconds,
             )
         try:
             value = loader()
@@ -234,10 +263,12 @@ class BoundedReadCache(Generic[T]):
                 observed_at=observed,
                 received_at=current,
                 max_age_seconds=policy.max_age_seconds,
+                expected_interval_seconds=policy.expected_interval_seconds,
             ).at(
                 now=current,
                 max_age_seconds=policy.max_age_seconds,
                 max_stale_seconds=policy.max_stale_seconds,
+                expected_interval_seconds=policy.expected_interval_seconds,
             )
             self._entries[key] = _CacheEntry(snapshot, current_mono)
             return snapshot
@@ -253,6 +284,7 @@ class BoundedReadCache(Generic[T]):
                 max_age_seconds=policy.max_age_seconds,
                 max_stale_seconds=policy.max_stale_seconds,
                 error=message,
+                expected_interval_seconds=policy.expected_interval_seconds,
             )
             if fallback.freshness is Freshness.UNAVAILABLE:
                 return cast(

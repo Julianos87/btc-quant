@@ -380,11 +380,24 @@ function beat(age) {
 
 function renderCockpitStatus(s) {
   const critical = [], warnings = [];
-  const incidents = (s.health && s.health.open_incidents) || [];
-  if (!s.trend.alive || ["UNKNOWN", "UNAVAILABLE"].includes(s.trend.freshness)) critical.push("Trend state UNKNOWN");
-  else if (s.trend.freshness === "STALE") warnings.push("Trend state STALE");
-  if (!s.carry.alive || ["UNKNOWN", "UNAVAILABLE"].includes(s.carry.freshness)) critical.push("Carry state UNKNOWN");
-  else if (s.carry.freshness === "STALE") warnings.push("Carry state STALE");
+  const health = s.health || {};
+  const required = new Set(health.required_components || ["trend"]);
+  const incidents = health.open_incidents || [];
+  const safety = health.safety_status || "UNKNOWN";
+  if (safety === "FAIL") critical.push("Execution safety UNSAFE");
+  else if (safety === "UNKNOWN") critical.push("Execution safety UNKNOWN");
+  const component = (name, item) => {
+    const requiredComponent = required.has(name);
+    if (!item || !item.alive || ["UNKNOWN", "UNAVAILABLE"].includes(item.freshness)) {
+      (requiredComponent ? critical : warnings).push(
+        `${name} state ${item && item.freshness ? item.freshness : "UNKNOWN"}`
+      );
+    } else if (item.freshness === "STALE") {
+      (requiredComponent ? warnings : warnings).push(`${name} state STALE`);
+    }
+  };
+  component("trend", s.trend);
+  component("carry", s.carry);
   if (s.trend.halted) critical.push(t("status_kill"));
   if (s.trend.daily_lockout) warnings.push(t("status_lockout"));
   for (const incident of incidents) {
@@ -447,12 +460,28 @@ function renderPerformanceBrief(s) {
 function renderRiskRadar(s) {
   const profile = trendStopProfile(s), m = lastMetrics || {};
   const lev = s.totals.leverage || 0;
-  const engineDown = !s.trend.alive
-    || !s.carry.alive
-    || s.trend.freshness !== "FRESH"
-    || s.carry.freshness !== "FRESH";
-  const protection = engineDown ? t("risk_engine_down") : s.trend.halted ? t("risk_halted") : s.trend.daily_lockout ? t("risk_lockout") : t("risk_armed");
-  const protectionTone = engineDown || s.trend.halted ? "crit" : s.trend.daily_lockout ? "warn" : "";
+  const health = s.health || {};
+  const safety = health.safety_status || "UNKNOWN";
+  const required = new Set(health.required_components || ["trend"]);
+  const componentDown = (name, item) => required.has(name)
+    && (!item || !item.alive || item.freshness !== "FRESH");
+  const engineDown = componentDown("trend", s.trend) || componentDown("carry", s.carry);
+  const protection = safety === "FAIL"
+    ? "UNSAFE"
+    : safety === "UNKNOWN"
+      ? "UNKNOWN"
+      : engineDown
+        ? t("risk_engine_down")
+        : s.trend.halted
+          ? t("risk_halted")
+          : s.trend.daily_lockout
+            ? t("risk_lockout")
+            : t("risk_armed");
+  const protectionTone = safety !== "PASS" || engineDown || s.trend.halted
+    ? "crit"
+    : s.trend.daily_lockout
+      ? "warn"
+      : "";
   const margin = profile.nearest == null ? "—" : fmtPct(profile.nearest, 1);
   const marginTone = profile.nearest != null && profile.nearest < .01 ? "crit" : profile.nearest != null && profile.nearest < .03 ? "warn" : "";
   $("risk-radar").innerHTML =
@@ -464,18 +493,19 @@ function renderRiskRadar(s) {
 
 function renderMonitorPulse(s) {
   const h = s.health || {};
-  const engine = (label, alive, age, freshness) => {
+  const required = new Set(h.required_components || ["trend"]);
+  const engine = (name, label, alive, age, freshness) => {
     const fresh = freshness === "FRESH" && alive;
     const stale = freshness === "STALE";
     const status = fresh ? t("monitor_ready") : stale ? "STALE" : "UNKNOWN";
-    const tone = fresh ? "" : stale ? "warn" : "crit";
+    const tone = fresh ? "" : stale ? "warn" : required.has(name) ? "crit" : "warn";
     return '<div class="ops-item ' + tone + '"><span class="ops-dot"></span><div class="ops-copy"><div class="ops-label">'
       + label + '</div><div class="ops-value">' + status + '</div><div class="ops-note">'
       + (beat(age).replace(/^·\s*/, "") || "—") + '</div></div></div>';
   };
   $("monitor-pulse").innerHTML =
-    engine(t("monitor_trend"), s.trend.alive, s.trend.age_s, s.trend.freshness) +
-    engine(t("monitor_carry"), s.carry.alive, s.carry.age_s, s.carry.freshness) +
+    engine("trend", t("monitor_trend"), s.trend.alive, s.trend.age_s, s.trend.freshness) +
+    engine("carry", t("monitor_carry"), s.carry.alive, s.carry.age_s, s.carry.freshness) +
     '<div class="ops-item"><span class="ops-dot"></span><div class="ops-copy"><div class="ops-label">'
       + t("monitor_next_bar") + '</div><div class="ops-value num" id="pulse-next-bar">'
       + cdText(h.next_bar_ts) + '</div><div class="ops-note">' + t("next_bar")
@@ -1254,11 +1284,14 @@ function notify(title, body, tag) {
     navigator.serviceWorker.controller.postMessage({type:"notify", title, body, tag});
   else try { new Notification(title, {body, icon:"/icon.svg", tag}); } catch (e) {}
 }
-let alertState = {trendAlive:true, carryAlive:true, halted:false, ddNotified:false, posKeys:new Set()};
+let alertState = {trendConfirmed:true, carryConfirmed:true, halted:false, ddNotified:false, posKeys:new Set()};
 function checkAlerts(s) {
-  if (alertState.trendAlive && (!s.trend.alive || s.trend.freshness !== "FRESH")) notify("⚠ Moteur Trend non confirmé", "Le runner Trend est arrêté ou ses données sont périmées.", "trend-down");
-  if (alertState.carryAlive && (!s.carry.alive || s.carry.freshness !== "FRESH")) notify("⚠ Moteur Carry non confirmé", "Le runner Carry est arrêté ou ses données sont périmées.", "carry-down");
-  alertState.trendAlive = s.trend.alive; alertState.carryAlive = s.carry.alive;
+  const trendConfirmed = !!s.trend.alive && s.trend.freshness === "FRESH";
+  const carryConfirmed = !!s.carry.alive && s.carry.freshness === "FRESH";
+  if (alertState.trendConfirmed && !trendConfirmed) notify("⚠ Moteur Trend non confirmé", "Le runner Trend est arrêté ou ses données sont périmées.", "trend-down");
+  if (alertState.carryConfirmed && !carryConfirmed) notify("⚠ Moteur Carry non confirmé", "Le runner Carry est arrêté ou ses données sont périmées.", "carry-down");
+  alertState.trendConfirmed = trendConfirmed;
+  alertState.carryConfirmed = carryConfirmed;
   if (!alertState.halted && s.trend.halted) notify("⛔ KILL-SWITCH", "Drawdown maximal atteint, positions liquidées.", "kill");
   alertState.halted = s.trend.halted;
   if (PREFS.notifPos) {

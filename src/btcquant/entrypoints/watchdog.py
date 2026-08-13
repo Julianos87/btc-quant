@@ -45,11 +45,13 @@ def _sync_shadow_incident(
     max_age: int = SHADOW_MAX_AGE_SECONDS,
 ) -> None:
     fingerprint = "shadow:market_data_stale"
+    profile = service_component_profile()
+    shadow_required = "shadow" in profile.required or bool(profile.reason_codes)
     if not database.exists():
         incident = store.record_incident(
             fingerprint,
             engine="shadow",
-            severity="WARNING",
+            severity="CRITICAL" if shadow_required else "WARNING",
             kind="shadow_data_missing",
             message="Base shadow absente ; observation mainnet indisponible",
             context={"database": str(database)},
@@ -58,11 +60,12 @@ def _sync_shadow_incident(
         try:
             health = ShadowStore(database, read_only=True).runtime_health()
             age = health["last_success_age_seconds"]
+            store.resolve_incident("watchdog:shadow:check_failed")
         except Exception as error:
             incident = store.record_incident(
                 "watchdog:shadow:check_failed",
                 engine="shadow",
-                severity="CRITICAL",
+                severity="CRITICAL" if shadow_required else "WARNING",
                 kind="watchdog_check_failed",
                 message="Lecture de santé shadow impossible ; état UNKNOWN",
                 context={"error_type": type(error).__name__},
@@ -139,6 +142,7 @@ def main(argv: list[str] | None = None) -> None:
         try:
             age = store.engine_age_seconds(engine)
             health = execution_health(store, engine)
+            store.resolve_incident(f"watchdog:{engine}:check_failed")
         except Exception as error:
             incident = store.record_incident(
                 f"watchdog:{engine}:check_failed",

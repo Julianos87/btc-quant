@@ -60,8 +60,13 @@ Les endpoints ont deux contrats distincts :
 
 
 Chaque observation réseau expose source, observed_at, received_at,
-age_seconds et freshness. Le cache utilise une TTL monotone et une durée
-maximale de fallback : une lecture périmée est STALE, puis devient
+age_seconds et freshness. Les sources périodiques exposent aussi
+expected_interval_seconds et freshness_lateness_seconds. La fraîcheur est
+évaluée sur la lateness (âge d'observation moins l'intervalle attendu), tandis
+que l'âge d'observation réel reste visible pour l'opérateur. Les intervalles
+attendus sont 60 s pour le prix 1 minute, 3 600 s pour OHLCV 1h et le funding
+horaire, et 14 400 s pour OHLCV 4h. Le cache utilise une TTL monotone et une
+durée maximale de fallback : une lecture périmée est STALE, puis devient
 UNAVAILABLE ; elle ne peut jamais rester indéfiniment affichée comme live.
 Les endpoints exposent également le skew temporel entre les sources et un
 statut de valorisation MARK_TO_MARKET_ESTIMATE ou UNKNOWN. L'absence du prix
@@ -70,8 +75,16 @@ as-of rend la valorisation non confirmée.
 Le dashboard et ses métriques ouvrent les bases trading et shadow en
 lecture seule. Une erreur de lecture produit UNKNOWN/SOURCE_UNAVAILABLE et
 ne résout jamais implicitement un incident. Le watchdog persiste un incident
-watchdog_check_failed lorsqu'une vérification échoue ; il ne transforme pas
-une erreur d'observation en état nominal.
+watchdog_check_failed lorsqu'une vérification échoue ; il ne le résout qu'après
+une lecture autoritative réussie et le rouvre lors d'un échec ultérieur.
+
+EXECUTION_SAFETY_HEALTH est la source unique des statuts PASS, FAIL et
+UNKNOWN pour le résumé, la readiness et Prometheus. Il couvre les ordres
+non résolus ou déséquilibrés, les positions sans protection, les transitions
+de stop, la réconciliation requise et les incidents d'exécution critiques.
+Un composant optionnel absent ou simplement périmé ne bloque pas la readiness,
+mais une condition financière unsafe connue bloque toujours la sécurité et la
+readiness. UNKNOWN n'est jamais assimilé à PASS.
 
 
 ### Semantique temporelle des sources

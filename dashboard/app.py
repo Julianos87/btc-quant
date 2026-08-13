@@ -33,12 +33,16 @@ from btcquant.reporting.analytics import (
 )
 from btcquant.reporting.repository import ReportingReadError, ReportingRepository
 from btcquant.reporting.prometheus import render_prometheus
-from btcquant.execution.health import execution_health
+from btcquant.execution.health import (
+    execution_health,
+    execution_safety_health,
+)
 from btcquant.execution.readiness import (
     SERVICE_ENGINE_MAX_AGE_SECONDS,
     SERVICE_SHADOW_MAX_AGE_SECONDS,
     evaluate_readiness,
     evaluate_service_readiness,
+    service_component_profile,
 )
 from btcquant.execution.shadow import ShadowStore
 from btcquant.execution.state_store import StateStore
@@ -46,6 +50,7 @@ from btcquant.observability import (
     BoundedReadCache,
     CachePolicy,
     Freshness,
+    SafetyStatus,
     SourceSnapshot,
     temporal_skew,
 )
@@ -167,7 +172,6 @@ def prometheus_metrics():
     except Exception:
         app.logger.exception("Portfolio metrics source unavailable")
         metrics["btcquant_portfolio_source_available"] = 0
-        safety_unknown = True
 
     for engine, legacy_name in (
         ("trend", "live_state_4x.json"),
@@ -180,13 +184,14 @@ def prometheus_metrics():
         except Exception:
             app.logger.exception("%s state age source unavailable", engine)
             metrics[f"btcquant_{engine}_state_age_seconds"] = None
-            safety_unknown = True
+
     database = STATE / "btcquant.db"
     metrics["btcquant_trading_db_available"] = int(database.exists())
     if database.exists():
         try:
             store = StateStore(database, initialize=False, read_only=True)
-            metrics["btcquant_trading_db_available"] = int(store.integrity_check())
+            database_available = bool(store.integrity_check())
+            metrics["btcquant_trading_db_available"] = int(database_available)
             incidents = store.read_incidents(open_only=True)
             metrics["btcquant_open_incidents"] = len(incidents)
             metrics["btcquant_open_critical_incidents"] = sum(
@@ -197,29 +202,45 @@ def prometheus_metrics():
             metrics["btcquant_pending_deposit_amount"] = sum(
                 float(item["amount"]) for item in pending_deposits
             )
-            for engine in ("trend", "carry"):
-                health = execution_health(store, engine)
-                prefix = f"btcquant_execution_{engine}"
-                metrics.update(
-                    {
-                        f"{prefix}_orders_analyzed": health.orders_analyzed,
-                        f"{prefix}_unresolved_orders": len(health.unresolved_order_ids),
-                        f"{prefix}_stale_pending_orders": len(health.stale_pending_order_ids),
-                        f"{prefix}_unbalanced_orders": len(health.unbalanced_order_ids),
-                        f"{prefix}_fill_ratio": health.fill_ratio,
-                        f"{prefix}_rejection_rate": health.rejection_rate,
-                        f"{prefix}_partial_rate": health.partial_rate,
-                        f"{prefix}_average_slippage_bps": health.average_slippage_bps,
-                        f"{prefix}_p95_slippage_bps": health.p95_slippage_bps,
-                    }
+            if database_available:
+                safety = execution_safety_health(store)
+                for engine, health in safety.engines.items():
+                    prefix = f"btcquant_execution_{engine}"
+                    metrics.update(
+                        {
+                            f"{prefix}_orders_analyzed": health.orders_analyzed,
+                            f"{prefix}_unresolved_orders": len(health.unresolved_order_ids),
+                            f"{prefix}_stale_pending_orders": len(health.stale_pending_order_ids),
+                            f"{prefix}_unbalanced_orders": len(health.unbalanced_order_ids),
+                            f"{prefix}_fill_ratio": health.fill_ratio,
+                            f"{prefix}_rejection_rate": health.rejection_rate,
+                            f"{prefix}_partial_rate": health.partial_rate,
+                            f"{prefix}_average_slippage_bps": health.average_slippage_bps,
+                            f"{prefix}_p95_slippage_bps": health.p95_slippage_bps,
+                        }
+                    )
+                metrics["btcquant_execution_safety_pass"] = int(safety.status is SafetyStatus.PASS)
+                metrics["btcquant_execution_safety_fail"] = int(safety.status is SafetyStatus.FAIL)
+                metrics["btcquant_execution_safety_unknown"] = int(
+                    safety.status is SafetyStatus.UNKNOWN
                 )
-            if not metrics["btcquant_trading_db_available"]:
+                safety_unknown = safety.status is SafetyStatus.UNKNOWN
+            else:
+                metrics["btcquant_execution_safety_pass"] = 0
+                metrics["btcquant_execution_safety_fail"] = 0
+                metrics["btcquant_execution_safety_unknown"] = 1
                 safety_unknown = True
         except Exception:
             app.logger.exception("Trading metrics source unavailable")
             metrics["btcquant_trading_db_available"] = 0
+            metrics["btcquant_execution_safety_pass"] = 0
+            metrics["btcquant_execution_safety_fail"] = 0
+            metrics["btcquant_execution_safety_unknown"] = 1
             safety_unknown = True
     else:
+        metrics["btcquant_execution_safety_pass"] = 0
+        metrics["btcquant_execution_safety_fail"] = 0
+        metrics["btcquant_execution_safety_unknown"] = 1
         safety_unknown = True
 
     shadow_database = STATE / "execution-shadow.db"
@@ -250,16 +271,18 @@ def prometheus_metrics():
         except Exception:
             app.logger.exception("Shadow metrics source unavailable")
             metrics["btcquant_shadow_db_available"] = 0
-            safety_unknown = True
 
-    for key, snapshot in _cache_snapshots.items():
+    for key in _CACHE_SOURCES:
         prefix = f"btcquant_source_{key}"
+        snapshot = _cache_snapshot(key)
         metrics[f"{prefix}_available"] = int(snapshot.freshness is not Freshness.UNAVAILABLE)
         metrics[f"{prefix}_fresh"] = int(snapshot.freshness is Freshness.FRESH)
+        metrics[f"{prefix}_stale"] = int(snapshot.freshness is Freshness.STALE)
+        metrics[f"{prefix}_unknown"] = int(snapshot.freshness is Freshness.UNKNOWN)
         if snapshot.age_seconds is not None:
             metrics[f"{prefix}_age_seconds"] = snapshot.age_seconds
-        if snapshot.freshness in {Freshness.UNAVAILABLE, Freshness.UNKNOWN}:
-            safety_unknown = True
+        if snapshot.freshness_lateness_seconds is not None:
+            metrics[f"{prefix}_lateness_seconds"] = snapshot.freshness_lateness_seconds
 
     readiness, _status = _readiness_snapshot()
     metrics["btcquant_ready"] = int(readiness["status"] == "ready")
@@ -418,6 +441,16 @@ _CACHE_SOURCES = {
     "fx_eur": "BINANCE_FX_DISPLAY_ONLY",
     "buyhold": "HYPERLIQUID_OHLCV",
 }
+# Source timestamps remain the native observation timestamps. For periodic
+# sources, freshness budgets apply to lateness after the next expected event.
+_CACHE_EXPECTED_INTERVAL_SECONDS = {
+    "price": 60.0,
+    "ohlcv1h": 3_600.0,
+    "ohlcv4h": 14_400.0,
+    "funding": 3_600.0,
+    "fx_eur": None,
+    "buyhold": 3_600.0,
+}
 
 
 def _cache_observed_at(value):
@@ -451,6 +484,7 @@ def _cached(key: str, ttl: float, fn):
         ttl_seconds=ttl,
         max_stale_seconds=_CACHE_MAX_STALE_SECONDS.get(key, max(ttl * 3.0, ttl + 60.0)),
         max_age_seconds=_CACHE_MAX_AGE_SECONDS.get(key, ttl),
+        expected_interval_seconds=_CACHE_EXPECTED_INTERVAL_SECONDS.get(key),
     )
     try:
         with _ex_lock:
@@ -472,6 +506,8 @@ def _cached(key: str, ttl: float, fn):
                 freshness=snapshot.freshness,
                 error=snapshot.error,
                 last_success_at=snapshot.last_success_at,
+                expected_interval_seconds=snapshot.expected_interval_seconds,
+                freshness_lateness_seconds=snapshot.freshness_lateness_seconds,
             )
         _cache_snapshots[key] = snapshot
         return value
@@ -486,7 +522,12 @@ def _cache_snapshot(key: str) -> SourceSnapshot:
         return SourceSnapshot.unavailable(source=_CACHE_SOURCES.get(key, key))
     max_age = _CACHE_MAX_AGE_SECONDS.get(key)
     max_stale = _CACHE_MAX_STALE_SECONDS.get(key)
-    return snapshot.at(max_age_seconds=max_age, max_stale_seconds=max_stale)
+    expected_interval = _CACHE_EXPECTED_INTERVAL_SECONDS.get(key)
+    return snapshot.at(
+        max_age_seconds=max_age,
+        max_stale_seconds=max_stale,
+        expected_interval_seconds=expected_interval,
+    )
 
 
 # ── fetchers réseau (appelés via _cached ; préchauffés par _warm_loop) ──────
@@ -807,11 +848,27 @@ def summary():
     # prochaine bougie 4h (le trend décide à la clôture des bougies 4h UTC)
     now_ts = pd.Timestamp.now(tz="UTC")
     next_bar = now_ts.floor("4h") + pd.Timedelta(hours=4)
-    operational: dict = {"execution": {}, "open_incidents": []}
+    profile = service_component_profile()
+    operational: dict = {
+        "execution": {},
+        "execution_safety": {
+            "status": SafetyStatus.UNKNOWN.value,
+            "reasons": ["DATABASE_UNAVAILABLE"],
+            "engines": {},
+            "open_critical_incidents": [],
+        },
+        "open_incidents": [],
+        "required_components": list(profile.required),
+        "optional_components": list(profile.optional),
+    }
+    safety_status = SafetyStatus.UNKNOWN
     if store is not None:
+        safety = execution_safety_health(store)
+        safety_status = safety.status
         operational["execution"] = {
-            engine: execution_health(store, engine).to_dict() for engine in ("trend", "carry")
+            engine: health.to_dict() for engine, health in safety.engines.items()
         }
+        operational["execution_safety"] = safety.to_dict()
         operational["open_incidents"] = store.read_incidents(open_only=True)
 
     source_observations = {
@@ -822,11 +879,6 @@ def summary():
         "trend_state": trend_observed_at,
         "carry_state": carry_observed_at,
     }
-    required_source_fresh = (
-        price_snapshot.freshness is Freshness.FRESH
-        and trend_freshness == Freshness.FRESH.value
-        and state_price_temporal["freshness_status"] == Freshness.FRESH.value
-    )
     return jsonify(
         {
             "api_schema_version": 2,
@@ -918,9 +970,7 @@ def summary():
                 "server_uptime_s": max(0.0, time.monotonic() - START_TIME),
                 "api_latency_ms": _cache.get("api_ms"),
                 "next_bar_ts": int(next_bar.timestamp() * 1000),
-                "safety_status": (
-                    "PASS" if required_source_fresh and accounting_status == "FRESH" else "UNKNOWN"
-                ),
+                "safety_status": safety_status.value,
                 "valuation_status": market_valuation_status,
                 "source_skew": state_price_temporal["max_source_skew_seconds"],
                 **operational,

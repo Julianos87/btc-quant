@@ -89,7 +89,7 @@ def evaluate_service_readiness(
     from pathlib import Path
 
     from ..observability import Freshness
-    from .health import execution_health
+    from .health import execution_safety_health
     from .shadow import ShadowStore
 
     current = now or datetime.now(UTC)
@@ -131,36 +131,13 @@ def evaluate_service_readiness(
         checks["no_critical_incident"] = critical_count == 0
         if critical_count:
             reasons.append("CRITICAL_INCIDENT_OPEN")
-        safety: dict[str, Any] = {}
-        safety_pass = True
-        try:
-            for engine in ("trend", "carry"):
-                health = execution_health(store, engine)
-                safety[engine] = {
-                    "status": "PASS"
-                    if not (
-                        health.unresolved_order_ids
-                        or health.unbalanced_order_ids
-                        or health.unprotected_slots
-                        or health.stop_transition_slots
-                        or health.reconciliation_required
-                    )
-                    else "FAIL",
-                    "unresolved_orders": len(health.unresolved_order_ids),
-                    "unbalanced_orders": len(health.unbalanced_order_ids),
-                    "unprotected_slots": len(health.unprotected_slots),
-                    "stop_transition_slots": len(health.stop_transition_slots),
-                    "reconciliation_required": health.reconciliation_required,
-                    "orders_analyzed": health.orders_analyzed,
-                }
-                if engine in cfg.required and safety[engine]["status"] != "PASS":
-                    safety_pass = False
-        except Exception:
-            safety = {"status": "UNKNOWN"}
-            safety_pass = False
+        safety_health = execution_safety_health(store, now=current)
+        details["execution_safety"] = safety_health.to_dict()
+        checks["execution_safety"] = safety_health.status.value == "PASS"
+        if safety_health.status.value == "FAIL":
+            reasons.append("EXECUTION_SAFETY_FAIL")
+        elif safety_health.status.value == "UNKNOWN":
             reasons.append("EXECUTION_SAFETY_UNKNOWN")
-        details["execution_safety"] = safety
-        checks["execution_safety"] = safety_pass
         for engine in ("trend", "carry"):
             age = store.engine_age_seconds(engine, now=current)
             observed_at = store.engine_updated_at(engine)
@@ -234,6 +211,7 @@ def evaluate_service_readiness(
         except Exception:
             reasons.append("SHADOW_SOURCE_UNAVAILABLE")
     components.append(shadow_item)
+    checks["shadow_fresh"] = shadow_item["status"] == Freshness.FRESH.value
     if shadow_item["required"] and shadow_item["status"] != Freshness.FRESH.value:
         reasons.append(f"REQUIRED_SHADOW_{shadow_item['status']}")
 

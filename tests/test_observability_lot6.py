@@ -9,6 +9,7 @@ import pytest
 
 import dashboard.app as dashboard
 from btcquant.entrypoints import watchdog
+from btcquant.execution.health import execution_safety_health
 from btcquant.execution.readiness import (
     ServiceComponentProfile,
     evaluate_service_readiness,
@@ -524,11 +525,10 @@ def test_optional_carry_safety_does_not_gate_service_readiness(tmp_path: Path) -
         {"slots": {"carry": {"position": {"qty": 1.0}, "stop_order_id": None}}},
     )
     payload = evaluate_service_readiness(database)
-    carry = next(
-        item for item in payload["details"]["execution_safety"].items() if item[0] == "carry"
-    )
-    assert carry[1]["status"] == "FAIL"
-    assert payload["ready"] is True
+    safety = payload["details"]["execution_safety"]
+    assert safety["status"] == "FAIL"
+    assert "CARRY_UNPROTECTED_POSITION" in safety["reasons"]
+    assert payload["ready"] is False
 
 
 def test_missing_source_timestamp_is_unknown_not_fresh() -> None:
@@ -583,4 +583,203 @@ def test_future_market_timestamp_never_produces_live_valuation(tmp_path: Path, m
     payload = dashboard.app.test_client().get("/api/summary").get_json()
     assert payload["btc"]["freshness"] == "UNKNOWN"
     assert payload["btc"]["valuation_status"] == "UNKNOWN"
-    assert payload["health"]["safety_status"] == "UNKNOWN"
+    assert payload["health"]["safety_status"] == "PASS"
+
+
+def _clean_execution_store(path: Path) -> StateStore:
+    store = StateStore(path)
+    store.save_engine_state("trend", {"slots": {}})
+    store.save_engine_state("carry", {"slots": {}, "reconciliation_required": False})
+    return store
+
+
+def test_execution_safety_contract_clean_state_is_pass(tmp_path: Path) -> None:
+    store = _clean_execution_store(tmp_path / "btcquant.db")
+    safety = execution_safety_health(store)
+    assert safety.status.value == "PASS"
+    assert safety.reasons == ()
+
+
+@pytest.mark.parametrize(
+    ("state", "reason"),
+    [
+        (
+            {"slots": {"carry": {"position": {"qty": 1.0}, "stop_order_id": None}}},
+            "CARRY_UNPROTECTED_POSITION",
+        ),
+        ({"reconciliation_required": True}, "CARRY_RECONCILIATION_REQUIRED"),
+    ],
+)
+def test_execution_safety_known_unsafe_state_is_fail(
+    tmp_path: Path, state: dict, reason: str
+) -> None:
+    store = _clean_execution_store(tmp_path / "btcquant.db")
+    store.save_engine_state("carry", state)
+    safety = execution_safety_health(store)
+    assert safety.status.value == "FAIL"
+    assert reason in safety.reasons
+
+
+def test_execution_safety_unbalanced_order_is_fail(tmp_path: Path) -> None:
+    store = _clean_execution_store(tmp_path / "btcquant.db")
+    order_id = store.begin_order(
+        "carry",
+        "carry",
+        "safety-unbalanced",
+        "MARKET",
+        "BUY",
+        1.0,
+        "entry",
+        reference_price=100.0,
+    )
+    store.complete_order(order_id, status="UNBALANCED", filled_qty=0.5, price=100.0)
+    safety = execution_safety_health(store)
+    assert safety.status.value == "FAIL"
+    assert "CARRY_UNBALANCED" in safety.reasons
+
+
+def test_execution_safety_read_failure_is_unknown(tmp_path: Path, monkeypatch) -> None:
+    store = _clean_execution_store(tmp_path / "btcquant.db")
+    import btcquant.execution.health as health_module
+
+    monkeypatch.setattr(
+        health_module,
+        "execution_health",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ConnectionError("read failed")),
+    )
+    safety = execution_safety_health(store)
+    assert safety.status.value == "UNKNOWN"
+    assert "EXECUTION_SAFETY_UNKNOWN" in safety.reasons
+
+
+def test_summary_safety_never_ignores_unprotected_position(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(dashboard, "STATE", tmp_path)
+    monkeypatch.setattr(dashboard, "_cached", lambda *_args: None)
+    store = _clean_execution_store(tmp_path / "btcquant.db")
+    store.save_engine_state(
+        "carry",
+        {"slots": {"carry": {"position": {"qty": 1.0}, "stop_order_id": None}}},
+    )
+    payload = dashboard.app.test_client().get("/api/summary").get_json()
+    assert payload["health"]["safety_status"] == "FAIL"
+    assert payload["health"]["execution_safety"]["status"] == "FAIL"
+
+
+def test_required_shadow_fresh_is_ready(tmp_path: Path) -> None:
+    database = tmp_path / "btcquant.db"
+    store = StateStore(database)
+    store.save_engine_state("trend", {"slots": {}})
+    shadow = tmp_path / "execution-shadow.db"
+    ShadowStore(shadow).record_success(datetime(2026, 8, 13, 12, tzinfo=UTC))
+    payload = evaluate_service_readiness(
+        database,
+        shadow,
+        now=datetime(2026, 8, 13, 12, tzinfo=UTC),
+        profile=ServiceComponentProfile(required=("trend", "shadow"), optional=("carry",)),
+    )
+    assert payload["checks"]["shadow_fresh"] is True
+    assert payload["ready"] is True
+
+
+def test_required_shadow_unavailable_is_not_ready(tmp_path: Path) -> None:
+    database = tmp_path / "btcquant.db"
+    StateStore(database).save_engine_state("trend", {"slots": {}})
+    payload = evaluate_service_readiness(
+        database,
+        tmp_path / "missing-shadow.db",
+        profile=ServiceComponentProfile(required=("trend", "shadow"), optional=("carry",)),
+    )
+    assert payload["checks"]["shadow_fresh"] is False
+    assert payload["ready"] is False
+
+
+def test_periodic_freshness_uses_lateness_after_expected_interval() -> None:
+    start = datetime(2026, 8, 13, 12, tzinfo=UTC)
+    for expected, age in ((3600.0, 50 * 60), (3600.0, 65 * 60), (14400.0, 3 * 3600)):
+        now = start + timedelta(seconds=age)
+        snapshot = SourceSnapshot.success(
+            1.0,
+            source="PERIODIC",
+            observed_at=start,
+            received_at=now,
+            expected_interval_seconds=expected,
+            max_age_seconds=600,
+        ).at(
+            now=now,
+            expected_interval_seconds=expected,
+            max_age_seconds=600,
+            max_stale_seconds=900,
+        )
+        assert snapshot.freshness is Freshness.FRESH
+        assert snapshot.age_seconds == pytest.approx(float(age))
+        assert snapshot.freshness_lateness_seconds == pytest.approx(max(0.0, age - expected))
+
+    late = start + timedelta(hours=1, seconds=601)
+    stale = SourceSnapshot.success(
+        1.0,
+        source="HOURLY",
+        observed_at=start,
+        received_at=late,
+        expected_interval_seconds=3600,
+    ).at(
+        now=late,
+        expected_interval_seconds=3600,
+        max_age_seconds=600,
+        max_stale_seconds=900,
+    )
+    assert stale.freshness is Freshness.STALE
+    unavailable_time = start + timedelta(hours=1, seconds=1501)
+    unavailable = stale.at(
+        now=unavailable_time,
+        expected_interval_seconds=3600,
+        max_age_seconds=600,
+        max_stale_seconds=900,
+    )
+    assert unavailable.freshness is Freshness.UNAVAILABLE
+
+
+def test_prometheus_recomputes_snapshot_age_without_network(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(dashboard, "STATE", tmp_path)
+    _clean_execution_store(tmp_path / "btcquant.db")
+    now = datetime.now(UTC)
+    old = SourceSnapshot.success(
+        1.0,
+        source="HYPERLIQUID_OHLCV_1H",
+        observed_at=now - timedelta(hours=1, seconds=601),
+        received_at=now,
+        expected_interval_seconds=3600,
+    )
+    dashboard._cache_snapshots = {"ohlcv1h": old}
+    original = dashboard._cache_snapshot
+    called: list[str] = []
+
+    def recompute(key: str):
+        called.append(key)
+        return original(key)
+
+    monkeypatch.setattr(dashboard, "_cache_snapshot", recompute)
+    monkeypatch.setattr(dashboard, "_hl", lambda: (_ for _ in ()).throw(AssertionError("network")))
+    monkeypatch.setattr(
+        dashboard, "_fx_ex", lambda: (_ for _ in ()).throw(AssertionError("network"))
+    )
+    response = dashboard.app.test_client().get(
+        "/metrics/prometheus",
+        environ_base={"REMOTE_ADDR": "127.0.0.1"},
+    )
+    text = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert called == list(dashboard._CACHE_SOURCES)
+    assert "btcquant_source_ohlcv1h_fresh 0" in text
+    assert "btcquant_source_ohlcv1h_stale 1" in text
+
+
+def test_frontend_safety_and_notification_contracts_are_explicit() -> None:
+    javascript = (Path(__file__).resolve().parents[1] / "dashboard/static/dashboard.js").read_text(
+        encoding="utf-8"
+    )
+    assert 'safety === "FAIL"' in javascript
+    assert 'safety === "UNKNOWN"' in javascript
+    assert "trendConfirmed" in javascript
+    assert "carryConfirmed" in javascript
+    assert "trendAlive" not in javascript
+    assert "carryAlive" not in javascript
