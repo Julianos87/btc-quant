@@ -4,10 +4,16 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKUP_DIR="${ROOT}/backups"
+OFFHOST_REMOTE="${BACKUP_OFFHOST_REMOTE:-origin}"
+OFFHOST_BRANCH="${BACKUP_OFFHOST_BRANCH:-backups}"
+if [ -z "${BACKUP_ENCRYPTION_KEY:-}" ] || [[ "${BACKUP_ENCRYPTION_KEY:-}" =~ ^[[:space:]]*$ ]]; then
+  echo "BACKUP_ENCRYPTION_KEY is required; refusing plaintext backup publication" >&2
+  exit 2
+fi
 mkdir -p "${BACKUP_DIR}"
-# compaction des historiques d'équity avant archivage
+# This job is a backup reader. Compaction is a separate scheduled writer and
+# must never mutate the authoritative database as a side effect of backup.
 PYBIN="${ROOT}/venv/bin/python"; [ -x "${PYBIN}" ] || PYBIN="python3"
-"${PYBIN}" "${ROOT}/scripts/compact_equity.py" || true
 STAMP="$(date -u +%Y%m%d-%H%M)"
 TMP_DIR="$(mktemp -d /tmp/btcquant-backup.XXXXXX)"
 cleanup() {
@@ -25,24 +31,22 @@ rsync -a \
   "${ROOT}/state/btcquant.db" "${TMP_DIR}/state/btcquant.db"
 PLAIN_ARCHIVE="${TMP_DIR}/state-${STAMP}.tar.gz"
 tar -czf "${PLAIN_ARCHIVE}" -C "${TMP_DIR}" state
-if [ -n "${BACKUP_ENCRYPTION_KEY:-}" ]; then
-  ARCHIVE="${BACKUP_DIR}/state-${STAMP}.tar.gz.enc"
-  openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt \
-    -in "${PLAIN_ARCHIVE}" -out "${ARCHIVE}" \
-    -pass env:BACKUP_ENCRYPTION_KEY
-  # Vérifie immédiatement qu'une restauration avec la clé produit exactement
-  # l'archive créée. Une sauvegarde non déchiffrable ne doit pas être annoncée.
-  ROUNDTRIP_ARCHIVE="${TMP_DIR}/roundtrip.tar.gz"
-  openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
-    -in "${ARCHIVE}" -out "${ROUNDTRIP_ARCHIVE}" \
-    -pass env:BACKUP_ENCRYPTION_KEY
-  cmp --silent "${PLAIN_ARCHIVE}" "${ROUNDTRIP_ARCHIVE}"
-else
-  # Disponibilité locale conservée, mais aucune copie distante en clair.
-  ARCHIVE="${BACKUP_DIR}/state-${STAMP}.tar.gz"
-  mv "${PLAIN_ARCHIVE}" "${ARCHIVE}"
-  echo "⚠ BACKUP_ENCRYPTION_KEY absente : archive locale seulement" >&2
+ARCHIVE="${BACKUP_DIR}/state-${STAMP}.tar.gz.enc"
+ENCRYPTED_TMP="${TMP_DIR}/state-${STAMP}.tar.gz.enc"
+if [ -e "${ARCHIVE}" ]; then
+  echo "Archive finale deja presente : ${ARCHIVE}" >&2
+  exit 3
 fi
+openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt \
+  -in "${PLAIN_ARCHIVE}" -out "${ENCRYPTED_TMP}" \
+  -pass env:BACKUP_ENCRYPTION_KEY
+# Verify that decryption reproduces the plaintext before publishing the final name.
+ROUNDTRIP_ARCHIVE="${TMP_DIR}/roundtrip.tar.gz"
+openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+  -in "${ENCRYPTED_TMP}" -out "${ROUNDTRIP_ARCHIVE}" \
+  -pass env:BACKUP_ENCRYPTION_KEY
+cmp --silent "${PLAIN_ARCHIVE}" "${ROUNDTRIP_ARCHIVE}"
+mv --no-clobber "${ENCRYPTED_TMP}" "${ARCHIVE}"
 # purge des archives de plus de 30 jours
 find "${BACKUP_DIR}" \( -name 'state-*.tar.gz' -o -name 'state-*.tar.gz.enc' \) \
   -mtime +30 -delete
@@ -55,11 +59,20 @@ REPO="${ROOT}/backups-repo"
 if [ -d "${REPO}/.git" ] && [[ "${ARCHIVE}" == *.enc ]]; then
   (
     cd "${REPO}"
-    cp "${ARCHIVE}" .
+    if find . -maxdepth 1 -type f \( -name 'state-*.tar.gz' -o -name '*.db' -o -name '*.db-wal' -o -name '*.db-shm' -o -name '.env' \) -print -quit | grep -q .; then
+      echo "Refusing: off-host repository contains an unauthorized plaintext artifact" >&2
+      exit 4
+    fi
+    if git ls-files | grep -Ev '^state-[0-9]{8}-[0-9]{4}\.tar\.gz\.enc$' | grep -q .; then
+      echo "Refusing: off-host repository contains a non-whitelisted tracked file" >&2
+      exit 5
+    fi
+    cp -- "${ARCHIVE}" .
     find . -maxdepth 1 -name 'state-*.tar.gz.enc' -mtime +30 -delete
-    git add -A
+    git add -u -- '*.tar.gz.enc'
+    git add -- "$(basename "${ARCHIVE}")"
     git -c commit.gpgsign=false commit -q -m "backup ${STAMP}" || exit 0
-    git push -q origin backups
-    echo "Copie hors-site poussée (branche backups)."
-  ) || echo "⚠ push hors-site échoué — la sauvegarde locale reste valide"
+    git push -q "${OFFHOST_REMOTE}" "${OFFHOST_BRANCH}"
+    echo "Off-host backup pushed."
+  ) || echo "Off-host push failed; local encrypted backup remains available" >&2
 fi

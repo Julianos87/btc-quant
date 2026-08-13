@@ -14,6 +14,7 @@ results.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from math import isclose, isfinite
@@ -535,6 +536,7 @@ class QuantGovernancePolicy:
         *,
         expected_base_git_sha: str | None = None,
         freeze_artifact_path: str | Path | None = None,
+        recovery_root: str | Path | None = None,
     ) -> None:
         """Authorize real search only with a portable and durable freeze proof."""
 
@@ -574,6 +576,37 @@ class QuantGovernancePolicy:
                 combined_fingerprint=self.fingerprint,
                 base_git_sha=expected_base_git_sha,
             )
+            configured_db = os.environ.get("BTCQUANT_GOVERNANCE_DB")
+            if not configured_db:
+                raise GovernanceIncomplete(
+                    "GOVERNANCE_INCOMPLETE: BTCQUANT_GOVERNANCE_DB is required for REAL_SEARCH"
+                )
+            if governance_store.resolved_path() != Path(configured_db).expanduser().resolve():
+                raise GovernanceIncomplete(
+                    "GOVERNANCE_INCOMPLETE: governance DB is not the configured canonical store"
+                )
+            configured_recovery_root = os.environ.get("BTCQUANT_RECOVERY_ROOT")
+            if not configured_recovery_root:
+                raise GovernanceIncomplete(
+                    "GOVERNANCE_INCOMPLETE: BTCQUANT_RECOVERY_ROOT is required for REAL_SEARCH"
+                )
+            if recovery_root is not None and (
+                Path(recovery_root).expanduser().resolve()
+                != Path(configured_recovery_root).expanduser().resolve()
+            ):
+                raise GovernanceIncomplete(
+                    "GOVERNANCE_INCOMPLETE: recovery root is not the configured canonical root"
+                )
+            from btcquant.backup import ResearchRecoveryRequired, assert_research_recovery_clear
+
+            try:
+                assert_research_recovery_clear(configured_recovery_root)
+            except ResearchRecoveryRequired as exc:
+                raise GovernanceIncomplete(
+                    "GOVERNANCE_INCOMPLETE: research recovery reconciliation is required"
+                ) from exc
+        except GovernanceIncomplete:
+            raise
         except GovernanceError as exc:
             raise GovernanceIncomplete(
                 "GOVERNANCE_INCOMPLETE: durable freeze verification failed"

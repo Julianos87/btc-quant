@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts import backup_database
 from scripts.verify_backup import verify_archive
 from btcquant.execution.state_store import SCHEMA_VERSION, StateStore
 
@@ -104,3 +105,49 @@ def test_restore_exposes_unresolved_external_effects(tmp_path):
 
     assert result["unresolved_orders"] == 1
     assert result["restart_safe"] is False
+
+
+def test_legacy_sqlite_backup_is_readonly_and_checks_source_and_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.db"
+    destination = tmp_path / "backup.db"
+    with sqlite3.connect(source) as connection:
+        connection.execute("CREATE TABLE parent (id INTEGER PRIMARY KEY)")
+        connection.execute(
+            "CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id))"
+        )
+        connection.execute("INSERT INTO parent VALUES (1)")
+        connection.execute("INSERT INTO child VALUES (1, 1)")
+
+    backup_database.create_backup(source, destination)
+
+    with sqlite3.connect(backup_database.readonly_uri(source), uri=True) as connection:
+        with pytest.raises(sqlite3.OperationalError):
+            connection.execute("CREATE TABLE forbidden (value TEXT)")
+        assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    with sqlite3.connect(destination) as connection:
+        assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+    corrupt = tmp_path / "corrupt.db"
+    corrupt.write_bytes(b"not sqlite")
+    corrupt_destination = tmp_path / "corrupt-backup.db"
+    with pytest.raises(sqlite3.DatabaseError):
+        backup_database.create_backup(corrupt, corrupt_destination)
+    assert not corrupt_destination.exists()
+
+    original_check = backup_database._check_integrity
+
+    def fail_destination(connection: sqlite3.Connection, label: str) -> None:
+        if label == "Backup":
+            raise RuntimeError("destination integrity failure")
+        original_check(connection, label)
+
+    monkeypatch.setattr(backup_database, "_check_integrity", fail_destination)
+    failed_destination = tmp_path / "failed-backup.db"
+    with pytest.raises(RuntimeError, match="destination integrity failure"):
+        backup_database.create_backup(source, failed_destination)
+    assert not failed_destination.exists()
+    assert not list(tmp_path.glob(".failed-backup.db.*.tmp"))

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tomllib
@@ -350,3 +351,75 @@ validate_canonical_repository(sys.argv[1], sys.argv[2])
         script = (ROOT / "deploy" / name).read_text(encoding="utf-8")
         assert "validate_canonical_repository('${REMOTE_URL}'" not in script
         assert 'validate_canonical_repository("${REMOTE_URL}"' not in script
+
+
+@pytest.mark.parametrize("key", [None, "", "   ", "\t"])
+def test_backup_script_fails_closed_without_encryption_key(tmp_path: Path, key: str | None) -> None:
+    app = tmp_path / "app"
+    (app / "scripts").mkdir(parents=True)
+    (app / "state").mkdir()
+    (app / "scripts" / "backup_state.sh").write_text(
+        (ROOT / "scripts" / "backup_state.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (app / "scripts" / "backup_database.py").write_text(
+        (ROOT / "scripts" / "backup_database.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    with sqlite3.connect(app / "state" / "btcquant.db") as connection:
+        connection.execute("CREATE TABLE sample (value TEXT)")
+        connection.execute("INSERT INTO sample VALUES ('fixture')")
+    env = os.environ.copy()
+    if key is None:
+        env.pop("BACKUP_ENCRYPTION_KEY", None)
+    else:
+        env["BACKUP_ENCRYPTION_KEY"] = key
+    result = subprocess.run(
+        ["bash", str(app / "scripts" / "backup_state.sh")],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert "BACKUP_ENCRYPTION_KEY" in result.stderr
+    assert not (app / "backups").exists()
+    assert not list(app.rglob("*.tar.gz"))
+
+
+def test_backup_script_does_not_invoke_compaction_and_publishes_only_encrypted(
+    tmp_path: Path,
+) -> None:
+    app = tmp_path / "app"
+    (app / "scripts").mkdir(parents=True)
+    (app / "state").mkdir()
+    (app / "venv" / "bin").mkdir(parents=True)
+    script = (ROOT / "scripts" / "backup_state.sh").read_text(encoding="utf-8")
+    (app / "scripts" / "backup_state.sh").write_text(script, encoding="utf-8")
+    (app / "scripts" / "backup_database.py").write_text(
+        (ROOT / "scripts" / "backup_database.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    with sqlite3.connect(app / "state" / "btcquant.db") as connection:
+        connection.execute("CREATE TABLE sample (value TEXT)")
+        connection.execute("INSERT INTO sample VALUES ('fixture')")
+    log = tmp_path / "python-invocations.log"
+    wrapper = app / "venv" / "bin" / "python"
+    wrapper.write_text(
+        f'#!/usr/bin/env bash\nprintf \'%s\n\' "$*" >> {log}\nexec /usr/bin/python3 "$@"\n',
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    env = os.environ.copy()
+    env["BACKUP_ENCRYPTION_KEY"] = "lot7-test-key"
+    result = subprocess.run(
+        ["bash", str(app / "scripts" / "backup_state.sh")],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "compact_equity.py" not in log.read_text(encoding="utf-8")
+    assert len(list((app / "backups").glob("*.tar.gz.enc"))) == 1
+    assert not list((app / "backups").glob("*.tar.gz"))

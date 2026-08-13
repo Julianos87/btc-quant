@@ -35,6 +35,7 @@ from ..domain import (
     funding_amount,
 )
 from ..indicators import bars_per_year, realized_vol
+from ..backup import assert_writer_recovery_clear
 from ..notify import notify
 from ..risk import RiskConfig, position_size
 from ..strategies.base import Direction, Position, Strategy
@@ -124,6 +125,10 @@ class LiveRunner:
         self.legacy_state_path = (
             Path(legacy_state_file) if legacy_state_file is not None else self.state_path
         )
+        # A restored trading state is never safe to run merely because the
+        # SQLite file opens. The backup layer writes an external recovery
+        # marker and only explicit reconciliation may clear it.
+        assert_writer_recovery_clear(self.state_path.parent)
         self.store = StateStore(database_path(self.state_path))
         if self.store.path.name == "btcquant.db":
             self.store.migrate_legacy_journals(self.state_path.parent)

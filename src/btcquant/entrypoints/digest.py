@@ -130,7 +130,7 @@ def main() -> None:
     if trend_state.get("halted"):
         lines.append("⛔ KILL-SWITCH ACTIF")
     if database.exists():
-        store = StateStore(database, initialize=False)
+        store = StateStore(database, initialize=False, read_only=True)
         health = execution_health(store, "trend")
         if health.orders_analyzed:
             fill_ratio = f"{health.fill_ratio:.1%}" if health.fill_ratio is not None else "n/d"

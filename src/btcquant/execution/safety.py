@@ -22,7 +22,7 @@ def require_live_execution_enabled(
     if not testnet:
         raise RuntimeError("SÉCURITÉ : l'exécution avec argent réel reste désactivée")
     try:
-        require_passed_qualification(StateStore(state_path))
+        require_passed_qualification(StateStore(state_path, read_only=True))
     except RuntimeError as error:
         raise RuntimeError(f"Safety Baseline — {error}") from error
     confirmation = os.environ.get("BTCQUANT_ENABLE_TESTNET", "")

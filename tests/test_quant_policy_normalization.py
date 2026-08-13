@@ -401,7 +401,9 @@ def test_freeze_artifact_contains_no_runtime_paths() -> None:
     assert artifact["status"] == "FROZEN"
 
 
-def test_real_search_requires_frozen_artifact_and_matching_durable_store(tmp_path) -> None:
+def test_real_search_requires_frozen_artifact_and_matching_durable_store(
+    tmp_path, monkeypatch
+) -> None:
     from btcquant.research.governance import GovernanceIncomplete
     from btcquant.research.governance_store import GovernanceStore
 
@@ -420,6 +422,8 @@ def test_real_search_requires_frozen_artifact_and_matching_durable_store(tmp_pat
         with pytest.raises(GovernanceIncomplete, match="durable freeze"):
             memory_frozen.validate_for_real_search(empty_store, expected_base_git_sha=base)
 
+    monkeypatch.setenv("BTCQUANT_GOVERNANCE_DB", str(tmp_path / "valid.sqlite3"))
+    monkeypatch.setenv("BTCQUANT_RECOVERY_ROOT", str(tmp_path / "recovery"))
     with GovernanceStore(tmp_path / "valid.sqlite3") as store:
         durable_approved = proposed.approve(store, base_git_sha=base)
         durable_frozen = durable_approved.freeze(store, base_git_sha=base)

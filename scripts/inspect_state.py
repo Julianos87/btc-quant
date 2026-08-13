@@ -29,7 +29,7 @@ def main() -> None:
     if not args.database.exists():
         raise SystemExit(f"Base introuvable : {args.database}")
 
-    store = StateStore(args.database, initialize=False)
+    store = StateStore(args.database, initialize=False, read_only=True)
     print(f"Base       : {args.database}")
     print(f"Intégrité  : {'OK' if store.integrity_check() else 'ERREUR'}")
     for engine in ("trend", "carry"):
@@ -59,7 +59,11 @@ def main() -> None:
             f"{order['side']} {order['requested_qty']} — {order['intent_id']}"
         )
 
-    with sqlite3.connect(args.database) as connection:
+    readonly_uri = f"file:{args.database.absolute()}?mode=ro"
+    with sqlite3.connect(readonly_uri, uri=True) as connection:
+        connection.execute("PRAGMA query_only=ON")
+        if connection.execute("PRAGMA query_only").fetchone()[0] != 1:
+            raise RuntimeError("Lecture SQLite non read-only")
         for table in (
             "positions",
             "orders",
