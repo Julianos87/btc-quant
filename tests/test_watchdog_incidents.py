@@ -260,3 +260,72 @@ def test_required_shadow_read_failure_is_critical(tmp_path, monkeypatch):
         item for item in incidents if item["fingerprint"] == "watchdog:shadow:check_failed"
     )
     assert incident["severity"] == "CRITICAL"
+
+
+def test_profile_required_to_optional_does_not_leave_stale_incident_blocking(tmp_path, monkeypatch):
+    from btcquant.execution.readiness import ServiceComponentProfile, evaluate_service_readiness
+
+    monkeypatch.setattr(watchdog, "STATE", tmp_path)
+    monkeypatch.setattr(watchdog, "notify", lambda _message: None)
+    monkeypatch.setenv("BTCQUANT_REQUIRED_ENGINES", "trend,carry")
+    database = tmp_path / "btcquant.db"
+    store = StateStore(database)
+    store.save_engine_state("trend", {"slots": {}})
+    store.save_engine_state("carry", {"slots": {}, "reconciliation_required": False})
+    store.record_incident(
+        "engine:carry:stale",
+        engine="carry",
+        severity="CRITICAL",
+        kind="engine_stale",
+        message="carry stale while required",
+    )
+    assert any(
+        item["fingerprint"] == "engine:carry:stale" for item in store.read_incidents(open_only=True)
+    )
+
+    monkeypatch.setenv("BTCQUANT_REQUIRED_ENGINES", "trend")
+    watchdog.main(["--database", str(database)])
+
+    assert any(
+        item["fingerprint"] == "engine:carry:stale" for item in store.read_incidents(open_only=True)
+    )
+    readiness = evaluate_service_readiness(
+        database,
+        profile=ServiceComponentProfile(required=("trend",), optional=("carry", "shadow")),
+    )
+    assert readiness["ready"] is True
+
+
+def test_profile_optional_does_not_resolve_execution_safety_incident(tmp_path, monkeypatch):
+    from btcquant.execution.readiness import ServiceComponentProfile, evaluate_service_readiness
+
+    monkeypatch.setattr(watchdog, "STATE", tmp_path)
+    monkeypatch.setattr(watchdog, "notify", lambda _message: None)
+    monkeypatch.setenv("BTCQUANT_REQUIRED_ENGINES", "trend")
+    database = tmp_path / "btcquant.db"
+    store = StateStore(database)
+    store.save_engine_state("trend", {"slots": {}})
+    store.save_engine_state(
+        "carry",
+        {"slots": {"carry": {"position": {"qty": 1.0}, "stop_order_id": None}}},
+    )
+    store.record_incident(
+        "execution:carry:unprotected",
+        engine="carry",
+        severity="CRITICAL",
+        kind="unprotected_position",
+        message="carry position has no stop",
+    )
+
+    watchdog.main(["--database", str(database)])
+
+    assert any(
+        item["fingerprint"] == "execution:carry:unprotected"
+        for item in store.read_incidents(open_only=True)
+    )
+    readiness = evaluate_service_readiness(
+        database,
+        profile=ServiceComponentProfile(required=("trend",), optional=("carry", "shadow")),
+    )
+    assert readiness["ready"] is False
+    assert readiness["details"]["execution_safety"]["status"] == "FAIL"

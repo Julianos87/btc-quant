@@ -75,6 +75,26 @@ def service_component_profile() -> ServiceComponentProfile:
 
 SERVICE_ENGINE_MAX_AGE_SECONDS = {"trend": 600.0, "carry": 1200.0}
 SERVICE_SHADOW_MAX_AGE_SECONDS = 300.0
+_PROFILE_AVAILABILITY_INCIDENT_KINDS = frozenset(
+    {
+        "engine_stale",
+        "engine_state_missing",
+        "shadow_data_stale",
+        "shadow_data_missing",
+        "watchdog_check_failed",
+    }
+)
+
+
+def _incident_applies_to_service_profile(
+    incident: dict[str, Any], profile: ServiceComponentProfile
+) -> bool:
+    engine = incident.get("engine")
+    if engine not in {"trend", "carry", "shadow"}:
+        return True
+    if engine in profile.required:
+        return True
+    return incident.get("kind") not in _PROFILE_AVAILABILITY_INCIDENT_KINDS
 
 
 def evaluate_service_readiness(
@@ -125,7 +145,10 @@ def evaluate_service_readiness(
         if not checks["database"]:
             reasons.append("DATABASE_CORRUPT")
         incidents = store.read_incidents(open_only=True)
-        critical_count = sum(item["severity"] == "CRITICAL" for item in incidents)
+        applicable_incidents = [
+            item for item in incidents if _incident_applies_to_service_profile(item, cfg)
+        ]
+        critical_count = sum(item["severity"] == "CRITICAL" for item in applicable_incidents)
         details["open_incidents"] = len(incidents)
         details["open_critical_incidents"] = critical_count
         checks["no_critical_incident"] = critical_count == 0

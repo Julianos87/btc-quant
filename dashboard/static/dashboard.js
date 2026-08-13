@@ -272,12 +272,17 @@ async function refreshSummary() {
 
   // bannière d'alerte : l'anormal doit sauter aux yeux
   const issues = [];
+  const health = s.health || {};
+  const componentIssue = (name, item, label) => {
+    const severity = BTCQuantOperationalState.componentAvailabilitySeverity(name, item, health);
+    if (severity) issues.push([severity, label + " " + (item && item.freshness ? item.freshness : "UNKNOWN")]);
+  };
   // Les commandes affichées ici sont celles réellement exécutables sur le VPS :
   // les moteurs tournent sous systemd, pas via un script Python.
-  if (!s.trend.alive || s.trend.freshness === "UNKNOWN" || s.trend.freshness === "UNAVAILABLE") issues.push(["crit", "état Trend non confirmé"]);
-  else if (s.trend.freshness === "STALE") issues.push(["warn", "données Trend périmées"]);
-  if (!s.carry.alive || s.carry.freshness === "UNKNOWN" || s.carry.freshness === "UNAVAILABLE") issues.push(["crit", "état Carry non confirmé"]);
-  else if (s.carry.freshness === "STALE") issues.push(["warn", "données Carry périmées"]);
+  componentIssue("trend", s.trend, "état Trend");
+  componentIssue("carry", s.carry, "état Carry");
+  if (health.safety_status === "FAIL") issues.push(["crit", "Execution safety UNSAFE"]);
+  else if (health.safety_status === "UNKNOWN") issues.push(["crit", "Execution safety UNKNOWN"]);
   if (s.btc.freshness !== "FRESH") issues.push([s.btc.freshness === "STALE" ? "warn" : "crit", "prix BTC non frais — valorisation non LIVE"]);
   if (s.trend.halted) issues.push(["crit", "KILL-SWITCH Trend déclenché : drawdown maximal atteint, positions liquidées"]);
   if (s.carry.halted) issues.push(["crit", "KILL-SWITCH Carry déclenché : drawdown maximal atteint, position fermée"]);
@@ -381,20 +386,15 @@ function beat(age) {
 function renderCockpitStatus(s) {
   const critical = [], warnings = [];
   const health = s.health || {};
-  const required = new Set(health.required_components || ["trend"]);
   const incidents = health.open_incidents || [];
   const safety = health.safety_status || "UNKNOWN";
   if (safety === "FAIL") critical.push("Execution safety UNSAFE");
   else if (safety === "UNKNOWN") critical.push("Execution safety UNKNOWN");
   const component = (name, item) => {
-    const requiredComponent = required.has(name);
-    if (!item || !item.alive || ["UNKNOWN", "UNAVAILABLE"].includes(item.freshness)) {
-      (requiredComponent ? critical : warnings).push(
-        `${name} state ${item && item.freshness ? item.freshness : "UNKNOWN"}`
-      );
-    } else if (item.freshness === "STALE") {
-      (requiredComponent ? warnings : warnings).push(`${name} state STALE`);
-    }
+    const severity = BTCQuantOperationalState.componentAvailabilitySeverity(name, item, health);
+    const state = item && item.freshness ? item.freshness : "UNKNOWN";
+    if (severity === "crit") critical.push(name + " state " + state);
+    else if (severity === "warn") warnings.push(name + " state " + state);
   };
   component("trend", s.trend);
   component("carry", s.carry);
@@ -493,12 +493,11 @@ function renderRiskRadar(s) {
 
 function renderMonitorPulse(s) {
   const h = s.health || {};
-  const required = new Set(h.required_components || ["trend"]);
   const engine = (name, label, alive, age, freshness) => {
     const fresh = freshness === "FRESH" && alive;
     const stale = freshness === "STALE";
     const status = fresh ? t("monitor_ready") : stale ? "STALE" : "UNKNOWN";
-    const tone = fresh ? "" : stale ? "warn" : required.has(name) ? "crit" : "warn";
+    const tone = fresh ? "" : BTCQuantOperationalState.componentAvailabilitySeverity(name, {alive, freshness}, h);
     return '<div class="ops-item ' + tone + '"><span class="ops-dot"></span><div class="ops-copy"><div class="ops-label">'
       + label + '</div><div class="ops-value">' + status + '</div><div class="ops-note">'
       + (beat(age).replace(/^·\s*/, "") || "—") + '</div></div></div>';
@@ -1284,13 +1283,19 @@ function notify(title, body, tag) {
     navigator.serviceWorker.controller.postMessage({type:"notify", title, body, tag});
   else try { new Notification(title, {body, icon:"/icon.svg", tag}); } catch (e) {}
 }
-let alertState = {trendConfirmed:true, carryConfirmed:true, halted:false, ddNotified:false, posKeys:new Set()};
+let alertState = {trendConfirmed:true, carryConfirmed:true, safetyStatus:"PASS", halted:false, ddNotified:false, posKeys:new Set()};
 function checkAlerts(s) {
+  const health = s.health || {};
   const trendConfirmed = !!s.trend.alive && s.trend.freshness === "FRESH";
   const carryConfirmed = !!s.carry.alive && s.carry.freshness === "FRESH";
-  if (alertState.trendConfirmed && !trendConfirmed) notify("⚠ Moteur Trend non confirmé", "Le runner Trend est arrêté ou ses données sont périmées.", "trend-down");
-  if (alertState.carryConfirmed && !carryConfirmed) notify("⚠ Moteur Carry non confirmé", "Le runner Carry est arrêté ou ses données sont périmées.", "carry-down");
+  if (BTCQuantOperationalState.shouldNotifyFreshnessTransition("trend", alertState.trendConfirmed, trendConfirmed, health))
+    notify("⚠ Moteur Trend non confirmé", "Le runner Trend est arrêté ou ses données sont périmées.", "trend-down");
+  if (BTCQuantOperationalState.shouldNotifyFreshnessTransition("carry", alertState.carryConfirmed, carryConfirmed, health))
+    notify("⚠ Moteur Carry non confirmé", "Le runner Carry est arrêté ou ses données sont périmées.", "carry-down");
+  if (BTCQuantOperationalState.shouldNotifySafetyFailureTransition(alertState.safetyStatus, health.safety_status))
+    notify("Execution safety", "A financial unsafe condition was detected.", "execution-safety");
   alertState.trendConfirmed = trendConfirmed;
+  alertState.safetyStatus = health.safety_status || "UNKNOWN";
   alertState.carryConfirmed = carryConfirmed;
   if (!alertState.halted && s.trend.halted) notify("⛔ KILL-SWITCH", "Drawdown maximal atteint, positions liquidées.", "kill");
   alertState.halted = s.trend.halted;
