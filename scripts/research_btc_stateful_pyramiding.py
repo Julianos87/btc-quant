@@ -74,6 +74,9 @@ def _score(item: dict) -> float:
 
 
 def main() -> None:
+    from btcquant.research.search_gates import refuse_ungoverned_search
+
+    refuse_ungoverned_search(__file__)
     cfg = load_config(CONFIG)
     base = load_ohlcv(
         cfg["exchange"],

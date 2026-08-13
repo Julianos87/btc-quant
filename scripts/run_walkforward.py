@@ -292,6 +292,10 @@ def main() -> None:
     except ValueError as exc:
         parser.error(str(exc))
 
+    from btcquant.research.search_gates import refuse_ungoverned_search
+
+    refuse_ungoverned_search(__file__)
+
     logging.basicConfig(level=logging.WARNING)
     cfg = load_config(args.config)
     spec = _strategy_spec(cfg, args.strategy)
