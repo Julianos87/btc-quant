@@ -361,6 +361,22 @@ def test_external_broker_is_centrally_disabled():
         CcxtBroker()
 
 
+def test_missing_qualification_stops_before_ccxt_initialization(tmp_path, monkeypatch):
+    def forbidden_exchange_init(_config):
+        raise AssertionError("external broker initialization must not be reached")
+
+    monkeypatch.setattr(
+        "btcquant.execution.ccxt_broker.ccxt.binance",
+        forbidden_exchange_init,
+    )
+    database = tmp_path / "missing.db"
+
+    with pytest.raises(RuntimeError, match="Safety Baseline"):
+        CcxtBroker(qualification_state_path=database)
+
+    assert not database.exists()
+
+
 def test_carry_close_failure_marks_unbalanced(tmp_path, monkeypatch):
     class CarryBrokerStub:
         def reconcile(self):

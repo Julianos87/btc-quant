@@ -6,6 +6,7 @@ la reprise sur incident et une validation testnet formalisée.
 
 import hmac
 import os
+import sqlite3
 from pathlib import Path
 
 from .readiness import require_passed_qualification
@@ -22,9 +23,11 @@ def require_live_execution_enabled(
     if not testnet:
         raise RuntimeError("SÉCURITÉ : l'exécution avec argent réel reste désactivée")
     try:
-        require_passed_qualification(StateStore(state_path, read_only=True))
-    except RuntimeError as error:
-        raise RuntimeError(f"Safety Baseline — {error}") from error
+        require_passed_qualification(StateStore(state_path, initialize=False, read_only=True))
+    except (FileNotFoundError, PermissionError, OSError, sqlite3.Error, RuntimeError) as error:
+        raise RuntimeError(
+            f"Safety Baseline — qualification state unavailable or invalid: {error}"
+        ) from error
     confirmation = os.environ.get("BTCQUANT_ENABLE_TESTNET", "")
     if not hmac.compare_digest(confirmation, TESTNET_CONFIRMATION):
         raise RuntimeError(
