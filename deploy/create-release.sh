@@ -17,6 +17,12 @@ ROOT="${BTCQUANT_ROOT:-/opt/btcquant}"
 RELEASES="${ROOT}/releases"
 DEPLOY_REMOTE="${DEPLOY_REMOTE:-}"
 
+# The deployment orchestrator is root, while the canonical checkout is owned
+# by btcquant. Keep Git trust process-local and scoped to this exact source path.
+source_git() {
+  git -c "safe.directory=${SOURCE}" -C "${SOURCE}" "$@"
+}
+
 case "${RELEASE_ID}" in
   *[!0-9a-f]*|"")
     echo "Identifiant de release invalide : ${RELEASE_ID}" >&2
@@ -28,18 +34,18 @@ if [ "${#RELEASE_ID}" -ne 40 ] || [ ! -d "${SOURCE}" ]; then
   exit 2
 fi
 
-SOURCE_HEAD="$(git -C "${SOURCE}" rev-parse HEAD)"
+SOURCE_HEAD="$(source_git rev-parse HEAD)"
 if [ "${SOURCE_HEAD}" != "${RELEASE_ID}" ]; then
   echo "Le clone source ne correspond pas au SHA demandé." >&2
   exit 1
 fi
-git -C "${SOURCE}" diff-tree --check -r "${RELEASE_ID}"
+source_git diff-tree --check -r "${RELEASE_ID}"
 if [ -z "${DEPLOY_REMOTE}" ]; then
   echo "Refus: DEPLOY_REMOTE doit identifier la remote canonique." >&2
   exit 1
 fi
-GIT_TREE="$(git -C "${SOURCE}" rev-parse "${RELEASE_ID}^{tree}")"
-ORIGIN="$(git -C "${SOURCE}" remote get-url "${DEPLOY_REMOTE}")"
+GIT_TREE="$(source_git rev-parse "${RELEASE_ID}^{tree}")"
+ORIGIN="$(source_git remote get-url "${DEPLOY_REMOTE}")"
 TARGET="${RELEASES}/${RELEASE_ID}"
 if [ -e "${TARGET}" ]; then
   if [ ! -f "${TARGET}/release-manifest.json" ]; then
@@ -68,7 +74,7 @@ mkdir -p "${STAGING}"
 rsync -a \
   --exclude .git --exclude .venv --exclude venv --exclude __pycache__ \
   --exclude state --exclude backups --exclude backups-repo \
-  --exclude .env --exclude data --exclude reports \
+  --exclude .env --exclude /data --exclude reports \
   "${SOURCE}/" "${STAGING}/"
 
 ln -s ../../state "${STAGING}/state"
