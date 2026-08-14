@@ -24,11 +24,39 @@ cleanup() {
 }
 trap cleanup EXIT
 mkdir -p "${TMP_DIR}/state"
-rsync -a \
-  --exclude 'btcquant.db' --exclude 'btcquant.db-wal' --exclude 'btcquant.db-shm' \
+# Generic state evidence may be copied, but SQLite files and every sidecar are
+# never eligible for raw rsync. Each allow-listed database below is captured
+# through the Online Backup API instead.
+SQLITE_EXCLUDES=(
+  --exclude '*.db' --exclude '*.db-wal' --exclude '*.db-shm'
+  --exclude '*.sqlite' --exclude '*.sqlite-wal' --exclude '*.sqlite-shm'
+  --exclude '*.sqlite3' --exclude '*.sqlite3-wal' --exclude '*.sqlite3-shm'
+)
+rsync -a "${SQLITE_EXCLUDES[@]}" \
   "${ROOT}/state/" "${TMP_DIR}/state/"
+
+while IFS= read -r candidate; do
+  candidate_name="$(basename "${candidate}")"
+  case "${candidate_name}" in
+    btcquant.db|execution-shadow.db|btcquant-testnet.db) ;;
+    *) echo "Ignoring unknown SQLite-like state artifact: ${candidate_name}" >&2 ;;
+  esac
+done < <(
+  find "${ROOT}/state" -maxdepth 1 -type f \(
+    -name '*.db' -o -name '*.db-wal' -o -name '*.db-shm' \
+    -o -name '*.sqlite' -o -name '*.sqlite-wal' -o -name '*.sqlite-shm' \
+    -o -name '*.sqlite3' -o -name '*.sqlite3-wal' -o -name '*.sqlite3-shm'
+  \) -print
+)
+
 "${PYBIN}" "${ROOT}/scripts/backup_database.py" \
   "${ROOT}/state/btcquant.db" "${TMP_DIR}/state/btcquant.db"
+for optional_db in execution-shadow.db btcquant-testnet.db; do
+  if [ -e "${ROOT}/state/${optional_db}" ]; then
+    "${PYBIN}" "${ROOT}/scripts/backup_database.py" \
+      "${ROOT}/state/${optional_db}" "${TMP_DIR}/state/${optional_db}"
+  fi
+done
 PLAIN_ARCHIVE="${TMP_DIR}/state-${STAMP}.tar.gz"
 tar -czf "${PLAIN_ARCHIVE}" -C "${TMP_DIR}" state
 ARCHIVE="${BACKUP_DIR}/state-${STAMP}.tar.gz.enc"
@@ -46,7 +74,18 @@ openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
   -in "${ENCRYPTED_TMP}" -out "${ROUNDTRIP_ARCHIVE}" \
   -pass env:BACKUP_ENCRYPTION_KEY
 cmp --silent "${PLAIN_ARCHIVE}" "${ROUNDTRIP_ARCHIVE}"
+# Do not report a completed archive until its bytes and containing directory
+# have been durably flushed.
+fsync_file() {
+  "${PYBIN}" -c 'import os, sys; fd=os.open(sys.argv[1], os.O_RDONLY); os.fsync(fd); os.close(fd)' "$1"
+}
+fsync_directory() {
+  "${PYBIN}" -c 'import os, sys; flags=os.O_RDONLY | getattr(os, "O_DIRECTORY", 0); fd=os.open(sys.argv[1], flags); os.fsync(fd); os.close(fd)' "$1"
+}
+fsync_file "${ENCRYPTED_TMP}"
 mv --no-clobber "${ENCRYPTED_TMP}" "${ARCHIVE}"
+fsync_file "${ARCHIVE}"
+fsync_directory "${BACKUP_DIR}"
 # purge des archives de plus de 30 jours
 find "${BACKUP_DIR}" \( -name 'state-*.tar.gz' -o -name 'state-*.tar.gz.enc' \) \
   -mtime +30 -delete
@@ -72,7 +111,7 @@ if [ -d "${REPO}/.git" ] && [[ "${ARCHIVE}" == *.enc ]]; then
     git add -u -- '*.tar.gz.enc'
     git add -- "$(basename "${ARCHIVE}")"
     git -c commit.gpgsign=false commit -q -m "backup ${STAMP}" || exit 0
-    git push -q "${OFFHOST_REMOTE}" "${OFFHOST_BRANCH}"
+    git push -q "${OFFHOST_REMOTE}" "HEAD:refs/heads/${OFFHOST_BRANCH}"
     echo "Off-host backup pushed."
   ) || echo "Off-host push failed; local encrypted backup remains available" >&2
 fi

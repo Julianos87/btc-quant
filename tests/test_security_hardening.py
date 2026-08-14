@@ -8,6 +8,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tarfile
 import tomllib
 from pathlib import Path
 
@@ -42,6 +43,15 @@ def test_backup_offsite_requires_encryption_and_checks_roundtrip():
     assert "openssl enc -aes-256-cbc -pbkdf2" in script
     assert "openssl enc -d -aes-256-cbc -pbkdf2" in script
     assert 'cmp --silent "${PLAIN_ARCHIVE}" "${ROUNDTRIP_ARCHIVE}"' in script
+    for pattern in (
+        "--exclude '*.db'",
+        "--exclude '*.db-wal'",
+        "--exclude '*.db-shm'",
+        "--exclude '*.sqlite'",
+        "--exclude '*.sqlite3'",
+    ):
+        assert pattern in script
+    assert "HEAD:refs/heads/" + "$" + "{OFFHOST_BRANCH}" in script
 
 
 def test_unprivileged_services_drop_linux_capabilities():
@@ -385,6 +395,102 @@ def test_backup_script_fails_closed_without_encryption_key(tmp_path: Path, key: 
     assert "BACKUP_ENCRYPTION_KEY" in result.stderr
     assert not (app / "backups").exists()
     assert not list(app.rglob("*.tar.gz"))
+
+
+def test_legacy_backup_snapshots_all_allowlisted_sqlite_wal_databases(tmp_path: Path) -> None:
+    app = tmp_path / "app"
+    (app / "scripts").mkdir(parents=True)
+    (app / "state").mkdir()
+    (app / "venv" / "bin").mkdir(parents=True)
+    (app / "scripts" / "backup_state.sh").write_text(
+        (ROOT / "scripts" / "backup_state.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (app / "scripts" / "backup_database.py").write_text(
+        (ROOT / "scripts" / "backup_database.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    writers: list[sqlite3.Connection] = []
+    source_rows: dict[str, int] = {}
+    for name in ("btcquant.db", "execution-shadow.db", "btcquant-testnet.db"):
+        path = app / "state" / name
+        connection = sqlite3.connect(path)
+        assert connection.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        connection.execute("CREATE TABLE sample (value TEXT)")
+        connection.execute("INSERT INTO sample VALUES (?)", (name,))
+        connection.commit()
+        connection.execute("INSERT INTO sample VALUES (?)", (f"{name}-latest",))
+        connection.commit()
+        source_rows[name] = connection.execute("SELECT COUNT(*) FROM sample").fetchone()[0]
+        writers.append(connection)
+
+    unknown = app / "state" / "foo.db"
+    unknown_connection = sqlite3.connect(unknown)
+    unknown_connection.execute("PRAGMA journal_mode=WAL")
+    unknown_connection.execute("CREATE TABLE sample (value TEXT)")
+    unknown_connection.execute("INSERT INTO sample VALUES ('must-not-be-archived')")
+    unknown_connection.commit()
+    writers.append(unknown_connection)
+
+    env = os.environ.copy()
+    env["BACKUP_ENCRYPTION_KEY"] = "lot7-wal-fixture-key"
+    result = subprocess.run(
+        ["bash", str(app / "scripts" / "backup_state.sh")],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    for connection in writers:
+        connection.close()
+    assert result.returncode == 0, result.stderr
+    archives = list((app / "backups").glob("*.tar.gz.enc"))
+    assert len(archives) == 1
+    assert not list((app / "backups").glob("*.tar.gz"))
+
+    archive = archives[0]
+    plain = tmp_path / "decrypted.tar.gz"
+    subprocess.run(
+        [
+            "openssl",
+            "enc",
+            "-d",
+            "-aes-256-cbc",
+            "-pbkdf2",
+            "-iter",
+            "200000",
+            "-in",
+            str(archive),
+            "-out",
+            str(plain),
+            "-pass",
+            "env:BACKUP_ENCRYPTION_KEY",
+        ],
+        env=env,
+        check=True,
+        capture_output=True,
+    )
+    extract = tmp_path / "extract"
+    extract.mkdir()
+    with tarfile.open(plain, "r:gz") as tar:
+        members = tar.getmembers()
+        names = {member.name for member in members}
+        assert "state/btcquant.db" in names
+        assert "state/execution-shadow.db" in names
+        assert "state/btcquant-testnet.db" in names
+        assert not any(
+            name.endswith((".db-wal", ".db-shm", ".sqlite-wal", ".sqlite-shm")) for name in names
+        )
+        assert not any(name.endswith("foo.db") for name in names)
+        tar.extractall(extract)
+
+    for name, expected_rows in source_rows.items():
+        restored = extract / "state" / name
+        with sqlite3.connect(restored) as connection:
+            assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+            assert connection.execute("SELECT COUNT(*) FROM sample").fetchone()[0] == expected_rows
 
 
 def test_backup_script_does_not_invoke_compaction_and_publishes_only_encrypted(

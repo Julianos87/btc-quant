@@ -53,7 +53,17 @@ def create_backup(source_path: Path, destination_path: Path) -> None:
             with sqlite3.connect(temporary) as destination:
                 source.backup(destination, pages=256, sleep=0.1)
                 _check_integrity(destination, "Backup")
+        destination_descriptor = os.open(temporary, os.O_RDONLY)
+        try:
+            os.fsync(destination_descriptor)
+        finally:
+            os.close(destination_descriptor)
         os.replace(temporary, destination_path)
+        directory_descriptor = os.open(destination_path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
     except Exception:
         if temporary.exists():
             temporary.unlink()

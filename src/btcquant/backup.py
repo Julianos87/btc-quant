@@ -23,6 +23,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import shutil
 import sqlite3
 import tempfile
@@ -70,6 +71,8 @@ _RESTORE_FILENAMES = {
     "shadow_state": "execution-shadow.db",
     "governance_state": "governance.sqlite3",
 }
+_FULL_GIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _ALLOWED_LOGICAL_NAMES = {
     "AUTHORITATIVE_TRADING_STATE": {"trading_state"},
     "AUTHORITATIVE_SHADOW_STATE": {"shadow_state"},
@@ -208,6 +211,24 @@ def sha256_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
         while chunk := stream.read(chunk_size):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _validate_app_git_sha(value: Any) -> str:
+    if not isinstance(value, str) or _FULL_GIT_SHA_RE.fullmatch(value) is None:
+        raise ManifestInvalid("app_git_sha must be exactly 40 lowercase hexadecimal characters")
+    return value
+
+
+def _validate_app_schema(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ManifestInvalid("app_schema_version must be a positive integer")
+    return value
+
+
+def _validate_sha256(value: Any, label: str) -> str:
+    if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
+        raise ManifestInvalid(f"{label} must be a 64-character lowercase hexadecimal SHA-256")
+    return value
 
 
 def _safe_relative(value: str) -> str:
@@ -431,6 +452,9 @@ class BackupVerification:
     total_bytes: int
     app_schema_version: int | None
     manifest: Mapping[str, Any] = field(repr=False)
+    created_at: datetime | None = field(default=None, repr=False)
+    last_verified_at: datetime | None = field(default=None, repr=False)
+    restore_drill_at: datetime | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -514,6 +538,7 @@ def _copy_sqlite(source: Path, destination: Path) -> tuple[int | None, str, bool
                 destination_connection.execute("PRAGMA journal_mode = DELETE")
                 destination_connection.commit()
             schema = _sqlite_schema_version(source_connection)
+        _fsync_file(destination)
         _check_sqlite(destination)
         return schema, integrity, True
     except sqlite3.DatabaseError as error:
@@ -588,6 +613,8 @@ def _read_manifest(directory: Path) -> dict[str, Any]:
     core_hash = manifest.get("manifest_sha256")
     if core_hash != _sha256_bytes(_canonical_json(_manifest_core(manifest))):
         raise HashMismatch("manifest content hash mismatch")
+    _validate_app_git_sha(manifest.get("app_git_sha"))
+    _validate_app_schema(manifest.get("app_schema_version"))
     entries = manifest.get("entries")
     if not isinstance(entries, list) or not entries:
         raise ManifestInvalid("manifest entries missing")
@@ -654,6 +681,8 @@ def _validate_manifest_metadata(manifest: Mapping[str, Any], total: int) -> None
         raise ManifestInvalid("manifest entries missing")
     if manifest.get("total_bytes") != total:
         raise ManifestInvalid("manifest total_bytes mismatch")
+    app_schema = _validate_app_schema(manifest.get("app_schema_version"))
+    _validate_app_git_sha(manifest.get("app_git_sha"))
     for entry in entries:
         classification = entry.get("classification")
         logical_name = entry.get("logical_name")
@@ -664,8 +693,51 @@ def _validate_manifest_metadata(manifest: Mapping[str, Any], total: int) -> None
         source_type = entry.get("source_type")
         if source_type not in {"sqlite", "file"}:
             raise ManifestInvalid("manifest source type is invalid")
-        if entry.get("source_status", "PRESENT") not in {"PRESENT", "OPTIONAL_NOT_PRESENT"}:
+        status = entry.get("source_status", "PRESENT")
+        if status not in {"PRESENT", "OPTIONAL_NOT_PRESENT"}:
             raise ManifestInvalid("manifest source status is invalid")
+        if (
+            status == "PRESENT"
+            and classification == "AUTHORITATIVE_TRADING_STATE"
+            and source_type == "sqlite"
+            and entry.get("sqlite_schema_version") != app_schema
+        ):
+            raise ManifestInvalid(
+                "authoritative trading SQLite schema must equal app_schema_version"
+            )
+
+
+def _successful_restore_drill(
+    record_root: str | Path | None,
+    *,
+    backup_id: str,
+    manifest_sha256: str,
+) -> datetime | None:
+    if record_root is None:
+        return None
+    root = Path(record_root).expanduser().absolute()
+    if not root.is_dir() or root.is_symlink():
+        return None
+    completed_times: list[datetime] = []
+    for path in root.glob("restore-drill-*.json"):
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+            completed = _parse_iso(str(record["completed_at_utc"]))
+        except (OSError, KeyError, TypeError, ValueError):
+            continue
+        if (
+            record.get("drill_schema_version") == 1
+            and record.get("backup_id") == backup_id
+            and record.get("manifest_sha256") == manifest_sha256
+            and record.get("result") == "PASS"
+            and record.get("integrity") == "PASS"
+            and record.get("application_open_test") == "PASS"
+            and record.get("recovery_gate_present") is True
+        ):
+            completed_times.append(completed)
+    return max(completed_times) if completed_times else None
 
 
 def verify_backup_set(
@@ -674,6 +746,7 @@ def verify_backup_set(
     expected_app_schema_version: int | None = None,
     now: datetime | None = None,
     clock_skew_tolerance_seconds: float = 5.0,
+    restore_drill_root: str | Path | None = None,
 ) -> BackupVerification:
     directory = _controlled_path(Path(backup_directory), create=False)
     manifest = _read_manifest(directory)
@@ -695,37 +768,42 @@ def verify_backup_set(
         raise ManifestInvalid("backup state is inconsistent with captured skew")
     total = _verify_directory_contents(directory, manifest)
     _validate_manifest_metadata(manifest, total)
-    schema_versions = {
-        int(entry["sqlite_schema_version"])
-        for entry in manifest["entries"]
-        if entry.get("sqlite_schema_version") is not None
-    }
-    app_schema = max(schema_versions) if schema_versions else None
-    if expected_app_schema_version is not None and app_schema is not None:
+    app_schema = _validate_app_schema(manifest["app_schema_version"])
+    if expected_app_schema_version is not None:
+        expected_app_schema_version = _validate_app_schema(expected_app_schema_version)
         if app_schema > expected_app_schema_version:
             raise SchemaIncompatible(
                 f"backup={app_schema}, expected<={expected_app_schema_version}"
             )
+    last_verified_at: datetime | None = None
     verification_path = directory / VERIFICATION_NAME
-    restore_verified = False
     if verification_path.is_file() and not verification_path.is_symlink():
         try:
             record = json.loads(verification_path.read_text(encoding="utf-8"))
-            restore_verified = (
+            if (
                 record.get("manifest_sha256") == manifest.get("manifest_sha256")
                 and record.get("verification_status") == "VERIFIED"
-            )
-        except (OSError, ValueError):
-            restore_verified = False
+            ):
+                last_verified_at = _parse_iso(str(record["verified_at_utc"]))
+        except (OSError, KeyError, TypeError, ValueError):
+            last_verified_at = None
+    restore_drill_at = _successful_restore_drill(
+        restore_drill_root,
+        backup_id=backup_id,
+        manifest_sha256=str(manifest["manifest_sha256"]),
+    )
     return BackupVerification(
         backup_id=backup_id,
         valid=True,
         trusted=state == "COMPLETED",
         state=state,
-        restore_verified=restore_verified,
+        restore_verified=restore_drill_at is not None,
         total_bytes=total,
         app_schema_version=app_schema,
         manifest=manifest,
+        created_at=created,
+        last_verified_at=last_verified_at,
+        restore_drill_at=restore_drill_at,
     )
 
 
@@ -755,12 +833,8 @@ def export_verified_backup_set(
             expected_app_schema_version=expected_app_schema_version,
             now=now,
         )
-        if (
-            not verification.trusted
-            or verification.state != "COMPLETED"
-            or not verification.restore_verified
-        ):
-            raise ExportRefused("only a completed verified BackupSet may be exported")
+        if not verification.trusted or verification.state != "COMPLETED":
+            raise ExportRefused("only a completed byte-verified BackupSet may be exported")
         exporter(backup, destination, verification)
     if not destination.exists() or destination.is_symlink():
         raise ExportRefused("exporter did not publish a destination")
@@ -795,13 +869,21 @@ def create_backup_set(
     max_capture_skew_seconds: float = 30.0,
     disk_usage_fn: Callable[[str], Any] = shutil.disk_usage,
     failure_hook: Callable[[str], None] | None = None,
+    safety_margin_bytes: int = 64 * 1024 * 1024,
 ) -> Path:
+    _validate_app_git_sha(app_git_sha)
+    _validate_app_schema(app_schema_version)
+    if isinstance(safety_margin_bytes, bool) or not isinstance(safety_margin_bytes, int):
+        raise ValueError("safety_margin_bytes must be an integer")
+    if safety_margin_bytes < 0:
+        raise ValueError("safety_margin_bytes cannot be negative")
     source_list = list(sources)
     if not source_list:
         raise ValueError("at least one explicit source is required")
     root = _controlled_path(Path(destination_root), create=True)
     with BackupLock(root):
-        _check_space(root, 2 * _estimated_bytes(source_list) + 1024 * 1024, disk_usage_fn)
+        required_space = 2 * _estimated_bytes(source_list) + safety_margin_bytes
+        _check_space(root, required_space, disk_usage_fn)
         created = _utc(now)
         stage = Path(tempfile.mkdtemp(prefix=".backup-staging-", dir=root))
         _restrict_mode(stage, 0o700)
@@ -1345,6 +1427,7 @@ def record_restore_drill(
     *,
     drill_id: str,
     backup_id: str,
+    manifest_sha256: str,
     started_at: datetime,
     completed_at: datetime,
     result: str,
@@ -1352,27 +1435,64 @@ def record_restore_drill(
     application_open_test: str,
     recovery_gate_present: bool,
 ) -> Path:
-    """Write a non-secret restore-drill record outside the immutable set."""
+    """Append immutable, manifest-bound evidence of a successful restore drill."""
 
     safe_id = _safe_relative(drill_id)
+    if "/" in safe_id or "\\" in safe_id:
+        raise ManifestInvalid("restore drill id must be a single path component")
     if not safe_id.endswith(".json"):
         safe_id += ".json"
+    manifest_sha256 = _validate_sha256(manifest_sha256, "manifest_sha256")
+    started = _utc(started_at)
+    completed = _utc(completed_at)
+    if completed < started:
+        raise ManifestInvalid("restore drill completed before it started")
+    if result != "PASS" or integrity != "PASS" or application_open_test != "PASS":
+        raise ManifestInvalid("only a fully passing restore drill can be recorded")
+    if recovery_gate_present is not True:
+        raise ManifestInvalid("restore drill must prove recovery gate presence")
     root = Path(record_root).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
     path = root / f"restore-drill-{safe_id}"
+    if path.exists() or path.is_symlink():
+        raise BackupError(f"restore drill ID already exists: {drill_id}")
     payload = {
         "drill_schema_version": 1,
         "drill_id": drill_id,
         "backup_id": backup_id,
-        "started_at_utc": _iso(_utc(started_at)),
-        "completed_at_utc": _iso(_utc(completed_at)),
+        "manifest_sha256": manifest_sha256,
+        "started_at_utc": _iso(started),
+        "completed_at_utc": _iso(completed),
         "result": result,
         "integrity": integrity,
         "application_open_test": application_open_test,
-        "recovery_gate_present": bool(recovery_gate_present),
+        "recovery_gate_present": recovery_gate_present,
     }
     _write_marker(path, payload)
     return path
+
+
+def backup_age_metrics(
+    created_at: datetime,
+    *,
+    last_verified_at: datetime | None,
+    restore_drill_at: datetime | None,
+    now: datetime,
+) -> dict[str, float | None]:
+    """Expose backup, byte-verification and restore-drill ages separately."""
+
+    current = _utc(now)
+
+    def age(value: datetime | None) -> float | None:
+        if value is None:
+            return None
+        return (current - _utc(value)).total_seconds()
+
+    return {
+        "backup_age_seconds": age(created_at),
+        "verification_age_seconds": age(last_verified_at),
+        "restore_drill_age_seconds": age(restore_drill_at),
+    }
 
 
 def backup_freshness(
@@ -1384,8 +1504,10 @@ def backup_freshness(
     stale_after_seconds: float,
 ) -> str:
     current = _utc(now)
-    reference = _utc(last_verified_at or created_at)
-    age = (current - reference).total_seconds()
+    # Re-verification proves current bytes; it does not make an old backup a
+    # newly captured recovery point. Keep the argument for API compatibility.
+    del last_verified_at
+    age = (current - _utc(created_at)).total_seconds()
     if age < 0:
         return "UNKNOWN"
     if age <= fresh_after_seconds:
@@ -1420,6 +1542,7 @@ __all__ = [
     "assert_research_recovery_clear",
     "assert_shadow_recovery_clear",
     "assert_writer_recovery_clear",
+    "backup_age_metrics",
     "backup_freshness",
     "create_backup_set",
     "latest_valid_backup",

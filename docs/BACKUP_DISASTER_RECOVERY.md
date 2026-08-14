@@ -154,18 +154,27 @@ restore. Free-space checks include a safety margin before backup creation.
 
 Backup status is distinct from business data freshness:
 
-```text
-FRESH_BACKUP → STALE_BACKUP → UNKNOWN
-```
+FRESH_BACKUP -> STALE_BACKUP -> UNKNOWN
 
-Future timestamps produce `UNKNOWN`; a failed verification never resets a
-previous successful verification timestamp. Capture skew is recorded and a
-set exceeding its configured bound is `DEGRADED`, not trusted for restore.
+backup_age is based on created_at_utc; verification_age is based on the last
+byte/integrity verification; and restore_drill_age is based on an explicit
+successful drill record. Re-verifying a 30-day-old backup does not make the
+backup itself fresh. Future timestamps produce UNKNOWN; a failed verification
+never resets a previous successful verification timestamp. Capture skew is
+recorded and a set exceeding its configured bound is DEGRADED, not trusted for
+restore.
 
-An off-host export must pass through `export_verified_backup_set`. The exporter
-callback is admitted only for a `COMPLETED`, independently verified and trusted
-BackupSet; it is responsible for authenticated encryption and remote
-publication. `CREATING`, failed, degraded, corrupt or unverified sets never
+trusted means current-byte and integrity verification only. It does not mean
+that a restore drill has run. A fresh or degraded BackupSet therefore reports
+restore_verified = false until an external, append-only drill record binds the
+backup ID, manifest SHA-256, successful integrity/application-open tests and
+recovery-gate evidence.
+
+An off-host export must pass through export_verified_backup_set. The exporter
+callback is admitted only for a COMPLETED, independently byte-verified and
+trusted BackupSet; a prior restore drill is not required merely to replicate a
+new backup. It is responsible for authenticated encryption and remote
+publication. CREATING, failed, degraded, corrupt or unverified sets never
 reach that boundary. Lot 7 does not invoke a remote exporter.
 
 ## Failure and recovery matrix
@@ -277,33 +286,49 @@ sidecars where present, staging duplication and a safety margin. Retention
 uses verified bytes only and always preserves the newest verified set; it
 does not delete the last good recovery point.
 
-## Public backup history incident and off-host policy
 
-A forensic audit found 13 plaintext runtime archives on the public `backups`
+## Current backup-ref distinction
+
+The sanitation anchor is 8b9112e7f1bc21a1408fc6d6057b55d69839a825.
+The legitimate scheduled commit 428f6c1c3fb62674b625dd34761aca07f9e01ece adds
+state-20260814-0300.tar.gz.enc and is intentionally retained. That
+pre-corrective archive proves only that the legacy encrypted scheduled
+pipeline continued to run; it does not prove the new SQLite allow-list or WAL
+handling is deployed.
+
+## Public backup history incident and off-host policy
+A forensic audit found 13 plaintext runtime archives on the public backups
 branch, covering 2026-07-14 through 2026-07-26. The audited archives contained
 operational/trading state such as equity history, strategy state, logs and trade
-history. No `.env`, API credential, private key, seed, wallet secret, dashboard
+history. No .env, API credential, private key, seed, wallet secret, dashboard
 token or exchange credential was detected in the 13 archives examined.
 
-The `backups` ref was sanitized locally and then force-updated with an exact
-`--force-with-lease`: its new orphan history retains all 36 encrypted archives
-byte-for-byte and no longer reaches plaintext archives, databases, WAL/SHM files,
-logs, CSV, JSON or secrets. The production `backups-repo` clone was then
-resynchronized to the sanitized commit. This does not retroactively erase
-publicly exposed information: old commit and raw URLs may remain accessible from
-GitHub's object/cache layer and require separate verification or support action.
+The sanitation anchor is
+8b9112e7f1bc21a1408fc6d6057b55d69839a825. The current scheduled branch head at
+the start of this corrective was
+428f6c1c3fb62674b625dd34761aca07f9e01ece, a legitimate descendant retaining
+37 encrypted archives. The retained encrypted generations remain byte-for-byte
+intact and the current branch tree reaches no plaintext archive, database,
+WAL/SHM file, log, CSV, JSON or secret. This does not retroactively erase
+publicly exposed information: old commit and raw URLs may remain accessible
+from GitHub's object/cache layer and require separate verification or support
+action.
 
-The independent restore of `state-20260813-0300.tar.gz.enc` succeeded in
-temporary staging with SQLite integrity and foreign-key checks passing. The
-restored trading database remained fenced because external exchange state is not
-included and its application schema is v4 while the current code targets v6.
+The independent legacy restore of state-20260813-0300.tar.gz.enc was qualified
+on 2026-08-13 in temporary staging with SQLite integrity and foreign-key checks
+passing. The restored trading database remained fenced because external
+exchange state is not included and its application schema is v4 while the
+current code targets v6. The scheduled state-20260814-0300.tar.gz.enc predates
+the current multi-SQLite truthfulness corrective and is not evidence that the
+corrective is deployed.
 
+The new BackupSet v1 off-host operational deployment is NOT YET DEPLOYED /
+NOT YET PRODUCTION-QUALIFIED. Full 3-2-1 qualification is NOT YET QUALIFIED.
 The public repository is transitional only and is not the preferred final
-3-2-1 target. Production should use a dedicated private repository or private
-object storage, configured through `BACKUP_OFFHOST_REMOTE` and an explicit branch
+target. Production should use a dedicated private repository or private object
+storage, configured through BACKUP_OFFHOST_REMOTE and an explicit branch
 configuration rather than a hard-coded provider. The current legacy encryption
 format is OpenSSL AES-256-CBC with PBKDF2, 200000 iterations and salt. Missing,
 empty or whitespace-only encryption keys fail closed before archive publication;
-encryption
-success alone is not a validity proof. BackupSet manifest, entry hashes and
-SQLite integrity checks remain mandatory after restore.
+encryption success alone is not a validity proof. BackupSet manifest, entry
+hashes and SQLite integrity checks remain mandatory after restore.

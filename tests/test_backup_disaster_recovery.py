@@ -15,6 +15,7 @@ from btcquant.backup import (
     DB_WRITER_SERVICES,
     DB_WRITER_TIMERS,
     BackupBusy,
+    BackupError,
     BackupSource,
     BackupVerification,
     ClockSkew,
@@ -32,6 +33,7 @@ from btcquant.backup import (
     assert_research_recovery_clear,
     assert_shadow_recovery_clear,
     assert_writer_recovery_clear,
+    backup_age_metrics,
     backup_freshness,
     create_backup_set,
     export_verified_backup_set,
@@ -51,16 +53,16 @@ APP_SHA = "a" * 40
 SOURCE_IDENTITY = "github.com/example/btcquant.git"
 
 
-def _make_db(path: Path, *, records: int = 2) -> None:
+def _make_db(path: Path, *, records: int = 2, schema: int = 6) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as connection:
         assert connection.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
         connection.executescript(
-            """
+            f"""
             CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE parent(id INTEGER PRIMARY KEY);
             CREATE TABLE child(id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id));
-            INSERT INTO metadata VALUES ('schema_version', '6');
+            INSERT INTO metadata VALUES ('schema_version', '{schema}');
             INSERT INTO parent VALUES (1);
             """
         )
@@ -381,6 +383,168 @@ def test_clock_skew_and_backup_freshness_are_explicit(tmp_path: Path) -> None:
         )
         == "UNKNOWN"
     )
+    assert (
+        backup_freshness(
+            now - timedelta(seconds=100),
+            last_verified_at=now - timedelta(seconds=1),
+            now=now,
+            fresh_after_seconds=30,
+            stale_after_seconds=60,
+        )
+        == "UNKNOWN"
+    )
+    ages = backup_age_metrics(
+        now - timedelta(days=30),
+        last_verified_at=now - timedelta(seconds=5),
+        restore_drill_at=None,
+        now=now,
+    )
+    assert ages["backup_age_seconds"] == 30 * 24 * 60 * 60
+    assert ages["verification_age_seconds"] == 5
+    assert ages["restore_drill_age_seconds"] is None
+
+
+def test_manifest_application_schema_is_not_entry_schema_max(tmp_path: Path) -> None:
+    trading = tmp_path / "trading.db"
+    shadow = tmp_path / "shadow.db"
+    _make_db(trading, schema=6)
+    _make_db(shadow, schema=1)
+    backup = create_backup_set(
+        [
+            BackupSource("trading_state", trading, "AUTHORITATIVE_TRADING_STATE"),
+            BackupSource("shadow_state", shadow, "AUTHORITATIVE_SHADOW_STATE"),
+        ],
+        tmp_path / "backups",
+        app_git_sha=APP_SHA,
+        app_schema_version=6,
+        source_identity=SOURCE_IDENTITY,
+    )
+    verification = verify_backup_set(backup, expected_app_schema_version=6)
+    assert verification.app_schema_version == 6
+    assert {entry["sqlite_schema_version"] for entry in verification.manifest["entries"]} == {1, 6}
+
+
+def test_shadow_only_manifest_keeps_application_schema_independent(tmp_path: Path) -> None:
+    shadow = tmp_path / "shadow.db"
+    _make_db(shadow, schema=1)
+    backup = create_backup_set(
+        [BackupSource("shadow_state", shadow, "AUTHORITATIVE_SHADOW_STATE")],
+        tmp_path / "backups",
+        app_git_sha=APP_SHA,
+        app_schema_version=6,
+        source_identity=SOURCE_IDENTITY,
+    )
+    assert verify_backup_set(backup, expected_app_schema_version=6).app_schema_version == 6
+
+
+def test_newer_application_schema_is_refused_even_when_entries_are_old(tmp_path: Path) -> None:
+    shadow = tmp_path / "shadow.db"
+    _make_db(shadow, schema=1)
+    backup = create_backup_set(
+        [BackupSource("shadow_state", shadow, "AUTHORITATIVE_SHADOW_STATE")],
+        tmp_path / "backups",
+        app_git_sha=APP_SHA,
+        app_schema_version=6,
+        source_identity=SOURCE_IDENTITY,
+    )
+    _rewrite_manifest(backup, lambda manifest: manifest.update(app_schema_version=7))
+    with pytest.raises(SchemaIncompatible):
+        verify_backup_set(backup, expected_app_schema_version=6)
+
+
+def test_older_application_schema_is_staging_migration_required(tmp_path: Path) -> None:
+    shadow = tmp_path / "shadow.db"
+    _make_db(shadow, schema=1)
+    backup = create_backup_set(
+        [BackupSource("shadow_state", shadow, "AUTHORITATIVE_SHADOW_STATE")],
+        tmp_path / "backups",
+        app_git_sha=APP_SHA,
+        app_schema_version=6,
+        source_identity=SOURCE_IDENTITY,
+    )
+    _rewrite_manifest(backup, lambda manifest: manifest.update(app_schema_version=5))
+    verification = verify_backup_set(backup, expected_app_schema_version=6)
+    assert verification.app_schema_version == 5
+    result = restore_to_staging(
+        backup,
+        tmp_path / "staging",
+        runtime_root=tmp_path / "runtime",
+        expected_app_schema_version=6,
+    )
+    assert result.migration_required is True
+
+
+@pytest.mark.parametrize("invalid_schema", [None, True, 0, -1, "6"])
+def test_manifest_application_schema_must_be_positive_integer(
+    tmp_path: Path, invalid_schema: object
+) -> None:
+    shadow = tmp_path / "shadow.db"
+    _make_db(shadow, schema=1)
+    backup = create_backup_set(
+        [BackupSource("shadow_state", shadow, "AUTHORITATIVE_SHADOW_STATE")],
+        tmp_path / "backups",
+        app_git_sha=APP_SHA,
+        app_schema_version=6,
+        source_identity=SOURCE_IDENTITY,
+    )
+    _rewrite_manifest(backup, lambda manifest: manifest.update(app_schema_version=invalid_schema))
+    with pytest.raises(ManifestInvalid):
+        verify_backup_set(backup)
+
+
+@pytest.mark.parametrize("invalid_sha", ["a" * 7, "main", "g" * 40])
+def test_manifest_requires_full_lowercase_git_sha(tmp_path: Path, invalid_sha: str) -> None:
+    source = tmp_path / "source.db"
+    _make_db(source)
+    with pytest.raises(ManifestInvalid):
+        create_backup_set(
+            [BackupSource("trading_state", source, "AUTHORITATIVE_TRADING_STATE")],
+            tmp_path / "backups",
+            app_git_sha=invalid_sha,
+            app_schema_version=6,
+            source_identity=SOURCE_IDENTITY,
+        )
+
+
+def test_restore_verification_requires_explicit_successful_drill(tmp_path: Path) -> None:
+    source = tmp_path / "source.db"
+    _make_db(source)
+    backup = _create(tmp_path / "backups", source)
+    initial = verify_backup_set(backup)
+    assert initial.trusted is True
+    assert initial.restore_verified is False
+    started = datetime(2026, 1, 1, 10, tzinfo=UTC)
+    completed = started + timedelta(seconds=3)
+    drills = tmp_path / "drills"
+    record_restore_drill(
+        drills,
+        drill_id="drill-001",
+        backup_id=initial.backup_id,
+        manifest_sha256=str(initial.manifest["manifest_sha256"]),
+        started_at=started,
+        completed_at=completed,
+        result="PASS",
+        integrity="PASS",
+        application_open_test="PASS",
+        recovery_gate_present=True,
+    )
+    drilled = verify_backup_set(backup, restore_drill_root=drills)
+    assert drilled.restore_verified is True
+    assert drilled.restore_drill_at == completed
+
+
+def test_creation_uses_configured_disk_safety_margin(tmp_path: Path) -> None:
+    source = tmp_path / "source.db"
+    _make_db(source)
+    with pytest.raises(InsufficientDisk):
+        create_backup_set(
+            [BackupSource("trading_state", source, "AUTHORITATIVE_TRADING_STATE")],
+            tmp_path / "backups",
+            app_git_sha=APP_SHA,
+            app_schema_version=6,
+            source_identity=SOURCE_IDENTITY,
+            disk_usage_fn=lambda _: type("Usage", (), {"free": 10 * 1024 * 1024})(),
+        )
 
 
 def test_writer_startup_fails_closed_when_trading_restore_is_unreconciled(tmp_path: Path) -> None:
@@ -462,7 +626,7 @@ def test_capture_skew_is_recorded_as_degraded_and_not_trusted(tmp_path: Path) ->
     verification = verify_backup_set(backup)
     assert verification.state == "DEGRADED"
     assert verification.trusted is False
-    assert verification.restore_verified is True
+    assert verification.restore_verified is False
 
 
 def test_quiescence_requires_all_writer_services_timers_and_open_handles() -> None:
@@ -486,17 +650,32 @@ def test_restore_drill_record_is_non_secret_and_auditable(tmp_path: Path) -> Non
         tmp_path / "drills",
         drill_id="drill-001",
         backup_id="backup-001",
+        manifest_sha256="a" * 64,
         started_at=started,
         completed_at=completed,
         result="PASS",
-        integrity="ok",
-        application_open_test="read_only_open",
+        integrity="PASS",
+        application_open_test="PASS",
         recovery_gate_present=True,
     )
     payload = json.loads(record.read_text(encoding="utf-8"))
     assert payload["backup_id"] == "backup-001"
     assert payload["recovery_gate_present"] is True
+    assert payload["manifest_sha256"] == "a" * 64
     assert "secret" not in record.read_text(encoding="utf-8").lower()
+    with pytest.raises(BackupError, match="restore drill ID already exists"):
+        record_restore_drill(
+            tmp_path / "drills",
+            drill_id="drill-001",
+            backup_id="backup-001",
+            manifest_sha256="a" * 64,
+            started_at=started,
+            completed_at=completed,
+            result="PASS",
+            integrity="PASS",
+            application_open_test="PASS",
+            recovery_gate_present=True,
+        )
 
 
 def test_shadow_restore_has_separate_writer_gate_and_ro_access(tmp_path: Path) -> None:

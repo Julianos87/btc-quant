@@ -53,6 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--schema-version", type=int, required=True)
     create.add_argument("--source", action="append", type=_source, required=True)
     create.add_argument("--source-identity", required=True)
+    create.add_argument("--safety-margin-bytes", type=int, default=64 * 1024 * 1024)
 
     verify = commands.add_parser("verify")
     verify.add_argument("--backup-directory", type=Path, required=True)
@@ -85,6 +86,7 @@ def main() -> int:
             app_git_sha=args.git_sha,
             app_schema_version=args.schema_version,
             source_identity=args.source_identity,
+            safety_margin_bytes=args.safety_margin_bytes,
         )
         print(created_path)
     elif args.command == "verify":
