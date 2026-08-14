@@ -28,9 +28,9 @@ mkdir -p "${TMP_DIR}/state"
 # never eligible for raw rsync. Each allow-listed database below is captured
 # through the Online Backup API instead.
 SQLITE_EXCLUDES=(
-  --exclude '*.db' --exclude '*.db-wal' --exclude '*.db-shm'
-  --exclude '*.sqlite' --exclude '*.sqlite-wal' --exclude '*.sqlite-shm'
-  --exclude '*.sqlite3' --exclude '*.sqlite3-wal' --exclude '*.sqlite3-shm'
+  --exclude '*.db' --exclude '*.db-*'
+  --exclude '*.sqlite' --exclude '*.sqlite-*'
+  --exclude '*.sqlite3' --exclude '*.sqlite3-*'
 )
 rsync -a "${SQLITE_EXCLUDES[@]}" \
   "${ROOT}/state/" "${TMP_DIR}/state/"
@@ -43,9 +43,9 @@ while IFS= read -r candidate; do
   esac
 done < <(
   find "${ROOT}/state" -maxdepth 1 -type f \(
-    -name '*.db' -o -name '*.db-wal' -o -name '*.db-shm' \
-    -o -name '*.sqlite' -o -name '*.sqlite-wal' -o -name '*.sqlite-shm' \
-    -o -name '*.sqlite3' -o -name '*.sqlite3-wal' -o -name '*.sqlite3-shm'
+    -name '*.db' -o -name '*.db-*' \
+    -o -name '*.sqlite' -o -name '*.sqlite-*' \
+    -o -name '*.sqlite3' -o -name '*.sqlite3-*' \
   \) -print
 )
 
@@ -98,7 +98,11 @@ REPO="${ROOT}/backups-repo"
 if [ -d "${REPO}/.git" ] && [[ "${ARCHIVE}" == *.enc ]]; then
   (
     cd "${REPO}"
-    if find . -maxdepth 1 -type f \( -name 'state-*.tar.gz' -o -name '*.db' -o -name '*.db-wal' -o -name '*.db-shm' -o -name '.env' \) -print -quit | grep -q .; then
+    if find . -maxdepth 1 -type f \
+      \( -name 'state-*.tar.gz' -o -name '*.db' -o -name '*.db-*' \
+      -o -name '*.sqlite' -o -name '*.sqlite-*' \
+      -o -name '*.sqlite3' -o -name '*.sqlite3-*' -o -name '.env' \) \
+      -print -quit | grep -q .; then
       echo "Refusing: off-host repository contains an unauthorized plaintext artifact" >&2
       exit 4
     fi

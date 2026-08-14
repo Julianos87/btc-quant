@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import os
 import sqlite3
 from pathlib import Path
@@ -45,12 +46,12 @@ def create_backup(source_path: Path, destination_path: Path) -> None:
     destination_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination_path.with_name(f".{destination_path.name}.{os.getpid()}.tmp")
     try:
-        with sqlite3.connect(readonly_uri(source_path), uri=True) as source:
+        with closing(sqlite3.connect(readonly_uri(source_path), uri=True)) as source:
             source.execute("PRAGMA query_only=ON")
             if source.execute("PRAGMA query_only").fetchone()[0] != 1:
                 raise RuntimeError("Source SQLite non read-only")
             _check_integrity(source, "Source")
-            with sqlite3.connect(temporary) as destination:
+            with closing(sqlite3.connect(temporary)) as destination:
                 source.backup(destination, pages=256, sleep=0.1)
                 _check_integrity(destination, "Backup")
         destination_descriptor = os.open(temporary, os.O_RDONLY)

@@ -45,10 +45,17 @@ def test_backup_offsite_requires_encryption_and_checks_roundtrip():
     assert 'cmp --silent "${PLAIN_ARCHIVE}" "${ROUNDTRIP_ARCHIVE}"' in script
     for pattern in (
         "--exclude '*.db'",
-        "--exclude '*.db-wal'",
-        "--exclude '*.db-shm'",
+        "--exclude '*.db-*'",
         "--exclude '*.sqlite'",
+        "--exclude '*.sqlite-*'",
         "--exclude '*.sqlite3'",
+        "--exclude '*.sqlite3-*'",
+    ):
+        assert pattern in script
+    for pattern in (
+        "-name '*.db-*'",
+        "-name '*.sqlite-*'",
+        "-name '*.sqlite3-*'",
     ):
         assert pattern in script
     assert "HEAD:refs/heads/" + "$" + "{OFFHOST_BRANCH}" in script
@@ -397,6 +404,48 @@ def test_backup_script_fails_closed_without_encryption_key(tmp_path: Path, key: 
     assert not list(app.rglob("*.tar.gz"))
 
 
+def test_legacy_backup_rsync_excludes_every_sqlite_sidecar(tmp_path: Path) -> None:
+    source = tmp_path / "state"
+    destination = tmp_path / "staging"
+    source.mkdir()
+
+    sidecar_names = (
+        "btcquant.db",
+        "btcquant.db-wal",
+        "btcquant.db-shm",
+        "btcquant.db-journal",
+        "execution-shadow.db-journal",
+        "foo.db",
+        "foo.db-wal",
+        "foo.db-shm",
+        "foo.db-journal",
+        "foo.sqlite",
+        "foo.sqlite-wal",
+        "foo.sqlite-shm",
+        "foo.sqlite-journal",
+        "foo.sqlite3",
+        "foo.sqlite3-wal",
+        "foo.sqlite3-shm",
+        "foo.sqlite3-journal",
+    )
+    for name in sidecar_names:
+        (source / name).write_bytes(b"must not be raw-copied")
+    (source / "non-sqlite-evidence.txt").write_text("retain", encoding="utf-8")
+
+    exclusions = [
+        argument
+        for pattern in ("*.db", "*.db-*", "*.sqlite", "*.sqlite-*", "*.sqlite3", "*.sqlite3-*")
+        for argument in ("--exclude", pattern)
+    ]
+    subprocess.run(
+        ["rsync", "-a", *exclusions, f"{source}/", f"{destination}/"],
+        check=True,
+        capture_output=True,
+    )
+    assert (destination / "non-sqlite-evidence.txt").read_text(encoding="utf-8") == "retain"
+    assert not any(path.name in sidecar_names for path in destination.rglob("*"))
+
+
 def test_legacy_backup_snapshots_all_allowlisted_sqlite_wal_databases(tmp_path: Path) -> None:
     app = tmp_path / "app"
     (app / "scripts").mkdir(parents=True)
@@ -432,6 +481,13 @@ def test_legacy_backup_snapshots_all_allowlisted_sqlite_wal_databases(tmp_path: 
     unknown_connection.execute("INSERT INTO sample VALUES ('must-not-be-archived')")
     unknown_connection.commit()
     writers.append(unknown_connection)
+
+    for sidecar_name in (
+        "foo.db-journal",
+        "foo.sqlite-journal",
+        "foo.sqlite3-journal",
+    ):
+        (app / "state" / sidecar_name).write_text("rollback journal fixture", encoding="utf-8")
 
     env = os.environ.copy()
     env["BACKUP_ENCRYPTION_KEY"] = "lot7-wal-fixture-key"
@@ -479,9 +535,7 @@ def test_legacy_backup_snapshots_all_allowlisted_sqlite_wal_databases(tmp_path: 
         assert "state/btcquant.db" in names
         assert "state/execution-shadow.db" in names
         assert "state/btcquant-testnet.db" in names
-        assert not any(
-            name.endswith((".db-wal", ".db-shm", ".sqlite-wal", ".sqlite-shm")) for name in names
-        )
+        assert not any(name.endswith(("-journal", "-wal", "-shm")) for name in names)
         assert not any(name.endswith("foo.db") for name in names)
         tar.extractall(extract)
 
