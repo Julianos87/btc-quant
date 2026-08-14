@@ -41,6 +41,7 @@ from ..carry import (
     smooth_funding_events,
 )
 from ..domain.carry_decision import CarryAction, decide_carry_payment
+from ..backup import assert_writer_recovery_clear
 from ..notify import notify
 from ..risk import RiskConfig
 from .carry_contract import CarrySagaStatus
@@ -111,6 +112,9 @@ class CarryRunner:
         self.legacy_state_path = (
             Path(legacy_state_file) if legacy_state_file is not None else self.state_path
         )
+        # Restored carry state remains blocked until the explicit trading
+        # reconciliation protocol has produced a cleared recovery marker.
+        assert_writer_recovery_clear(self.state_path.parent)
         self.store = StateStore(database_path(self.state_path))
         if self.store.path.name == "btcquant.db":
             self.store.migrate_legacy_journals(self.state_path.parent)

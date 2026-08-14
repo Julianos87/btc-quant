@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 
 from btcquant.execution.health import execution_health, sync_execution_incidents
+from btcquant.backup import assert_writer_recovery_clear
 from btcquant.execution.readiness import service_component_profile
 from btcquant.execution.shadow import ShadowStore
 from btcquant.execution.state_store import StateStore
@@ -116,6 +117,7 @@ def main(argv: list[str] | None = None) -> None:
     # arrêter avant toute sauvegarde ou migration de la base partagée; le code
     # refuse désormais une migration implicite.
     try:
+        assert_writer_recovery_clear(database.parent)
         store = StateStore(database)
     except Exception as error:
         message = (

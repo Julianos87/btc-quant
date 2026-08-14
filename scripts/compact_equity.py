@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from btcquant.console import enable_utf8_output
+from btcquant.backup import assert_writer_recovery_clear
 
 enable_utf8_output()
 
@@ -31,6 +32,7 @@ def main() -> None:
     if not database.exists():
         print("btcquant.db absente, aucune compaction")
         return
+    assert_writer_recovery_clear(STATE)
     cutoff = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=KEEP_FULL_DAYS)).isoformat()
     store = StateStore(database)
     for engine in ("trend", "carry"):

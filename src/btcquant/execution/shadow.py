@@ -19,6 +19,7 @@ from pathlib import Path
 from statistics import mean
 from typing import Literal, Protocol
 
+from ..backup import assert_shadow_recovery_clear
 from .execution_policy import (
     ExecutionEvidence,
     ExecutionPolicy,
@@ -91,6 +92,7 @@ class ShadowStore:
                 raise FileNotFoundError(self.path)
         else:
             self.path.parent.mkdir(parents=True, exist_ok=True)
+            assert_shadow_recovery_clear(self.path.parent)
             self._initialize()
 
     def _connect(self) -> sqlite3.Connection:

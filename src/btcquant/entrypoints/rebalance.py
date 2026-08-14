@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from btcquant.config import load_config, portfolio_from_config
+from btcquant.backup import assert_writer_recovery_clear
 from btcquant.execution.state_contract import validate_carry_state, validate_trend_state
 from btcquant.execution.state_store import StateStore
 from btcquant.notify import notify
@@ -95,6 +96,7 @@ def main() -> None:
 
     trend_path = STATE / "live_state_4x.json"
     carry_path = STATE / "carry_state.json"
+    assert_writer_recovery_clear(STATE)
     store = StateStore(STATE / "btcquant.db")
     if args.check_pending:
         raise SystemExit(0 if store.read_deposits(status="PENDING") else 3)

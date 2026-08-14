@@ -93,6 +93,13 @@ class StateStore:
         self.path = Path(path)
         self.allow_migration = allow_migration
         self.read_only = read_only
+        if not read_only:
+            # Every production StateStore writer shares the restore gate.  This
+            # central check covers runners, timers, watchdogs and qualification
+            # writers instead of relying on individual entrypoints.
+            from ..backup import assert_writer_recovery_clear
+
+            assert_writer_recovery_clear(self.path.parent)
         if read_only:
             if not self.path.exists():
                 raise FileNotFoundError(self.path)
