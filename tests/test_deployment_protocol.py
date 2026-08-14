@@ -250,11 +250,21 @@ def test_deployment_scripts_expose_fail_closed_guards():
     assert "merge-base --is-ancestor" in update
     assert "--untracked-files=all" in update
     assert "--frozen" in create
+    assert "--exclude /data" in create
     assert "validate-release.sh" in create
     assert "release-manifest.json" in create
     assert "pytest" in validate
     assert "check_baseline_provenance.py" in validate
     assert "pip-audit" in validate
+    assert 'VALIDATION_ROOT="$(mktemp -d /tmp/btcquant-release-validation.' in validate
+    assert 'VALIDATION_BIN="${VALIDATION_ROOT}/bin"' in validate
+    assert 'VALIDATION_ENV="${RELEASE}/.validation-venv"' not in validate
+    assert "-p no:cacheprovider" in validate
+    assert validate.count("--no-cache") >= 2
+    assert '--cache-dir "${MYPY_CACHE}"' in validate
+    assert 'PIP_AUDIT_CACHE="${VALIDATION_ROOT}/pip-audit"' in validate
+    assert 'COVERAGE_FILE="${COVERAGE_FILE}"' in validate
+    assert "for transient in" in validate
     assert "--confirm-migration" in migrate
     assert "Migration explicite requise" in preflight
     assert "BTCQUANT_MIGRATION_PENDING" in preflight
@@ -673,3 +683,289 @@ def test_migration_rollback_frontier_is_irreversible_after_writer_start():
         migration_rollback_disposition(db_migrated=False, target_writers_started=False)
         == "AUTO_CODE_ROLLBACK"
     )
+
+
+def test_source_git_boundary_is_process_local_and_path_scoped():
+    for name in ("create-release.sh", "install.sh"):
+        script = (Path("deploy") / name).read_text(encoding="utf-8")
+        assert "source_git()" in script
+        assert 'git -c "safe.directory=${SOURCE}" -C "${SOURCE}" "$@"' in script
+        assert "safe.directory=*" not in script
+        assert "git config --global" not in script
+        assert "git config --system" not in script
+        assert "git config --local" not in script
+        assert 'git -C "${SOURCE}"' not in script
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="requires root for the ownership boundary")
+def test_process_local_source_git_handles_foreign_owned_checkout(tmp_path):
+    """Reproduce the VPS root/btcquant Git boundary without persistent config."""
+    import pwd
+    import subprocess
+
+    try:
+        owner = pwd.getpwnam("btcquant")
+    except KeyError:
+        pytest.skip("btcquant user is unavailable")
+
+    source = tmp_path / "source"
+    other = tmp_path / "other"
+    for repository in (source, other):
+        subprocess.run(["git", "init", "-q", str(repository)], check=True)
+        (repository / "README").write_text("fixture\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repository), "add", "README"], check=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repository),
+                "-c",
+                "user.name=fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "-qm",
+                "fixture",
+            ],
+            check=True,
+        )
+        for path in repository.rglob("*"):
+            os.chown(path, owner.pw_uid, owner.pw_gid)
+        os.chown(repository, owner.pw_uid, owner.pw_gid)
+
+    plain = subprocess.run(
+        ["git", "-C", str(source), "rev-parse", "HEAD"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert plain.returncode != 0
+    assert "dubious ownership" in plain.stderr
+
+    scoped = subprocess.run(
+        [
+            "git",
+            "-c",
+            f"safe.directory={source}",
+            "-C",
+            str(source),
+            "rev-parse",
+            "HEAD",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert scoped.returncode == 0
+    assert len(scoped.stdout.strip()) == 40
+
+    wrong_scope = subprocess.run(
+        [
+            "git",
+            "-c",
+            f"safe.directory={source}",
+            "-C",
+            str(other),
+            "rev-parse",
+            "HEAD",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert wrong_scope.returncode != 0
+    assert "dubious ownership" in wrong_scope.stderr
+
+
+def test_validate_release_isolates_and_cleans_validation_artifacts(tmp_path):
+    import subprocess
+    import textwrap
+
+    release = tmp_path / "release"
+    tool_dir = tmp_path / "tools"
+    log_dir = tmp_path / "success-log"
+    release.mkdir()
+    tool_dir.mkdir()
+    log_dir.mkdir()
+
+    (release / "requirements.txt").write_text("fixture==1\n", encoding="utf-8")
+    (release / "dashboard/static").mkdir(parents=True)
+    (release / "dashboard/static/dashboard.js").write_text(
+        "const dashboard = true;\n", encoding="utf-8"
+    )
+    (release / "dashboard/static/effects.js").write_text(
+        "const effects = true;\n", encoding="utf-8"
+    )
+    for relative in (
+        "deploy/install.sh",
+        "deploy/update.sh",
+        "deploy/create-release.sh",
+        "deploy/preflight.sh",
+        "deploy/migrate.sh",
+        "deploy/rebalance-root.sh",
+        "deploy/resolve-uv.sh",
+        "deploy/start-hyperliquid-testnet.sh",
+        "deploy/stop-hyperliquid-testnet.sh",
+        "scripts/backup_state.sh",
+        "scripts/check_sbom.py",
+        "scripts/check_baseline_provenance.py",
+    ):
+        path = release / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        path.chmod(0o755)
+
+    def write_executable(path: Path, content: str) -> None:
+        path.write_text(textwrap.dedent(content).lstrip(), encoding="utf-8")
+        path.chmod(0o755)
+
+    write_executable(
+        tool_dir / "uv",
+        """\
+        #!/usr/bin/env bash
+        set -euo pipefail
+        if [ "$1" = "sync" ]; then
+          mkdir -p "$UV_PROJECT_ENVIRONMENT/bin"
+          printf '%s\\n' "$UV_PROJECT_ENVIRONMENT" > "$FAKE_LOG/validation-env"
+          for tool in pytest ruff mypy pip-audit python; do
+            cp "$FAKE_TOOL_DIR/$tool" "$UV_PROJECT_ENVIRONMENT/bin/$tool"
+          done
+        elif [ "$1" = "run" ]; then
+          shift
+          while [ "$#" -gt 0 ]; do
+            if [ "$1" = "mypy" ]; then
+              shift
+              exec "$FAKE_TOOL_DIR/mypy" "$@"
+            fi
+            shift
+          done
+          exit 51
+        elif [ "$1" = "export" ]; then
+          output=""
+          while [ "$#" -gt 0 ]; do
+            if [ "$1" = "--output-file" ]; then
+              shift
+              output="$1"
+            fi
+            shift
+          done
+          cp "$FAKE_REQUIREMENTS" "$output"
+        fi
+        """,
+    )
+    write_executable(
+        tool_dir / "pytest",
+        """\
+        #!/usr/bin/env bash
+        set -euo pipefail
+        case " $* " in *" -p no:cacheprovider "*) ;; *) exit 11 ;; esac
+        case "$COVERAGE_FILE" in "$RELEASE"/*|"") exit 12 ;; esac
+        touch "$COVERAGE_FILE"
+        if [ "$FAKE_FAIL" = 1 ]; then exit 14; fi
+        """,
+    )
+    write_executable(
+        tool_dir / "ruff",
+        """\
+        #!/usr/bin/env bash
+        set -euo pipefail
+        case " $* " in *" --no-cache "*) ;; *) exit 21 ;; esac
+        [ ! -e "$RELEASE/.ruff_cache" ]
+        """,
+    )
+    write_executable(
+        tool_dir / "mypy",
+        """\
+        #!/usr/bin/env bash
+        set -euo pipefail
+        cache=""
+        previous=""
+        for arg in "$@"; do
+          if [ "$previous" = 1 ]; then cache="$arg"; previous=""; fi
+          if [ "$arg" = "--cache-dir" ]; then previous=1; fi
+        done
+        [ -n "$cache" ]
+        case "$cache" in "$RELEASE"/*) exit 31 ;; esac
+        mkdir -p "$cache"
+        """,
+    )
+    write_executable(
+        tool_dir / "pip-audit",
+        """\
+        #!/usr/bin/env bash
+        set -euo pipefail
+        cache=""
+        previous=""
+        for arg in "$@"; do
+          if [ "$previous" = 1 ]; then cache="$arg"; previous=""; fi
+          if [ "$arg" = "--cache-dir" ]; then previous=1; fi
+        done
+        [ -n "$cache" ]
+        case "$cache" in "$RELEASE"/*) exit 41 ;; esac
+        mkdir -p "$cache"
+        """,
+    )
+    write_executable(tool_dir / "python", "#!/usr/bin/env bash\nexit 0\n")
+
+    uv = tool_dir / "uv"
+    before = {
+        path.relative_to(release): path.read_bytes()
+        for path in release.rglob("*")
+        if path.is_file()
+    }
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "FAKE_LOG": str(log_dir),
+            "FAKE_TOOL_DIR": str(tool_dir),
+            "FAKE_REQUIREMENTS": str(release / "requirements.txt"),
+            "RELEASE": str(release),
+            "FAKE_FAIL": "0",
+        }
+    )
+    command = ["bash", "deploy/validate-release.sh", str(release), str(uv)]
+    success = subprocess.run(
+        command,
+        cwd=Path.cwd(),
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+    assert success.returncode == 0, success.stderr
+    validation_env = Path((log_dir / "validation-env").read_text().strip())
+    assert not validation_env.is_relative_to(release)
+    assert not validation_env.parent.exists()
+    assert {
+        path.relative_to(release): path.read_bytes()
+        for path in release.rglob("*")
+        if path.is_file()
+    } == before
+    for transient in (
+        ".validation-venv",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".coverage",
+        ".uv-cache",
+    ):
+        assert not (release / transient).exists()
+
+    failure_log = tmp_path / "failure-log"
+    failure_log.mkdir()
+    failure_environment = environment.copy()
+    failure_environment.update({"FAKE_LOG": str(failure_log), "FAKE_FAIL": "1"})
+    failure = subprocess.run(
+        command,
+        cwd=Path.cwd(),
+        env=failure_environment,
+        capture_output=True,
+        text=True,
+    )
+    assert failure.returncode != 0
+    failed_validation_env = Path((failure_log / "validation-env").read_text().strip())
+    assert not failed_validation_env.parent.exists()
+    assert {
+        path.relative_to(release): path.read_bytes()
+        for path in release.rglob("*")
+        if path.is_file()
+    } == before

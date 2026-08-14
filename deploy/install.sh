@@ -16,6 +16,12 @@ CANONICAL_REPOSITORY="${BTCQUANT_CANONICAL_REPOSITORY:-github.com/Julianos87/btc
 CANONICAL_REMOTE_ALIASES="${BTCQUANT_CANONICAL_REMOTE_ALIASES:-}"
 export BTCQUANT_CANONICAL_REMOTE_ALIASES="${CANONICAL_REMOTE_ALIASES}"
 
+# Root may orchestrate installation while SOURCE belongs to another trusted account.
+# Scope Git trust to this resolved checkout and process; never persist configuration.
+source_git() {
+  git -c "safe.directory=${SOURCE}" -C "${SOURCE}" "$@"
+}
+
 if [ -z "${DEPLOY_REMOTE}" ] || [ -z "${DEPLOY_BRANCH}" ]; then
   echo "Refus: DEPLOY_REMOTE et DEPLOY_BRANCH doivent être configurés." >&2
   exit 1
@@ -47,20 +53,20 @@ chown root:btcquant "${ROOT}/.env"
 chmod 640 "${ROOT}/.env"
 
 echo "── Construction de la release ──"
-git -C "${SOURCE}" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+source_git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
   echo "Refus: une source Git vérifiable est obligatoire." >&2
   exit 1
 }
-[ -z "$(git -C "${SOURCE}" status --porcelain --untracked-files=all)" ] || {
+[ -z "$(source_git status --porcelain --untracked-files=all)" ] || {
   echo "Refus: source Git dirty ou contenant un fichier non suivi." >&2
   exit 1
 }
-RELEASE_ID="${BTCQUANT_TARGET_SHA:-$(git -C "${SOURCE}" rev-parse HEAD)}"
+RELEASE_ID="${BTCQUANT_TARGET_SHA:-$(source_git rev-parse HEAD)}"
 [[ "${RELEASE_ID}" =~ ^[0-9a-f]{40}$ ]] || {
   echo "Refus: SHA Git complet requis." >&2
   exit 1
 }
-REMOTE_URL="$(git -C "${SOURCE}" remote get-url "${DEPLOY_REMOTE}" 2>/dev/null || true)"
+REMOTE_URL="$(source_git remote get-url "${DEPLOY_REMOTE}" 2>/dev/null || true)"
 [ -n "${REMOTE_URL}" ] || {
   echo "Refus: remote ${DEPLOY_REMOTE} absente." >&2
   exit 1
@@ -71,13 +77,13 @@ from btcquant.deployment import validate_canonical_repository
 
 validate_canonical_repository(sys.argv[1], sys.argv[2])
 ' "${REMOTE_URL}" "${CANONICAL_REPOSITORY}"
-git -C "${SOURCE}" fetch "${DEPLOY_REMOTE}" --prune
+source_git fetch "${DEPLOY_REMOTE}" --prune
 REMOTE_REF="${DEPLOY_REMOTE}/${DEPLOY_BRANCH}"
-[ "$(git -C "${SOURCE}" rev-parse "${REMOTE_REF}")" = "${RELEASE_ID}" ] || {
+[ "$(source_git rev-parse "${REMOTE_REF}")" = "${RELEASE_ID}" ] || {
   echo "Refus: la cible doit être exactement ${REMOTE_REF} canonique." >&2
   exit 1
 }
-git -C "${SOURCE}" merge-base --is-ancestor "${RELEASE_ID}" "${REMOTE_REF}" || {
+source_git merge-base --is-ancestor "${RELEASE_ID}" "${REMOTE_REF}" || {
   echo "Refus: SHA cible non atteignable depuis ${REMOTE_REF}." >&2
   exit 1
 }

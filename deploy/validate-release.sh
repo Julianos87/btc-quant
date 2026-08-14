@@ -12,26 +12,36 @@ UV_BIN="$2"
 [ "${UV_BIN#/}" != "${UV_BIN}" ] || { echo "uv doit être un chemin absolu résolu." >&2; exit 1; }
 [ -x "${UV_BIN}" ] || { echo "uv absent ou non exécutable." >&2; exit 1; }
 
-VALIDATION_ENV="${RELEASE}/.validation-venv"
-TEMP_EXPORT="$(mktemp /tmp/btcquant-export.XXXXXX)"
+VALIDATION_ROOT="$(mktemp -d /tmp/btcquant-release-validation.XXXXXX)"
+VALIDATION_BIN="${VALIDATION_ROOT}/bin"
+VALIDATION_ENV="${VALIDATION_ROOT}/venv"
+PIP_AUDIT_CACHE="${VALIDATION_ROOT}/pip-audit"
+MYPY_CACHE="${VALIDATION_ROOT}/mypy-cache"
+MYPY_ENV="${VALIDATION_ROOT}/mypy-venv"
+COVERAGE_FILE="${VALIDATION_ROOT}/.coverage"
+TEMP_EXPORT=""
 cleanup() {
   rm -f -- "${TEMP_EXPORT}"
-  rm -rf -- "${VALIDATION_ENV}"
+  rm -rf -- "${VALIDATION_ROOT}"
 }
 trap cleanup EXIT
 
-# L'environnement de validation est séparé du venv runtime --no-dev et est
-# supprimé avant l'activation de la release.
+TEMP_EXPORT="$(mktemp "${VALIDATION_ROOT}/export.XXXXXX")"
+
+# Keep all validation-only artifacts outside the immutable release staging.
 UV_PROJECT_ENVIRONMENT="${VALIDATION_ENV}" "${UV_BIN}" sync --frozen --dev \
   --python 3.12 --directory "${RELEASE}"
-export PATH="$(dirname "${UV_BIN}"):${PATH}"
+mkdir -p "${VALIDATION_BIN}"
+cp -- "${UV_BIN}" "${VALIDATION_BIN}/uv"
+chmod +x "${VALIDATION_BIN}/uv"
+export PATH="${VALIDATION_BIN}:${PATH}"
 cd "${RELEASE}"
 
-"${VALIDATION_ENV}/bin/pytest" -q \
-  --cov=btcquant --cov-branch --cov-fail-under=80
-"${VALIDATION_ENV}/bin/ruff" check .
-"${VALIDATION_ENV}/bin/ruff" format --check .
-"${VALIDATION_ENV}/bin/mypy" src
+COVERAGE_FILE="${COVERAGE_FILE}" "${VALIDATION_ENV}/bin/pytest" -q \
+  -p no:cacheprovider --cov=btcquant --cov-branch --cov-fail-under=80
+"${VALIDATION_ENV}/bin/ruff" check --no-cache .
+"${VALIDATION_ENV}/bin/ruff" format --check --no-cache .
+UV_PROJECT_ENVIRONMENT="${MYPY_ENV}" "${UV_BIN}" run --locked --python 3.11 mypy --cache-dir "${MYPY_CACHE}" src
 command -v node >/dev/null
 node --check dashboard/static/dashboard.js
 node --check dashboard/static/effects.js
@@ -46,4 +56,12 @@ diff -u requirements.txt "${TEMP_EXPORT}"
 "${VALIDATION_ENV}/bin/python" scripts/check_sbom.py
 "${VALIDATION_ENV}/bin/python" scripts/check_baseline_provenance.py
 "${VALIDATION_ENV}/bin/pip-audit" -r requirements.txt --disable-pip \
-  --progress-spinner off --cache-dir .uv-cache/pip-audit --timeout 15 -s osv
+  --progress-spinner off --cache-dir "${PIP_AUDIT_CACHE}" --timeout 15 -s osv
+
+# No validation artifact is allowed to be published with the release.
+for transient in .validation-venv .pytest_cache .mypy_cache .ruff_cache .coverage .uv-cache; do
+  if [ -e "${RELEASE}/${transient}" ]; then
+    echo "Artefact de validation dans la release : ${transient}" >&2
+    exit 1
+  fi
+done
