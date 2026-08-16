@@ -322,6 +322,17 @@ class CarryRunner:
                 raise RuntimeError("Résultat carry incohérent malgré un statut exécutable")
             fill_price = result.spot_fill.average_price if result.spot_fill is not None else None
         else:
+            intent_id = f"carry-open-paper-{uuid.uuid4().hex}"
+            notional = self.equity * self.leverage
+            order_id = self.store.begin_order(
+                "carry",
+                "carry",
+                intent_id,
+                "CARRY_PAIR",
+                "OPEN",
+                0.0,
+                f"paper_switch notional={notional:.2f}",
+            )
             self.equity *= 1.0 - self.switch_cost
 
         self.in_position = True
@@ -331,7 +342,7 @@ class CarryRunner:
                 order_id,
                 engine="carry",
                 state=self._state_payload(),
-                status=result.status.value,
+                status="FILLED" if self.live_broker is None else result.status.value,
                 filled_qty=self.qty,
                 price=fill_price,
             )
@@ -396,11 +407,22 @@ class CarryRunner:
             closed_qty = previous_qty
             self.qty = self.spot_qty = self.perp_qty = 0.0
         else:
+            intent_id = f"carry-close-paper-{uuid.uuid4().hex}"
+            order_id = self.store.begin_order(
+                "carry",
+                "carry",
+                intent_id,
+                "CARRY_PAIR",
+                "CLOSE",
+                0.0,
+                reason,
+            )
             self.equity *= 1.0 - self.switch_cost
+            closed_qty = 0.0
 
         self.in_position = False
         self.execution_state = "FLAT"
-        if self.live_broker is not None:
+        if order_id is not None:
             self.store.complete_order_and_checkpoint(
                 order_id,
                 engine="carry",

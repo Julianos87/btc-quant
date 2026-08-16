@@ -78,6 +78,25 @@ def test_runner_defaults_are_the_published_backtest_policy():
         assert defaults[field].default == getattr(PAPER_CARRY_POLICY, field), field
 
 
+def test_paper_open_and_close_are_journaled_as_orders(tmp_path):
+    runner = _runner(tmp_path, _funding(60, 0.0002), smooth_days=1)
+    runner._tick()
+    assert runner.in_position
+    opened = runner.store.read_orders("carry")
+    assert len(opened) == 1
+    assert opened[0]["order_type"] == "CARRY_PAIR"
+    assert opened[0]["side"] == "OPEN"
+    assert opened[0]["status"] == "FILLED"
+
+    runner.equity = runner.peak_equity * 0.5
+    runner._tick()
+    assert not runner.in_position
+    closed = runner.store.read_orders("carry")
+    assert len(closed) == 2
+    assert {row["side"] for row in closed} == {"OPEN", "CLOSE"}
+    assert all(row["status"] == "FILLED" for row in closed)
+
+
 def test_runner_uses_the_policy_switch_cost(tmp_path):
     runner = _runner(tmp_path, _funding(60, 0.0002))
     expected = 2 * (PAPER_CARRY_POLICY.fee_rate + PAPER_CARRY_POLICY.slippage_bps / 10_000.0)

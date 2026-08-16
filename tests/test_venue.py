@@ -5,6 +5,7 @@ import sys
 import time
 from pathlib import Path
 
+import ccxt
 import pandas as pd
 import pytest
 
@@ -15,6 +16,7 @@ from dataclasses import replace
 
 from btcquant.carry import PAPER_CARRY_POLICY
 from btcquant.execution.carry_runner import CarryRunner
+from btcquant.execution.resilience import RetryPolicy
 from btcquant.execution.venue import Venue
 
 
@@ -65,6 +67,31 @@ def test_hyperliquid_price_from_candle():
     """Pas de fetch_ticker sur Hyperliquid (~12 s) : prix = clôture 1m."""
     v = _stub_venue(Venue("hyperliquid", "BTC/USDC:USDC"), price=61_234.5)
     assert v.last_price() == pytest.approx(61_234.5)
+
+
+def test_hyperliquid_empty_candle_raises_instead_of_index_error():
+    v = _stub_venue(Venue("hyperliquid", "BTC/USDC:USDC"))
+    v._retry = RetryPolicy(attempts=2, sleep=lambda _delay: None)
+    v.exchange.fetch_ohlcv = lambda *args, **kwargs: []
+    with pytest.raises(ccxt.ExchangeNotAvailable, match="bougie 1m vide"):
+        v.last_price()
+
+
+def test_hyperliquid_empty_candle_is_retried_then_succeeds():
+    calls = {"n": 0}
+
+    def fetch_ohlcv(*args, **kwargs):
+        del args, kwargs
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return []
+        return [[1, 1, 1, 1, 61_000.0, 1.0]]
+
+    v = _stub_venue(Venue("hyperliquid", "BTC/USDC:USDC"))
+    v._retry = RetryPolicy(attempts=4, sleep=lambda _delay: None)
+    v.exchange.fetch_ohlcv = fetch_ohlcv
+    assert v.last_price() == pytest.approx(61_000.0)
+    assert calls["n"] == 3
 
 
 def test_testnet_switches_hyperliquid_public_api_to_sandbox(monkeypatch):

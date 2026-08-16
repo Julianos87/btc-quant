@@ -14,6 +14,14 @@ Keep a Changelog et les versions suivent Semantic Versioning.
 - déploiement atomique, rollback, préflight et sauvegardes chiffrées ;
 - politiques de sécurité, contribution, ownership, Dependabot et SBOM SPDX.
 
+### Fixed
+
+- `Venue.last_price` : une bougie Hyperliquid 1m vide lève une erreur métier
+  retriable au lieu d'un `IndexError` (incidents des 1, 8 et 15 août 2026) ;
+- le carry paper journalise désormais chaque bascule ON/OFF dans `orders` ;
+- compaction equity : 90 jours à pleine résolution, puis 1 point / 5 min
+  (l'ancien point horaire faisait échouer l'uptime de qualification).
+
 ### Changed
 
 - réconciliation et erreurs SQLite rendues fail-closed ;
