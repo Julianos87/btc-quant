@@ -663,6 +663,10 @@ def summary():
                 "equity": carry_equity,
                 "initial": PORTFOLIO.carry_capital,
                 "in_position": carry_state.get("in_position", False),
+                "qty": float(carry_state.get("qty") or 0.0),
+                "leverage": CARRY_POLICY.leverage,
+                "notional": carry_notional,
+                "synthetic": True,
                 "last_funding_ts": carry_state.get("last_funding_ts"),
                 # Le carry a des coupe-circuits depuis le 27/07/2026 ; les
                 # exposer permet à la bannière d'alerte de les signaler comme

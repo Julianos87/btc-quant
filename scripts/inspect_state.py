@@ -41,15 +41,20 @@ def main() -> None:
             else f"{engine:10}: absent"
         )
         health = execution_health(store, engine)
-        print(
-            f"{'':10}  exécution: {health.orders_analyzed} ordres, "
-            f"fill {health.fill_ratio:.1%}, rejet {health.rejection_rate:.1%}, "
-            f"slippage p95 {health.p95_slippage_bps:.1f} bps"
-            if health.fill_ratio is not None
+        if (
+            health.fill_ratio is not None
             and health.rejection_rate is not None
             and health.p95_slippage_bps is not None
-            else f"{'':10}  exécution: données insuffisantes"
-        )
+        ):
+            print(
+                f"{'':10}  exécution: {health.orders_analyzed} ordres, "
+                f"fill {health.fill_ratio:.1%}, rejet {health.rejection_rate:.1%}, "
+                f"slippage p95 {health.p95_slippage_bps:.1f} bps"
+            )
+        elif health.orders_analyzed == 0:
+            print(f"{'':10}  exécution: aucun ordre journalisé")
+        else:
+            print(f"{'':10}  exécution: données insuffisantes")
 
     unresolved = store.unresolved_orders("trend") + store.unresolved_orders("carry")
     print(f"Ordres non résolus : {len(unresolved)}")

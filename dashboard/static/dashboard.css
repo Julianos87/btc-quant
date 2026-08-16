@@ -634,6 +634,7 @@
   }
   .rdy-toggle:hover { color:var(--ink); }
   .rdy-detail { margin-top:8px; }
+  .carry-synth { margin-left:8px; color:var(--muted); font-size:11.5px; font-weight:550; }
 
   /* ── groupe "effets visuels" du panneau de réglages (statique, non généré
      par buildDrawer() — reprend exactement le style des autres setrow) ──── */

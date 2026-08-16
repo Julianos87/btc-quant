@@ -16,6 +16,11 @@ Keep a Changelog et les versions suivent Semantic Versioning.
 
 ### Fixed
 
+- carry paper : le dashboard affiche un notionnel synthétique au lieu d'une
+  position BTC à quantité nulle ;
+- `inspect_state` : « aucun ordre journalisé » à la place de « données insuffisantes » ;
+- filtre funding : une venue muette bloque les nouvelles entrées, plus fail-open ;
+- gunicorn : `HOME` writable pour supprimer l'erreur `/home/btcquant` ;
 - carte Testnet du dashboard : verdict Santé / Qualification / Exécution,
   blockers en tête, fraîcheur en secondes ou minutes (plus `0.0 h < 0 h`) ;
 - `Venue.last_price` : une bougie Hyperliquid 1m vide lève une erreur métier

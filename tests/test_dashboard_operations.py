@@ -143,6 +143,32 @@ def test_summary_exposes_pending_deposit_amount(tmp_path, monkeypatch):
     assert "btcquant_pending_deposit_count 1" in metrics_text
 
 
+def test_summary_describes_paper_carry_as_synthetic_notional(tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard_app, "STATE", tmp_path)
+    monkeypatch.setattr(dashboard_app, "_cached", lambda *_args: None)
+    store = StateStore(tmp_path / "btcquant.db")
+    store.save_engine_state("trend", {"slots": {"trend_ls_20": {"cash": 6_000.0, "position": None}}})
+    store.save_engine_state(
+        "carry",
+        {"equity": 4_000.0, "in_position": True, "qty": 0.0, "execution_state": "OPEN"},
+    )
+    now = datetime.now(UTC).isoformat()
+    store.append_equity("trend", 6_000.0, now)
+    store.append_equity("carry", 4_000.0, now)
+
+    payload = dashboard_app.app.test_client().get(
+        "/api/summary",
+        environ_base={"REMOTE_ADDR": "127.0.0.1"},
+    ).get_json()
+
+    carry = payload["carry"]
+    assert carry["in_position"] is True
+    assert carry["qty"] == 0.0
+    assert carry["synthetic"] is True
+    assert carry["leverage"] == pytest.approx(3.0)
+    assert carry["notional"] == pytest.approx(12_000.0)
+
+
 def test_shadow_endpoint_and_prometheus_metrics(tmp_path, monkeypatch):
     monkeypatch.setattr(dashboard_app, "STATE", tmp_path)
     started = datetime(2026, 7, 28, 12, tzinfo=UTC)

@@ -55,6 +55,8 @@ const I18N = {
     yearly_title:"Années précédentes", yearly_sub:"backtest · mêmes réglages que le live",
     yearly_note:"Simulation avec frais, slippage et funding réels — pas des résultats réalisés. Rendements par année civile ; pire creux de l’année au survol.",
     yearly_partial:"année incomplète", yearly_missing:"Référence annuelle absente — lancer scripts/make_yearly_reference.py",
+    carry_synthetic:"notionnel synthétique · pas de BTC",
+    paper_vs_bt:"Hyperliquid 1 m · backtest Binance 4 h",
     readiness_title:"Testnet", readiness_note:"Critères fixés à froid — le passage ne se décide pas au feeling.",
     rdy_ready:"PRÊT", rdy_not_ready:"NON PRÊT", rdy_blocked:"BLOQUÉ",
     rdy_ready_why:"Tous les critères sont au vert. La décision de passer au testnet reste humaine.",
@@ -107,6 +109,8 @@ const I18N = {
     yearly_title:"Previous years", yearly_sub:"backtest · same settings as live",
     yearly_note:"Simulation with real fees, slippage and funding — not realized results. Calendar-year returns; each year's worst drawdown on hover.",
     yearly_partial:"partial year", yearly_missing:"Yearly reference missing — run scripts/make_yearly_reference.py",
+    carry_synthetic:"synthetic notional · no BTC",
+    paper_vs_bt:"Hyperliquid 1m · Binance 4h backtest",
     readiness_title:"Testnet", readiness_note:"Criteria set in advance — the transition is not a gut call.",
     rdy_ready:"READY", rdy_not_ready:"NOT READY", rdy_blocked:"BLOCKED",
     rdy_ready_why:"Every criterion is green. The testnet decision remains a human call.",
@@ -294,8 +298,13 @@ async function refreshSummary() {
   $("trend-eq").textContent = fmt$(s.trend.equity, 2);
   $("trend-guard").textContent = s.trend.halted ? "⛔ KILL-SWITCH DÉCLENCHÉ" : s.trend.daily_lockout ? "⚠ lockout journalier" : "coupe-circuits armés";
   $("carry-eq").textContent = fmt$(s.carry.equity, 2);
+  const carryLev = s.carry.leverage || 3;
+  const carryNotional = s.carry.notional != null
+    ? s.carry.notional
+    : (s.carry.in_position ? s.carry.equity * carryLev : 0);
   $("carry-pos").innerHTML = s.carry.in_position
-    ? '<span class="badge long">● ACTIVE</span>' : '<span class="badge flat">EN ATTENTE</span>';
+    ? `<span class="badge long">● ACTIVE</span><span class="carry-synth">${esc(t("carry_synthetic"))} ${esc(String(carryLev))}× · ${esc(fmt$(carryNotional))}</span>`
+    : '<span class="badge flat">EN ATTENTE</span>';
   if ($("carry-last")) $("carry-last").textContent = s.carry.last_funding_ts
     ? new Date(s.carry.last_funding_ts).toLocaleString(LOCALE(), {day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit"}) : "—";
 

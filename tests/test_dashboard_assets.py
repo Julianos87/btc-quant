@@ -63,6 +63,7 @@ def test_frontend_escapes_remote_text_before_html_injection():
     assert "${esc(rdyDisplayValue(check))}" in javascript
     assert "RDY_HEALTH" in javascript
     assert "document.body.dataset.view = view" in javascript
+    assert "carry_synthetic" in javascript
     css = (dashboard.ROOT / "dashboard" / "static" / "dashboard.css").read_text(encoding="utf-8")
     assert 'body[data-view="monitor"] .grid' in css
     assert 'body[data-view="performance"] .grid' in css
