@@ -543,6 +543,59 @@
      (classe posée par le JS additif via MutationObserver sur #alert) ────── */
   html.has-alert header { box-shadow:inset 0 -1px 0 color-mix(in oklch, var(--crit) 45%, transparent); }
 
+  /* ── qualification testnet (vue décisionnelle) ───────────── */
+  .rdy-banner {
+    display:grid; gap:6px; padding:12px 13px; border-radius:12px; margin:8px 0 12px;
+    border:1px solid var(--ring);
+  }
+  .rdy-banner[data-tone="ok"] { background:var(--good-bg); border-color:color-mix(in srgb,var(--good) 35%,var(--ring)); }
+  .rdy-banner[data-tone="wait"] { background:var(--warn-bg); border-color:color-mix(in srgb,var(--warn) 35%,var(--ring)); }
+  .rdy-banner[data-tone="block"] { background:var(--crit-bg); border-color:color-mix(in srgb,var(--crit) 35%,var(--ring)); }
+  .rdy-kicker { font-size:10px; font-weight:700; letter-spacing:1.1px; text-transform:uppercase; color:var(--muted); }
+  .rdy-verdict { font-size:18px; font-weight:750; letter-spacing:-.2px; line-height:1.15; }
+  .rdy-banner[data-tone="ok"] .rdy-verdict { color:var(--good-text); }
+  .rdy-banner[data-tone="wait"] .rdy-verdict { color:var(--warn); }
+  .rdy-banner[data-tone="block"] .rdy-verdict { color:var(--crit); }
+  .rdy-why { font-size:12.5px; color:var(--ink-2); line-height:1.4; }
+  .rdy-scores { display:flex; flex-wrap:wrap; gap:6px; margin-top:4px; }
+  .rdy-chip {
+    font-size:11px; font-weight:650; padding:3px 8px; border-radius:99px;
+    background:var(--surface-2); color:var(--ink-2); border:1px solid var(--ring);
+  }
+  .rdy-chip[data-tone="ok"] { color:var(--good-text); background:var(--good-bg); border-color:transparent; }
+  .rdy-chip[data-tone="wait"] { color:var(--warn); background:var(--warn-bg); border-color:transparent; }
+  .rdy-chip[data-tone="block"] { color:var(--crit); background:var(--crit-bg); border-color:transparent; }
+  .rdy-chip[data-tone="na"] { color:var(--muted); }
+  .rdy-section { margin-top:12px; }
+  .rdy-section h3 {
+    display:flex; justify-content:space-between; align-items:baseline; gap:10px;
+    font-size:10.5px; font-weight:700; letter-spacing:.9px; text-transform:uppercase;
+    color:var(--muted); margin:0 0 7px;
+  }
+  .rdy-row { display:grid; gap:3px; padding:6px 0; border-top:1px solid var(--grid); }
+  .rdy-row:first-of-type { border-top:0; }
+  .rdy-main { display:flex; justify-content:space-between; align-items:baseline; gap:10px; }
+  .rdy-label { font-size:12.5px; color:var(--ink); display:flex; align-items:center; gap:7px; min-width:0; }
+  .rdy-mark { width:7px; height:7px; border-radius:99px; flex:none; background:var(--muted); }
+  .rdy-row[data-tone="ok"] .rdy-mark { background:var(--good); }
+  .rdy-row[data-tone="wait"] .rdy-mark { background:var(--warn); }
+  .rdy-row[data-tone="block"] .rdy-mark { background:var(--crit); }
+  .rdy-row[data-tone="na"] .rdy-label { color:var(--ink-2); }
+  .rdy-val { font-size:12px; font-weight:650; color:var(--ink); font-variant-numeric:tabular-nums; text-align:right; }
+  .rdy-obj { font-weight:500; color:var(--muted); }
+  .rdy-note { font-size:11px; color:var(--muted); padding-left:14px; }
+  .rdy-meter { height:5px; border-radius:99px; background:color-mix(in srgb,var(--muted) 16%,transparent); overflow:hidden; margin:2px 0 0 14px; }
+  .rdy-meter > i { display:block; height:100%; border-radius:99px; background:var(--warn); }
+  .rdy-row[data-tone="ok"] .rdy-meter > i { background:var(--good); }
+  .rdy-row[data-tone="block"] .rdy-meter > i { background:var(--crit); }
+  .rdy-toggle {
+    margin-top:12px; width:100%; border:1px solid var(--ring); background:var(--surface-2);
+    color:var(--ink-2); font:inherit; font-size:12px; font-weight:650; padding:7px 10px;
+    border-radius:10px; cursor:pointer;
+  }
+  .rdy-toggle:hover { color:var(--ink); }
+  .rdy-detail { margin-top:8px; }
+
   /* ── groupe "effets visuels" du panneau de réglages (statique, non généré
      par buildDrawer() — reprend exactement le style des autres setrow) ──── */
   .fx-note { font-size:11px; color:var(--muted); margin-top:-4px; margin-bottom:2px; }

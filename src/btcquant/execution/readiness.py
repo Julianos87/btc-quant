@@ -274,6 +274,7 @@ def _build_active_checks(
             p95_slippage is not None and p95_slippage <= policy.max_p95_slippage_bps,
             "—" if p95_slippage is None else f"{p95_slippage:.1f} bps",
             f"≤ {policy.max_p95_slippage_bps:.1f} bps",
+            note="" if p95_slippage is not None else "Aucun ordre terminal à analyser.",
         ),
         ReadinessCheck(
             "drawdown",
@@ -281,6 +282,7 @@ def _build_active_checks(
             max_drawdown is not None and max_drawdown >= policy.max_drawdown,
             "—" if max_drawdown is None else f"{max_drawdown:.1%}",
             f"≥ {policy.max_drawdown:.0%}",
+            note="" if max_drawdown is not None else "Pas encore assez d'échantillons d'équity.",
         ),
         *[
             _freshness_check(
@@ -628,7 +630,16 @@ def _rate_check(
         value is not None and value <= maximum,
         "—" if value is None else f"{value:.1%}",
         f"≤ {maximum:.0%}",
+        note="" if value is not None else "Aucun ordre terminal à analyser.",
     )
+
+
+def _format_duration(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.0f} s"
+    if seconds < 3600:
+        return f"{seconds / 60:.0f} min"
+    return f"{seconds / 3600:.1f} h"
 
 
 def _freshness_check(
@@ -641,6 +652,6 @@ def _freshness_check(
         key,
         label,
         age is not None and age <= maximum,
-        "—" if age is None else f"{age / 3600:.1f} h",
-        f"≤ {maximum / 3600:.0f} h",
+        "—" if age is None else _format_duration(age),
+        f"max {_format_duration(maximum)}",
     )

@@ -16,6 +16,8 @@ Keep a Changelog et les versions suivent Semantic Versioning.
 
 ### Fixed
 
+- carte Testnet du dashboard : verdict Santé / Qualification / Exécution,
+  blockers en tête, fraîcheur en secondes ou minutes (plus `0.0 h < 0 h`) ;
 - `Venue.last_price` : une bougie Hyperliquid 1m vide lève une erreur métier
   retriable au lieu d'un `IndexError` (incidents des 1, 8 et 15 août 2026) ;
 - le carry paper journalise désormais chaque bascule ON/OFF dans `orders` ;

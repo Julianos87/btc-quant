@@ -55,7 +55,16 @@ const I18N = {
     yearly_title:"Années précédentes", yearly_sub:"backtest · mêmes réglages que le live",
     yearly_note:"Simulation avec frais, slippage et funding réels — pas des résultats réalisés. Rendements par année civile ; pire creux de l’année au survol.",
     yearly_partial:"année incomplète", yearly_missing:"Référence annuelle absente — lancer scripts/make_yearly_reference.py",
-    readiness_title:"Prêt pour le testnet ?", readiness_note:"Critères fixés à froid — le passage ne se décide pas au feeling.",
+    readiness_title:"Testnet", readiness_note:"Critères fixés à froid — le passage ne se décide pas au feeling.",
+    rdy_ready:"PRÊT", rdy_not_ready:"NON PRÊT", rdy_blocked:"BLOQUÉ",
+    rdy_ready_why:"Tous les critères sont au vert. La décision de passer au testnet reste humaine.",
+    rdy_wait_why:"Le système est sain, mais la campagne n'a pas encore assez de preuves.",
+    rdy_block_why:"Un critère opérationnel bloque le passage, indépendamment de la durée de campagne.",
+    rdy_health:"Santé opérationnelle", rdy_stats:"Qualification", rdy_exec:"Qualité d'exécution",
+    rdy_blockers:"Principaux critères manquants", rdy_show:"Voir les 16 critères", rdy_hide:"Masquer le détail",
+    rdy_objective:"objectif", rdy_na:"Pas encore de données", rdy_short_window:"Fenêtre trop courte pour être significative.",
+    rdy_campaign:"Campagne", rdy_running:"en cours", rdy_protocol:"protocole",
+    rdy_inactive:"Inactif", rdy_triggered:"Déclenché", rdy_source:"Source de readiness",
     signal_wait:"ATTENTE · AUCUN SIGNAL",
     signal_threshold:"SEUIL FRANCHI EN COURS · ATTENDRE LA CLÔTURE 4 H",
     signal_position:"POSITION TREND OUVERTE",
@@ -72,7 +81,7 @@ const I18N = {
       chart:"Courbe d’équity", price:"Graphe prix", events:"Journal", trend:"Moteur Trend",
       carry:"Moteur Carry", breakdown:"Répartition & records", conformity:"Est-ce normal ?", yearly:"Années précédentes",
       trades:"Trades clôturés", metrics:"Performance en direct", exposure:"Exposition & santé", protocol:"Protocole",
-      readiness:"Prêt pour le testnet ?"},
+      readiness:"Testnet"},
   },
   en: {
     paper:"PAPER TRADING", theme:"Theme", settings:"Settings", btcusdt:"BTC-PERP / USDC",
@@ -98,7 +107,16 @@ const I18N = {
     yearly_title:"Previous years", yearly_sub:"backtest · same settings as live",
     yearly_note:"Simulation with real fees, slippage and funding — not realized results. Calendar-year returns; each year's worst drawdown on hover.",
     yearly_partial:"partial year", yearly_missing:"Yearly reference missing — run scripts/make_yearly_reference.py",
-    readiness_title:"Ready for testnet?", readiness_note:"Criteria set in advance — the transition is not a gut call.",
+    readiness_title:"Testnet", readiness_note:"Criteria set in advance — the transition is not a gut call.",
+    rdy_ready:"READY", rdy_not_ready:"NOT READY", rdy_blocked:"BLOCKED",
+    rdy_ready_why:"Every criterion is green. The testnet decision remains a human call.",
+    rdy_wait_why:"The system is healthy, but the campaign does not yet have enough evidence.",
+    rdy_block_why:"An operational criterion is blocking promotion, regardless of campaign age.",
+    rdy_health:"Operational health", rdy_stats:"Qualification", rdy_exec:"Execution quality",
+    rdy_blockers:"Main missing criteria", rdy_show:"Show all 16 criteria", rdy_hide:"Hide details",
+    rdy_objective:"target", rdy_na:"No data yet", rdy_short_window:"Window too short to be meaningful.",
+    rdy_campaign:"Campaign", rdy_running:"running", rdy_protocol:"protocol",
+    rdy_inactive:"Inactive", rdy_triggered:"Triggered", rdy_source:"Readiness source",
     signal_wait:"WAITING · NO SIGNAL",
     signal_threshold:"THRESHOLD CROSSED · WAIT FOR THE 4H CLOSE",
     signal_position:"TREND POSITION OPEN",
@@ -129,7 +147,7 @@ const I18N = {
       chart:"Equity curve", price:"Price chart", events:"Event log", trend:"Trend engine",
       carry:"Carry engine", breakdown:"Breakdown & records", conformity:"Is this normal?", yearly:"Previous years",
       trades:"Closed trades", metrics:"Live performance", exposure:"Exposure & health", protocol:"Protocol",
-      readiness:"Ready for testnet?"},
+      readiness:"Testnet"},
   },
 };
 const t = k => (I18N[PREFS.lang] || I18N.fr)[k] || k;
@@ -143,6 +161,7 @@ function applyI18n() {
     ? t("auto_refresh") + " " + (PREFS.refresh/1000) + " s" : (PREFS.lang==="en"?"Manual refresh":"Rafraîchissement manuel");
   if (lastSummary) { renderCockpitStatus(lastSummary); renderViewFocus(lastSummary); }
   if (pcData) drawPChart();
+  if (lastReadiness) renderReadiness(lastReadiness);
   updateDataFreshness();
 }
 
@@ -162,6 +181,8 @@ const fmtDrawdown = (v, dp=1) => v == null || isNaN(v) ? "—" :
 const fmtNum = (v, dp=2) => v == null || isNaN(v) ? "—" : v.toFixed(dp).replace(".", PREFS.lang==="en"?".":",");
 const cls = (el, v) => { el.classList.toggle("up", v > 0); el.classList.toggle("down", v < 0); };
 let range = PREFS.range, unit = "pct", chartData = null, showBH = false, lastSummary = null, lastTradeRows = [];
+let lastReadiness = null;
+let readinessDetailOpen = false;
 let lastMetrics = null;
 let lastSummaryUpdatedAt = null;
 
@@ -604,18 +625,190 @@ function kvRow(k, v, note, status) {
 }
 
 // ── critères go/no-go paper → testnet (évalués côté serveur) ──
-async function refreshReadiness() {
-  const r = await (await fetch("/api/readiness")).json();
+const RDY_HEALTH = new Set(["integrity", "unresolved", "incidents", "trend_freshness", "carry_freshness", "killswitch"]);
+const RDY_EXEC = new Set(["rejections", "partials", "slippage"]);
+const RDY_META = new Set(["campaign", "qualification_age", "protocol_version"]);
+
+function rdyIsBlank(check) {
+  return check.value == null || String(check.value).trim() === "—";
+}
+
+function rdyTone(check) {
+  if (rdyIsBlank(check)) return "na";
+  if (check.passed) return "ok";
+  if (RDY_HEALTH.has(check.key) || check.key === "drawdown" || check.key === "integrity" || RDY_META.has(check.key)) {
+    return "block";
+  }
+  return "wait";
+}
+
+function rdyGroup(check) {
+  if (RDY_META.has(check.key)) return "meta";
+  if (RDY_EXEC.has(check.key)) return "exec";
+  if (check.key === "drawdown") return rdyIsBlank(check) ? "stats" : "health";
+  if (RDY_HEALTH.has(check.key)) return "health";
+  return "stats";
+}
+
+function rdyParseNumber(text) {
+  if (text == null) return null;
+  const match = String(text).replace(",", ".").match(/-?\d+(?:\.\d+)?/);
+  return match ? Number(match[0]) : null;
+}
+
+function rdyProgress(check) {
+  const current = rdyParseNumber(check.value);
+  const target = rdyParseNumber(check.target);
+  if (current == null || target == null || target === 0) return null;
+  if (String(check.target).includes("≤") || String(check.target).startsWith("max ")) return null;
+  return Math.max(0, Math.min(100, (current / Math.abs(target)) * 100));
+}
+
+function rdyDisplayValue(check) {
+  if (check.key === "killswitch") {
+    return check.passed ? t("rdy_inactive") : t("rdy_triggered");
+  }
+  if (rdyIsBlank(check)) return t("rdy_na");
+  return String(check.value);
+}
+
+function rdyDisplayTarget(check) {
+  if (!check.target || check.target === "ok" || check.target === "non" || check.target === "0") return "";
+  const cleaned = String(check.target).replace(/^[≥≤]\s*/, "");
+  return `${t("rdy_objective")} ${cleaned}`;
+}
+
+function rdyDaysElapsed(checks) {
+  const days = checks.find(item => item.key === "days");
+  return days ? rdyParseNumber(days.value) : null;
+}
+
+function rdyCampaignLine(report) {
+  const campaign = (report.checks || []).find(item => item.key === "campaign");
+  if (!campaign) return "";
+  const id = report.campaign_id != null ? `#${report.campaign_id}` : "";
+  const running = report.campaign_status === "RUNNING" ? ` · ${t("rdy_running")}` : "";
+  const proto = report.protocol_version != null ? ` · ${t("rdy_protocol")} v${report.protocol_version}` : "";
+  return `${t("rdy_campaign")} ${id}${running}${proto}`;
+}
+
+function rdyRow(check, {showBar = false, extraNote = ""} = {}) {
+  const tone = rdyTone(check);
+  const progress = showBar ? rdyProgress(check) : null;
+  const target = rdyDisplayTarget(check);
+  const note = extraNote || check.note || "";
+  return `<div class="rdy-row" data-tone="${tone}" data-key="${esc(check.key)}">
+    <div class="rdy-main">
+      <span class="rdy-label"><i class="rdy-mark"></i>${esc(check.label)}</span>
+      <span class="rdy-val">${esc(rdyDisplayValue(check))}${target ? ` <span class="rdy-obj">${esc(target)}</span>` : ""}</span>
+    </div>
+    ${progress != null ? `<div class="rdy-meter" aria-hidden="true"><i style="width:${progress.toFixed(0)}%"></i></div>` : ""}
+    ${note ? `<div class="rdy-note">${esc(note)}</div>` : ""}
+  </div>`;
+}
+
+function rdySection(title, score, checks, options = {}) {
+  if (!checks.length) return "";
+  return `<section class="rdy-section">
+    <h3><span>${esc(title)}</span><span>${esc(score)}</span></h3>
+    ${checks.map(check => rdyRow(check, {
+      showBar: !!options.showBar,
+      extraNote: options.noteFor ? options.noteFor(check) : (options.extraNote || ""),
+    })).join("")}
+  </section>`;
+}
+
+function rdyScoreLabel(items) {
+  const known = items.filter(item => rdyTone(item) !== "na");
+  if (!known.length) return `—/${items.length}`;
+  const ok = known.filter(item => item.passed).length;
+  return `${ok}/${items.length}`;
+}
+
+function rdyScoreTone(items) {
+  if (items.some(item => rdyTone(item) === "block")) return "block";
+  if (items.every(item => rdyTone(item) === "na")) return "na";
+  if (items.filter(item => rdyTone(item) !== "na").every(item => item.passed)) return "ok";
+  return "wait";
+}
+
+function renderReadiness(report) {
+  const root = $("readiness");
   const badge = $("rdy-badge");
-  badge.textContent = `${r.n_ok}/${r.n_total}`;
-  badge.style.color = r.ready ? "var(--good-text)" : "var(--ink-2)";
-  const dot = s => s === "ok" ? "var(--good)" : s === "warn" ? "var(--warn)" : "var(--muted)";
-  $("readiness").innerHTML = r.checks.map(c => `<div class="kv" style="flex-wrap:wrap">
-    <span class="k"><span style="display:inline-block;width:7px;height:7px;border-radius:99px;background:${dot(c.status)};margin-right:8px"></span>${esc(c.label)}</span>
-    <span class="num">${esc(c.value)} <span style="color:var(--muted);font-weight:500">(${esc(c.target)})</span></span>
-    ${c.note ? `<div style="flex-basis:100%;font-size:11.5px;color:var(--muted);padding:2px 0 0 15px">${esc(c.note)}</div>` : ""}
-  </div>`).join("")
-  + (r.ready ? `<div style="margin-top:8px;font-size:12px;color:var(--good-text);font-weight:700">✓ Tous les critères sont au vert — décision testnet à prendre.</div>` : "");
+  if (!root || !badge) return;
+  if (!report || report.status === "SOURCE_UNAVAILABLE" || !Array.isArray(report.checks)) {
+    badge.textContent = "—";
+    badge.className = "estate";
+    root.innerHTML = `<div class="kv"><span class="k">${esc(t("rdy_source"))}</span><span class="num" style="color:var(--crit)">${esc((report && report.status) || "UNKNOWN")}</span></div>`;
+    return;
+  }
+  const checks = report.checks;
+  const health = checks.filter(item => rdyGroup(item) === "health");
+  const stats = checks.filter(item => rdyGroup(item) === "stats");
+  const exec = checks.filter(item => rdyGroup(item) === "exec");
+  const days = rdyDaysElapsed(checks);
+  const premature = days != null && days < 1;
+  const healthBroken = health.some(item => rdyTone(item) === "block");
+  const bannerTone = healthBroken ? "block" : report.ready ? "ok" : "wait";
+  const verdict = healthBroken ? t("rdy_blocked") : report.ready ? t("rdy_ready") : t("rdy_not_ready");
+  const why = healthBroken ? t("rdy_block_why") : report.ready ? t("rdy_ready_why") : t("rdy_wait_why");
+  badge.textContent = verdict;
+  badge.className = "estate " + (bannerTone === "ok" ? "on" : bannerTone === "block" ? "off" : "");
+  if (bannerTone === "wait") badge.style.color = "var(--warn)";
+  else badge.style.color = "";
+
+  const blockers = [
+    ...health.filter(item => rdyTone(item) === "block"),
+    ...stats.filter(item => {
+      if (item.passed || rdyTone(item) === "na") return false;
+      if (premature && (item.key === "uptime" || item.key.endsWith("_uptime"))) return false;
+      return true;
+    }),
+  ].slice(0, 5);
+
+  const statsNote = check => (
+    premature && (check.key === "uptime" || check.key.endsWith("_uptime")) && check.passed
+      ? t("rdy_short_window")
+      : ""
+  );
+
+  root.innerHTML = `
+    <div class="rdy-banner" data-tone="${bannerTone}">
+      <div class="rdy-kicker">${esc(rdyCampaignLine(report))}</div>
+      <div class="rdy-verdict">${esc(verdict)}</div>
+      <div class="rdy-why">${esc(why)}</div>
+      <div class="rdy-scores">
+        <span class="rdy-chip" data-tone="${rdyScoreTone(health)}">${esc(t("rdy_health"))} ${esc(rdyScoreLabel(health))}</span>
+        <span class="rdy-chip" data-tone="${rdyScoreTone(stats)}">${esc(t("rdy_stats"))} ${esc(rdyScoreLabel(stats))}</span>
+        <span class="rdy-chip" data-tone="${rdyScoreTone(exec)}">${esc(t("rdy_exec"))} ${esc(rdyScoreLabel(exec))}</span>
+      </div>
+    </div>
+    ${blockers.length && !report.ready ? rdySection(t("rdy_blockers"), "", blockers, {showBar: true}) : ""}
+    ${rdySection(t("rdy_health"), rdyScoreLabel(health), health)}
+    ${rdySection(t("rdy_stats"), rdyScoreLabel(stats), stats, {showBar: true, noteFor: statsNote})}
+    ${rdySection(t("rdy_exec"), rdyScoreLabel(exec), exec)}
+    <button type="button" class="rdy-toggle" id="rdy-toggle">${esc(readinessDetailOpen ? t("rdy_hide") : t("rdy_show"))}</button>
+    <div class="rdy-detail" id="rdy-detail" ${readinessDetailOpen ? "" : "hidden"}>
+      ${checks.map(check => rdyRow(check, {showBar: false, extraNote: statsNote(check)})).join("")}
+    </div>`;
+
+  const toggle = $("rdy-toggle");
+  if (toggle) {
+    toggle.onclick = () => {
+      readinessDetailOpen = !readinessDetailOpen;
+      renderReadiness(report);
+    };
+  }
+}
+
+async function refreshReadiness() {
+  try {
+    const response = await fetch("/api/readiness");
+    lastReadiness = await response.json();
+  } catch (error) {
+    lastReadiness = {status: "UNKNOWN", checks: null};
+  }
+  renderReadiness(lastReadiness);
 }
 
 // ── années précédentes (backtest) : barres annuelles portefeuille vs BTC ──

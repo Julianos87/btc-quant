@@ -54,3 +54,8 @@ def test_frontend_escapes_remote_text_before_html_injection():
     assert 'direction:"SHORT", active:isShort' in javascript
     assert "const waiting = candles.map" in javascript
     assert "if (all.length < 10 || !sideKnown)" in javascript
+    assert "function renderReadiness(" in javascript
+    assert "rdy_not_ready" in javascript
+    assert "rdyIsBlank" in javascript
+    assert "${esc(rdyDisplayValue(check))}" in javascript
+    assert "RDY_HEALTH" in javascript

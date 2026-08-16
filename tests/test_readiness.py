@@ -9,6 +9,8 @@ import pytest
 
 from btcquant.execution.readiness import (
     ReadinessPolicy,
+    _format_duration,
+    _freshness_check,
     evaluate_readiness,
     finalize_campaign,
     require_passed_qualification,
@@ -265,6 +267,18 @@ def test_active_previous_protocol_cannot_be_finalized(tmp_path):
     assert not campaign["passed"]
     with pytest.raises(RuntimeError, match="Qualification refusée"):
         finalize_campaign(store, now=now + timedelta(seconds=1))
+
+
+def test_freshness_is_shown_in_seconds_or_minutes_not_zero_hours():
+    fresh = _freshness_check("trend_freshness", "Fraîcheur moteur trend", 23.0, 600.0)
+    stale = _freshness_check("trend_freshness", "Fraîcheur moteur trend", 900.0, 600.0)
+
+    assert fresh.passed
+    assert fresh.value == "23 s"
+    assert fresh.target == "max 10 min"
+    assert stale.passed is False
+    assert stale.value == "15 min"
+    assert _format_duration(0.4) == "0 s"
 
 
 def test_testnet_p1_profile_requires_30_days_and_two_smoke_orders():
