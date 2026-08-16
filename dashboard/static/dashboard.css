@@ -225,7 +225,7 @@
   .card:hover { --lift:-3px; box-shadow:var(--shadow-hover), 0 0 0 1px color-mix(in oklch, var(--s1) 16%, transparent); border-color:color-mix(in oklch, var(--s1) 30%, var(--ring)); }
   .card:hover::before, .card:hover::after { opacity:1; }
   @media (hover:none) { .card::before, .card::after { display:none; } }
-  .card h2 { font-size:13px; font-weight:700; display:flex; align-items:center; gap:10px; letter-spacing:.1px; }
+  .card h2 { font-size:13px; font-weight:700; display:flex; align-items:center; gap:10px; letter-spacing:.1px; flex-wrap:wrap; min-width:0; }
   .card h2::before {
     content:""; width:3px; height:13px; border-radius:2px; flex:none;
     background:linear-gradient(180deg, var(--s1), var(--s2));
@@ -246,19 +246,16 @@
     @keyframes enter-rise { from { opacity:0; transform:translateY(22px) scale(.98); filter:blur(6px); } to { opacity:1; transform:none; filter:blur(0); } }
     .tiles .tile:nth-child(1) { animation-delay:.02s; } .tiles .tile:nth-child(2) { animation-delay:.08s; }
     .tiles .tile:nth-child(3) { animation-delay:.14s; } .tiles .tile:nth-child(4) { animation-delay:.20s; }
-    .col-left .card:nth-child(1) { animation-delay:.12s; } .col-left .card:nth-child(2) { animation-delay:.18s; }
-    .col-left .card:nth-child(3) { animation-delay:.24s; } .col-left .card:nth-child(4) { animation-delay:.30s; }
-    .col-left .card:nth-child(5) { animation-delay:.36s; } .col-left .card:nth-child(6) { animation-delay:.42s; }
-    .engines .card:nth-child(1) { animation-delay:.14s; } .engines .card:nth-child(2) { animation-delay:.20s; }
-    .engines .card:nth-child(3) { animation-delay:.26s; } .engines .card:nth-child(4) { animation-delay:.32s; }
-    .engines .card:nth-child(5) { animation-delay:.38s; } .engines .card:nth-child(6) { animation-delay:.44s; }
-    .engines .card:nth-child(7) { animation-delay:.50s; } .engines .card:nth-child(8) { animation-delay:.56s; }
-    .engines .card:nth-child(9) { animation-delay:.62s; }
+    .grid > .card:nth-child(1) { animation-delay:.12s; } .grid > .card:nth-child(2) { animation-delay:.16s; }
+    .grid > .card:nth-child(3) { animation-delay:.20s; } .grid > .card:nth-child(4) { animation-delay:.24s; }
+    .grid > .card:nth-child(5) { animation-delay:.28s; } .grid > .card:nth-child(6) { animation-delay:.32s; }
+    .grid > .card:nth-child(7) { animation-delay:.36s; } .grid > .card:nth-child(8) { animation-delay:.40s; }
   }
 
-  .tiles { display:grid; grid-template-columns:2.2fr 1fr 1fr 1fr; gap:16px; margin-bottom:16px; }
+  .tiles { display:grid; grid-template-columns:minmax(0,2.2fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr); gap:16px; margin-bottom:16px; align-items:stretch; }
   .tiles.view-empty { display:none; }
-  @media (max-width:1120px){ .tiles { grid-template-columns:1fr 1fr; } }
+  .tiles .tile { min-width:0; display:flex; flex-direction:column; }
+  @media (max-width:1120px){ .tiles { grid-template-columns:minmax(0,1fr) minmax(0,1fr); } }
   .tile .val { font-size:27px; font-weight:700; letter-spacing:-.4px; }
   .tile.hero { position:relative; overflow:hidden; }
   .tile.hero::after {
@@ -288,15 +285,58 @@
   .alloclab b { color:var(--ink); font-weight:650; }
 
   /* ── layout ─────────────────────────────────────────────── */
-  .grid { display:grid; grid-template-columns:minmax(0,2.15fr) minmax(310px,1fr); gap:16px; }
-  @media (max-width:1120px){ .grid { grid-template-columns:1fr; } }
-  /* conteneurs de mise en page : les grilles internes (focus-grid, ops-grid,
-     metrics-grid…) peuvent ainsi réagir à LEUR propre largeur de colonne —
-     utile quand le drawer de réglages est ouvert et rétrécit la colonne sans
-     changer la largeur du viewport (les @media seuls ne verraient rien) */
-  .col-left, .engines { container-type:inline-size; }
-  .col-left { container-name:colleft; }
-  .engines { container-name:colright; }
+  .grid {
+    display:grid; gap:16px; align-items:stretch; min-width:0;
+    grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);
+  }
+  .grid > .card { min-width:0; overflow-x:clip; height:100%; display:flex; flex-direction:column; }
+  .card-head { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+  .card-head h2 { flex:1 1 180px; min-width:0; }
+  .card-head .chips { flex:0 1 auto; }
+  .table-wrap { overflow-x:auto; max-width:100%; }
+  [data-card="performance_brief"] { grid-area:brief; }
+  [data-card="risk_radar"] { grid-area:radar; }
+  [data-card="monitor_pulse"] { grid-area:pulse; }
+  [data-card="chart"] { grid-area:chart; }
+  [data-card="price"] { grid-area:price; }
+  [data-card="events"] { grid-area:events; }
+  [data-card="trend"] { grid-area:trend; }
+  [data-card="carry"] { grid-area:carry; }
+  [data-card="breakdown"] { grid-area:breakdown; }
+  [data-card="conformity"] { grid-area:conformity; }
+  [data-card="yearly"] { grid-area:yearly; }
+  [data-card="trades"] { grid-area:trades; }
+  [data-card="metrics"] { grid-area:metrics; }
+  [data-card="exposure"] { grid-area:exposure; }
+  [data-card="protocol"] { grid-area:protocol; }
+  [data-card="readiness"] { grid-area:readiness; }
+  body[data-view="monitor"] .grid {
+    grid-template-areas:
+      "pulse trend"
+      "price carry"
+      "price exposure"
+      "events readiness";
+  }
+  body[data-view="performance"] .grid {
+    grid-template-areas:
+      "brief metrics"
+      "chart breakdown"
+      "chart yearly"
+      "trades conformity"
+      "readiness readiness";
+  }
+  body[data-view="risk"] .grid {
+    grid-template-areas:
+      "radar trend"
+      "chart carry"
+      "price exposure"
+      "events events";
+  }
+  @media (max-width:1120px){
+    .grid { grid-template-columns:minmax(0,1fr); grid-template-areas:none !important; }
+    .grid > .card { grid-area:auto !important; height:auto; }
+  }
+  .grid { container-type:inline-size; }
   .controls { display:flex; align-items:center; gap:14px; margin:4px 0 10px; flex-wrap:wrap; }
   .chips { display:flex; background:var(--surface-2); border:1px solid var(--ring); border-radius:10px; padding:3px; gap:2px; }
   .chip {
@@ -346,7 +386,6 @@
   .signal-key .waiting-zone { height:8px; border:1px solid var(--ring); background:color-mix(in srgb,var(--muted) 8%,transparent); }
 
   /* ── moteurs ────────────────────────────────────────────── */
-  .engines { display:grid; gap:16px; align-content:start; }
   .estate { margin-left:auto; display:inline-flex; align-items:center; gap:7px; font-size:10.5px;
             font-weight:700; letter-spacing:.9px; padding:4px 11px; border-radius:99px; }
   .estate.on  { color:var(--good-text); background:var(--good-bg); }
@@ -383,7 +422,7 @@
   body:has([data-card="monitor_pulse"][data-view-hidden="0"]) [data-card="exposure"] .dup-with-pulse { display:none; }
 
   /* ── événements ─────────────────────────────────────────── */
-  #events { max-height:420px; overflow-y:auto; margin-top:8px; scrollbar-width:thin; }
+  #events { flex:1; min-height:180px; max-height:none; overflow-y:auto; margin-top:8px; scrollbar-width:thin; }
   #events::-webkit-scrollbar { width:8px; }
   #events::-webkit-scrollbar-thumb { background:var(--axis); border-radius:99px; }
   .ev { display:flex; align-items:baseline; gap:12px; padding:9px 10px; margin:0 -10px;
@@ -426,7 +465,7 @@
   /* ── métriques live (mini-tuiles) ────────────────────────── */
   .metrics-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:9px; margin-top:4px; }
   @media (max-width:520px){ .metrics-grid { grid-template-columns:1fr 1fr; } }
-  @container colright (max-width:340px){ .metrics-grid { grid-template-columns:1fr 1fr; } .records { grid-template-columns:1fr; } }
+  @container (max-width:520px){ .metrics-grid { grid-template-columns:1fr 1fr; } .records { grid-template-columns:1fr; } }
   .metric { background:var(--surface-2); border:1px solid var(--ring); border-radius:11px; padding:11px 12px; }
   .metric .ml { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.7px; }
   .metric .mv { font-size:20px; font-weight:700; margin-top:3px; letter-spacing:-.3px; }
@@ -457,7 +496,7 @@
   .ops-note { margin-top:1px; color:var(--muted); font-size:10.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   @media (max-width:760px) { .focus-grid { grid-template-columns:1fr 1fr; } }
   @media (max-width:520px) { .ops-grid { grid-template-columns:1fr; } .focus-metric .fv { font-size:19px; } }
-  @container colleft (max-width:480px) {
+  @container (max-width:480px) {
     .focus-grid { grid-template-columns:1fr 1fr; }
     .ops-grid { grid-template-columns:1fr; }
   }

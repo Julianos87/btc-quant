@@ -125,6 +125,7 @@ document.querySelectorAll("#dashboard-view [data-view]").forEach(btn => {
 // fois après le premier chargement de données (les cartes n'ont que leur
 // hauteur "vide" tant que les API n'ont pas répondu).
 (function setupColumnBalance() {
+  // Grille par onglet : plus de déplacement de cartes entre colonnes.
   const colLeft = document.querySelector(".col-left"), engines = document.querySelector(".engines");
   if (!colLeft || !engines) return;
   [...colLeft.children].forEach(c => { if (c.classList.contains("card")) c.dataset.homeCol = "left"; });

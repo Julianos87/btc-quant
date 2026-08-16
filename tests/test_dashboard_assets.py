@@ -17,6 +17,9 @@ def test_dashboard_loads_external_versioned_assets(monkeypatch):
     assert b"BTC-PERP / USDC" in page.data
     assert b"Hyperliquid" in page.data
     assert b'id="signal-guide"' in page.data
+    assert b'class="grid" id="board"' in page.data
+    assert b'class="col-left"' not in page.data
+    assert b'class="engines"' not in page.data
     assert b"cl\xc3\xb4ture d\xe2\x80\x99une bougie 4 h" in page.data
     assert b'data-i18n="threshold_active"' in page.data
     assert b'data-i18n="threshold_inactive"' in page.data
@@ -59,3 +62,8 @@ def test_frontend_escapes_remote_text_before_html_injection():
     assert "rdyIsBlank" in javascript
     assert "${esc(rdyDisplayValue(check))}" in javascript
     assert "RDY_HEALTH" in javascript
+    assert "document.body.dataset.view = view" in javascript
+    css = (dashboard.ROOT / "dashboard" / "static" / "dashboard.css").read_text(encoding="utf-8")
+    assert 'body[data-view="monitor"] .grid' in css
+    assert 'body[data-view="performance"] .grid' in css
+    assert 'body[data-view="risk"] .grid' in css

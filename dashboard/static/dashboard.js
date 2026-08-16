@@ -203,6 +203,7 @@ const VIEW_TILES = {
 function applyDashboardView() {
   const view = VIEW_CARDS[PREFS.view] ? PREFS.view : "monitor";
   PREFS.view = view;
+  document.body.dataset.view = view;
   if (view === "risk") unit = "dd";
   if (view === "performance") unit = "pct";
   document.querySelectorAll("[data-card]").forEach(card => {
