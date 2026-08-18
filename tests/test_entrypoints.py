@@ -4,7 +4,16 @@ import sys
 
 import pytest
 
-from btcquant.entrypoints import carry, digest, readiness, rebalance, shadow, trend, watchdog
+from btcquant.entrypoints import (
+    carry,
+    carry_cutover,
+    digest,
+    readiness,
+    rebalance,
+    shadow,
+    trend,
+    watchdog,
+)
 
 
 @pytest.mark.parametrize(
@@ -12,6 +21,7 @@ from btcquant.entrypoints import carry, digest, readiness, rebalance, shadow, tr
     [
         trend.main,
         carry.main,
+        carry_cutover.main,
         readiness.main,
         digest.main,
         rebalance.main,
