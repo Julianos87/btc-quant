@@ -52,7 +52,9 @@ run_isolated() {
     "$@"
 }
 
-run_isolated env COVERAGE_FILE="${COVERAGE_FILE}" \
+run_isolated env \
+  COVERAGE_FILE="${COVERAGE_FILE}" \
+  HYPOTHESIS_STORAGE_DIRECTORY="${VALIDATION_ROOT}/hypothesis" \
   "${VALIDATION_ENV}/bin/pytest" -q \
   -p no:cacheprovider --cov=btcquant --cov-branch --cov-fail-under=80
 run_isolated "${VALIDATION_ENV}/bin/ruff" check --no-cache .
@@ -76,7 +78,7 @@ run_isolated "${VALIDATION_ENV}/bin/pip-audit" -r requirements.txt --disable-pip
   --progress-spinner off --cache-dir "${PIP_AUDIT_CACHE}" --timeout 15 -s osv
 
 # No validation artifact is allowed to be published with the release.
-for transient in .validation-venv .pytest_cache .mypy_cache .ruff_cache .coverage .uv-cache; do
+for transient in .validation-venv .pytest_cache .mypy_cache .ruff_cache .coverage .uv-cache .hypothesis; do
   if [ -e "${RELEASE}/${transient}" ]; then
     echo "Artefact de validation dans la release : ${transient}" >&2
     exit 1

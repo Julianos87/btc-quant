@@ -267,6 +267,7 @@ def test_deployment_scripts_expose_fail_closed_guards():
     assert "-u BTCQUANT_CURRENT" in validate
     assert "-u BTCQUANT_DATABASE" in validate
     assert "-u BTCQUANT_CLONE" in validate
+    assert 'HYPOTHESIS_STORAGE_DIRECTORY="${VALIDATION_ROOT}/hypothesis"' in validate
     assert "-u BTCQUANT_ROOT" in create
     assert "-p no:cacheprovider" in validate
     assert validate.count("--no-cache") >= 2
@@ -874,6 +875,9 @@ def test_validate_release_isolates_and_cleans_validation_artifacts(tmp_path):
           printf 'runtime root leaked into pytest\\n' >&2
           exit 15
         fi
+        case "${HYPOTHESIS_STORAGE_DIRECTORY:-}" in
+          "$RELEASE"/*|"") exit 16 ;;
+        esac
         touch "$COVERAGE_FILE"
         if [ "$FAKE_FAIL" = 1 ]; then exit 14; fi
         """,
@@ -967,6 +971,7 @@ def test_validate_release_isolates_and_cleans_validation_artifacts(tmp_path):
         ".ruff_cache",
         ".coverage",
         ".uv-cache",
+        ".hypothesis",
     ):
         assert not (release / transient).exists()
 
