@@ -643,6 +643,26 @@ def _seed_journal(store, checkpoints: int = 40) -> None:
     store.complete_order(order_id, status="FILLED", filled_qty=1.0, price=100.0)
 
 
+def test_compact_equity_keeps_five_minute_buckets_before_cutoff(tmp_path):
+    store = StateStore(tmp_path / "btcquant.db")
+    for minute in range(12):
+        store.append_equity("trend", 10_000.0 + minute, ts=f"2026-01-01T00:{minute:02d}:00+00:00")
+    store.append_equity("trend", 10_100.0, ts="2026-01-02T00:00:00+00:00")
+
+    before, after = store.compact_equity("trend", "2026-01-01T12:00:00+00:00", min_rows=1)
+
+    assert before == 13
+    remaining = [row["ts"] for row in store.read_equity("trend")]
+    assert "2026-01-02T00:00:00+00:00" in remaining
+    old = [ts for ts in remaining if ts.startswith("2026-01-01")]
+    assert old == [
+        "2026-01-01T00:04:00+00:00",
+        "2026-01-01T00:09:00+00:00",
+        "2026-01-01T00:11:00+00:00",
+    ]
+    assert after == 4
+
+
 def test_compact_events_removes_old_routine_checkpoints(tmp_path):
     store = StateStore(tmp_path / "btcquant.db")
     _seed_journal(store)

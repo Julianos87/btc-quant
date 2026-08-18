@@ -55,16 +55,27 @@ class Venue:
     # ── prix & bougies ───────────────────────────────────────────────────────
     def last_price(self) -> float:
         if self.is_hourly_funding:
-            candles = self._retry.call(
-                self.exchange.fetch_ohlcv,
-                self.symbol,
-                "1m",
-                limit=1,
-                retry_on=NETWORK_ERRORS,
-            )
-            return float(candles[-1][4])
+            return float(self._retry.call(self._hyperliquid_last_close, retry_on=NETWORK_ERRORS))
         ticker = self._retry.call(self.exchange.fetch_ticker, self.symbol, retry_on=NETWORK_ERRORS)
-        return float(ticker["last"])
+        last = ticker.get("last") if isinstance(ticker, dict) else None
+        if last is None:
+            raise ccxt.ExchangeNotAvailable(
+                f"{self.exchange_id} ticker.last absent pour {self.symbol}"
+            )
+        return float(last)
+
+    def _hyperliquid_last_close(self) -> float:
+        """Clôture 1m ; une réponse vide est transitoire, pas un IndexError."""
+
+        candles = self.exchange.fetch_ohlcv(self.symbol, "1m", limit=1)
+        if not candles:
+            raise ccxt.ExchangeNotAvailable(f"{self.exchange_id} bougie 1m vide pour {self.symbol}")
+        close = candles[-1][4] if len(candles[-1]) > 4 else None
+        if close is None:
+            raise ccxt.ExchangeNotAvailable(
+                f"{self.exchange_id} clôture 1m absente pour {self.symbol}"
+            )
+        return float(close)
 
     def fetch_ohlcv(self, timeframe: str, limit: int = 1000) -> list[list]:
         return self._retry.call(

@@ -323,6 +323,93 @@ class OneTradeStrategy(Strategy):
         return 1
 
 
+class FundingFilteredStrategy(OneTradeStrategy):
+    @staticmethod
+    def default_params() -> dict:
+        return {"funding_long_max": 0.0008, "funding_short_min": -0.0008}
+
+
+def test_missing_funding_blocks_new_entries_when_filter_is_active(tmp_path, monkeypatch):
+    strategy = FundingFilteredStrategy()
+    slot = StrategySlot(strategy, 1.0, 10_000.0)
+    runner = LiveRunner(
+        [slot],
+        PaperBroker(),
+        RiskConfig(initial_capital=10_000.0, vol_target_annual=None),
+        "binance",
+        "BTC/USDT",
+        tmp_path / "state.json",
+    )
+    index = pd.date_range("2026-01-01", periods=6, freq="4h", tz="UTC")
+    price = np.full(len(index), 100.0)
+    frame = pd.DataFrame(
+        {
+            "open": price,
+            "high": price + 1.0,
+            "low": price - 1.0,
+            "close": price,
+            "volume": np.full(len(index), 20.0),
+        },
+        index=index,
+    )
+    monkeypatch.setattr(runner, "_fetch_frame", lambda _strategy: frame)
+    monkeypatch.setattr(
+        runner.venue,
+        "funding_rate_8h",
+        lambda: (_ for _ in ()).throw(RuntimeError("venue down")),
+    )
+
+    runner._process_bar(slot, 105.0)
+
+    assert slot.position is None
+    assert runner.store.read_orders("trend") == []
+
+
+def test_missing_funding_still_exits_an_open_position(tmp_path, monkeypatch):
+    strategy = FundingFilteredStrategy()
+    slot = StrategySlot(strategy, 1.0, 10_000.0)
+    slot.position = Position(
+        entry_time=pd.Timestamp("2026-01-01T00:00:00Z"),
+        entry_price=100.0,
+        qty=1.0,
+        stop_price=1.0,
+        bars_held=4,
+    )
+    runner = LiveRunner(
+        [slot],
+        PaperBroker(),
+        RiskConfig(initial_capital=10_000.0, vol_target_annual=None),
+        "binance",
+        "BTC/USDT",
+        tmp_path / "state.json",
+    )
+    index = pd.date_range("2026-01-01", periods=6, freq="4h", tz="UTC")
+    price = np.full(len(index), 100.0)
+    frame = pd.DataFrame(
+        {
+            "open": price,
+            "high": price + 1.0,
+            "low": price - 1.0,
+            "close": price,
+            "volume": np.full(len(index), 20.0),
+        },
+        index=index,
+    )
+    monkeypatch.setattr(runner, "_fetch_frame", lambda _strategy: frame)
+    monkeypatch.setattr(
+        runner.venue,
+        "funding_rate_8h",
+        lambda: (_ for _ in ()).throw(RuntimeError("venue down")),
+    )
+
+    runner._process_bar(slot, 105.0)
+
+    assert slot.position is None
+    orders = runner.store.read_orders("trend")
+    assert orders
+    assert orders[-1]["reason"] != "entry"
+
+
 def test_backtest_handles_partial_entries_and_exits():
     index = pd.date_range("2026-01-01", periods=16, freq="4h", tz="UTC")
     price = np.full(len(index), 100.0)
