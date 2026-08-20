@@ -2578,8 +2578,13 @@ class StateStore:
             after = int(connection.execute("SELECT COUNT(*) FROM events").fetchone()[0])
         return before, after
 
-    def compact_equity(self, engine: str, cutoff: str) -> tuple[int, int]:
-        """Conserve un point horaire avant ``cutoff`` et tous les points récents."""
+    def compact_equity(self, engine: str, cutoff: str, *, min_rows: int = 5_000) -> tuple[int, int]:
+        """Conserve un point / 5 min avant ``cutoff`` et tous les points récents.
+
+        Un point horaire laissait 50 minutes « stale » pour une fraîcheur
+        readiness de 10 minutes, ce qui faisait échouer l'uptime d'une
+        campagne saine. Cinq minutes restent couvertes par le seuil 600 s.
+        """
 
         with self._transaction() as connection:
             before = int(
@@ -2587,7 +2592,7 @@ class StateStore:
                     "SELECT COUNT(*) FROM equity_samples WHERE engine = ?", (engine,)
                 ).fetchone()[0]
             )
-            if before < 5_000:
+            if before < min_rows:
                 return before, before
             connection.execute(
                 """
@@ -2596,7 +2601,11 @@ class StateStore:
                   AND ts NOT IN (
                     SELECT MAX(ts) FROM equity_samples
                     WHERE engine = ? AND ts < ?
-                    GROUP BY substr(ts, 1, 13)
+                    GROUP BY substr(ts, 1, 14)
+                           || printf(
+                                '%02d',
+                                (CAST(substr(ts, 15, 2) AS INTEGER) / 5) * 5
+                              )
                   )
                 """,
                 (engine, cutoff, engine, cutoff),

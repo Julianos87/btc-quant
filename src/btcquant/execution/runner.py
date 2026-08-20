@@ -1334,15 +1334,25 @@ class LiveRunner:
             data["close"], VOL_LOOKBACK, bars_per_year(slot.strategy.timeframe)
         )
         data["funding"] = float("nan")
+        funding_available = True
         try:
             # toujours en équivalent 8 h (convention des filtres et du backtest),
             # quelle que soit la périodicité native de la venue
             data.loc[data.index[-1], "funding"] = self.venue.funding_rate_8h()
-        except Exception as e:  # le filtre funding devient neutre, on ne bloque pas le bot
+        except Exception as e:
             if self.funding_rate_8h:
                 data.loc[data.index[-1], "funding"] = self.funding_rate_8h
             else:
-                log.warning("Funding indisponible (%s) : filtre funding neutre sur cette barre", e)
+                funding_available = False
+                log.warning(
+                    "Funding indisponible (%s) : nouvelles expositions bloquées sur cette barre",
+                    e,
+                )
+        uses_funding_filter = (
+            slot.strategy.params.get("funding_long_max") is not None
+            or slot.strategy.params.get("funding_short_min") is not None
+        )
+        allow_new_exposure = funding_available or not uses_funding_filter
         row = data.iloc[-1]
 
         if slot.position is not None:
@@ -1395,7 +1405,7 @@ class LiveRunner:
                     (float(row["_rvol"]) if pd.notna(row.get("_rvol")) else None),
                     decision_checkpoint=last_ts.isoformat(),
                 )
-            elif pyramid_event:
+            elif pyramid_event and allow_new_exposure:
                 self._pyramid_position(
                     slot,
                     row,
@@ -1403,10 +1413,15 @@ class LiveRunner:
                     pyramid_event.fraction,
                     decision_checkpoint=last_ts.isoformat(),
                 )
+            elif pyramid_event:
+                log.warning(
+                    "[%s] Renfort ignoré : funding venue indisponible",
+                    slot.strategy.name,
+                )
             return decision
         else:
             slot.last_bar_ts = last_ts
-            can_enter = not self.halted and not self.daily_lockout
+            can_enter = not self.halted and not self.daily_lockout and allow_new_exposure
             decision = decide_bar_close(
                 slot.strategy,
                 row,

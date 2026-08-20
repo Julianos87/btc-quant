@@ -95,6 +95,11 @@ def test_dashboard_uses_a_production_wsgi_server():
     assert "/gunicorn " in service
     assert "dashboard.wsgi:app" in service
     assert "dashboard/app.py" not in service
+    assert "ProtectHome=true" in service
+    assert "Environment=HOME=/opt/btcquant/state" in service
+    assert "PrivateTmp=true" in service
+    assert "NoNewPrivileges=true" in service
+    assert "ProtectSystem=strict" in service
 
 
 def test_runtime_services_use_installed_entrypoints():
