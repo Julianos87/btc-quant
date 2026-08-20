@@ -6,7 +6,16 @@ from pathlib import Path
 
 import pytest
 
-from btcquant.entrypoints import carry, digest, readiness, rebalance, shadow, trend, watchdog
+from btcquant.entrypoints import (
+    carry,
+    carry_cutover,
+    digest,
+    readiness,
+    rebalance,
+    shadow,
+    trend,
+    watchdog,
+)
 
 
 def test_digest_import_follows_btcquant_root_so_validation_must_unset_it(tmp_path, monkeypatch):
@@ -32,6 +41,7 @@ def test_digest_import_follows_btcquant_root_so_validation_must_unset_it(tmp_pat
     [
         trend.main,
         carry.main,
+        carry_cutover.main,
         readiness.main,
         digest.main,
         rebalance.main,
