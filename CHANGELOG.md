@@ -7,6 +7,9 @@ Keep a Changelog et les versions suivent Semantic Versioning.
 
 ### Added
 
+- `deploy/migrate.sh` exécute `btcquant.entrypoints.migrate` depuis le venv
+  de la release cible (script-relative), pas depuis `/opt/btcquant/current` ;
+
 - commande explicite `btcquant-carry-cutover` pour retirer un checkpoint Carry
   paper synthétique (`OPEN` qty=0) vers un état v6 `FLAT`, hors migration de
   schéma et hors démarrage du runner ;

@@ -320,8 +320,10 @@ if ${MIGRATION_MODE}; then
   MIGRATION_ATTEMPTED=true
   MIGRATION_BACKUP="${ROOT}/backups/pre-migration-${TARGET_SHA}.db"
   trap migration_abort_on_error ERR
+  # migrate.sh resolves its Python from its own release directory (TARGET),
+  # not from /opt/btcquant/current. Do not pass BTCQUANT_CURRENT here.
   BTCQUANT_DEPLOY_LOCK_HELD=true BTCQUANT_ROOT="${ROOT}" \
-    BTCQUANT_CURRENT="${CURRENT}" BTCQUANT_DATABASE="${ROOT}/state/btcquant.db" \
+    BTCQUANT_DATABASE="${ROOT}/state/btcquant.db" \
     bash "${TARGET}/deploy/migrate.sh" --sha "${TARGET_SHA}" \
       --backup "${MIGRATION_BACKUP}" --confirm-migration
   MIGRATION_COMPLETED=true
