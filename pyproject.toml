@@ -18,6 +18,7 @@ dependencies = [
 [project.scripts]
 btcquant-trend = "btcquant.entrypoints.trend:main"
 btcquant-carry = "btcquant.entrypoints.carry:main"
+btcquant-carry-cutover = "btcquant.entrypoints.carry_cutover:main"
 btcquant-readiness = "btcquant.entrypoints.readiness:main"
 btcquant-watchdog = "btcquant.entrypoints.watchdog:main"
 btcquant-digest = "btcquant.entrypoints.digest:main"

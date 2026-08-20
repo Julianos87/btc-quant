@@ -7,6 +7,9 @@ Keep a Changelog et les versions suivent Semantic Versioning.
 
 ### Added
 
+- commande explicite `btcquant-carry-cutover` pour retirer un checkpoint Carry
+  paper synthétique (`OPEN` qty=0) vers un état v6 `FLAT`, hors migration de
+  schéma et hors démarrage du runner ;
 - carte Testnet décisionnelle, regroupement Santé / Qualification / Exécution
   et libellés Carry paper synthétique sur l'architecture dashboard Lot6 ;
 - journal SQLite transactionnel, migrations, reprise après crash et readiness ;

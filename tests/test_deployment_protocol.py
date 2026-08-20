@@ -253,12 +253,22 @@ def test_deployment_scripts_expose_fail_closed_guards():
     assert "--exclude /data" in create
     assert "validate-release.sh" in create
     assert "release-manifest.json" in create
+    assert create.index("validate-release.sh") < create.index("ln -s ../../state")
+    assert create.index("load_config('environments/paper/config.yaml')") < create.index(
+        "ln -s ../../state"
+    )
     assert "pytest" in validate
     assert "check_baseline_provenance.py" in validate
     assert "pip-audit" in validate
     assert 'VALIDATION_ROOT="$(mktemp -d /tmp/btcquant-release-validation.' in validate
     assert 'VALIDATION_BIN="${VALIDATION_ROOT}/bin"' in validate
     assert 'VALIDATION_ENV="${RELEASE}/.validation-venv"' not in validate
+    assert "-u BTCQUANT_ROOT" in validate
+    assert "-u BTCQUANT_CURRENT" in validate
+    assert "-u BTCQUANT_DATABASE" in validate
+    assert "-u BTCQUANT_CLONE" in validate
+    assert 'HYPOTHESIS_STORAGE_DIRECTORY="${VALIDATION_ROOT}/hypothesis"' in validate
+    assert "-u BTCQUANT_ROOT" in create
     assert "-p no:cacheprovider" in validate
     assert validate.count("--no-cache") >= 2
     assert '--cache-dir "${MYPY_CACHE}"' in validate
@@ -860,6 +870,14 @@ def test_validate_release_isolates_and_cleans_validation_artifacts(tmp_path):
         set -euo pipefail
         case " $* " in *" -p no:cacheprovider "*) ;; *) exit 11 ;; esac
         case "$COVERAGE_FILE" in "$RELEASE"/*|"") exit 12 ;; esac
+        if [ -n "${BTCQUANT_ROOT:-}" ] || [ -n "${BTCQUANT_CURRENT:-}" ] \
+          || [ -n "${BTCQUANT_DATABASE:-}" ] || [ -n "${BTCQUANT_CLONE:-}" ]; then
+          printf 'runtime root leaked into pytest\\n' >&2
+          exit 15
+        fi
+        case "${HYPOTHESIS_STORAGE_DIRECTORY:-}" in
+          "$RELEASE"/*|"") exit 16 ;;
+        esac
         touch "$COVERAGE_FILE"
         if [ "$FAKE_FAIL" = 1 ]; then exit 14; fi
         """,
@@ -913,6 +931,8 @@ def test_validate_release_isolates_and_cleans_validation_artifacts(tmp_path):
         for path in release.rglob("*")
         if path.is_file()
     }
+    runtime_root = tmp_path / "runtime-root"
+    runtime_root.mkdir()
     environment = os.environ.copy()
     environment.update(
         {
@@ -921,6 +941,10 @@ def test_validate_release_isolates_and_cleans_validation_artifacts(tmp_path):
             "FAKE_REQUIREMENTS": str(release / "requirements.txt"),
             "RELEASE": str(release),
             "FAKE_FAIL": "0",
+            "BTCQUANT_ROOT": str(runtime_root),
+            "BTCQUANT_CURRENT": str(runtime_root / "current"),
+            "BTCQUANT_DATABASE": str(runtime_root / "state" / "btcquant.db"),
+            "BTCQUANT_CLONE": str(runtime_root / "clone"),
         }
     )
     command = ["bash", "deploy/validate-release.sh", str(release), str(uv)]
@@ -947,6 +971,7 @@ def test_validate_release_isolates_and_cleans_validation_artifacts(tmp_path):
         ".ruff_cache",
         ".coverage",
         ".uv-cache",
+        ".hypothesis",
     ):
         assert not (release / transient).exists()
 

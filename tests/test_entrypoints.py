@@ -1,10 +1,39 @@
 from __future__ import annotations
 
+import importlib
 import sys
+from pathlib import Path
 
 import pytest
 
-from btcquant.entrypoints import carry, digest, readiness, rebalance, shadow, trend, watchdog
+from btcquant.entrypoints import (
+    carry,
+    carry_cutover,
+    digest,
+    readiness,
+    rebalance,
+    shadow,
+    trend,
+    watchdog,
+)
+
+
+def test_digest_import_follows_btcquant_root_so_validation_must_unset_it(tmp_path, monkeypatch):
+    """Runtime root is not a source tree; digest loads paper config at import.
+
+    Release validation therefore unsets BTCQUANT_ROOT rather than planting a
+    fake environments/ directory under the deploy root.
+    """
+
+    runtime_root = tmp_path / "runtime-root"
+    runtime_root.mkdir()
+    monkeypatch.setenv("BTCQUANT_ROOT", str(runtime_root))
+    with pytest.raises(FileNotFoundError, match="environments/paper/config.yaml"):
+        importlib.reload(digest)
+    monkeypatch.delenv("BTCQUANT_ROOT", raising=False)
+    monkeypatch.chdir(Path(__file__).resolve().parents[1])
+    importlib.reload(digest)
+    importlib.reload(rebalance)
 
 
 @pytest.mark.parametrize(
@@ -12,6 +41,7 @@ from btcquant.entrypoints import carry, digest, readiness, rebalance, shadow, tr
     [
         trend.main,
         carry.main,
+        carry_cutover.main,
         readiness.main,
         digest.main,
         rebalance.main,

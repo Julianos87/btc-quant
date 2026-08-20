@@ -37,11 +37,30 @@ chmod +x "${VALIDATION_BIN}/uv"
 export PATH="${VALIDATION_BIN}:${PATH}"
 cd "${RELEASE}"
 
-COVERAGE_FILE="${COVERAGE_FILE}" "${VALIDATION_ENV}/bin/pytest" -q \
+# Orchestration exports BTCQUANT_ROOT to the runtime root (releases/, state/,
+# backups/, data/). That root has no repository source. Several entrypoints
+# resolve environments/paper/config.yaml from BTCQUANT_ROOT at import time,
+# so pytest collection would look under the runtime root and could also point
+# STATE at the live database through the staging symlink. Validation must
+# stay hermetic to this staging tree.
+run_isolated() {
+  env \
+    -u BTCQUANT_ROOT \
+    -u BTCQUANT_CURRENT \
+    -u BTCQUANT_DATABASE \
+    -u BTCQUANT_CLONE \
+    "$@"
+}
+
+run_isolated env \
+  COVERAGE_FILE="${COVERAGE_FILE}" \
+  HYPOTHESIS_STORAGE_DIRECTORY="${VALIDATION_ROOT}/hypothesis" \
+  "${VALIDATION_ENV}/bin/pytest" -q \
   -p no:cacheprovider --cov=btcquant --cov-branch --cov-fail-under=80
-"${VALIDATION_ENV}/bin/ruff" check --no-cache .
-"${VALIDATION_ENV}/bin/ruff" format --check --no-cache .
-UV_PROJECT_ENVIRONMENT="${MYPY_ENV}" "${UV_BIN}" run --locked --python 3.11 mypy --cache-dir "${MYPY_CACHE}" src
+run_isolated "${VALIDATION_ENV}/bin/ruff" check --no-cache .
+run_isolated "${VALIDATION_ENV}/bin/ruff" format --check --no-cache .
+run_isolated env UV_PROJECT_ENVIRONMENT="${MYPY_ENV}" \
+  "${UV_BIN}" run --locked --python 3.11 mypy --cache-dir "${MYPY_CACHE}" src
 command -v node >/dev/null
 node --check dashboard/static/dashboard.js
 node --check dashboard/static/effects.js
@@ -50,16 +69,16 @@ bash -n deploy/install.sh deploy/update.sh deploy/create-release.sh \
   deploy/resolve-uv.sh \
   deploy/start-hyperliquid-testnet.sh deploy/stop-hyperliquid-testnet.sh \
   scripts/backup_state.sh
-"${UV_BIN}" export --locked --no-default-groups --group exchange --group dashboard \
+run_isolated "${UV_BIN}" export --locked --no-default-groups --group exchange --group dashboard \
   --no-header --no-emit-project --output-file "${TEMP_EXPORT}"
 diff -u requirements.txt "${TEMP_EXPORT}"
-"${VALIDATION_ENV}/bin/python" scripts/check_sbom.py
-"${VALIDATION_ENV}/bin/python" scripts/check_baseline_provenance.py
-"${VALIDATION_ENV}/bin/pip-audit" -r requirements.txt --disable-pip \
+run_isolated "${VALIDATION_ENV}/bin/python" scripts/check_sbom.py
+run_isolated "${VALIDATION_ENV}/bin/python" scripts/check_baseline_provenance.py
+run_isolated "${VALIDATION_ENV}/bin/pip-audit" -r requirements.txt --disable-pip \
   --progress-spinner off --cache-dir "${PIP_AUDIT_CACHE}" --timeout 15 -s osv
 
 # No validation artifact is allowed to be published with the release.
-for transient in .validation-venv .pytest_cache .mypy_cache .ruff_cache .coverage .uv-cache; do
+for transient in .validation-venv .pytest_cache .mypy_cache .ruff_cache .coverage .uv-cache .hypothesis; do
   if [ -e "${RELEASE}/${transient}" ]; then
     echo "Artefact de validation dans la release : ${transient}" >&2
     exit 1

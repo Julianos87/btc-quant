@@ -80,6 +80,37 @@ def test_hyperliquid_price_from_candle():
     assert v.last_price() == pytest.approx(61_234.5)
 
 
+def test_hyperliquid_empty_1m_is_retriable_availability_error():
+    import ccxt
+
+    class EmptyCandleExchange(_StubExchange):
+        def fetch_ohlcv(self, symbol, timeframe, since=None, limit=None):
+            del symbol, timeframe, since, limit
+            return []
+
+    venue = Venue("hyperliquid", "BTC/USDC:USDC")
+    venue.exchange = EmptyCandleExchange()
+    venue._retry = type(venue._retry)(attempts=1, base_delay=0.0)
+
+    with pytest.raises(ccxt.ExchangeNotAvailable, match="bougie 1m vide"):
+        venue.last_price()
+
+
+def test_hyperliquid_empty_1m_never_raises_index_error():
+    class EmptyCandleExchange(_StubExchange):
+        def fetch_ohlcv(self, symbol, timeframe, since=None, limit=None):
+            del symbol, timeframe, since, limit
+            return []
+
+    venue = Venue("hyperliquid", "BTC/USDC:USDC")
+    venue.exchange = EmptyCandleExchange()
+    venue._retry = type(venue._retry)(attempts=1, base_delay=0.0)
+
+    with pytest.raises(Exception) as raised:
+        venue.last_price()
+    assert not isinstance(raised.value, IndexError)
+
+
 def test_testnet_switches_hyperliquid_public_api_to_sandbox(monkeypatch):
     switched: list[bool] = []
 
