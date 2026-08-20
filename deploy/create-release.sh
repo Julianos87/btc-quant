@@ -77,11 +77,6 @@ rsync -a \
   --exclude .env --exclude /data --exclude reports \
   "${SOURCE}/" "${STAGING}/"
 
-ln -s ../../state "${STAGING}/state"
-ln -s ../../backups "${STAGING}/backups"
-ln -s ../../data "${STAGING}/data"
-ln -s ../../backups-repo "${STAGING}/backups-repo"
-
 # Le lockfile est la source de vérité; aucune résolution ni mise à niveau
 # implicite n'est autorisée pendant un build de release.
 UV_PROJECT_ENVIRONMENT="${STAGING}/venv" "${UV_BIN}" sync \
@@ -96,12 +91,34 @@ UV_PROJECT_ENVIRONMENT="${STAGING}/venv" "${UV_BIN}" sync \
   --new-prefix "${TARGET}"
 
 "${STAGING}/venv/bin/python" -m compileall -q "${STAGING}/src" "${STAGING}/dashboard"
-bash "${STAGING}/deploy/validate-release.sh" "${STAGING}" "${UV_BIN}"
+# Validation and import smoke run before the runtime state/data/backups
+# symlinks exist, so a leaked BTCQUANT_ROOT or an import-time StateStore
+# cannot write through to the live runtime root.
+env \
+  -u BTCQUANT_ROOT \
+  -u BTCQUANT_CURRENT \
+  -u BTCQUANT_DATABASE \
+  -u BTCQUANT_CLONE \
+  bash "${STAGING}/deploy/validate-release.sh" "${STAGING}" "${UV_BIN}"
 (
   cd "${STAGING}"
-  "${STAGING}/venv/bin/python" -c \
+  env \
+    -u BTCQUANT_ROOT \
+    -u BTCQUANT_CURRENT \
+    -u BTCQUANT_DATABASE \
+    -u BTCQUANT_CLONE \
+    "${STAGING}/venv/bin/python" -c \
     "import dashboard.app; from btcquant.config import load_config; load_config('environments/paper/config.yaml')"
 )
+# Tests may have created a real state/ directory under staging. Remove any
+# leftover before installing the runtime symlinks required after activation.
+for runtime_link in state backups data backups-repo; do
+  rm -rf -- "${STAGING}/${runtime_link}"
+done
+ln -s ../../state "${STAGING}/state"
+ln -s ../../backups "${STAGING}/backups"
+ln -s ../../data "${STAGING}/data"
+ln -s ../../backups-repo "${STAGING}/backups-repo"
 "${STAGING}/venv/bin/python" "${STAGING}/scripts/create_release_manifest.py" \
   --release "${STAGING}" \
   --git-sha "${RELEASE_ID}" \
