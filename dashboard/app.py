@@ -940,6 +940,13 @@ def summary():
                 "equity": carry_equity if accounting_available else None,
                 "initial": PORTFOLIO.carry_capital,
                 "in_position": carry_state.get("in_position", False),
+                "execution_state": carry_state.get("execution_state"),
+                "qty": carry_state.get("qty"),
+                "spot_qty": carry_state.get("spot_qty"),
+                "perp_qty": carry_state.get("perp_qty"),
+                "spot_notional": carry_state.get("spot_notional"),
+                "perp_notional": carry_state.get("perp_notional"),
+                "accounting_uncertain": bool(carry_state.get("accounting_uncertain", False)),
                 "last_funding_ts": carry_state.get("last_funding_ts"),
                 # Le carry a des coupe-circuits depuis le 27/07/2026 ; les
                 # exposer permet à la bannière d'alerte de les signaler comme

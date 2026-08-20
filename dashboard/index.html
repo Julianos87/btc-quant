@@ -11,7 +11,7 @@
 <link rel="stylesheet" href="/static/dashboard.css">
 
 </head>
-<body>
+<body data-view="monitor">
 <canvas id="fx" aria-hidden="true"></canvas>
 
 <header>
@@ -75,8 +75,7 @@
   </div>
 </section>
 
-<div class="grid">
-  <div class="col-left" style="display:grid;gap:16px;align-content:start">
+<div class="grid" id="board">
     <div class="card focus-card performance" data-card="performance_brief">
       <h2 data-i18n="performance_snapshot">Synthèse de performance</h2>
       <div class="focus-intro" data-i18n="performance_snapshot_note">Le bilan réalisé, sans bruit opérationnel.</div>
@@ -122,13 +121,14 @@
     </div>
 
     <div class="card" data-card="price">
-      <h2>BTC-PERP / USDC · Hyperliquid · 1 h <span style="color:var(--muted);font-weight:500;font-size:11.5px" id="pos-note">— aucune position ouverte</span>
-        <span class="chips" id="prange" style="margin-left:auto">
+      <div class="card-head">
+      <h2>BTC-PERP / USDC · Hyperliquid · 1 h <span style="color:var(--muted);font-weight:500;font-size:11.5px" id="pos-note">— aucune position ouverte</span></h2>
+        <span class="chips" id="prange">
           <button class="chip" data-n="48">2 j</button>
           <button class="chip" data-n="96">4 j</button>
           <button class="chip on" data-n="200">8 j</button>
         </span>
-      </h2>
+      </div>
       <div class="signal-guide" id="signal-guide" data-side="unknown">
         <strong id="signal-mode">CALCUL EN COURS</strong>
         <span id="signal-rule">Les entrées sont décidées uniquement à la clôture d’une bougie 4 h.</span>
@@ -148,27 +148,28 @@
     </div>
 
     <div class="card" data-card="events">
-      <h2>Journal des événements
-        <span class="chips" id="evfilter" style="margin-left:auto">
+      <div class="card-head">
+        <h2>Journal des événements</h2>
+        <span class="chips" id="evfilter">
           <button class="chip on" data-f="all">Tout</button>
           <button class="chip" data-f="trend">Trend</button>
           <button class="chip" data-f="carry">Carry</button>
         </span>
-      </h2>
+      </div>
       <div id="events"><div class="empty">Chargement…</div></div>
     </div>
-  </div>
 
-  <div class="engines">
     <div class="card" data-card="trend">
       <h2>Moteur Trend <span style="color:var(--muted);font-weight:600">4x</span> <span class="estate" id="trend-state"><span class="dot"></span>—</span></h2>
       <div class="eequity num" id="trend-eq">—</div>
       <div class="esub">ensemble Donchian 20 / 55 / 100 · futures · <span id="trend-guard">—</span>
         <span class="beat num" id="trend-beat"></span></div>
+      <div class="table-wrap">
       <table>
         <thead><tr><th>Système</th><th>État</th><th>Entrée</th><th>Stop suiveur / marge</th><th>PnL lat.</th></tr></thead>
         <tbody id="slots"></tbody>
       </table>
+      </div>
       <div style="color:var(--muted);font-size:11px;margin-top:8px">Pas de take-profit : le stop suiveur (3×ATR sous le
         meilleur close) sert de sortie gagnante quand la tendance s'essouffle ; sortie aussi sur retournement EMA50/200.</div>
     </div>
@@ -178,7 +179,12 @@
       <div class="eequity num" id="carry-eq">—</div>
       <div class="esub">cash-and-carry · encaisse le funding toutes les heures
         <span class="beat num" id="carry-beat"></span></div>
+      <div class="kv"><span class="k" data-i18n="carry_mode">Mode</span><span id="carry-mode">Paper synthétique</span></div>
       <div class="kv"><span class="k">Position</span><span id="carry-pos">—</span></div>
+      <div class="kv"><span class="k" data-i18n="carry_modeled_qty">Perp qty modélisé</span><span class="num" id="carry-perp-qty">—</span></div>
+      <div class="kv"><span class="k" data-i18n="carry_modeled_spot">Spot notionnel modélisé</span><span class="num" id="carry-spot-notional">—</span></div>
+      <div class="kv"><span class="k" data-i18n="carry_modeled_perp">Perp notionnel modélisé</span><span class="num" id="carry-perp-notional">—</span></div>
+      <div class="rdy-note" id="carry-uncertain" style="display:none" data-i18n="carry_uncertain">Comptabilité Carry incertaine — pas d'exposition venue</div>
       <div class="kv"><span class="k">PnL carry (funding − coûts)</span><span class="num" id="carry-funding">—</span></div>
       <svg id="fundchart" style="width:100%;height:52px;display:block;margin-top:8px" aria-label="Funding cumulé"></svg>
       <div class="kv"><span class="k">Règle de sortie</span><span>funding lissé 14 j &lt; 0</span></div>
@@ -256,13 +262,12 @@
     </div>
 
     <div class="card" data-card="readiness">
-      <h2><span data-i18n="readiness_title">Prêt pour le testnet ?</span>
-        <span class="estate" id="rdy-badge" style="background:color-mix(in srgb,var(--muted) 10%,transparent);color:var(--ink-2)">—</span>
+      <h2><span data-i18n="readiness_title">Testnet</span>
+        <span class="estate" id="rdy-badge">—</span>
       </h2>
       <div style="font-size:11px;color:var(--muted);margin:4px 0 6px" data-i18n="readiness_note">Critères fixés à froid — le passage ne se décide pas au feeling.</div>
       <div id="readiness"><div class="empty">Chargement…</div></div>
     </div>
-  </div>
 </div>
 
 <!-- ── panneau de préférences ─────────────────────────────── -->
@@ -325,6 +330,7 @@
 </footer>
 
 <script src="/static/operational_state.js" defer></script>
+<script src="/static/dashboard_ux.js" defer></script>
 <script src="/static/dashboard.js" defer></script>
 <script src="/static/effects.js" defer></script>
 
