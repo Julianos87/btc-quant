@@ -7,6 +7,8 @@ Keep a Changelog et les versions suivent Semantic Versioning.
 
 ### Added
 
+- carte Testnet décisionnelle, regroupement Santé / Qualification / Exécution
+  et libellés Carry paper synthétique sur l'architecture dashboard Lot6 ;
 - journal SQLite transactionnel, migrations, reprise après crash et readiness ;
 - services de funding, risque, ordres, stops et comptabilité de positions ;
 - simulateur d'exécution partagé backtest/paper ;

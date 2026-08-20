@@ -55,7 +55,24 @@ const I18N = {
     yearly_title:"Années précédentes", yearly_sub:"backtest · mêmes réglages que le live",
     yearly_note:"Simulation avec frais, slippage et funding réels — pas des résultats réalisés. Rendements par année civile ; pire creux de l’année au survol.",
     yearly_partial:"année incomplète", yearly_missing:"Référence annuelle absente — lancer scripts/make_yearly_reference.py",
-    readiness_title:"Prêt pour le testnet ?", readiness_note:"Critères fixés à froid — le passage ne se décide pas au feeling.",
+    carry_synthetic:"paper synthétique · pas de position venue",
+    carry_mode:"Mode", carry_mode_value:"Paper synthétique",
+    carry_modeled_qty:"Perp qty modélisé", carry_modeled_spot:"Spot notionnel modélisé",
+    carry_modeled_perp:"Perp notionnel modélisé",
+    carry_uncertain:"Comptabilité Carry incertaine — pas d'exposition venue",
+    paper_vs_bt:"Hyperliquid 1 m · backtest Binance 4 h",
+    readiness_title:"Testnet", readiness_note:"Critères fixés à froid — le passage ne se décide pas au feeling.",
+    rdy_ready:"PRÊT", rdy_not_ready:"NON PRÊT", rdy_blocked:"BLOQUÉ",
+    rdy_ready_why:"Tous les critères sont au vert. La décision de passer au testnet reste humaine.",
+    rdy_wait_why:"Le système est sain, mais la campagne n'a pas encore assez de preuves.",
+    rdy_block_why:"Un critère opérationnel bloque le passage, indépendamment de la durée de campagne.",
+    rdy_health:"Santé système", rdy_stats:"Qualification", rdy_exec:"Exécution",
+    rdy_blockers:"Principaux critères manquants", rdy_show:"Voir tous les critères", rdy_hide:"Masquer le détail",
+    rdy_objective:"objectif", rdy_na:"N/A", rdy_na_orders:"N/A — aucun ordre terminal",
+    rdy_na_fills:"N/A — aucun fill exploitable",
+    rdy_campaign:"Campagne", rdy_running:"En cours", rdy_protocol:"protocole",
+    rdy_inactive:"Inactif", rdy_triggered:"Déclenché", rdy_source:"Source de readiness",
+    rdy_counts:"critères validés", rdy_remain:"critères restent à satisfaire",
     signal_wait:"ATTENTE · AUCUN SIGNAL",
     signal_threshold:"SEUIL FRANCHI EN COURS · ATTENDRE LA CLÔTURE 4 H",
     signal_position:"POSITION TREND OUVERTE",
@@ -72,7 +89,7 @@ const I18N = {
       chart:"Courbe d’équity", price:"Graphe prix", events:"Journal", trend:"Moteur Trend",
       carry:"Moteur Carry", breakdown:"Répartition & records", conformity:"Est-ce normal ?", yearly:"Années précédentes",
       trades:"Trades clôturés", metrics:"Performance en direct", exposure:"Exposition & santé", protocol:"Protocole",
-      readiness:"Prêt pour le testnet ?"},
+      readiness:"Testnet"},
   },
   en: {
     paper:"PAPER TRADING", theme:"Theme", settings:"Settings", btcusdt:"BTC-PERP / USDC",
@@ -98,7 +115,24 @@ const I18N = {
     yearly_title:"Previous years", yearly_sub:"backtest · same settings as live",
     yearly_note:"Simulation with real fees, slippage and funding — not realized results. Calendar-year returns; each year's worst drawdown on hover.",
     yearly_partial:"partial year", yearly_missing:"Yearly reference missing — run scripts/make_yearly_reference.py",
-    readiness_title:"Ready for testnet?", readiness_note:"Criteria set in advance — the transition is not a gut call.",
+    carry_synthetic:"synthetic paper · no venue position",
+    carry_mode:"Mode", carry_mode_value:"Synthetic paper",
+    carry_modeled_qty:"Modeled perp qty", carry_modeled_spot:"Modeled spot notional",
+    carry_modeled_perp:"Modeled perp notional",
+    carry_uncertain:"Carry accounting uncertain — no venue exposure",
+    paper_vs_bt:"Hyperliquid 1m · Binance 4h backtest",
+    readiness_title:"Testnet", readiness_note:"Criteria set in advance — the transition is not a gut call.",
+    rdy_ready:"READY", rdy_not_ready:"NOT READY", rdy_blocked:"BLOCKED",
+    rdy_ready_why:"Every criterion is green. The testnet decision remains a human call.",
+    rdy_wait_why:"The system is healthy, but the campaign does not yet have enough evidence.",
+    rdy_block_why:"An operational criterion blocks promotion, independent of campaign duration.",
+    rdy_health:"System health", rdy_stats:"Qualification", rdy_exec:"Execution",
+    rdy_blockers:"Outstanding criteria", rdy_show:"Show all criteria", rdy_hide:"Hide details",
+    rdy_objective:"target", rdy_na:"N/A", rdy_na_orders:"N/A — no terminal orders",
+    rdy_na_fills:"N/A — no usable fill",
+    rdy_campaign:"Campaign", rdy_running:"Running", rdy_protocol:"protocol",
+    rdy_inactive:"Inactive", rdy_triggered:"Triggered", rdy_source:"Readiness source",
+    rdy_counts:"criteria passed", rdy_remain:"criteria still outstanding",
     signal_wait:"WAITING · NO SIGNAL",
     signal_threshold:"THRESHOLD CROSSED · WAIT FOR THE 4H CLOSE",
     signal_position:"TREND POSITION OPEN",
@@ -129,7 +163,7 @@ const I18N = {
       chart:"Equity curve", price:"Price chart", events:"Event log", trend:"Trend engine",
       carry:"Carry engine", breakdown:"Breakdown & records", conformity:"Is this normal?", yearly:"Previous years",
       trades:"Closed trades", metrics:"Live performance", exposure:"Exposure & health", protocol:"Protocol",
-      readiness:"Ready for testnet?"},
+      readiness:"Testnet"},
   },
 };
 const t = k => (I18N[PREFS.lang] || I18N.fr)[k] || k;
@@ -182,6 +216,7 @@ const VIEW_TILES = {
 function applyDashboardView() {
   const view = VIEW_CARDS[PREFS.view] ? PREFS.view : "monitor";
   PREFS.view = view;
+  document.body.dataset.view = view;
   if (view === "risk") unit = "dd";
   if (view === "performance") unit = "pct";
   document.querySelectorAll("[data-card]").forEach(card => {
@@ -298,8 +333,7 @@ async function refreshSummary() {
   $("trend-eq").textContent = fmt$(s.trend.equity, 2);
   $("trend-guard").textContent = s.trend.halted ? "⛔ KILL-SWITCH DÉCLENCHÉ" : s.trend.daily_lockout ? "⚠ lockout journalier" : "coupe-circuits armés";
   $("carry-eq").textContent = fmt$(s.carry.equity, 2);
-  $("carry-pos").innerHTML = s.carry.in_position
-    ? '<span class="badge long">● ACTIVE</span>' : '<span class="badge flat">EN ATTENTE</span>';
+  renderCarryCard(s.carry);
   if ($("carry-last")) $("carry-last").textContent = s.carry.last_funding_ts
     ? new Date(s.carry.last_funding_ts).toLocaleString(LOCALE(), {day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit"}) : "—";
 
@@ -349,11 +383,24 @@ function renderExposureHealth(s) {
   updateCountdowns();
 }
 function fmtDur(sec) {
-  sec = Math.floor(sec);
-  const d = Math.floor(sec/86400), hh = Math.floor(sec%86400/3600), m = Math.floor(sec%3600/60);
-  if (d) return `${d} j ${hh} h`;
-  if (hh) return `${hh} h ${m} min`;
-  return `${m} min`;
+  return BTCQuantDashboardUx.formatDuration(sec) || "—";
+}
+
+function renderCarryCard(carry) {
+  const view = BTCQuantDashboardUx.carryPresentation(carry);
+  const open = view.position === "OPEN";
+  if ($("carry-mode")) $("carry-mode").textContent = t("carry_mode_value");
+  $("carry-pos").innerHTML = open
+    ? `<span class="badge long">● ${esc(view.position)}</span><span class="carry-synth">${esc(t("carry_synthetic"))}</span>`
+    : `<span class="badge flat">${esc(view.position)}</span><span class="carry-synth">${esc(t("carry_synthetic"))}</span>`;
+  const qty = $("carry-perp-qty");
+  if (qty) qty.textContent = view.perp_qty == null ? "—" : String(view.perp_qty);
+  const spot = $("carry-spot-notional");
+  if (spot) spot.textContent = view.spot_notional == null ? "—" : fmt$(view.spot_notional, 2);
+  const perp = $("carry-perp-notional");
+  if (perp) perp.textContent = view.perp_notional == null ? "—" : fmt$(view.perp_notional, 2);
+  const note = $("carry-uncertain");
+  if (note) note.style.display = view.accounting_uncertain ? "block" : "none";
 }
 function cdText(ts) {
   if (!ts) return "—";
@@ -689,32 +736,110 @@ function kvRow(k, v, note, status) {
 }
 
 // ── critères go/no-go paper → testnet (évalués côté serveur) ──
-async function refreshReadiness() {
+let lastReadiness = null;
+let readinessDetailOpen = false;
+
+function readinessLabels() {
+  return {
+    running: t("rdy_running"),
+    protocol: t("rdy_protocol"),
+    campaign: t("rdy_campaign"),
+    inactive: t("rdy_inactive"),
+    triggered: t("rdy_triggered"),
+    na: t("rdy_na"),
+    naOrders: t("rdy_na_orders"),
+    naFills: t("rdy_na_fills"),
+  };
+}
+
+function rdyRow(check, {showBar = false} = {}) {
+  const ux = BTCQuantDashboardUx;
+  const tone = ux.toneFor(check);
+  const target = ux.displayTarget(check);
+  const note = check.note || ux.naCopy(check, readinessLabels()) || "";
+  const shownNote = ux.isBlank(check) ? note : check.note;
+  return `<div class="rdy-row" data-tone="${tone}" data-key="${esc(check.key)}">
+    <div class="rdy-main">
+      <span class="rdy-label"><i class="rdy-mark" aria-hidden="true"></i>${esc(check.label)}</span>
+      <span class="rdy-val">${esc(ux.displayValue(check, readinessLabels()))}${target ? ` <span class="rdy-obj">${esc(t("rdy_objective"))} ${esc(target)}</span>` : ""}</span>
+    </div>
+    ${shownNote ? `<div class="rdy-note">${esc(shownNote)}</div>` : ""}
+  </div>`;
+}
+
+function rdySection(title, score, checks) {
+  if (!checks.length) return "";
+  return `<section class="rdy-section">
+    <h3><span>${esc(title)}</span><span>${esc(score)}</span></h3>
+    ${checks.map(check => rdyRow(check)).join("")}
+  </section>`;
+}
+
+function renderReadiness(report) {
+  const root = $("readiness");
   const badge = $("rdy-badge");
-  try {
-    const response = await fetch("/api/readiness");
-    const r = await response.json();
-  if (!response.ok || !Array.isArray(r.checks)) {
-    badge.textContent = "?";
+  if (!root || !badge) return;
+  const ux = BTCQuantDashboardUx;
+  if (!report || report.status === "SOURCE_UNAVAILABLE" || !Array.isArray(report.checks)) {
+    badge.textContent = "—";
+    badge.className = "estate";
     badge.style.color = "var(--crit)";
-    $("readiness").innerHTML = `<div class="kv"><span class="k">Source de readiness</span><span class="num" style="color:var(--crit)">${esc(r.status || "UNKNOWN")}</span></div>`;
+    root.innerHTML = `<div class="kv"><span class="k">${esc(t("rdy_source"))}</span><span class="num" style="color:var(--crit)">${esc((report && report.status) || "UNKNOWN")}</span></div>`;
     return;
   }
-  badge.textContent = `${r.n_ok}/${r.n_total}`;
-  badge.style.color = r.ready ? "var(--good-text)" : "var(--ink-2)";
-  const dot = s => s === "ok" ? "var(--good)" : s === "warn" ? "var(--warn)" : "var(--muted)";
-  $("readiness").innerHTML = r.checks.map(c => `<div class="kv" style="flex-wrap:wrap">
-    <span class="k"><span style="display:inline-block;width:7px;height:7px;border-radius:99px;background:${dot(c.status)};margin-right:8px"></span>${esc(c.label)}</span>
-    <span class="num">${esc(c.value)} <span style="color:var(--muted);font-weight:500">(${esc(c.target)})</span></span>
-    ${c.note ? `<div style="flex-basis:100%;font-size:11.5px;color:var(--muted);padding:2px 0 0 15px">${esc(c.note)}</div>` : ""}
-  </div>`).join("")
-  + (r.ready ? `<div style="margin-top:8px;font-size:12px;color:var(--good-text);font-weight:700">✓ Tous les critères sont au vert — décision testnet à prendre.</div>` : "");
+  const decided = ux.decision(report);
+  const groups = ux.partition(report.checks);
+  const nOk = Number(report.n_ok);
+  const nTotal = Number(report.n_total);
+  const remain = Number.isFinite(nOk) && Number.isFinite(nTotal) ? Math.max(0, nTotal - nOk) : 0;
+  const verdictLabel = decided.verdict === "PRÊT" ? t("rdy_ready")
+    : decided.verdict === "BLOQUÉ" ? t("rdy_blocked") : t("rdy_not_ready");
+  const why = decided.tone === "block" ? t("rdy_block_why") : decided.tone === "ok" ? t("rdy_ready_why") : t("rdy_wait_why");
+  badge.textContent = `TESTNET — ${verdictLabel}`;
+  badge.className = "estate " + (decided.tone === "ok" ? "on" : decided.tone === "block" ? "off" : "");
+  badge.style.color = decided.tone === "wait" ? "var(--warn)" : "";
+  const outstanding = ux.blockers(report);
+  root.innerHTML = `
+    <div class="rdy-banner" data-tone="${decided.tone}">
+      <div class="rdy-kicker">${esc(ux.campaignLine(report, readinessLabels()))}</div>
+      <div class="rdy-verdict">${esc(`TESTNET — ${verdictLabel}`)}</div>
+      <div class="rdy-why">${esc(why)}</div>
+      <div class="rdy-counts">${esc(`${nOk} / ${nTotal} ${t("rdy_counts")}`)} · ${esc(`${remain} ${t("rdy_remain")}`)}</div>
+      <div class="rdy-scores">
+        <span class="rdy-chip" data-tone="${ux.scoreTone(groups.health)}">${esc(t("rdy_health"))} ${esc(ux.scoreLabel(groups.health))}</span>
+        <span class="rdy-chip" data-tone="${ux.scoreTone(groups.qualification)}">${esc(t("rdy_stats"))} ${esc(ux.scoreLabel(groups.qualification))}</span>
+        <span class="rdy-chip" data-tone="${ux.scoreTone(groups.execution)}">${esc(t("rdy_exec"))} ${esc(ux.scoreLabel(groups.execution))}</span>
+      </div>
+    </div>
+    ${outstanding.length && !report.ready ? rdySection(t("rdy_blockers"), "", outstanding) : ""}
+    ${rdySection(t("rdy_health"), ux.scoreLabel(groups.health), groups.health)}
+    ${rdySection(t("rdy_stats"), ux.scoreLabel(groups.qualification), groups.qualification)}
+    ${rdySection(t("rdy_exec"), ux.scoreLabel(groups.execution), groups.execution)}
+    <button type="button" class="rdy-toggle" id="rdy-toggle">${esc(readinessDetailOpen ? t("rdy_hide") : t("rdy_show"))}</button>
+    <div class="rdy-detail" id="rdy-detail" ${readinessDetailOpen ? "" : "hidden"}>
+      ${report.checks.map(check => rdyRow(check)).join("")}
+    </div>`;
+  const toggle = $("rdy-toggle");
+  if (toggle) {
+    toggle.onclick = () => {
+      readinessDetailOpen = !readinessDetailOpen;
+      renderReadiness(report);
+    };
+  }
+}
+
+async function refreshReadiness() {
+  try {
+    const response = await fetch("/api/readiness");
+    lastReadiness = await response.json();
+    if (!response.ok && !Array.isArray(lastReadiness && lastReadiness.checks)) {
+      lastReadiness = lastReadiness || {status: "UNKNOWN", checks: null};
+    }
   } catch (error) {
     console.error(error);
-    badge.textContent = "?";
-    badge.style.color = "var(--crit)";
-    $("readiness").innerHTML = "<div class=\"kv\"><span class=\"k\">Source de readiness</span><span class=\"num\" style=\"color:var(--crit)\">UNKNOWN</span></div>";
+    lastReadiness = {status: "UNKNOWN", checks: null};
   }
+  renderReadiness(lastReadiness);
 }
 
 // ── années précédentes (backtest) : barres annuelles portefeuille vs BTC ──

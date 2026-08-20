@@ -8,8 +8,13 @@ def test_dashboard_loads_external_versioned_assets(monkeypatch):
     page = client.get("/")
     assert page.status_code == 200
     assert b'<link rel="stylesheet" href="/static/dashboard.css">' in page.data
+    assert b'<script src="/static/operational_state.js" defer></script>' in page.data
+    assert b'<script src="/static/dashboard_ux.js" defer></script>' in page.data
     assert b'<script src="/static/dashboard.js" defer></script>' in page.data
     assert b'<script src="/static/effects.js" defer></script>' in page.data
+    assert b'data-view="monitor"' in page.data
+    assert b'id="board"' in page.data
+    assert b"Paper synth" in page.data
     assert b"<style>" not in page.data
     assert b"<script>" not in page.data
     assert b"fonts.googleapis.com" not in page.data
