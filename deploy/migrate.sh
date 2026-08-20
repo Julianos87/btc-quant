@@ -1,15 +1,28 @@
 #!/usr/bin/env bash
 # Migration explicite: elle refuse toute écriture tant que la quiescence des
 # writers et des timers n'est pas démontrée. Elle ne les arrête pas implicitement.
+#
+# Le runtime de migration est la release qui contient CE script (cible),
+# jamais /opt/btcquant/current. BTCQUANT_CURRENT n'est pas consulté.
 set -euo pipefail
 
 ROOT="${BTCQUANT_ROOT:-/opt/btcquant}"
-CURRENT="${BTCQUANT_CURRENT:-${ROOT}/current}"
 DATABASE="${BTCQUANT_DATABASE:-${ROOT}/state/btcquant.db}"
 BACKUP=""
 TARGET_SHA=""
 CONFIRM=false
 LOCK_FILE="${BTCQUANT_DEPLOY_LOCK:-/run/lock/btcquant-deploy.lock}"
+
+SCRIPT_DIR="$(
+  cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1
+  pwd -P
+)"
+MIGRATION_RELEASE="$(
+  cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1
+  pwd -P
+)"
+MIGRATION_PYTHON="${MIGRATION_RELEASE}/venv/bin/python"
+MANIFEST="${MIGRATION_RELEASE}/release-manifest.json"
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "La migration doit être préparée par root." >&2
@@ -96,14 +109,31 @@ if [ "${BTCQUANT_DEPLOY_LOCK_HELD:-false}" != true ]; then
     exit 75
   fi
 fi
+if [ ! -x "${MIGRATION_PYTHON}" ]; then
+  echo "MIGRATION_REFUSED: Python de migration absent dans la release cible (${MIGRATION_PYTHON})." >&2
+  exit 1
+fi
+if [ ! -f "${MANIFEST}" ]; then
+  echo "MIGRATION_REFUSED: manifeste de release absent (${MANIFEST})." >&2
+  exit 1
+fi
+MANIFEST_SHA="$(
+  "${MIGRATION_PYTHON}" -c \
+    'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("git_sha",""))' \
+    "${MANIFEST}"
+)" || {
+  echo "MIGRATION_REFUSED: manifeste illisible (${MANIFEST})." >&2
+  exit 1
+}
+if [ "${MANIFEST_SHA}" != "${TARGET_SHA}" ]; then
+  echo "MIGRATION_REFUSED: migration release SHA != requested target SHA (${MANIFEST_SHA} != ${TARGET_SHA})." >&2
+  exit 1
+fi
+
 check_quiescence
 # The Python migration entrypoint performs the second, independent /proc gate
 # for open DB/WAL/SHM descriptors immediately before checkpoint and backup.
-[ -x "${CURRENT}/venv/bin/python" ] || {
-  echo "MIGRATION_REFUSED: Python de migration absent dans current." >&2
-  exit 1
-}
-exec "${CURRENT}/venv/bin/python" -m btcquant.entrypoints.migrate \
+exec "${MIGRATION_PYTHON}" -m btcquant.entrypoints.migrate \
   --database "${DATABASE}" \
   --backup "${BACKUP}" \
   --target-git-sha "${TARGET_SHA}" \

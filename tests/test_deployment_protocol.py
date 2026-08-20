@@ -279,6 +279,16 @@ def test_deployment_scripts_expose_fail_closed_guards():
     assert "Migration explicite requise" in preflight
     assert "BTCQUANT_MIGRATION_PENDING" in preflight
     assert "MIGRATION_REFUSED" in migrate
+    assert "BASH_SOURCE[0]" in migrate
+    assert "MIGRATION_PYTHON" in migrate
+    assert "MIGRATION_RELEASE" in migrate
+    assert '"${CURRENT}/venv/bin/python"' not in migrate
+    assert "Python de migration absent dans la release cible" in migrate
+    assert "migration release SHA != requested target SHA" in migrate
+    assert "BTCQUANT_CURRENT n'est pas consulté" in migrate
+    migrate_invocation = update.split('bash "${TARGET}/deploy/migrate.sh"', 1)[0]
+    migrate_env = migrate_invocation.rsplit("BTCQUANT_DEPLOY_LOCK_HELD", 1)[-1]
+    assert "BTCQUANT_CURRENT=" not in migrate_env
 
 
 V4_ORDERS_SQL = """
