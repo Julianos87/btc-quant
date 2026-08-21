@@ -19,7 +19,9 @@ Keep a Changelog et les versions suivent Semantic Versioning.
   `RUNTIME_ROOT` (`BTCQUANT_ROOT`, obligatoire) : la source SQLite est
   `/opt/btcquant/state/btcquant.db`, jamais `<release>/state` ;
 - `rebalance-root.sh` transmet `BTCQUANT_ROOT=/opt/btcquant` (plus
-  `current`) pour `--pending-only` et le chemin mensuel.
+  `current`) pour `--pending-only` et le chemin mensuel ;
+- `backup_state.sh` : le `find` de diagnostic SQLite n'est plus coupé par
+  un saut de ligne après `\\(` (GNU find 4.9 : « expected to find a ')' »).
 
 ### Added
 

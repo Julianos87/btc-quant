@@ -66,6 +66,8 @@ def test_backup_offsite_requires_encryption_and_checks_roundtrip():
     assert "${APP_ROOT}/scripts/backup_database.py" in script
     assert "${RUNTIME_ROOT}/backups" in script
     assert "${RUNTIME_ROOT}/backups-repo" in script
+    assert "type f \\(\n" not in script
+    assert "\\( -name '*.db'" in script
     assert "${STATE_DIR}/btcquant.db" in script
 
 
