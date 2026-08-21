@@ -209,7 +209,8 @@ def test_replacement_keeps_old_stop_protection_but_alerts_pending_transition(tmp
                         "previous_stop_id": "old-stop",
                     },
                 }
-            }
+            },
+            "stop_protection_mode": "EXCHANGE",
         },
     )
 

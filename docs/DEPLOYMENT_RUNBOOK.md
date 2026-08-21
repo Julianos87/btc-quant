@@ -16,6 +16,10 @@ ou clone Git propre. Il refuse également une horloge non synchronisée, moins
 d’un Gio libre, de mauvaises permissions sur `.env` ou une base SQLite
 corrompue. Il sauvegarde SQLite avant la bascule.
 
+Si des positions Trend paper sont **OPEN** au moment d'un déploiement v6, ne
+pas démarrer la campagne formelle v6 tant que tous les slots ne sont pas
+FLAT. Voir `docs/TREND_V6_OPEN_POSITION_CONTINUITY.md`.
+
 ## Qualification staging obligatoire
 
 Utiliser une VM Ubuntu de même version que le VPS, sans clés d’exchange et avec

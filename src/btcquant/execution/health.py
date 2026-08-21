@@ -2,12 +2,27 @@
 
 from __future__ import annotations
 
+import math
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 from ..observability import SafetyStatus
 from .quality_metrics import percentile, slippages_bps
+from .state_contract import (
+    EXCHANGE_STOP_CONFIRMED,
+    EXCHANGE_STOP_MISSING,
+    EXCHANGE_STOP_REPLACEMENT_ACTIVE,
+    PROTECTION_MODE_UNKNOWN,
+    RECONCILIATION_BLOCKS_PROTECTION,
+    SOFTWARE_STOP_ACTIVE,
+    SOFTWARE_STOP_INCONSISTENT_TRANSITION,
+    SOFTWARE_STOP_INVALID,
+    STOP_PROTECTION_EXCHANGE,
+    STOP_PROTECTION_SOFTWARE,
+    VALID_STOP_PROTECTION_MODES,
+)
 from .state_store import StateStore
 
 
@@ -35,6 +50,8 @@ class ExecutionHealth:
     partial_rate: float | None
     average_slippage_bps: float | None
     p95_slippage_bps: float | None
+    protection_mode: str | None = None
+    slot_protection: tuple[tuple[str, str], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -56,6 +73,70 @@ class ExecutionSafetyHealth:
             "reasons": list(self.reasons),
             "open_critical_incidents": list(self.open_critical_incidents),
         }
+
+
+def _finite_positive(value: object) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    number = float(value)
+    return math.isfinite(number) and number > 0
+
+
+def _valid_signed_direction(value: object) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    number = float(value)
+    if not math.isfinite(number) or number not in (-1.0, 1.0):
+        return False
+    return True
+
+
+def software_stop_contract_valid(position: object) -> bool:
+    """True when a persisted PAPER/SOFTWARE stop can actually protect the slot."""
+
+    if not isinstance(position, Mapping):
+        return False
+    if not _finite_positive(position.get("qty")):
+        return False
+    if not _finite_positive(position.get("stop_price")):
+        return False
+    if not _valid_signed_direction(position.get("direction")):
+        return False
+    return True
+
+
+def evaluate_open_slot_protection(
+    slot: Mapping[str, Any],
+    *,
+    protection_mode: object,
+    reconciliation_required: bool,
+) -> tuple[str, bool, bool]:
+    """Return ``(reason, protected, exchange_transition_pending)`` for an OPEN slot.
+
+    Missing/unknown protection mode is fail-closed. SOFTWARE never infers
+    safety from a numeric stop alone on an EXCHANGE checkpoint.
+    """
+
+    transition = slot.get("stop_transition")
+    transition_pending = transition is not None
+    previous_stop = transition.get("previous_stop_id") if isinstance(transition, dict) else None
+    if reconciliation_required:
+        return RECONCILIATION_BLOCKS_PROTECTION, False, transition_pending
+    if protection_mode not in VALID_STOP_PROTECTION_MODES:
+        return PROTECTION_MODE_UNKNOWN, False, transition_pending
+    if protection_mode == STOP_PROTECTION_SOFTWARE:
+        if transition is not None or slot.get("stop_order_id") not in (None, ""):
+            return SOFTWARE_STOP_INCONSISTENT_TRANSITION, False, True
+        if not software_stop_contract_valid(slot.get("position")):
+            return SOFTWARE_STOP_INVALID, False, False
+        return SOFTWARE_STOP_ACTIVE, True, False
+    if protection_mode != STOP_PROTECTION_EXCHANGE:
+        return PROTECTION_MODE_UNKNOWN, False, transition_pending
+    if slot.get("stop_order_id") is None and previous_stop is None:
+        return EXCHANGE_STOP_MISSING, False, transition_pending
+    if previous_stop is not None and slot.get("stop_order_id") is None:
+        return EXCHANGE_STOP_REPLACEMENT_ACTIVE, True, transition_pending
+    return EXCHANGE_STOP_CONFIRMED, True, transition_pending
 
 
 @dataclass(frozen=True)
@@ -81,14 +162,22 @@ def execution_health(
     state = store.load_engine_state(engine) or {}
     unprotected_slots: list[str] = []
     stop_transition_slots: list[str] = []
+    slot_protection: list[tuple[str, str]] = []
+    protection_mode = state.get("stop_protection_mode")
+    recorded_mode = str(protection_mode) if protection_mode in VALID_STOP_PROTECTION_MODES else None
+    reconciliation_required = bool(state.get("reconciliation_required"))
     for slot_name, slot in (state.get("slots") or {}).items():
         if not isinstance(slot, dict) or slot.get("position") is None:
             continue
-        transition = slot.get("stop_transition")
-        if transition is not None:
+        reason, protected, transition_pending = evaluate_open_slot_protection(
+            slot,
+            protection_mode=protection_mode,
+            reconciliation_required=reconciliation_required,
+        )
+        slot_protection.append((str(slot_name), reason))
+        if transition_pending:
             stop_transition_slots.append(str(slot_name))
-        previous_stop = transition.get("previous_stop_id") if isinstance(transition, dict) else None
-        if slot.get("stop_order_id") is None and previous_stop is None:
+        if not protected:
             unprotected_slots.append(str(slot_name))
     stale_pending: list[int] = []
     unbalanced: list[int] = []
@@ -124,7 +213,9 @@ def execution_health(
         unbalanced_order_ids=tuple(unbalanced),
         unprotected_slots=tuple(unprotected_slots),
         stop_transition_slots=tuple(stop_transition_slots),
-        reconciliation_required=bool(state.get("reconciliation_required")),
+        reconciliation_required=reconciliation_required,
+        protection_mode=recorded_mode,
+        slot_protection=tuple(slot_protection),
         fill_ratio=filled / requested if requested else None,
         rejection_rate=rejection_count / len(terminal) if terminal else None,
         partial_rate=partial_count / len(terminal) if terminal else None,
@@ -205,7 +296,11 @@ def sync_execution_incidents(
             severity="CRITICAL",
             kind="unprotected_position",
             message=f"{len(health.unprotected_slots)} position(s) sans stop confirmé",
-            context={"slots": health.unprotected_slots},
+            context={
+                "slots": health.unprotected_slots,
+                "protection_mode": health.protection_mode,
+                "slot_protection": dict(health.slot_protection),
+            },
         ),
         f"execution:{engine}:stop_transition_pending": _IncidentCondition(
             active=bool(health.stop_transition_slots),

@@ -56,6 +56,7 @@ from .state_contract import (
     PositionState,
     TrendSlotState,
     TrendStatePayload,
+    stop_protection_mode_from_broker,
     validate_trend_state,
 )
 from .state_store import StateStore, database_path
@@ -249,6 +250,9 @@ class LiveRunner:
             "reconciliation_required": self.reconciliation_required,
             "last_funding_ts": (
                 self.last_funding_ts.isoformat() if self.last_funding_ts is not None else None
+            ),
+            "stop_protection_mode": stop_protection_mode_from_broker(
+                supports_stop_orders=self.broker.supports_stop_orders
             ),
         }
         for slot in self.slots:
