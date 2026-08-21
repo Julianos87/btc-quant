@@ -56,11 +56,10 @@ while IFS= read -r candidate; do
     *) echo "Ignoring unknown SQLite-like state artifact: ${candidate_name}" >&2 ;;
   esac
 done < <(
-  find "${STATE_DIR}" -maxdepth 1 -type f \(
-    -name '*.db' -o -name '*.db-*' \
-    -o -name '*.sqlite' -o -name '*.sqlite-*' \
-    -o -name '*.sqlite3' -o -name '*.sqlite3-*' \
-  \) -print
+  find "${STATE_DIR}" -maxdepth 1 -type f \
+    \( -name '*.db' -o -name '*.db-*' -o -name '*.sqlite' \
+       -o -name '*.sqlite-*' -o -name '*.sqlite3' -o -name '*.sqlite3-*' \) \
+    -print
 )
 
 "${PYBIN}" "${APP_ROOT}/scripts/backup_database.py" \
