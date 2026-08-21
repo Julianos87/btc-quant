@@ -1,19 +1,33 @@
 #!/usr/bin/env bash
 # Archive quotidienne de state/ (track record paper), conservée 30 jours.
-# Appelé par un timer systemd. Chemin projet auto-détecté.
+# Appelé par un timer systemd.
+#
+# APP_ROOT     : arbre physique de la release (venv + scripts).
+# RUNTIME_ROOT : BTCQUANT_ROOT obligatoire = /opt/btcquant en production.
+# Jamais de repli sur <release>/state (symlink rejeté par path-safety).
 set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BACKUP_DIR="${ROOT}/backups"
-OFFHOST_REMOTE="${BACKUP_OFFHOST_REMOTE:-origin}"
-OFFHOST_BRANCH="${BACKUP_OFFHOST_BRANCH:-backups}"
+APP_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 if [ -z "${BACKUP_ENCRYPTION_KEY:-}" ] || [[ "${BACKUP_ENCRYPTION_KEY:-}" =~ ^[[:space:]]*$ ]]; then
   echo "BACKUP_ENCRYPTION_KEY is required; refusing plaintext backup publication" >&2
   exit 2
 fi
+if [ -z "${BTCQUANT_ROOT:-}" ]; then
+  echo "BTCQUANT_ROOT is required; refusing backup through release/state" >&2
+  exit 2
+fi
+RUNTIME_ROOT="$(cd "${BTCQUANT_ROOT}" && pwd -P)"
+STATE_DIR="${RUNTIME_ROOT}/state"
+BACKUP_DIR="${RUNTIME_ROOT}/backups"
+if [ -L "${STATE_DIR}" ]; then
+  echo "Refusing: runtime state path is a symlink: ${STATE_DIR}" >&2
+  exit 2
+fi
+OFFHOST_REMOTE="${BACKUP_OFFHOST_REMOTE:-origin}"
+OFFHOST_BRANCH="${BACKUP_OFFHOST_BRANCH:-backups}"
 mkdir -p "${BACKUP_DIR}"
 # This job is a backup reader. Compaction is a separate scheduled writer and
 # must never mutate the authoritative database as a side effect of backup.
-PYBIN="${ROOT}/venv/bin/python"; [ -x "${PYBIN}" ] || PYBIN="python3"
+PYBIN="${APP_ROOT}/venv/bin/python"; [ -x "${PYBIN}" ] || PYBIN="python3"
 STAMP="$(date -u +%Y%m%d-%H%M)"
 TMP_DIR="$(mktemp -d /tmp/btcquant-backup.XXXXXX)"
 cleanup() {
@@ -33,7 +47,7 @@ SQLITE_EXCLUDES=(
   --exclude '*.sqlite3' --exclude '*.sqlite3-*'
 )
 rsync -a "${SQLITE_EXCLUDES[@]}" \
-  "${ROOT}/state/" "${TMP_DIR}/state/"
+  "${STATE_DIR}/" "${TMP_DIR}/state/"
 
 while IFS= read -r candidate; do
   candidate_name="$(basename "${candidate}")"
@@ -42,19 +56,19 @@ while IFS= read -r candidate; do
     *) echo "Ignoring unknown SQLite-like state artifact: ${candidate_name}" >&2 ;;
   esac
 done < <(
-  find "${ROOT}/state" -maxdepth 1 -type f \(
+  find "${STATE_DIR}" -maxdepth 1 -type f \(
     -name '*.db' -o -name '*.db-*' \
     -o -name '*.sqlite' -o -name '*.sqlite-*' \
     -o -name '*.sqlite3' -o -name '*.sqlite3-*' \
   \) -print
 )
 
-"${PYBIN}" "${ROOT}/scripts/backup_database.py" \
-  "${ROOT}/state/btcquant.db" "${TMP_DIR}/state/btcquant.db"
+"${PYBIN}" "${APP_ROOT}/scripts/backup_database.py" \
+  "${STATE_DIR}/btcquant.db" "${TMP_DIR}/state/btcquant.db"
 for optional_db in execution-shadow.db btcquant-testnet.db; do
-  if [ -e "${ROOT}/state/${optional_db}" ]; then
-    "${PYBIN}" "${ROOT}/scripts/backup_database.py" \
-      "${ROOT}/state/${optional_db}" "${TMP_DIR}/state/${optional_db}"
+  if [ -e "${STATE_DIR}/${optional_db}" ]; then
+    "${PYBIN}" "${APP_ROOT}/scripts/backup_database.py" \
+      "${STATE_DIR}/${optional_db}" "${TMP_DIR}/state/${optional_db}"
   fi
 done
 PLAIN_ARCHIVE="${TMP_DIR}/state-${STAMP}.tar.gz"
@@ -94,7 +108,7 @@ echo "Sauvegarde : ${ARCHIVE}"
 # ── copie hors-site : branche `backups` du dépôt GitHub (clé de déploiement,
 # ~btcquant/.ssh/backup_deploy). Best-effort : un échec réseau ne doit jamais
 # faire échouer la sauvegarde locale. ────────────────────────────────────────
-REPO="${ROOT}/backups-repo"
+REPO="${RUNTIME_ROOT}/backups-repo"
 if [ -d "${REPO}/.git" ] && [[ "${ARCHIVE}" == *.enc ]]; then
   (
     cd "${REPO}"

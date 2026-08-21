@@ -38,9 +38,32 @@ from btcquant.execution.state_contract import validate_carry_state, validate_tre
 from btcquant.execution.state_store import StateStore
 from btcquant.notify import notify
 
-ROOT = Path(os.environ.get("BTCQUANT_ROOT", Path.cwd())).resolve()
+
+def _runtime_root() -> Path:
+    raw = os.environ.get("BTCQUANT_ROOT")
+    if raw:
+        return Path(raw).resolve()
+    return Path.cwd().resolve()
+
+
+def _paper_config_path() -> Path:
+    """Paper YAML lives in the release tree, not under the runtime root."""
+
+    candidates = (
+        Path.cwd(),
+        Path(sys.prefix).resolve().parent,
+        _runtime_root(),
+    )
+    for root in candidates:
+        config = root / "environments" / "paper" / "config.yaml"
+        if config.is_file():
+            return config
+    return Path.cwd() / "environments" / "paper" / "config.yaml"
+
+
+ROOT = _runtime_root()
 STATE = ROOT / "state"
-PORTFOLIO = portfolio_from_config(load_config(ROOT / "environments" / "paper" / "config.yaml"))
+PORTFOLIO = portfolio_from_config(load_config(_paper_config_path()))
 TARGET_TREND = PORTFOLIO.trend_fraction
 
 

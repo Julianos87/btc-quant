@@ -18,6 +18,13 @@ Hyperliquid**. Toute exécution mainnet reste verrouillée par la Safety Baselin
 - `create-release.sh` construit et fume les launchers **sous le ROOT
   final**. Ne pas rsync une release construite ailleurs : les shebangs
   venv resteraient collés au préfixe de staging.
+- Sauvegarde : `APP_ROOT` = release physique (`pwd -P` du script) pour
+  le venv et `backup_database.py` ; `RUNTIME_ROOT` = `BTCQUANT_ROOT`
+  (obligatoire, `/opt/btcquant`) pour `state/`, `backups/` et
+  `backups-repo/`. Une invocation ad-hoc sans `BTCQUANT_ROOT` est
+  refusée : pas de repli par `release/state`.
+- Rééquilibrage : le binaire vient de `current/venv`, mais
+  `BTCQUANT_ROOT=/opt/btcquant`. Jamais `BTCQUANT_ROOT=.../current`.
 
 Le script refuse une mise à jour sans `.env`, clé de chiffrement, release active
 ou clone Git propre. Il refuse également une horloge non synchronisée, moins
