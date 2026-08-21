@@ -7,6 +7,7 @@ Type=oneshot
 User=btcquant
 WorkingDirectory=/opt/btcquant/current
 Environment=PYTHONIOENCODING=utf-8
+Environment=BTCQUANT_ROOT=/opt/btcquant
 EnvironmentFile=-/opt/btcquant/.env
 ExecStart=/opt/btcquant/current/venv/bin/btcquant-watchdog --database /opt/btcquant/state/btcquant-testnet.db --service btcquant-hyperliquid-testnet --max-age 600
 NoNewPrivileges=true

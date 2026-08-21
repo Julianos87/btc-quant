@@ -10,6 +10,14 @@ Hyperliquid**. Toute exécution mainnet reste verrouillée par la Safety Baselin
 - `/opt/btcquant/previous` : release de rollback ;
 - `/opt/btcquant/state`, `backups`, `data` et `.env` : données partagées,
   jamais remplacées par un déploiement.
+- `BTCQUANT_ROOT=/opt/btcquant` est posé **dans les units source**. Ne pas
+  dépendre d'un drop-in hôte `btcquant-*.service.d` pour cette variable :
+  `WorkingDirectory=/opt/btcquant/current` se résout vers le répertoire
+  physique de la release, et `Path.cwd().resolve()` suivrait alors
+  `current/state` (symlink) que la path-safety refuse.
+- `create-release.sh` construit et fume les launchers **sous le ROOT
+  final**. Ne pas rsync une release construite ailleurs : les shebangs
+  venv resteraient collés au préfixe de staging.
 
 Le script refuse une mise à jour sans `.env`, clé de chiffrement, release active
 ou clone Git propre. Il refuse également une horloge non synchronisée, moins

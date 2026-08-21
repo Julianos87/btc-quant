@@ -10,6 +10,7 @@ Type=simple
 User=btcquant
 WorkingDirectory=/opt/btcquant/current
 Environment=PYTHONIOENCODING=utf-8
+Environment=BTCQUANT_ROOT=/opt/btcquant
 EnvironmentFile=-/opt/btcquant/.env
 ExecStart=/opt/btcquant/current/venv/bin/btcquant-carry --config /opt/btcquant/current/environments/paper/config.yaml
 Restart=always

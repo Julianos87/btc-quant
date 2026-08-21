@@ -144,6 +144,12 @@ def test_read_only_shadow_store_does_not_create_or_write(tmp_path: Path) -> None
         ShadowStore(missing, read_only=True)
     database = tmp_path / "execution-shadow.db"
     ShadowStore(database)
+    # Initialize uses WAL. Hashing the main file before checkpoint races with
+    # SQLite merging the WAL, especially when pytest runs as root inside
+    # create-release. Checkpoint first so the byte comparison is about
+    # read_only summary(), not a pending WAL flush.
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     before = hashlib.sha256(database.read_bytes()).hexdigest()
     assert ShadowStore(database, read_only=True).summary()["status"] == "SHADOW_PROXY_ONLY"
     assert hashlib.sha256(database.read_bytes()).hexdigest() == before

@@ -7,10 +7,11 @@ toutes les 5 minutes suffit à la mesure d'uptime (fraîcheur 10 / 20 min).
 La trace d'audit — ordres, fills, stops, funding, flux — n'est jamais purgée.
 """
 
+import os
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(os.environ.get("BTCQUANT_ROOT", Path(__file__).resolve().parents[1])).resolve()
 sys.path.insert(0, str(ROOT / "src"))
 
 from btcquant.console import enable_utf8_output

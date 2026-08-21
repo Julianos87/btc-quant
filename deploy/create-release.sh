@@ -52,6 +52,17 @@ if [ -e "${TARGET}" ]; then
     echo "Release existante sans manifeste : refus de la réutiliser." >&2
     exit 1
   fi
+  # A pre-existing tree is reused only when its launcher runtime is already
+  # valid. Never mutate an existing release to make the contract pass.
+  if [ ! -x "${TARGET}/venv/bin/python" ]; then
+    echo "Release existante : interpréteur python absent, refus de réutilisation." >&2
+    exit 1
+  fi
+  if ! "${TARGET}/venv/bin/python" "${TARGET}/scripts/relocate_venv_launchers.py" \
+    --validate-existing --release "${TARGET}"; then
+    echo "Release existante : launchers runtime invalides, refus de réutilisation." >&2
+    exit 1
+  fi
   echo "${TARGET}"
   exit 0
 fi
@@ -62,7 +73,18 @@ UV_BIN="$(
 echo "Construction staging pour ${RELEASE_ID}" >&2
 mkdir -p "${RELEASES}" "${ROOT}/state" "${ROOT}/backups" "${ROOT}/data"
 STAGING="${RELEASES}/.${RELEASE_ID}.$$"
+NEW_RELEASE_CREATED=0
 cleanup() {
+  if [ "${NEW_RELEASE_CREATED}" = 1 ] && [ -e "${TARGET}" ]; then
+    echo "RELEASE BUILD REFUSED : launchers post-move invalides." >&2
+    if /usr/bin/python3 "${TARGET}/scripts/relocate_venv_launchers.py" \
+      --quarantine-new --release "${TARGET}" --root "${ROOT}"; then
+      echo "Release nouvellement créée mise en quarantaine (jamais current/previous)." >&2
+    else
+      echo "Quarantaine de la release nouvellement créée refusée." >&2
+    fi
+    return
+  fi
   case "${STAGING}" in
     "${RELEASES}"/.*) rm -rf -- "${STAGING}" ;;
     *) echo "Refus de nettoyer un chemin inattendu : ${STAGING}" >&2 ;;
@@ -75,6 +97,9 @@ rsync -a \
   --exclude .git --exclude .venv --exclude venv --exclude __pycache__ \
   --exclude state --exclude backups --exclude backups-repo \
   --exclude .env --exclude /data --exclude reports \
+  --exclude .pytest_cache --exclude .mypy_cache --exclude .ruff_cache \
+  --exclude .coverage --exclude .uv-cache --exclude .hypothesis \
+  --exclude .validation-venv \
   "${SOURCE}/" "${STAGING}/"
 
 # Le lockfile est la source de vérité; aucune résolution ni mise à niveau
@@ -138,5 +163,13 @@ chown -R root:btcquant "${STAGING}"
 chmod -R o-rwx "${STAGING}"
 chmod +x "${STAGING}/scripts/backup_state.sh" "${STAGING}/deploy/"*.sh
 mv "${STAGING}" "${TARGET}"
+NEW_RELEASE_CREATED=1
+# Static shebang rewrite is not enough: the OS must be able to exec the
+# launchers from the FINAL target path before the release is advertised.
+if ! /usr/bin/python3 "${TARGET}/scripts/relocate_venv_launchers.py" \
+  --smoke --release "${TARGET}"; then
+  echo "RELEASE BUILD REFUSED : smoke post-move des launchers." >&2
+  exit 1
+fi
 trap - EXIT
 echo "${TARGET}"

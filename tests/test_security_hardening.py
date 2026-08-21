@@ -97,6 +97,7 @@ def test_dashboard_uses_a_production_wsgi_server():
     assert "dashboard/app.py" not in service
     assert "ProtectHome=true" in service
     assert "Environment=HOME=/opt/btcquant/state" in service
+    assert "Environment=BTCQUANT_ROOT=/opt/btcquant" in service
     assert "PrivateTmp=true" in service
     assert "NoNewPrivileges=true" in service
     assert "ProtectSystem=strict" in service
@@ -131,6 +132,12 @@ def test_runtime_services_use_installed_entrypoints():
     assert "monthly:$(date -u +%Y-%m)" in rebalance
     assert "--check-pending" in rebalance
     assert "/venv/bin/btcquant-shadow " in shadow
+    assert "Environment=BTCQUANT_ROOT=/opt/btcquant" in trend
+    assert "Environment=BTCQUANT_ROOT=/opt/btcquant" in carry
+    assert "Environment=BTCQUANT_ROOT=/opt/btcquant" in watchdog
+    assert "Environment=BTCQUANT_ROOT=/opt/btcquant" in digest
+    assert "Environment=BTCQUANT_ROOT=/opt/btcquant" in weekly
+    assert "Environment=BTCQUANT_ROOT=/opt/btcquant" in shadow
     assert "EnvironmentFile=" not in shadow
     assert "HYPERLIQUID_PRIVATE_KEY" not in shadow
     assert "--frozen" in release
