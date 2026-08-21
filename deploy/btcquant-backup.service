@@ -6,6 +6,7 @@ Type=oneshot
 User=btcquant
 WorkingDirectory=/opt/btcquant/current
 EnvironmentFile=-/opt/btcquant/.env
+Environment=BTCQUANT_ROOT=/opt/btcquant
 ExecStart=/usr/bin/env bash /opt/btcquant/current/scripts/backup_state.sh
 NoNewPrivileges=true
 PrivateTmp=true

@@ -7,11 +7,21 @@ toutes les 5 minutes suffit à la mesure d'uptime (fraîcheur 10 / 20 min).
 La trace d'audit — ordres, fills, stops, funding, flux — n'est jamais purgée.
 """
 
+import os
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+APP_ROOT = Path(__file__).resolve().parents[1]
+_runtime = os.environ.get("BTCQUANT_ROOT")
+if _runtime:
+    RUNTIME_ROOT = Path(_runtime).resolve()
+elif (APP_ROOT / "state").is_symlink():
+    raise SystemExit("BTCQUANT_ROOT is required; refusing compact via release/state")
+else:
+    RUNTIME_ROOT = APP_ROOT
+# Keep ROOT as the runtime root for existing tests and recovery checks.
+ROOT = RUNTIME_ROOT
+sys.path.insert(0, str(APP_ROOT / "src"))
 
 from btcquant.console import enable_utf8_output
 from btcquant.backup import assert_writer_recovery_clear

@@ -8,7 +8,7 @@ MODE="${1:-monthly}"
 
 if [ "${MODE}" = "--pending-only" ]; then
   set +e
-  runuser -u btcquant -- env BTCQUANT_ROOT="${CURRENT}" \
+  runuser -u btcquant -- env BTCQUANT_ROOT="${ROOT}" \
     "${CURRENT}/venv/bin/btcquant-rebalance" --check-pending
   pending_status=$?
   set -e
@@ -37,5 +37,5 @@ else
   )
 fi
 
-runuser -u btcquant -- env BTCQUANT_ROOT="${CURRENT}" \
+runuser -u btcquant -- env BTCQUANT_ROOT="${ROOT}" \
   "${CURRENT}/venv/bin/btcquant-rebalance" "${args[@]}"

@@ -5,6 +5,22 @@ Keep a Changelog et les versions suivent Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- `create-release.sh` réécrit les shebangs venv `python` / `python3` /
+  `python3.12`, refuse tout préfixe staging restant, exécute un smoke
+  post-move depuis la cible finale et refuse de réutiliser une release
+  existante dont les launchers sont invalides ; une cible nouvellement
+  créée et invalide est mise en quarantaine sans toucher `current` /
+  `previous` ; le rsync de construction ignore les caches pytest/mypy ;
+- les units systemd applicables exportent `BTCQUANT_ROOT=/opt/btcquant`
+  afin que l'état runtime ne passe plus par le symlink `release/state` ;
+- `backup_state.sh` sépare `APP_ROOT` (venv/scripts de la release) et
+  `RUNTIME_ROOT` (`BTCQUANT_ROOT`, obligatoire) : la source SQLite est
+  `/opt/btcquant/state/btcquant.db`, jamais `<release>/state` ;
+- `rebalance-root.sh` transmet `BTCQUANT_ROOT=/opt/btcquant` (plus
+  `current`) pour `--pending-only` et le chemin mensuel.
+
 ### Added
 
 - `deploy/migrate.sh` exécute `btcquant.entrypoints.migrate` depuis le venv

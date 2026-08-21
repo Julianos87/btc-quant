@@ -18,22 +18,21 @@ from btcquant.entrypoints import (
 )
 
 
-def test_digest_import_follows_btcquant_root_so_validation_must_unset_it(tmp_path, monkeypatch):
-    """Runtime root is not a source tree; digest loads paper config at import.
-
-    Release validation therefore unsets BTCQUANT_ROOT rather than planting a
-    fake environments/ directory under the deploy root.
-    """
+def test_digest_state_follows_btcquant_root_while_config_stays_on_app_tree(tmp_path, monkeypatch):
+    """Runtime root holds state; paper YAML stays in the release/checkout tree."""
 
     runtime_root = tmp_path / "runtime-root"
     runtime_root.mkdir()
-    monkeypatch.setenv("BTCQUANT_ROOT", str(runtime_root))
-    with pytest.raises(FileNotFoundError, match="environments/paper/config.yaml"):
-        importlib.reload(digest)
-    monkeypatch.delenv("BTCQUANT_ROOT", raising=False)
     monkeypatch.chdir(Path(__file__).resolve().parents[1])
+    monkeypatch.setenv("BTCQUANT_ROOT", str(runtime_root))
     importlib.reload(digest)
-    importlib.reload(rebalance)
+    try:
+        assert digest.STATE == runtime_root.resolve() / "state"
+        assert digest.PORTFOLIO.trend_fraction > 0
+    finally:
+        monkeypatch.delenv("BTCQUANT_ROOT", raising=False)
+        importlib.reload(digest)
+        importlib.reload(rebalance)
 
 
 @pytest.mark.parametrize(

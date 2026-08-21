@@ -7,6 +7,7 @@ et drawdown courant. No-op silencieux si Telegram n'est pas configuré.
 
 import argparse
 import os
+import sys
 from datetime import datetime, UTC
 from pathlib import Path
 
@@ -19,10 +20,31 @@ from btcquant.notify import notify
 from btcquant.reporting.analytics import combined_equity, deposits_total
 from btcquant.reporting.repository import ReportingRepository
 
-ROOT = Path(os.environ.get("BTCQUANT_ROOT", Path.cwd())).resolve()
+
+def _runtime_root() -> Path:
+    raw = os.environ.get("BTCQUANT_ROOT")
+    if raw:
+        return Path(raw).resolve()
+    return Path.cwd().resolve()
+
+
+def _paper_config_path() -> Path:
+    candidates = (
+        Path.cwd(),
+        Path(sys.prefix).resolve().parent,
+        _runtime_root(),
+    )
+    for root in candidates:
+        config = root / "environments" / "paper" / "config.yaml"
+        if config.is_file():
+            return config
+    return Path.cwd() / "environments" / "paper" / "config.yaml"
+
+
+ROOT = _runtime_root()
 STATE = ROOT / "state"
 repository = ReportingRepository(STATE)
-PORTFOLIO = portfolio_from_config(load_config(ROOT / "environments" / "paper" / "config.yaml"))
+PORTFOLIO = portfolio_from_config(load_config(_paper_config_path()))
 
 
 def _repository() -> ReportingRepository:

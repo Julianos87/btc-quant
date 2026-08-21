@@ -7,12 +7,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+APP_ROOT = Path(__file__).resolve().parents[1]
+_runtime = os.environ.get("BTCQUANT_ROOT")
+if _runtime:
+    ROOT = Path(_runtime).resolve()
+elif (APP_ROOT / "state").is_symlink():
+    raise SystemExit("BTCQUANT_ROOT is required; refusing inspect via release/state")
+else:
+    ROOT = APP_ROOT
+sys.path.insert(0, str(APP_ROOT / "src"))
 
 from btcquant.console import enable_utf8_output
 

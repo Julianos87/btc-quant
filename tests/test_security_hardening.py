@@ -59,6 +59,21 @@ def test_backup_offsite_requires_encryption_and_checks_roundtrip():
     ):
         assert pattern in script
     assert "HEAD:refs/heads/" + "$" + "{OFFHOST_BRANCH}" in script
+    assert "APP_ROOT=" in script
+    assert "RUNTIME_ROOT=" in script
+    assert "BTCQUANT_ROOT is required" in script
+    assert "${APP_ROOT}/venv/bin/python" in script
+    assert "${APP_ROOT}/scripts/backup_database.py" in script
+    assert "${RUNTIME_ROOT}/backups" in script
+    assert "${RUNTIME_ROOT}/backups-repo" in script
+    assert "${STATE_DIR}/btcquant.db" in script
+
+
+def test_backup_unit_exports_runtime_root_and_keeps_ssh_home_readable():
+    service = (ROOT / "deploy" / "btcquant-backup.service").read_text(encoding="utf-8")
+    assert "Environment=BTCQUANT_ROOT=/opt/btcquant" in service
+    assert "ProtectHome=read-only" in service
+    assert "ProtectHome=true" not in service
 
 
 def test_unprivileged_services_drop_linux_capabilities():
@@ -97,6 +112,7 @@ def test_dashboard_uses_a_production_wsgi_server():
     assert "dashboard/app.py" not in service
     assert "ProtectHome=true" in service
     assert "Environment=HOME=/opt/btcquant/state" in service
+    assert "Environment=BTCQUANT_ROOT=/opt/btcquant" in service
     assert "PrivateTmp=true" in service
     assert "NoNewPrivileges=true" in service
     assert "ProtectSystem=strict" in service
@@ -127,10 +143,19 @@ def test_runtime_services_use_installed_entrypoints():
     assert "/venv/bin/btcquant-digest" in digest
     assert "/venv/bin/btcquant-digest --weekly" in weekly
     assert "/venv/bin/btcquant-rebalance" in rebalance
+    assert 'BTCQUANT_ROOT="${CURRENT}"' not in rebalance
+    assert 'BTCQUANT_ROOT="${ROOT}"' in rebalance
+    assert rebalance.count('BTCQUANT_ROOT="${ROOT}"') == 2
     assert "--deposit-id" in rebalance
     assert "monthly:$(date -u +%Y-%m)" in rebalance
     assert "--check-pending" in rebalance
     assert "/venv/bin/btcquant-shadow " in shadow
+    assert "Environment=BTCQUANT_ROOT=/opt/btcquant" in trend
+    assert "Environment=BTCQUANT_ROOT=/opt/btcquant" in carry
+    assert "Environment=BTCQUANT_ROOT=/opt/btcquant" in watchdog
+    assert "Environment=BTCQUANT_ROOT=/opt/btcquant" in digest
+    assert "Environment=BTCQUANT_ROOT=/opt/btcquant" in weekly
+    assert "Environment=BTCQUANT_ROOT=/opt/btcquant" in shadow
     assert "EnvironmentFile=" not in shadow
     assert "HYPERLIQUID_PRIVATE_KEY" not in shadow
     assert "--frozen" in release
@@ -392,6 +417,7 @@ def test_backup_script_fails_closed_without_encryption_key(tmp_path: Path, key: 
         connection.execute("CREATE TABLE sample (value TEXT)")
         connection.execute("INSERT INTO sample VALUES ('fixture')")
     env = os.environ.copy()
+    env["BTCQUANT_ROOT"] = str(app)
     if key is None:
         env.pop("BACKUP_ENCRYPTION_KEY", None)
     else:
@@ -496,6 +522,7 @@ def test_legacy_backup_snapshots_all_allowlisted_sqlite_wal_databases(tmp_path: 
 
     env = os.environ.copy()
     env["BACKUP_ENCRYPTION_KEY"] = "lot7-wal-fixture-key"
+    env["BTCQUANT_ROOT"] = str(app)
     result = subprocess.run(
         ["bash", str(app / "scripts" / "backup_state.sh")],
         env=env,
@@ -577,6 +604,7 @@ def test_backup_script_does_not_invoke_compaction_and_publishes_only_encrypted(
     wrapper.chmod(0o755)
     env = os.environ.copy()
     env["BACKUP_ENCRYPTION_KEY"] = "lot7-test-key"
+    env["BTCQUANT_ROOT"] = str(app)
     result = subprocess.run(
         ["bash", str(app / "scripts" / "backup_state.sh")],
         env=env,

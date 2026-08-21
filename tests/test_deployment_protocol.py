@@ -251,6 +251,8 @@ def test_deployment_scripts_expose_fail_closed_guards():
     assert "--untracked-files=all" in update
     assert "--frozen" in create
     assert "--exclude /data" in create
+    assert "--exclude .pytest_cache" in create
+    assert "--exclude .hypothesis" in create
     assert "validate-release.sh" in create
     assert "release-manifest.json" in create
     assert create.index("validate-release.sh") < create.index("ln -s ../../state")
@@ -269,6 +271,13 @@ def test_deployment_scripts_expose_fail_closed_guards():
     assert "-u BTCQUANT_CLONE" in validate
     assert 'HYPOTHESIS_STORAGE_DIRECTORY="${VALIDATION_ROOT}/hypothesis"' in validate
     assert "-u BTCQUANT_ROOT" in create
+    assert "--validate-existing" in create
+    assert "refus de réutilisation" in create
+    assert "--smoke" in create
+    assert "--quarantine-new" in create
+    assert "RELEASE BUILD REFUSED" in create
+    assert "NEW_RELEASE_CREATED=1" in create
+    assert create.index('mv "${STAGING}" "${TARGET}"') < create.index("--smoke")
     assert "-p no:cacheprovider" in validate
     assert validate.count("--no-cache") >= 2
     assert '--cache-dir "${MYPY_CACHE}"' in validate
