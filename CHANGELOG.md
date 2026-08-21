@@ -24,6 +24,11 @@ Keep a Changelog et les versions suivent Semantic Versioning.
 
 ### Changed
 
+- santé Trend : un stop logiciel paper (`SOFTWARE`, `position.stop_price`)
+  n'est plus classé `unprotected_position` ; l'absence de `stop_order_id`
+  exchange reste CRITICAL en mode `EXCHANGE` ; un mode absent sur une
+  position OPEN reste fail-closed. Voir
+  `docs/TREND_V6_OPEN_POSITION_CONTINUITY.md` ;
 - réconciliation et erreurs SQLite rendues fail-closed ;
 - carry à deux jambes géré comme une saga persistante ;
 - frontend dashboard séparé en HTML, CSS et JavaScript ;

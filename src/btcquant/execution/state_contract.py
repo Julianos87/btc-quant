@@ -32,6 +32,28 @@ class TrendSlotState(TypedDict):
     financial_transition_seq: NotRequired[int]
 
 
+STOP_PROTECTION_SOFTWARE = "SOFTWARE"
+STOP_PROTECTION_EXCHANGE = "EXCHANGE"
+VALID_STOP_PROTECTION_MODES = frozenset({STOP_PROTECTION_SOFTWARE, STOP_PROTECTION_EXCHANGE})
+
+SOFTWARE_STOP_ACTIVE = "SOFTWARE_STOP_ACTIVE"
+EXCHANGE_STOP_CONFIRMED = "EXCHANGE_STOP_CONFIRMED"
+EXCHANGE_STOP_REPLACEMENT_ACTIVE = "EXCHANGE_STOP_REPLACEMENT_ACTIVE"
+PROTECTION_MODE_UNKNOWN = "PROTECTION_MODE_UNKNOWN"
+SOFTWARE_STOP_INVALID = "SOFTWARE_STOP_INVALID"
+SOFTWARE_STOP_INCONSISTENT_TRANSITION = "SOFTWARE_STOP_INCONSISTENT_TRANSITION"
+EXCHANGE_STOP_MISSING = "EXCHANGE_STOP_MISSING"
+RECONCILIATION_BLOCKS_PROTECTION = "RECONCILIATION_BLOCKS_PROTECTION"
+
+
+def stop_protection_mode_from_broker(*, supports_stop_orders: bool) -> str:
+    """Derive the Trend protection mode from the live broker capability."""
+
+    if supports_stop_orders:
+        return STOP_PROTECTION_EXCHANGE
+    return STOP_PROTECTION_SOFTWARE
+
+
 class TrendStatePayload(TypedDict):
     slots: dict[str, TrendSlotState]
     peak_equity: float
@@ -41,6 +63,7 @@ class TrendStatePayload(TypedDict):
     daily_lockout: bool
     reconciliation_required: bool
     last_funding_ts: str | None
+    stop_protection_mode: NotRequired[str]
 
 
 class CarryStatePayload(TypedDict):
@@ -99,6 +122,13 @@ def validate_trend_state(payload: object) -> TrendStatePayload:
     slots = raw.get("slots")
     if not isinstance(slots, Mapping):
         raise ValueError("État trend invalide : slots absent ou non objet")
+    if "stop_protection_mode" in raw:
+        mode = raw.get("stop_protection_mode")
+        if mode not in VALID_STOP_PROTECTION_MODES:
+            raise ValueError(
+                "État trend invalide : stop_protection_mode doit être "
+                f"{STOP_PROTECTION_SOFTWARE} ou {STOP_PROTECTION_EXCHANGE}"
+            )
     for name, value in slots.items():
         slot = _mapping(value, f"trend.{name}")
         _finite_number(slot.get("cash"), f"trend.{name}.cash")
