@@ -300,6 +300,205 @@ def test_deployment_scripts_expose_fail_closed_guards():
     assert "BTCQUANT_CURRENT=" not in migrate_env
 
 
+def test_update_derives_release_target_from_deterministic_path():
+    update = Path("deploy/update.sh").read_text(encoding="utf-8")
+
+    assert 'TARGET="$(bash "${CLONE}/deploy/create-release.sh"' not in update
+    assert 'BTCQUANT_ROOT="${ROOT}"' in update
+    assert 'TARGET="${ROOT}/releases/${RELEASE_ID}"' in update
+    assert 'EXPECTED_TARGET="$(readlink -m -- "${ROOT}/releases/${RELEASE_ID}")"' in update
+    assert 'validate_release_target "${TARGET}" "${EXPECTED_TARGET}"' in update
+    target_gate = update.index('validate_release_target "${TARGET}"')
+    assert target_gate < update.index('"${TARGET}/venv/bin/python" -c', target_gate)
+
+
+def _release_target_validator_harness(update: str, tmp_path: Path) -> Path:
+    start = update.index("validate_release_target() {")
+    end = update.index("\n}\n", start) + 3
+    function = update[start:end]
+    harness = tmp_path / "validate-target.sh"
+    harness.write_text(
+        f'#!/usr/bin/env bash\nset -euo pipefail\n{function}\nvalidate_release_target "$1" "$2"\n',
+        encoding="utf-8",
+    )
+    harness.chmod(0o755)
+    return harness
+
+
+def _make_release_target(root: Path, release_id: str) -> Path:
+    target = root / "releases" / release_id
+    (target / "venv/bin").mkdir(parents=True)
+    (target / "release-manifest.json").write_text("{}\n", encoding="utf-8")
+    python = target / "venv/bin/python"
+    python.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    python.chmod(0o755)
+    return target
+
+
+def test_release_target_contract_accepts_noisy_and_empty_builder_output(tmp_path):
+    import subprocess
+
+    update = Path("deploy/update.sh").read_text(encoding="utf-8")
+    function_start = update.index("validate_release_target() {")
+    function_end = update.index("\n}\n", function_start) + 3
+    block_start = update.index('BTCQUANT_ROOT="${ROOT}"', function_end)
+    block_end = update.index('"${TARGET}/venv/bin/python" -c', block_start)
+    resolution_block = update[block_start:block_end]
+    release_id = "a" * 40
+
+    for index, output in enumerate(("pytest output\nRuff output\nSBOM output\n", "")):
+        root = tmp_path / f"root-{index}"
+        clone = tmp_path / f"clone-{index}"
+        (clone / "deploy").mkdir(parents=True)
+        target = root / "releases" / release_id
+        if index == 0:
+            _make_release_target(root, release_id)
+            manifest_before = (target / "release-manifest.json").read_bytes()
+        else:
+            manifest_before = None
+        builder = clone / "deploy/create-release.sh"
+        builder.write_text(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            'mkdir -p "${BTCQUANT_ROOT}/releases/${2}/venv/bin"\n'
+            'printf "%s\\n" "{}" > "${BTCQUANT_ROOT}/releases/${2}/release-manifest.json"\n'
+            'printf "#!/usr/bin/env bash\\nexit 0\\n" > "${BTCQUANT_ROOT}/releases/${2}/venv/bin/python"\n'
+            'chmod +x "${BTCQUANT_ROOT}/releases/${2}/venv/bin/python"\n'
+            f"printf '%s' {output!r}\n",
+            encoding="utf-8",
+        )
+        builder.chmod(0o755)
+        harness = tmp_path / f"resolution-{index}.sh"
+        function = update[function_start:function_end]
+        harness.write_text(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            f"ROOT={root!s}\n"
+            f"CLONE={clone!s}\n"
+            f"RELEASE_ID={release_id}\n"
+            f"{function}\n"
+            f"{resolution_block}"
+            'printf "resolved=%s\\n" "${TARGET}"\n',
+            encoding="utf-8",
+        )
+        harness.chmod(0o755)
+        result = subprocess.run([str(harness)], check=False, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        assert f"resolved={target}" in result.stdout
+        assert target.is_dir()
+        if manifest_before is not None:
+            assert (target / "release-manifest.json").read_bytes() == manifest_before
+
+
+@pytest.mark.parametrize(
+    ("fixture", "expected_message"),
+    [
+        ("missing", "absente"),
+        ("symlink", "lien symbolique"),
+        ("manifest", "manifeste"),
+        ("python", "interpréteur Python"),
+    ],
+)
+def test_release_target_contract_refuses_invalid_expected_target(
+    tmp_path, fixture, expected_message
+):
+    import subprocess
+
+    update = Path("deploy/update.sh").read_text(encoding="utf-8")
+    validator = _release_target_validator_harness(update, tmp_path)
+    release_id = "b" * 40
+    root = tmp_path / "root"
+    target = root / "releases" / release_id
+    if fixture == "missing":
+        target.parent.mkdir(parents=True)
+    elif fixture == "symlink":
+        target.parent.mkdir(parents=True)
+        destination_root = tmp_path / "elsewhere-root"
+        destination = _make_release_target(destination_root, release_id)
+        target.symlink_to(destination)
+    else:
+        _make_release_target(root, release_id)
+        if fixture == "manifest":
+            (target / "release-manifest.json").unlink()
+        elif fixture == "python":
+            (target / "venv/bin/python").unlink()
+
+    expected = str(target.resolve())
+    result = subprocess.run(
+        [str(validator), str(target), expected],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert expected_message in result.stderr
+
+
+def test_release_target_contract_refuses_unexpected_canonical_path(tmp_path):
+    import subprocess
+
+    update = Path("deploy/update.sh").read_text(encoding="utf-8")
+    validator = _release_target_validator_harness(update, tmp_path)
+    release_id = "c" * 40
+    root = tmp_path / "root"
+    target = _make_release_target(root, release_id)
+    unexpected = str((root / "releases" / ("d" * 40)).resolve())
+    result = subprocess.run(
+        [str(validator), str(target), unexpected],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "inattendu" in result.stderr
+
+
+def test_target_manifest_identity_remains_authoritative(tmp_path):
+    release = _release(tmp_path, "e" * 40)
+    from btcquant.deployment import write_release_manifest
+
+    manifest = build_release_manifest(
+        release,
+        git_sha="f" * 40,
+        git_tree="a" * 40,
+        origin="https://github.com/example/btc-quant.git",
+        python_version="3.12.0",
+        uv_version="0.11.0",
+        release_created_at="2026-08-22T00:00:00+00:00",
+    )
+    write_release_manifest(release, manifest)
+    with pytest.raises(DeploymentProtocolError, match="SHA du manifeste"):
+        validate_release_manifest(release, "e" * 40)
+
+
+def test_builder_failure_stops_before_switch_in_contract_harness(tmp_path):
+    import subprocess
+
+    root = tmp_path / "root"
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    builder = clone / "create-release.sh"
+    builder.write_text("#!/usr/bin/env bash\nexit 23\n", encoding="utf-8")
+    builder.chmod(0o755)
+    release_id = "1" * 40
+    switched = root / "switched"
+    harness = tmp_path / "builder-contract.sh"
+    harness.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        f"ROOT={root!s}\n"
+        f"CLONE={clone!s}\n"
+        f"RELEASE_ID={release_id}\n"
+        'BTCQUANT_ROOT="${ROOT}" bash "${CLONE}/create-release.sh" "${CLONE}" "${RELEASE_ID}"\n'
+        f"touch {switched!s}\n",
+        encoding="utf-8",
+    )
+    harness.chmod(0o755)
+    result = subprocess.run([str(harness)], check=False, capture_output=True, text=True)
+    assert result.returncode == 23
+    assert not switched.exists()
+
+
 V4_ORDERS_SQL = """
 CREATE TABLE orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

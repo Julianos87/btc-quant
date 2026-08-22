@@ -106,6 +106,34 @@ install_units() {
   systemd-analyze verify "${CURRENT}/deploy/"*.service "${CURRENT}/deploy/"*.timer
 }
 
+validate_release_target() {
+  local target="$1"
+  local expected_target="$2"
+  local resolved_target
+
+  if [ -L "${target}" ]; then
+    echo "Refus: la release cible ne doit pas être un lien symbolique." >&2
+    return 1
+  fi
+  if [ ! -d "${target}" ]; then
+    echo "Refus: la release cible attendue est absente ou n'est pas un répertoire." >&2
+    return 1
+  fi
+  resolved_target="$(readlink -f -- "${target}" 2>/dev/null || true)"
+  if [ "${resolved_target}" != "${expected_target}" ]; then
+    echo "Refus: le chemin canonique de la release cible est inattendu." >&2
+    return 1
+  fi
+  if [ ! -f "${target}/release-manifest.json" ]; then
+    echo "Refus: manifeste de release absent." >&2
+    return 1
+  fi
+  if [ ! -x "${target}/venv/bin/python" ]; then
+    echo "Refus: interpréteur Python de release absent ou non exécutable." >&2
+    return 1
+  fi
+}
+
 restore_pre_migration_and_old_code() {
   local old_target="$1"
   if [ ! -f "${MIGRATION_BACKUP}" ]; then
@@ -269,7 +297,13 @@ RELEASE_ID="${TARGET_SHA}"
 OLD_TARGET="$(readlink -f "${CURRENT}")"
 OLD_PREVIOUS="$(readlink -f "${PREVIOUS}" 2>/dev/null || true)"
 
-TARGET="$(bash "${CLONE}/deploy/create-release.sh" "${CLONE}" "${RELEASE_ID}")"
+# create-release.sh emits build logs; the release identity is the deterministic
+# ROOT/releases/SHA path, never a value parsed from its stdout.
+BTCQUANT_ROOT="${ROOT}" \
+  bash "${CLONE}/deploy/create-release.sh" "${CLONE}" "${RELEASE_ID}"
+TARGET="${ROOT}/releases/${RELEASE_ID}"
+EXPECTED_TARGET="$(readlink -m -- "${ROOT}/releases/${RELEASE_ID}")"
+validate_release_target "${TARGET}" "${EXPECTED_TARGET}"
 "${TARGET}/venv/bin/python" -c '
 import sys
 from btcquant.deployment import validate_release_manifest
