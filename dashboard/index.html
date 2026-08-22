@@ -164,9 +164,16 @@
       <div class="eequity num" id="trend-eq">—</div>
       <div class="esub">ensemble Donchian 20 / 55 / 100 · futures · <span id="trend-guard">—</span>
         <span class="beat num" id="trend-beat"></span></div>
-      <div class="table-wrap">
-      <table>
-        <thead><tr><th>Système</th><th>État</th><th>Entrée</th><th>Stop suiveur / marge</th><th>PnL lat.</th></tr></thead>
+      <div class="engine-summary trend-summary" id="trend-overview">
+        <div class="summary-item"><span>Slots ouverts</span><strong class="num" id="trend-open-slots">—</strong><small id="trend-open-detail">—</small></div>
+        <div class="summary-item"><span>Exposition</span><strong class="num" id="trend-total-notional">—</strong><small>notionnel estimé · prix observé</small></div>
+        <div class="summary-item"><span>PnL latent estimé</span><strong class="num" id="trend-total-upnl">—</strong><small id="trend-total-upnl-pct">% du notionnel d’entrée</small></div>
+        <div class="summary-item"><span>Protection</span><strong id="trend-protection">—</strong><small>mode v6 : <span id="trend-protection-mode">N/A</span></small></div>
+        <div class="summary-item trend-next"><span>Prochaine clôture 4 h</span><strong class="num" id="trend-next-boundary">N/A</strong><small id="trend-next-countdown">frontière planifiée · aucune action garantie</small></div>
+      </div>
+      <div class="table-wrap position-table-wrap">
+      <table class="position-table">
+        <thead><tr><th>Slot</th><th>Position</th><th>Prix / exposition</th><th>PnL latent estimé</th><th>Protection</th></tr></thead>
         <tbody id="slots"></tbody>
       </table>
       </div>
@@ -179,15 +186,36 @@
       <div class="eequity num" id="carry-eq">—</div>
       <div class="esub">cash-and-carry · encaisse le funding toutes les heures
         <span class="beat num" id="carry-beat"></span></div>
-      <div class="kv"><span class="k" data-i18n="carry_mode">Mode</span><span id="carry-mode">Paper synthétique</span></div>
-      <div class="kv"><span class="k">Position</span><span id="carry-pos">—</span></div>
-      <div class="kv"><span class="k" data-i18n="carry_modeled_qty">Perp qty modélisé</span><span class="num" id="carry-perp-qty">—</span></div>
-      <div class="kv"><span class="k" data-i18n="carry_modeled_spot">Spot notionnel modélisé</span><span class="num" id="carry-spot-notional">—</span></div>
-      <div class="kv"><span class="k" data-i18n="carry_modeled_perp">Perp notionnel modélisé</span><span class="num" id="carry-perp-notional">—</span></div>
+      <div class="carry-state-strip">
+        <div><span class="label">Mode</span><strong id="carry-mode">Paper synthétique</strong></div>
+        <div><span class="label">Position</span><strong id="carry-pos">—</strong></div>
+        <div><span class="label">Comptabilité</span><strong id="carry-accounting">—</strong></div>
+      </div>
+      <div class="detail-grid carry-detail-grid">
+        <div class="kv"><span class="k">Perp qty modélisé</span><span class="num" id="carry-perp-qty">—</span></div>
+        <div class="kv"><span class="k">Notionnel spot modélisé</span><span class="num" id="carry-spot-notional">—</span></div>
+        <div class="kv"><span class="k">Notionnel perp modélisé</span><span class="num" id="carry-perp-notional">—</span></div>
+        <div class="kv"><span class="k">Brut 2 jambes / delta notionnel</span><span class="num" id="carry-gross-net">—</span></div>
+        <div class="kv"><span class="k">PnL Carry cumulé hors flux</span><span class="num" id="carry-pnl-net">—</span></div>
+        <div class="kv"><span class="k">Autres coûts</span><span class="num" id="carry-costs">N/A</span></div>
+        <div class="kv"><span class="k">Prix d’entrée</span><span class="num" id="carry-entry-price">N/A</span></div>
+        <div class="kv"><span class="k">Principal emprunt</span><span class="num" id="carry-borrow-principal">N/A</span></div>
+        <div class="kv"><span class="k">Génération position</span><span class="num" id="carry-generation">N/A</span></div>
+        <div class="kv"><span class="k">Source prix funding</span><span class="num" id="carry-funding-price-source">N/A</span></div>
+        <div class="kv"><span class="k">Horodatage prix funding</span><span class="num" id="carry-funding-price-time">N/A</span></div>
+        <div class="kv"><span class="k">Mise à jour état</span><span class="num" id="carry-state-age">N/A</span></div>
+      </div>
+      <div class="provenance-line">Notionnels : <span class="num" id="carry-notional-source">—</span> · âge entrée : <span class="num" id="carry-entry-age">—</span> · dernier funding : <span class="num" id="carry-funding-age">—</span></div>
       <div class="rdy-note" id="carry-uncertain" style="display:none" data-i18n="carry_uncertain">Comptabilité Carry incertaine — pas d'exposition venue</div>
-      <div class="kv"><span class="k">PnL carry (funding − coûts)</span><span class="num" id="carry-funding">—</span></div>
+      <div class="detail-grid carry-ledger-grid">
+        <div class="kv"><span class="k">Funding brut cumulé</span><span class="num" id="carry-funding-gross">N/A</span></div>
+        <div class="kv"><span class="k">Coût d’emprunt cumulé</span><span class="num" id="carry-borrow-cost">N/A</span></div>
+        <div class="kv"><span class="k">Statut ledger</span><span id="carry-ledger-status">N/A</span></div>
+        <div class="kv"><span class="k">Autres coûts d’exécution</span><span>N/A</span></div>
+      </div>
+      <div class="kv"><span class="k">Courbe funding cumulée</span><span class="num" id="carry-funding">—</span></div>
       <svg id="fundchart" style="width:100%;height:52px;display:block;margin-top:8px" aria-label="Funding cumulé"></svg>
-      <div class="kv"><span class="k">Règle de sortie</span><span>funding lissé 14 j &lt; 0</span></div>
+      <div class="card-note">Règle de sortie : funding lissé 14 j &lt; 0. Les jambes spot/perp sont ici modélisées en paper ; aucune position venue n'est déduite de cet affichage.</div>
     </div>
 
     <div class="card" data-card="breakdown">
@@ -236,15 +264,29 @@
 
     <div class="card" data-card="exposure">
       <h2 data-i18n="exposure_health">Exposition &amp; santé</h2>
-      <div class="setrow" style="border:none;padding:6px 0 0"><span class="sk" data-i18n="gross_exposure">Exposition brute</span>
+      <div class="setrow" style="border:none;padding:6px 0 0"><span class="sk" data-i18n="gross_exposure">Exposition brute portefeuille</span>
         <span class="num" id="exp-val" style="font-weight:700">—</span></div>
       <div class="gauge-track"><div class="gauge-fill" id="exp-gauge" style="width:0"></div>
         <div class="gauge-mark" style="left:100%"></div></div>
-      <div style="font-size:10.5px;color:var(--muted)" data-i18n="leverage_note">levier effectif · repère = 1× (notionnel = équity)</div>
-      <!-- ces trois lignes répètent "Pulse opérationnel" (Prochaine décision,
-           Flux Hyperliquid) — les deux cartes ne coexistent qu'en vue
-           Surveillance : dup-with-pulse s'y masque via :has() ci-dessous,
-           mais reste affiché en vue Risque où monitor_pulse est absent. -->
+      <div style="font-size:10.5px;color:var(--muted)" data-i18n="leverage_note">ratio d’exposition brute · repère = 1× ; descriptif, pas le levier du moteur</div>
+      <div class="exposure-breakdown">
+        <div><span>Trend brut</span><strong class="num" id="exp-trend">—</strong></div>
+        <div><span>Carry spot</span><strong class="num" id="exp-carry-spot">—</strong></div>
+        <div><span>Carry perp</span><strong class="num" id="exp-carry-perp">—</strong></div>
+        <div><span>Carry brut 2 jambes</span><strong class="num" id="exp-carry">—</strong></div>
+        <div><span>Brut portefeuille</span><strong class="num" id="exp-gross">—</strong></div>
+        <div><span>Directionnel net</span><strong class="num" id="exp-net">—</strong></div>
+        <div><span>Équité</span><strong class="num" id="exp-equity">—</strong></div>
+        <div><span>Brut / equity</span><strong class="num" id="exp-ratio">—</strong></div>
+        <div><span>Protection</span><strong id="exp-protection">—</strong></div>
+        <div><span>Fraîcheur</span><strong id="exp-freshness">—</strong></div>
+        <div><span>Prix</span><strong id="exp-price-freshness">—</strong></div>
+        <div><span>Shadow</span><strong id="exp-shadow-freshness">—</strong></div>
+        <div><span>Sécurité exécution</span><strong id="exp-safety">—</strong></div>
+        <div><span>Incidents actifs</span><strong class="num" id="exp-incidents">—</strong></div>
+      </div>
+      <div class="exposure-note">Brut total = somme des notionnels absolus ; le repère 1× compare ce brut à l'équité. C'est un indicateur descriptif, pas un nouveau seuil de risque.</div>
+      <!-- Les compteurs ci-dessous restent visibles dans les vues où le Pulse opérationnel est masqué. -->
       <div class="dup-with-pulse">
         <div class="kv"><span class="k" data-i18n="next_bar">Prochaine bougie 4 h</span><span class="num cd" id="cd-bar">—</span></div>
         <div class="kv"><span class="k" data-i18n="next_funding">Prochain funding</span><span class="num cd" id="cd-funding">—</span></div>

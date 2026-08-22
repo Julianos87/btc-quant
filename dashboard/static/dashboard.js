@@ -20,8 +20,8 @@ const I18N = {
   fr: {
     paper:"PAPER TRADING", theme:"Thème", settings:"Réglages", btcusdt:"BTC-PERP / USDC",
     h24:"24 heures", funding_ann:"Funding annualisé", live_perf:"Performance en direct",
-    realized:"réalisé", exposure_health:"Exposition & santé", gross_exposure:"Exposition brute",
-    leverage_note:"levier effectif · repère = 1× (notionnel = équity)", next_bar:"Prochaine bougie 4 h",
+    realized:"réalisé", exposure_health:"Exposition & santé", gross_exposure:"Exposition brute portefeuille",
+    leverage_note:"ratio d’exposition brute · repère = 1× ; descriptif, pas le levier du moteur", next_bar:"Prochaine bougie 4 h",
     next_funding:"Prochain funding", api_latency:"Latence API Hyperliquid", uptime:"Uptime dashboard",
     protocol:"Protocole", phase:"Phase actuelle", next_step:"Étape suivante",
     rebalance:"Rééquilibrage 60/40", monthly:"mensuel", golden_rule:"Règle d’or",
@@ -94,8 +94,8 @@ const I18N = {
   en: {
     paper:"PAPER TRADING", theme:"Theme", settings:"Settings", btcusdt:"BTC-PERP / USDC",
     h24:"24 hours", funding_ann:"Annualized funding", live_perf:"Live performance",
-    realized:"realized", exposure_health:"Exposure & health", gross_exposure:"Gross exposure",
-    leverage_note:"effective leverage · marker = 1× (notional = equity)", next_bar:"Next 4h candle",
+    realized:"realized", exposure_health:"Exposure & health", gross_exposure:"Portfolio gross exposure",
+    leverage_note:"gross exposure ratio · descriptive 1× marker, not engine leverage", next_bar:"Next 4h candle",
     next_funding:"Next funding", api_latency:"Hyperliquid API latency", uptime:"Dashboard uptime",
     protocol:"Protocol", phase:"Current phase", next_step:"Next step",
     rebalance:"Rebalancing 60/40", monthly:"monthly", golden_rule:"Golden rule",
@@ -337,22 +337,71 @@ async function refreshSummary() {
   if ($("carry-last")) $("carry-last").textContent = s.carry.last_funding_ts
     ? new Date(s.carry.last_funding_ts).toLocaleString(LOCALE(), {day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit"}) : "—";
 
-  $("slots").innerHTML = s.trend.slots.map(sl => {
-    const badge = sl.state === "LONG" ? "long" : sl.state === "SHORT" ? "short" : "flat";
-    const arrow = sl.state === "LONG" ? "▲ " : sl.state === "SHORT" ? "▼ " : "";
-    const pnl = sl.upnl == null ? "—" : (sl.upnl >= 0 ? "+" : "") + sl.upnl.toFixed(1) + " $";
+  function renderTrendOverview(summary) {
+    const trend = summary.trend || {};
+    const open = trend.open_slots == null ? null : trend.open_slots;
+    const total = trend.total_slots == null ? null : trend.total_slots;
+    $("trend-open-slots").textContent = open == null ? "—" : (open + "/" + (total == null ? "—" : total));
+    $("trend-open-detail").textContent = open == null ? "état indisponible" : ((trend.protected_slots == null ? "N/A" : trend.protected_slots) + " protégés · " + (trend.pending_protection_slots == null ? "N/A" : trend.pending_protection_slots) + " en transition");
+    $("trend-total-notional").textContent = trend.total_notional == null ? "N/A" : fmt$(trend.total_notional, 0);
+    $("trend-total-upnl").textContent = trend.total_upnl == null ? "N/A" : fmt$(trend.total_upnl, 0);
+    $("trend-total-upnl-pct").textContent = trend.total_upnl_pct == null ? "N/A" : fmtPct(trend.total_upnl_pct, 2);
+    const protectionSummary = {
+      ACTIVE: "PROTECTION ACTIVE",
+      REPLACEMENT_PENDING: "REMPLACEMENT EN COURS",
+      PENDING: "PROTECTION EN TRANSITION",
+      UNSAFE: "PROTECTION NON CONFIRMÉE",
+      UNKNOWN: "PROTECTION INCONNUE",
+      NONE: "AUCUNE POSITION",
+    };
+    $("trend-protection").textContent = protectionSummary[trend.protection_status] || "N/A";
+    $("trend-protection-mode").textContent = trend.protection_mode || "UNKNOWN";
+    const next = summary.health && summary.health.next_bar_ts;
+    $("trend-next-boundary").textContent = fmtTimeUTC(next);
+    $("trend-next-countdown").textContent = next ? "dans " + cdText(next) + " · aucune action garantie" : "N/A";
+  }
+
+  renderTrendOverview(s);
+  $("slots").innerHTML = (s.trend.slots || []).map(sl => {
+    const badge = sl.state === "LONG" ? "long" : sl.state === "SHORT" ? "short" : sl.state === "FLAT" ? "flat" : "unknown";
+    const arrow = sl.state === "LONG" ? "▲ " : sl.state === "SHORT" ? "▼ " : sl.state === "UNKNOWN" ? "? " : "";
+    const f = v => v == null || isNaN(v) ? "N/A" : Number(v).toLocaleString(LOCALE(), {maximumFractionDigits: 2});
+    const money = v => v == null || isNaN(v) ? "N/A" : fmt$(v, 0);
+    const pnl = money(sl.upnl);
     const pnlCls = sl.upnl > 0 ? "up" : sl.upnl < 0 ? "down" : "";
-    const f = v => v ? v.toLocaleString("fr-FR", {maximumFractionDigits:0}) : "—";
-    const stopGap = s.btc.price && sl.stop && sl.state !== "FLAT"
-      ? (sl.state === "LONG" ? (s.btc.price - sl.stop) : (sl.stop - s.btc.price)) / s.btc.price : null;
-    const closeToStop = stopGap != null && stopGap < 0.01;
-    const gap = stopGap == null ? "" : `<div class="stop-gap ${closeToStop ? "urgent" : ""}">
-      <i style="width:${Math.max(3, Math.min(100, Math.max(0, stopGap) / .08 * 100)).toFixed(0)}%"></i>
-      <span>${stopGap < 0 ? "stop dépassé" : `${(stopGap * 100).toFixed(1).replace(".", ",")} % au stop`}</span></div>`;
-    return `<tr class="slotclick" data-name="${esc(sl.name)}" title="Voir le détail"><td style="font-weight:600">${esc(sl.name).replace("trend_ls_", "Donchian ")}</td>
-      <td><span class="badge ${badge}">${arrow}${sl.state}</span></td>
-      <td class="num">${f(sl.entry)}</td><td class="num"><div>${f(sl.stop)}</div>${gap}</td>
-      <td class="num ${pnlCls}" style="font-weight:600">${pnl}</td></tr>`;
+    const stopPct = sl.stop_distance_pct;
+    const protectionLabel = {
+      ACTIVE: "PROTECTION ACTIVE",
+      REPLACEMENT_PENDING: "REMPLACEMENT EN COURS",
+      PENDING: "PROTECTION EN TRANSITION",
+      UNSAFE: "PROTECTION NON CONFIRMÉE",
+      UNKNOWN: "PROTECTION INCONNUE",
+    }[sl.protection_status] || "N/A";
+    const protectionClass = sl.protection_status === "ACTIVE" || sl.protection_status === "REPLACEMENT_PENDING"
+      ? "protected"
+      : sl.protection_status === "UNSAFE" ? "unsafe" : "unknown";
+    const protection = `${protectionLabel} · ${sl.protection_mode || "UNKNOWN"}`;
+    const protectionReason = sl.protection_reason || "N/A";
+    const gap = stopPct == null ? "N/A" : (stopPct < 0 ? "stop dépassé" : percentNA(stopPct, 1) + " au stop");
+    const stopPnl = sl.stop_pnl;
+    const stopPnlText = stopPnl == null ? "N/A" : stopPnl > 0 ? "gain protégé au stop " + money(stopPnl) : stopPnl < 0 ? "risque restant au stop " + money(Math.abs(stopPnl)) : "PnL au stop 0 $";
+    const details = [
+      sl.qty == null ? "qty N/A" : "qty " + f(sl.qty),
+      sl.initial_qty == null ? "initial qty N/A" : "initial qty " + f(sl.initial_qty),
+      sl.pyramid_adds == null ? "adds N/A" : "adds " + f(sl.pyramid_adds),
+      sl.bars == null ? "bars N/A" : "bars " + f(sl.bars),
+      sl.cash == null ? "cash poche N/A" : "cash poche " + money(sl.cash),
+      sl.entry_fee == null ? "frais entrée N/A" : "frais entrée " + money(sl.entry_fee),
+    ].join(" · ");
+    const timestamp = sl.entry_time ? fmtTimeUTC(sl.entry_time) : "N/A";
+    const updated = sl.updated_at ? fmtTimeUTC(sl.updated_at) : "N/A";
+    return `<tr class="slotclick" data-name="${esc(sl.name)}" title="Voir le détail">
+      <td><strong class="position-primary">${esc(sl.name).replace("trend_ls_", "Donchian ")}</strong><small class="position-secondary">${details}</small></td>
+      <td><span class="badge ${badge}">${arrow}${sl.state}</span><small class="position-secondary">entrée ${timestamp} · âge ${durationNA(sl.position_age_s)}</small></td>
+      <td class="num"><div>entrée ${f(sl.entry)}</div><div>prix observé ${f(sl.market_price)}</div><small class="position-secondary">${money(sl.notional)} notionnel estimé · ${sl.price_source || "N/A"}</small></td>
+      <td class="num ${pnlCls}"><strong>${pnl}</strong><small class="position-secondary">${percentNA(sl.upnl_pct)} · % notionnel d’entrée</small></td>
+      <td><div class="protection-cell"><strong><span class="badge protection-${protectionClass}">${protection}</span></strong><small class="position-secondary">raison ${protectionReason}</small><small class="position-secondary">stop ${f(sl.stop)} · ${money(sl.stop_distance)} · ${gap}</small><small class="position-secondary">${stopPnlText} · estimé hors frais/slippage</small><small class="position-secondary">best close ${f(sl.best_close)} · barre ${sl.last_bar_ts || "N/A"} · maj ${updated}</small></div></td>
+    </tr>`;
   }).join("");
   document.querySelectorAll("#slots .slotclick").forEach(tr => tr.onclick = () => openDrill(tr.dataset.name));
   renderExposureHealth(s);
@@ -371,36 +420,100 @@ async function refreshSummary() {
 // ── exposition + santé + countdowns ────────────────────────
 let nextBarTs = null, nextFundingTs = null;
 function renderExposureHealth(s) {
-  const lev = s.totals.leverage || 0;
-  $("exp-val").textContent = fmt$(s.totals.gross_notional) + "  ·  " + fmtNum(lev, 2) + "×";
+  const totals = s.totals || {};
+  const trend = s.trend || {};
+  const carry = s.carry || {};
+  const moneyNA = value => value == null || isNaN(value) ? "N/A" : fmt$(value, 0);
+  const ratio = totals.gross_equity_ratio;
+  const ratioText = ratio == null ? "N/A" : fmtNum(ratio, 2) + "×";
+  $("exp-val").textContent = moneyNA(totals.portfolio_gross_notional) + "  ·  " + ratioText;
   const g = $("exp-gauge");
-  g.style.width = Math.min(100, lev / 2 * 100) + "%";  // pleine largeur = 2×
-  g.style.background = lev > 1.5 ? "var(--crit)" : lev > 1.05 ? "var(--warn)" : "var(--s2)";
+  const gaugeRatio = Number.isFinite(Number(ratio)) ? Number(ratio) : 0;
+  g.style.width = Math.min(100, gaugeRatio / 2 * 100) + "%";  // repère visuel 2×, sans seuil de risque
+  g.style.background = hColor(safetyState(totals, s.health));
   const h = s.health || {};
+  $("exp-trend").textContent = moneyNA(totals.trend_notional);
+  $("exp-carry-spot").textContent = moneyNA(totals.carry_spot_notional);
+  $("exp-carry-perp").textContent = moneyNA(totals.carry_perp_notional);
+  $("exp-carry").textContent = moneyNA(totals.carry_gross_notional);
+  $("exp-gross").textContent = moneyNA(totals.portfolio_gross_notional);
+  $("exp-net").textContent = moneyNA(totals.portfolio_directional_net_notional);
+  $("exp-equity").textContent = moneyNA(totals.equity);
+  $("exp-ratio").textContent = ratioText;
+  $("exp-protection").textContent = trend.protection_status || "N/A";
+  $("exp-freshness").textContent = [trend.freshness, carry.freshness].filter(Boolean).join(" / ") || "N/A";
+  $("exp-price-freshness").textContent = s.btc && s.btc.freshness || "N/A";
+  $("exp-shadow-freshness").textContent = "N/A";
+  $("exp-safety").textContent = h.safety_status || (h.execution_safety && h.execution_safety.status) || "UNKNOWN";
+  $("exp-incidents").textContent = String((h.open_incidents || []).length);
   nextBarTs = h.next_bar_ts; nextFundingTs = s.funding && s.funding.next_ts;
   $("h-latency").textContent = h.api_latency_ms != null ? Math.round(h.api_latency_ms) + " ms" : "—";
   $("h-uptime").textContent = h.server_uptime_s != null ? fmtDur(h.server_uptime_s) : "—";
   updateCountdowns();
 }
+function safetyState(_totals, health) {
+  const status = health && (health.safety_status || (health.execution_safety && health.execution_safety.status));
+  return status === "FAIL" ? "crit" : status === "UNKNOWN" ? "warn" : "neutral";
+}
+function hColor(state) {
+  return state === "crit" ? "var(--crit)" : state === "warn" ? "var(--warn)" : "var(--s1)";
+}
 function fmtDur(sec) {
   return BTCQuantDashboardUx.formatDuration(sec) || "—";
 }
+function durationNA(sec) { return sec == null || isNaN(sec) ? "N/A" : (fmtDur(sec) || "N/A"); }
+function percentNA(value, dp=2) { return value == null || isNaN(value) ? "N/A" : fmtPct(value, dp); }
+
+function fmtTimeUTC(value) {
+  if (value == null) return "N/A";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "N/A";
+  return date.toLocaleString(LOCALE(), {day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit", timeZone:"UTC"}) + " UTC";
+}
 
 function renderCarryCard(carry) {
-  const view = BTCQuantDashboardUx.carryPresentation(carry);
-  const open = view.position === "OPEN";
-  if ($("carry-mode")) $("carry-mode").textContent = t("carry_mode_value");
-  $("carry-pos").innerHTML = open
-    ? `<span class="badge long">● ${esc(view.position)}</span><span class="carry-synth">${esc(t("carry_synthetic"))}</span>`
-    : `<span class="badge flat">${esc(view.position)}</span><span class="carry-synth">${esc(t("carry_synthetic"))}</span>`;
+  const positionStatus = ["OPEN", "FLAT", "UNKNOWN"].includes(carry.position_status)
+    ? carry.position_status
+    : "UNKNOWN";
+  const open = positionStatus === "OPEN";
+  const accounting = carry.position_known !== true
+    ? "N/A"
+    : carry.accounting_uncertain === true
+      ? "INCERTAINE"
+      : "OK";
+  if ($("carry-mode")) $("carry-mode").textContent = carry.mode || t("carry_mode_value");
+  const positionBadge = positionStatus === "OPEN"
+    ? `<span class="badge long">● OPEN</span>`
+    : positionStatus === "FLAT"
+      ? `<span class="badge flat">FLAT</span>`
+      : `<span class="badge unknown">? ÉTAT INCONNU</span>`;
+  $("carry-pos").innerHTML = positionBadge + `<span class="carry-synth">${esc(t("carry_synthetic"))}</span>`;
   const qty = $("carry-perp-qty");
-  if (qty) qty.textContent = view.perp_qty == null ? "—" : String(view.perp_qty);
+  if (qty) qty.textContent = !open || carry.perp_qty == null ? "N/A" : fmtNum(carry.perp_qty, 6);
   const spot = $("carry-spot-notional");
-  if (spot) spot.textContent = view.spot_notional == null ? "—" : fmt$(view.spot_notional, 2);
+  if (spot) spot.textContent = !open || carry.spot_notional_derived == null ? "N/A" : fmt$(carry.spot_notional_derived, 0);
   const perp = $("carry-perp-notional");
-  if (perp) perp.textContent = view.perp_notional == null ? "—" : fmt$(view.perp_notional, 2);
+  if (perp) perp.textContent = !open || carry.perp_notional_derived == null ? "N/A" : fmt$(carry.perp_notional_derived, 0);
+  if ($("carry-gross-net")) $("carry-gross-net").textContent =
+    carry.gross_notional == null || carry.net_notional == null ? "N/A" : fmt$(carry.gross_notional, 0) + " / " + fmt$(carry.net_notional, 0);
+  if ($("carry-pnl-net")) $("carry-pnl-net").textContent = carry.pnl_net == null || positionStatus === "UNKNOWN" ? "N/A" : fmt$(carry.pnl_net, 0);
+  if ($("carry-costs")) $("carry-costs").textContent = carry.costs == null || positionStatus === "UNKNOWN" ? "N/A" : fmt$(carry.costs, 0);
+  if ($("carry-notional-source")) $("carry-notional-source").textContent =
+    (carry.notional_source || "N/A") + " · persisted " + (carry.persisted_notional_status || "N/A");
+  if ($("carry-entry-age")) $("carry-entry-age").textContent = open ? durationNA(carry.position_age_s) : "N/A";
+  if ($("carry-funding-age")) $("carry-funding-age").textContent = open ? durationNA(carry.last_funding_age_s) : "N/A";
+  if ($("carry-entry-price")) $("carry-entry-price").textContent = !open || carry.entry_price == null ? "N/A" : fmt$(carry.entry_price, 2);
+  if ($("carry-borrow-principal")) $("carry-borrow-principal").textContent = !open || carry.borrow_principal == null ? "N/A" : fmt$(carry.borrow_principal, 0);
+  if ($("carry-generation")) $("carry-generation").textContent = !open ? "N/A" : carry.position_generation || "N/A";
+  if ($("carry-funding-price-source")) $("carry-funding-price-source").textContent = !open ? "N/A" : carry.funding_price_source || "N/A";
+  if ($("carry-funding-price-time")) $("carry-funding-price-time").textContent = !open ? "N/A" : fmtTimeUTC(carry.funding_price_timestamp);
+  if ($("carry-state-age")) $("carry-state-age").textContent = positionStatus === "UNKNOWN" ? "N/A" : fmtTimeUTC(carry.state_updated_at);
+  if ($("carry-funding-gross")) $("carry-funding-gross").textContent = carry.funding_gross_total == null ? "N/A" : fmt$(carry.funding_gross_total, 2);
+  if ($("carry-borrow-cost")) $("carry-borrow-cost").textContent = carry.borrow_cost_total == null ? "N/A" : fmt$(carry.borrow_cost_total, 2);
+  if ($("carry-ledger-status")) $("carry-ledger-status").textContent = carry.funding_ledger_status || "N/A";
+  if ($("carry-accounting")) $("carry-accounting").textContent = accounting;
   const note = $("carry-uncertain");
-  if (note) note.style.display = view.accounting_uncertain ? "block" : "none";
+  if (note) note.style.display = carry.accounting_uncertain === true ? "block" : "none";
 }
 function cdText(ts) {
   if (!ts) return "—";

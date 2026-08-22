@@ -166,11 +166,16 @@
 
   function carryPresentation(carry) {
     const state = carry || {};
-    const execution = String(state.execution_state || (state.in_position ? "OPEN" : "FLAT")).toUpperCase();
-    const open = execution === "OPEN" || state.in_position === true;
+    const position = ["OPEN", "FLAT", "UNKNOWN"].includes(state.position_status)
+      ? state.position_status
+      : state.position_known === false || state.in_position == null
+        ? "UNKNOWN"
+        : state.in_position === true
+          ? "OPEN"
+          : "FLAT";
     return {
       mode: "Paper synthétique",
-      position: open ? "OPEN" : "FLAT",
+      position,
       modeled: true,
       live: false,
       qty: state.qty,

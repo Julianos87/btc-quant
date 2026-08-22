@@ -144,6 +144,15 @@ def test_carry_presentation_is_paper_modeled() -> None:
     assert "Hyperliquid" not in json.dumps(view)
 
 
+def test_carry_presentation_preserves_unknown_position_state() -> None:
+    view = _node(
+        "console.log(JSON.stringify(helper.carryPresentation({"
+        "position_status:'UNKNOWN',position_known:false,in_position:null"
+        "})))"
+    )
+    assert view["position"] == "UNKNOWN"
+
+
 def test_groups_cover_known_lot6_keys_once() -> None:
     keys = [
         "campaign",
