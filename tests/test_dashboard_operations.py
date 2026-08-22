@@ -16,6 +16,117 @@ from btcquant.execution.state_store import StateStore
 from btcquant.execution.shadow import BookTop, ShadowCollector, ShadowStore
 
 
+_MISSING = object()
+
+
+def _summary_fixture(
+    tmp_path,
+    monkeypatch,
+    trend_state,
+    carry_state=None,
+    *,
+    price=105.0,
+    ledger=_MISSING,
+    trend_override=None,
+):
+    """Build a read-only summary fixture without changing production state."""
+
+    monkeypatch.setattr(dashboard_app, "STATE", tmp_path)
+    now = datetime.now(UTC)
+    observed = now - timedelta(seconds=1)
+    snapshots = {
+        "price": dashboard_app.SourceSnapshot.success(
+            price, source="test-price", observed_at=observed
+        ),
+        "ohlcv1h": dashboard_app.SourceSnapshot.success(
+            [], source="test-candles", observed_at=observed
+        ),
+        "funding": dashboard_app.SourceSnapshot.unavailable(source="test-funding"),
+        "fx_eur": dashboard_app.SourceSnapshot.success(1.1, source="test-fx", observed_at=observed),
+    }
+    monkeypatch.setattr(dashboard_app, "_cache_snapshots", snapshots)
+    monkeypatch.setattr(
+        dashboard_app,
+        "_cached",
+        lambda key, _ttl, _fn: {
+            "price": price,
+            "ohlcv1h": [],
+            "funding": None,
+            "fx_eur": 1.1,
+        }[key],
+    )
+    store = StateStore(tmp_path / "btcquant.db")
+    carry_state = carry_state or {
+        "equity": 4_000.0,
+        "in_position": False,
+        "peak_equity": 4_000.0,
+        "day_start_equity": 4_000.0,
+    }
+    store.save_engine_state("trend", trend_state)
+    store.save_engine_state("carry", carry_state)
+    store.append_equity("trend", 6_000.0, now.isoformat())
+    store.append_equity("carry", 4_000.0, now.isoformat())
+    if ledger is not _MISSING:
+        monkeypatch.setattr(StateStore, "read_funding_ledger", lambda _self: ledger)
+    if trend_override is not None:
+        monkeypatch.setattr(
+            dashboard_app,
+            "_engine_state",
+            lambda engine, _legacy_name: trend_override if engine == "trend" else carry_state,
+        )
+    return (
+        dashboard_app.app.test_client()
+        .get(
+            "/api/summary",
+            environ_base={"REMOTE_ADDR": "127.0.0.1"},
+        )
+        .get_json()
+    )
+
+
+def _trend_position(*, direction=1, stop_order_id=None, stop_transition=None):
+    return {
+        "direction": direction,
+        "qty": 2.0,
+        "entry_price": 100.0,
+        "stop_price": 95.0,
+        "entry_time": datetime.now(UTC).isoformat(),
+        "bars_held": 2,
+        "best_close": 105.0,
+        "initial_qty": 2.0,
+        "last_add_price": 100.0,
+        "pyramid_adds": 0,
+    }
+
+
+def _trend_state_with_positions(
+    *, mode="SOFTWARE", count=1, reconciliation=False, transition=None, stop_order_id=None
+):
+    slots = {
+        f"trend_ls_{index}": {
+            "cash": 6_000.0,
+            "stop_order_id": stop_order_id,
+            "stop_transition": transition,
+            "entry_fee": 0.0,
+            "last_bar_ts": None,
+            "position": _trend_position(
+                stop_order_id=stop_order_id,
+                stop_transition=transition,
+            ),
+        }
+        for index in range(count)
+    }
+    state = {
+        "slots": slots,
+        "peak_equity": 6_000.0,
+        "day_start_equity": 6_000.0,
+        "reconciliation_required": reconciliation,
+    }
+    if mode is not None:
+        state["stop_protection_mode"] = mode
+    return state
+
+
 def test_donchian_display_uses_only_closed_4h_bars_for_regime_and_thresholds():
     four_h = dashboard_app.FOUR_HOURS_MS
     start = datetime(2026, 1, 1, tzinfo=UTC).timestamp() * 1000
@@ -270,6 +381,7 @@ def test_summary_exposes_position_detail_without_changing_execution_semantics(
             },
             "peak_equity": 6_000.0,
             "day_start_equity": 6_000.0,
+            "stop_protection_mode": "SOFTWARE",
         },
     )
     store.save_engine_state(
@@ -553,3 +665,216 @@ def test_summary_keeps_flat_and_stale_values_explicitly_unknown(tmp_path, monkey
     assert payload["carry"]["gross_notional"] == pytest.approx(0.0)
     assert payload["carry"]["net_notional"] == pytest.approx(0.0)
     assert payload["totals"]["portfolio_gross_notional"] == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize(
+    (
+        "mode",
+        "stop_order_id",
+        "transition",
+        "reconciliation",
+        "expected_reason",
+        "expected_status",
+        "protected",
+    ),
+    [
+        ("SOFTWARE", None, None, False, "SOFTWARE_STOP_ACTIVE", "ACTIVE", True),
+        (None, None, None, False, "PROTECTION_MODE_UNKNOWN", "UNKNOWN", False),
+        ("EXCHANGE", None, None, False, "EXCHANGE_STOP_MISSING", "UNSAFE", False),
+        ("EXCHANGE", "stop-1", None, False, "EXCHANGE_STOP_CONFIRMED", "ACTIVE", True),
+        (
+            "SOFTWARE",
+            None,
+            None,
+            True,
+            "RECONCILIATION_BLOCKS_PROTECTION",
+            "UNSAFE",
+            False,
+        ),
+        (
+            "SOFTWARE",
+            None,
+            {"previous_stop_id": "old-stop"},
+            False,
+            "SOFTWARE_STOP_INCONSISTENT_TRANSITION",
+            "UNSAFE",
+            False,
+        ),
+    ],
+)
+def test_summary_projects_authoritative_trend_protection(
+    tmp_path,
+    monkeypatch,
+    mode,
+    stop_order_id,
+    transition,
+    reconciliation,
+    expected_reason,
+    expected_status,
+    protected,
+):
+    payload = _summary_fixture(
+        tmp_path,
+        monkeypatch,
+        _trend_state_with_positions(
+            mode=mode,
+            reconciliation=reconciliation,
+            transition=transition,
+            stop_order_id=stop_order_id,
+        ),
+    )
+    slot = payload["trend"]["slots"][0]
+    assert slot["protection_mode"] == mode
+    assert slot["protection_reason"] == expected_reason
+    assert slot["protection_status"] == expected_status
+    assert slot["protection_protected"] is protected
+    assert payload["trend"]["protected_slots"] == (1 if protected else 0)
+
+
+def test_realistic_three_slot_software_fixture_requires_top_level_mode(tmp_path, monkeypatch):
+    state = _trend_state_with_positions(mode="SOFTWARE", count=3)
+    payload = _summary_fixture(tmp_path, monkeypatch, state)
+    assert payload["trend"]["protected_slots"] == 3
+    assert payload["trend"]["protection_status"] == "ACTIVE"
+    assert all(
+        slot["protection_reason"] == "SOFTWARE_STOP_ACTIVE"
+        and slot["protection_status"] == "ACTIVE"
+        for slot in payload["trend"]["slots"]
+    )
+
+    legacy_state = dict(state)
+    legacy_state.pop("stop_protection_mode")
+    payload = _summary_fixture(tmp_path, monkeypatch, legacy_state)
+    assert payload["trend"]["protected_slots"] == 0
+    assert payload["trend"]["protection_status"] == "UNKNOWN"
+    assert all(
+        slot["protection_reason"] == "PROTECTION_MODE_UNKNOWN"
+        and slot["protection_protected"] is False
+        for slot in payload["trend"]["slots"]
+    )
+
+
+@pytest.mark.parametrize("invalid_direction", [None, 0, float("inf")])
+def test_invalid_trend_direction_fails_closed(tmp_path, monkeypatch, invalid_direction):
+    valid_state = _trend_state_with_positions(mode="SOFTWARE")
+    invalid_state = _trend_state_with_positions(mode="SOFTWARE")
+    invalid_state["slots"]["trend_ls_0"]["position"]["direction"] = invalid_direction
+    payload = _summary_fixture(
+        tmp_path,
+        monkeypatch,
+        valid_state,
+        trend_override=invalid_state,
+    )
+    slot = payload["trend"]["slots"][0]
+    assert slot["state"] == "UNKNOWN"
+    assert slot["direction"] is None
+    assert slot["upnl"] is None
+    assert slot["upnl_pct"] is None
+    assert slot["stop_distance"] is None
+    assert slot["stop_pnl"] is None
+    assert payload["totals"]["portfolio_directional_net_notional"] is None
+
+
+@pytest.mark.parametrize("invalid_qty", [float("nan"), float("inf")])
+def test_non_finite_trend_quantity_fails_closed(tmp_path, monkeypatch, invalid_qty):
+    valid_state = _trend_state_with_positions(mode="SOFTWARE")
+    invalid_state = _trend_state_with_positions(mode="SOFTWARE")
+    invalid_state["slots"]["trend_ls_0"]["position"]["qty"] = invalid_qty
+    payload = _summary_fixture(
+        tmp_path,
+        monkeypatch,
+        valid_state,
+        trend_override=invalid_state,
+    )
+    slot = payload["trend"]["slots"][0]
+    assert slot["qty"] is None
+    assert slot["notional"] is None
+    assert slot["upnl"] is None
+    assert payload["trend"]["total_notional"] is None
+
+
+@pytest.mark.parametrize(
+    ("ledger", "funding_total", "borrow_total", "ledger_status", "funding_status", "borrow_status"),
+    [
+        (
+            [{"funding_pnl": 10.5, "borrow_cost": 2.5}],
+            10.5,
+            2.5,
+            "AVAILABLE",
+            "AVAILABLE",
+            "AVAILABLE",
+        ),
+        ([{"borrow_cost": 2.5}], None, 2.5, "PARTIAL", "INVALID", "AVAILABLE"),
+        (
+            [{"funding_pnl": 10.5, "borrow_cost": float("inf")}],
+            10.5,
+            None,
+            "PARTIAL",
+            "AVAILABLE",
+            "INVALID",
+        ),
+        ([], None, None, "EMPTY", "EMPTY", "EMPTY"),
+    ],
+)
+def test_funding_ledger_aggregation_fails_closed(
+    tmp_path,
+    monkeypatch,
+    ledger,
+    funding_total,
+    borrow_total,
+    ledger_status,
+    funding_status,
+    borrow_status,
+):
+    payload = _summary_fixture(
+        tmp_path,
+        monkeypatch,
+        _trend_state_with_positions(mode="SOFTWARE"),
+        ledger=ledger,
+    )
+    carry = payload["carry"]
+    assert carry["funding_gross_total"] == funding_total
+    assert carry["borrow_cost_total"] == borrow_total
+    assert carry["funding_ledger_status"] == ledger_status
+    assert carry["funding_pnl_status"] == funding_status
+    assert carry["borrow_cost_status"] == borrow_status
+
+
+def test_invalid_persisted_carry_notionals_fall_back_to_explicit_model(tmp_path, monkeypatch):
+    carry_state = {
+        "equity": 4_000.0,
+        "in_position": True,
+        "spot_qty": 1.0,
+        "perp_qty": -1.0,
+        "spot_notional": -300.0,
+        "perp_notional": 280.0,
+    }
+    payload = _summary_fixture(
+        tmp_path,
+        monkeypatch,
+        _trend_state_with_positions(mode="SOFTWARE"),
+        carry_state=carry_state,
+    )
+    carry = payload["carry"]
+    assert carry["persisted_notional_status"] == "INVALID"
+    assert carry["notional_source"] == "MODELLED_FROM_QTY_AND_MARK"
+    assert carry["gross_notional"] == pytest.approx(210.0)
+    assert carry["net_notional"] == pytest.approx(0.0)
+
+
+def test_protection_source_unavailable_is_unknown_not_unprotected_zero(tmp_path, monkeypatch):
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("health unavailable")
+
+    monkeypatch.setattr(dashboard_app, "execution_health", unavailable)
+    payload = _summary_fixture(
+        tmp_path,
+        monkeypatch,
+        _trend_state_with_positions(mode="SOFTWARE"),
+    )
+    assert payload["trend"]["protected_slots"] is None
+    assert payload["trend"]["protection_status"] == "UNKNOWN"
+    slot = payload["trend"]["slots"][0]
+    assert slot["protection_status"] == "UNKNOWN"
+    assert slot["protection_reason"] is None
+    assert slot["protection_protected"] is None

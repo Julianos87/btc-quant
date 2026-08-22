@@ -73,6 +73,7 @@ def test_position_cards_expose_operational_detail_contract(monkeypatch):
         b"trend-total-notional",
         b"trend-total-upnl",
         b"trend-protection",
+        b"trend-protection-mode",
         b"carry-gross-net",
         b"carry-pnl-net",
         b"carry-accounting",
@@ -92,4 +93,6 @@ def test_position_cards_expose_operational_detail_contract(monkeypatch):
     assert b"Brut total = somme des notionnels absolus" in page
     javascript = (dashboard.ROOT / "dashboard" / "static" / "dashboard.js").read_bytes()
     assert b"prix observ\xc3\xa9" in javascript.lower()
+    assert b"PROTECTION INCONNUE" in javascript
+    assert b"PROTECTION NON CONFIRM\xc3\x89E" in javascript
     assert b"aucune position venue" in page

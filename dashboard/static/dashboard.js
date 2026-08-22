@@ -346,7 +346,16 @@ async function refreshSummary() {
     $("trend-total-notional").textContent = trend.total_notional == null ? "N/A" : fmt$(trend.total_notional, 0);
     $("trend-total-upnl").textContent = trend.total_upnl == null ? "N/A" : fmt$(trend.total_upnl, 0);
     $("trend-total-upnl-pct").textContent = trend.total_upnl_pct == null ? "N/A" : fmtPct(trend.total_upnl_pct, 2);
-    $("trend-protection").textContent = trend.protection_status || "N/A";
+    const protectionSummary = {
+      ACTIVE: "PROTECTION ACTIVE",
+      REPLACEMENT_PENDING: "REMPLACEMENT EN COURS",
+      PENDING: "PROTECTION EN TRANSITION",
+      UNSAFE: "PROTECTION NON CONFIRMÉE",
+      UNKNOWN: "PROTECTION INCONNUE",
+      NONE: "AUCUNE POSITION",
+    };
+    $("trend-protection").textContent = protectionSummary[trend.protection_status] || "N/A";
+    $("trend-protection-mode").textContent = trend.protection_mode || "UNKNOWN";
     const next = summary.health && summary.health.next_bar_ts;
     $("trend-next-boundary").textContent = fmtTimeUTC(next);
     $("trend-next-countdown").textContent = next ? "dans " + cdText(next) + " · aucune action garantie" : "N/A";
@@ -354,16 +363,25 @@ async function refreshSummary() {
 
   renderTrendOverview(s);
   $("slots").innerHTML = (s.trend.slots || []).map(sl => {
-    const badge = sl.state === "LONG" ? "long" : sl.state === "SHORT" ? "short" : "flat";
-    const arrow = sl.state === "LONG" ? "▲ " : sl.state === "SHORT" ? "▼ " : "";
+    const badge = sl.state === "LONG" ? "long" : sl.state === "SHORT" ? "short" : sl.state === "FLAT" ? "flat" : "unknown";
+    const arrow = sl.state === "LONG" ? "▲ " : sl.state === "SHORT" ? "▼ " : sl.state === "UNKNOWN" ? "? " : "";
     const f = v => v == null || isNaN(v) ? "N/A" : Number(v).toLocaleString(LOCALE(), {maximumFractionDigits: 2});
     const money = v => v == null || isNaN(v) ? "N/A" : fmt$(v, 0);
     const pnl = money(sl.upnl);
     const pnlCls = sl.upnl > 0 ? "up" : sl.upnl < 0 ? "down" : "";
     const stopPct = sl.stop_distance_pct;
-    const protection = sl.protection_status
-      ? `${sl.protection_status} · ${sl.protection_mode || "N/A"}`
-      : "N/A";
+    const protectionLabel = {
+      ACTIVE: "PROTECTION ACTIVE",
+      REPLACEMENT_PENDING: "REMPLACEMENT EN COURS",
+      PENDING: "PROTECTION EN TRANSITION",
+      UNSAFE: "PROTECTION NON CONFIRMÉE",
+      UNKNOWN: "PROTECTION INCONNUE",
+    }[sl.protection_status] || "N/A";
+    const protectionClass = sl.protection_status === "ACTIVE" || sl.protection_status === "REPLACEMENT_PENDING"
+      ? "protected"
+      : sl.protection_status === "UNSAFE" ? "unsafe" : "unknown";
+    const protection = `${protectionLabel} · ${sl.protection_mode || "UNKNOWN"}`;
+    const protectionReason = sl.protection_reason || "N/A";
     const gap = stopPct == null ? "N/A" : (stopPct < 0 ? "stop dépassé" : percentNA(stopPct, 1) + " au stop");
     const stopPnl = sl.stop_pnl;
     const stopPnlText = stopPnl == null ? "N/A" : stopPnl > 0 ? "gain protégé au stop " + money(stopPnl) : stopPnl < 0 ? "risque restant au stop " + money(Math.abs(stopPnl)) : "PnL au stop 0 $";
@@ -382,7 +400,7 @@ async function refreshSummary() {
       <td><span class="badge ${badge}">${arrow}${sl.state}</span><small class="position-secondary">entrée ${timestamp} · âge ${durationNA(sl.position_age_s)}</small></td>
       <td class="num"><div>entrée ${f(sl.entry)}</div><div>prix observé ${f(sl.market_price)}</div><small class="position-secondary">${money(sl.notional)} notionnel estimé · ${sl.price_source || "N/A"}</small></td>
       <td class="num ${pnlCls}"><strong>${pnl}</strong><small class="position-secondary">${percentNA(sl.upnl_pct)} · % notionnel d’entrée</small></td>
-      <td><div class="protection-cell"><strong>${protection}</strong><small class="position-secondary">stop ${f(sl.stop)} · ${money(sl.stop_distance)} · ${gap}</small><small class="position-secondary">${stopPnlText} · estimé hors frais/slippage</small><small class="position-secondary">best close ${f(sl.best_close)} · barre ${sl.last_bar_ts || "N/A"} · maj ${updated}</small></div></td>
+      <td><div class="protection-cell"><strong><span class="badge protection-${protectionClass}">${protection}</span></strong><small class="position-secondary">raison ${protectionReason}</small><small class="position-secondary">stop ${f(sl.stop)} · ${money(sl.stop_distance)} · ${gap}</small><small class="position-secondary">${stopPnlText} · estimé hors frais/slippage</small><small class="position-secondary">best close ${f(sl.best_close)} · barre ${sl.last_bar_ts || "N/A"} · maj ${updated}</small></div></td>
     </tr>`;
   }).join("");
   document.querySelectorAll("#slots .slotclick").forEach(tr => tr.onclick = () => openDrill(tr.dataset.name));
@@ -470,7 +488,8 @@ function renderCarryCard(carry) {
     carry.gross_notional == null || carry.net_notional == null ? "N/A" : fmt$(carry.gross_notional, 0) + " / " + fmt$(carry.net_notional, 0);
   if ($("carry-pnl-net")) $("carry-pnl-net").textContent = carry.pnl_net == null ? "N/A" : fmt$(carry.pnl_net, 0);
   if ($("carry-costs")) $("carry-costs").textContent = carry.costs == null ? "N/A" : fmt$(carry.costs, 0);
-  if ($("carry-notional-source")) $("carry-notional-source").textContent = carry.notional_source || "N/A";
+  if ($("carry-notional-source")) $("carry-notional-source").textContent =
+    (carry.notional_source || "N/A") + " · persisted " + (carry.persisted_notional_status || "N/A");
   if ($("carry-entry-age")) $("carry-entry-age").textContent = open ? durationNA(carry.position_age_s) : "N/A";
   if ($("carry-funding-age")) $("carry-funding-age").textContent = durationNA(carry.last_funding_age_s);
   if ($("carry-entry-price")) $("carry-entry-price").textContent = carry.entry_price == null ? "N/A" : fmt$(carry.entry_price, 2);

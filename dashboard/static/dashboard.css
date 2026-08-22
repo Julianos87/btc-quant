@@ -404,6 +404,9 @@
   .badge.long  { background:var(--good-bg); color:var(--good-text); }
   .badge.short { background:var(--crit-bg); color:var(--crit); }
   .badge.flat  { background:color-mix(in srgb,var(--muted) 12%,transparent); color:var(--muted); }
+  .badge.unknown, .badge.protection-unknown { background:var(--warn-bg); color:var(--warn); }
+  .badge.protection-protected { background:var(--good-bg); color:var(--good-text); }
+  .badge.protection-unsafe { background:var(--crit-bg); color:var(--crit); }
   /* liseré discret sur toute la ligne d'un slot en position — n'affecte pas
      la boîte (box-shadow inset), donc aucun décalage de mise en page */
   tr.slotclick:has(.badge.long) td:first-child { box-shadow:inset 3px 0 0 color-mix(in oklch, var(--s2) 55%, transparent); }

@@ -9,6 +9,7 @@ from __future__ import annotations
 import gzip
 import json
 import logging
+import math
 import os
 import re
 import sqlite3
@@ -37,6 +38,10 @@ from btcquant.reporting.prometheus import render_prometheus
 from btcquant.execution.health import (
     execution_health,
     execution_safety_health,
+)
+from btcquant.execution.state_contract import (
+    EXCHANGE_STOP_REPLACEMENT_ACTIVE,
+    PROTECTION_MODE_UNKNOWN,
 )
 from btcquant.execution.readiness import (
     SERVICE_ENGINE_MAX_AGE_SECONDS,
@@ -806,12 +811,20 @@ def summary():
 
     def _number(value):
         try:
-            if value is None:
+            if value is None or isinstance(value, bool):
                 return None
             number = float(value)
-            return number if pd.notna(number) else None
+            return number if math.isfinite(number) else None
         except (TypeError, ValueError):
             return None
+
+    def _positive_number(value):
+        number = _number(value)
+        return number if number is not None and number > 0 else None
+
+    def _magnitude(value):
+        number = _number(value)
+        return number if number is not None and number >= 0 else None
 
     def _timestamp(value):
         if value is None:
@@ -830,32 +843,68 @@ def summary():
         parsed = _timestamp(value)
         return max(0.0, float((now_utc - parsed).total_seconds())) if parsed else None
 
-    mark_price = _number(price) if market_valuation_status != "UNKNOWN" else None
+    mark_price = _positive_number(price) if market_valuation_status != "UNKNOWN" else None
+    trend_health = None
+    if store is not None:
+        try:
+            trend_health = execution_health(store, "trend")
+        except Exception:
+            app.logger.exception("Trend protection source unavailable")
+    protection_by_slot = dict(trend_health.slot_protection) if trend_health else {}
+    unprotected_slots = set(trend_health.unprotected_slots) if trend_health else set()
+
+    def _protection_projection(slot_name):
+        if trend_health is None:
+            return None, None, "UNKNOWN", None
+        reason = protection_by_slot.get(slot_name, PROTECTION_MODE_UNKNOWN)
+        protected = slot_name in protection_by_slot and slot_name not in unprotected_slots
+        if reason == EXCHANGE_STOP_REPLACEMENT_ACTIVE and protected:
+            status = "REPLACEMENT_PENDING"
+        elif protected:
+            status = "ACTIVE"
+        elif reason == PROTECTION_MODE_UNKNOWN:
+            status = "UNKNOWN"
+        else:
+            status = "UNSAFE"
+        return trend_health.protection_mode, reason, status, protected
+
     for name, s in trend_state.get("slots", {}).items():
         pos = s.get("position")
         last_bar = s.get("last_bar_ts")
         row = {
             "name": name,
-            "cash": s.get("cash"),
+            "cash": _number(s.get("cash")),
             "state": "FLAT",
             "last_bar": last_bar,
             "last_bar_ts": last_bar,
             "updated_at": trend_observed_at.isoformat() if trend_observed_at else None,
         }
         if pos:
-            direction = 1 if _number(pos.get("direction", 1)) != -1 else -1
-            qty = _number(pos.get("qty"))
-            entry = _number(pos.get("entry_price"))
-            stop = _number(pos.get("stop_price"))
+            raw_direction = _number(pos.get("direction"))
+            direction = raw_direction if raw_direction in (1.0, -1.0) else None
+            qty = _positive_number(pos.get("qty"))
+            entry = _positive_number(pos.get("entry_price"))
+            stop = _positive_number(pos.get("stop_price"))
             upnl = None
-            if mark_price is not None and qty is not None and entry is not None:
-                upnl = direction * qty * (mark_price - entry)
-            entry_notional = abs(qty * entry) if qty is not None and entry is not None else None
-            notional = abs(qty) * mark_price if qty is not None and mark_price is not None else None
+            if (
+                direction is not None
+                and mark_price is not None
+                and qty is not None
+                and entry is not None
+            ):
+                upnl = _number(direction * qty * (mark_price - entry))
+            entry_notional = (
+                _number(abs(qty * entry)) if qty is not None and entry is not None else None
+            )
+            notional = (
+                _number(abs(qty) * mark_price)
+                if qty is not None and mark_price is not None
+                else None
+            )
             upnl_pct = upnl / entry_notional if upnl is not None and entry_notional else None
             stop_distance = (
-                direction * (mark_price - stop)
-                if mark_price is not None and stop is not None
+                _number(direction * (mark_price - stop))
+                if direction is not None and mark_price is not None and stop is not None
                 else None
             )
             stop_distance_pct = (
@@ -864,19 +913,19 @@ def summary():
                 else None
             )
             stop_pnl = (
-                direction * qty * (stop - entry)
-                if qty is not None and stop is not None and entry is not None
+                _number(direction * qty * (stop - entry))
+                if direction is not None
+                and qty is not None
+                and stop is not None
+                and entry is not None
                 else None
             )
             entry_time = _timestamp(pos.get("entry_time"))
-            protection_mode = s.get("stop_protection_mode") or (
-                "EXCHANGE" if s.get("stop_order_id") else "SOFTWARE" if stop is not None else None
-            )
-            protection_status = (
-                "PENDING" if s.get("stop_transition") else "ACTIVE" if stop is not None else None
+            protection_mode, protection_reason, protection_status, protection_protected = (
+                _protection_projection(name)
             )
             row.update(
-                state="LONG" if direction == 1 else "SHORT",
+                state="LONG" if direction == 1 else "SHORT" if direction == -1 else "UNKNOWN",
                 direction=direction,
                 qty=qty,
                 initial_qty=_number(pos.get("initial_qty")),
@@ -891,7 +940,9 @@ def summary():
                 stop_distance_pct=stop_distance_pct,
                 stop_pnl=stop_pnl,
                 protection_mode=protection_mode,
+                protection_reason=protection_reason,
                 protection_status=protection_status,
+                protection_protected=protection_protected,
                 entry_time=entry_time.isoformat() if entry_time else None,
                 position_age_s=_age(entry_time),
                 bars=pos.get("bars_held"),
@@ -912,6 +963,9 @@ def summary():
         slots.append(row)
 
     open_slots = [slot for slot in slots if slot["state"] != "FLAT"]
+    trend_notional_complete = not open_slots or all(
+        slot.get("notional") is not None for slot in open_slots
+    )
     trend_valuation_complete = not open_slots or all(
         slot.get("notional") is not None
         and slot.get("upnl") is not None
@@ -919,26 +973,44 @@ def summary():
         for slot in open_slots
     )
     trend_total_notional = (
-        sum(slot["notional"] for slot in open_slots) if trend_valuation_complete else None
+        _number(sum(slot["notional"] for slot in open_slots)) if trend_notional_complete else None
     )
     trend_total_upnl = (
-        sum(slot["upnl"] for slot in open_slots) if trend_valuation_complete else None
+        _number(sum(slot["upnl"] for slot in open_slots)) if trend_valuation_complete else None
     )
     trend_entry_notional = (
-        sum(slot["entry_notional"] for slot in open_slots) if trend_valuation_complete else None
+        _number(sum(slot["entry_notional"] for slot in open_slots))
+        if trend_valuation_complete
+        else None
     )
-    protected_slots = [slot for slot in open_slots if slot.get("protection_status") == "ACTIVE"]
+    protected_slots = [slot for slot in open_slots if slot.get("protection_protected") is True]
     pending_protection_slots = [
-        slot for slot in open_slots if slot.get("protection_status") == "PENDING"
+        slot for slot in open_slots if slot.get("protection_status") == "REPLACEMENT_PENDING"
     ]
-    if not open_slots:
+    if trend_health is None:
+        trend_protection_status = "UNKNOWN"
+        protected_slot_count = None
+        pending_protection_count = None
+    elif not open_slots:
         trend_protection_status = "NONE"
+        protected_slot_count = 0
+        pending_protection_count = 0
+    elif len(protected_slots) == len(open_slots):
+        trend_protection_status = "REPLACEMENT_PENDING" if pending_protection_slots else "ACTIVE"
+        protected_slot_count = len(protected_slots)
+        pending_protection_count = len(pending_protection_slots)
+    elif all(slot.get("protection_status") == "UNKNOWN" for slot in open_slots):
+        trend_protection_status = "UNKNOWN"
+        protected_slot_count = 0
+        pending_protection_count = len(pending_protection_slots)
     elif pending_protection_slots:
         trend_protection_status = "PENDING"
-    elif len(protected_slots) == len(open_slots):
-        trend_protection_status = "ACTIVE"
+        protected_slot_count = len(protected_slots)
+        pending_protection_count = len(pending_protection_slots)
     else:
-        trend_protection_status = "PARTIAL"
+        trend_protection_status = "UNSAFE"
+        protected_slot_count = len(protected_slots)
+        pending_protection_count = len(pending_protection_slots)
 
     carry_entry_time = _timestamp(
         carry_state.get("entry_timestamp") or carry_state.get("entry_time")
@@ -946,27 +1018,36 @@ def summary():
     carry_last_funding = _timestamp(carry_state.get("last_funding_ts"))
     carry_spot_qty = _number(carry_state.get("spot_qty"))
     carry_perp_qty = _number(carry_state.get("perp_qty"))
-    carry_spot_notional = _number(carry_state.get("spot_notional"))
-    carry_perp_notional = _number(carry_state.get("perp_notional"))
+    raw_carry_spot_notional = _number(carry_state.get("spot_notional"))
+    raw_carry_perp_notional = _number(carry_state.get("perp_notional"))
+    persisted_notional_fields_present = any(
+        key in carry_state for key in ("spot_notional", "perp_notional")
+    )
     carry_in_position = bool(carry_state.get("in_position"))
     carry_position_known = "in_position" in carry_state
+    persisted_carry_notionals = (
+        _magnitude(raw_carry_spot_notional) is not None
+        and _magnitude(raw_carry_perp_notional) is not None
+    )
+    persisted_notional_status = (
+        "N/A"
+        if not carry_in_position
+        else "VALID"
+        if persisted_carry_notionals
+        else "INVALID"
+        if persisted_notional_fields_present
+        else "MISSING"
+    )
     if not carry_in_position:
         carry_spot_notional = carry_perp_notional = None
-    persisted_carry_notionals = carry_spot_notional is not None and carry_perp_notional is not None
-    if (
-        carry_in_position
-        and carry_spot_notional is None
-        and carry_spot_qty is not None
-        and mark_price is not None
-    ):
-        carry_spot_notional = abs(carry_spot_qty) * mark_price
-    if (
-        carry_in_position
-        and carry_perp_notional is None
-        and carry_perp_qty is not None
-        and mark_price is not None
-    ):
-        carry_perp_notional = abs(carry_perp_qty) * mark_price
+    elif persisted_carry_notionals:
+        carry_spot_notional = _magnitude(raw_carry_spot_notional)
+        carry_perp_notional = _magnitude(raw_carry_perp_notional)
+    elif carry_spot_qty is not None and carry_perp_qty is not None and mark_price is not None:
+        carry_spot_notional = _number(abs(carry_spot_qty) * mark_price)
+        carry_perp_notional = _number(abs(carry_perp_qty) * mark_price)
+    else:
+        carry_spot_notional = carry_perp_notional = None
     carry_notional_source = (
         "PERSISTED"
         if persisted_carry_notionals
@@ -975,39 +1056,51 @@ def summary():
         else None
     )
     carry_net_notional = (
-        carry_spot_notional - carry_perp_notional
+        _number(carry_spot_notional - carry_perp_notional)
         if carry_spot_notional is not None and carry_perp_notional is not None
         else 0.0
         if carry_position_known and not carry_in_position
         else None
     )
     carry_gross_notional = (
-        abs(carry_spot_notional) + abs(carry_perp_notional)
+        _number(abs(carry_spot_notional) + abs(carry_perp_notional))
         if carry_spot_notional is not None and carry_perp_notional is not None
         else 0.0
         if carry_position_known and not carry_in_position
         else None
     )
     carry_pnl_net, _ = carry_funding_curve(carry_eq, flows, PORTFOLIO.carry_capital)
+    carry_pnl_net = _number(carry_pnl_net)
     funding_ledger = None
     if store is not None:
         try:
             funding_ledger = store.read_funding_ledger()
         except sqlite3.Error:
             funding_ledger = None
-    funding_ledger_status = (
-        "UNAVAILABLE" if funding_ledger is None else "AVAILABLE" if funding_ledger else "EMPTY"
-    )
-    funding_gross_total = (
-        sum(_number(row.get("funding_pnl")) or 0.0 for row in funding_ledger)
-        if funding_ledger
-        else None
-    )
-    borrow_cost_total = (
-        sum(_number(row.get("borrow_cost")) or 0.0 for row in funding_ledger)
-        if funding_ledger
-        else None
-    )
+
+    def _ledger_total(rows, field):
+        if rows is None:
+            return None, "UNAVAILABLE"
+        if not rows:
+            return None, "EMPTY"
+        values = [_number(row.get(field)) for row in rows]
+        if any(value is None for value in values):
+            return None, "INVALID"
+        total = _number(sum(values))
+        return (total, "AVAILABLE") if total is not None else (None, "INVALID")
+
+    funding_gross_total, funding_status = _ledger_total(funding_ledger, "funding_pnl")
+    borrow_cost_total, borrow_status = _ledger_total(funding_ledger, "borrow_cost")
+    if funding_ledger is None:
+        funding_ledger_status = "UNAVAILABLE"
+    elif not funding_ledger:
+        funding_ledger_status = "EMPTY"
+    elif funding_status == borrow_status == "AVAILABLE":
+        funding_ledger_status = "AVAILABLE"
+    elif funding_status == borrow_status == "INVALID":
+        funding_ledger_status = "INVALID"
+    else:
+        funding_ledger_status = "PARTIAL"
     last_funding_ledger = funding_ledger[-1] if funding_ledger else None
 
     # funding horaire sur Hyperliquid : prochain paiement à l'heure pile
@@ -1015,30 +1108,38 @@ def summary():
 
     # exposition brute / levier effectif (somme des notionnels / équity totale)
     trend_notional = trend_total_notional
-    carry_notional = carry_equity * CARRY_POLICY.leverage if carry_state.get("in_position") else 0.0
-    gross_notional = trend_notional + carry_notional if trend_notional is not None else None
-    leverage = gross_notional / total if gross_notional is not None and total else None
+    carry_notional = (
+        _number(carry_equity * CARRY_POLICY.leverage) if carry_state.get("in_position") else 0.0
+    )
+    gross_notional = (
+        _number(trend_notional + carry_notional)
+        if trend_notional is not None and carry_notional is not None
+        else None
+    )
+    leverage = _number(gross_notional / total) if gross_notional is not None and total else None
     trend_directional_net = (
-        sum(slot["direction"] * slot["notional"] for slot in open_slots)
+        _number(sum(slot["direction"] * slot["notional"] for slot in open_slots))
         if trend_valuation_complete
         else None
     )
     portfolio_gross_notional = (
-        trend_total_notional + carry_gross_notional
+        _number(trend_total_notional + carry_gross_notional)
         if mark_price is not None
         and trend_total_notional is not None
         and carry_gross_notional is not None
         else None
     )
     portfolio_directional_net = (
-        trend_directional_net + carry_net_notional
+        _number(trend_directional_net + carry_net_notional)
         if mark_price is not None
         and trend_directional_net is not None
         and carry_net_notional is not None
         else None
     )
     gross_equity_ratio = (
-        portfolio_gross_notional / total if portfolio_gross_notional is not None and total else None
+        _number(portfolio_gross_notional / total)
+        if portfolio_gross_notional is not None and total
+        else None
     )
 
     # prochaine bougie 4h (le trend décide à la clôture des bougies 4h UTC)
@@ -1135,9 +1236,10 @@ def summary():
                 "total_upnl_pct": trend_total_upnl / trend_entry_notional
                 if trend_entry_notional
                 else None,
-                "protected_slots": len(protected_slots),
-                "pending_protection_slots": len(pending_protection_slots),
+                "protected_slots": protected_slot_count,
+                "pending_protection_slots": pending_protection_count,
                 "protection_status": trend_protection_status,
+                "protection_mode": trend_health.protection_mode if trend_health else None,
             },
             "carry": {
                 "alive": carry_age is not None and carry_age < 900,
@@ -1148,11 +1250,11 @@ def summary():
                 "initial": PORTFOLIO.carry_capital,
                 "in_position": carry_state.get("in_position", False),
                 "execution_state": carry_state.get("execution_state"),
-                "qty": carry_state.get("qty"),
-                "spot_qty": carry_state.get("spot_qty"),
-                "perp_qty": carry_state.get("perp_qty"),
-                "spot_notional": carry_state.get("spot_notional"),
-                "perp_notional": carry_state.get("perp_notional"),
+                "qty": _number(carry_state.get("qty")),
+                "spot_qty": carry_spot_qty,
+                "perp_qty": carry_perp_qty,
+                "spot_notional": _magnitude(raw_carry_spot_notional),
+                "perp_notional": _magnitude(raw_carry_perp_notional),
                 "accounting_uncertain": bool(carry_state.get("accounting_uncertain", False)),
                 "last_funding_ts": carry_state.get("last_funding_ts"),
                 # Le carry a des coupe-circuits depuis le 27/07/2026 ; les
@@ -1170,6 +1272,7 @@ def summary():
                 "gross_notional": carry_gross_notional,
                 "net_notional": carry_net_notional,
                 "notional_source": carry_notional_source,
+                "persisted_notional_status": persisted_notional_status,
                 "pnl_net": carry_pnl_net,
                 "costs": None,
                 "last_funding_age_s": _age(carry_last_funding),
@@ -1183,6 +1286,8 @@ def summary():
                 "funding_gross_total": funding_gross_total,
                 "borrow_cost_total": borrow_cost_total,
                 "funding_ledger_status": funding_ledger_status,
+                "funding_pnl_status": funding_status,
+                "borrow_cost_status": borrow_status,
                 "funding_ledger_last_timestamp": last_funding_ledger.get("funding_timestamp")
                 if last_funding_ledger
                 else None,
