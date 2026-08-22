@@ -62,3 +62,34 @@ def test_frontend_escapes_remote_text_before_html_injection():
     assert 'direction:"SHORT", active:isShort' in javascript
     assert "const waiting = candles.map" in javascript
     assert "if (all.length < 10 || !sideKnown)" in javascript
+
+
+def test_position_cards_expose_operational_detail_contract(monkeypatch):
+    monkeypatch.setattr(dashboard, "AUTH_TOKEN", None)
+    page = dashboard.app.test_client().get("/").data
+
+    for element_id in (
+        b"trend-open-slots",
+        b"trend-total-notional",
+        b"trend-total-upnl",
+        b"trend-protection",
+        b"carry-gross-net",
+        b"carry-pnl-net",
+        b"carry-accounting",
+        b"exp-trend",
+        b"exp-carry",
+        b"exp-protection",
+        b"exp-freshness",
+        b"trend-next-boundary",
+        b"carry-entry-price",
+        b"carry-funding-gross",
+        b"exp-carry-spot",
+        b"exp-net",
+        b"exp-ratio",
+    ):
+        assert b'id="' + element_id + b'"' in page
+    assert b'class="position-table"' in page
+    assert b"Brut total = somme des notionnels absolus" in page
+    javascript = (dashboard.ROOT / "dashboard" / "static" / "dashboard.js").read_bytes()
+    assert b"prix observ\xc3\xa9" in javascript.lower()
+    assert b"aucune position venue" in page

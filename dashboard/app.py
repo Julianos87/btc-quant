@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import threading
 import time
 from datetime import UTC, datetime
@@ -800,28 +801,105 @@ def summary():
             if start_day > 0:
                 day_pnl_pct = day_total / start_day - 1.0
 
+    now_utc = pd.Timestamp.now(tz="UTC")
     slots = []
+
+    def _number(value):
+        try:
+            if value is None:
+                return None
+            number = float(value)
+            return number if pd.notna(number) else None
+        except (TypeError, ValueError):
+            return None
+
+    def _timestamp(value):
+        if value is None:
+            return None
+        try:
+            parsed = pd.Timestamp(value)
+            if parsed.tzinfo is None:
+                parsed = parsed.tz_localize("UTC")
+            else:
+                parsed = parsed.tz_convert("UTC")
+            return parsed
+        except (TypeError, ValueError):
+            return None
+
+    def _age(value):
+        parsed = _timestamp(value)
+        return max(0.0, float((now_utc - parsed).total_seconds())) if parsed else None
+
+    mark_price = _number(price) if market_valuation_status != "UNKNOWN" else None
     for name, s in trend_state.get("slots", {}).items():
         pos = s.get("position")
+        last_bar = s.get("last_bar_ts")
         row = {
             "name": name,
             "cash": s.get("cash"),
             "state": "FLAT",
-            "last_bar": s.get("last_bar_ts"),
+            "last_bar": last_bar,
+            "last_bar_ts": last_bar,
+            "updated_at": trend_observed_at.isoformat() if trend_observed_at else None,
         }
         if pos:
-            direction = pos.get("direction", 1)
+            direction = 1 if _number(pos.get("direction", 1)) != -1 else -1
+            qty = _number(pos.get("qty"))
+            entry = _number(pos.get("entry_price"))
+            stop = _number(pos.get("stop_price"))
             upnl = None
-            if price and market_valuation_status != "UNKNOWN":
-                upnl = direction * pos["qty"] * (price - pos["entry_price"])
+            if mark_price is not None and qty is not None and entry is not None:
+                upnl = direction * qty * (mark_price - entry)
+            entry_notional = abs(qty * entry) if qty is not None and entry is not None else None
+            notional = abs(qty) * mark_price if qty is not None and mark_price is not None else None
+            upnl_pct = upnl / entry_notional if upnl is not None and entry_notional else None
+            stop_distance = (
+                direction * (mark_price - stop)
+                if mark_price is not None and stop is not None
+                else None
+            )
+            stop_distance_pct = (
+                stop_distance / abs(mark_price)
+                if stop_distance is not None and mark_price
+                else None
+            )
+            stop_pnl = (
+                direction * qty * (stop - entry)
+                if qty is not None and stop is not None and entry is not None
+                else None
+            )
+            entry_time = _timestamp(pos.get("entry_time"))
+            protection_mode = s.get("stop_protection_mode") or (
+                "EXCHANGE" if s.get("stop_order_id") else "SOFTWARE" if stop is not None else None
+            )
+            protection_status = (
+                "PENDING" if s.get("stop_transition") else "ACTIVE" if stop is not None else None
+            )
             row.update(
                 state="LONG" if direction == 1 else "SHORT",
-                qty=pos["qty"],
-                entry=pos["entry_price"],
-                stop=pos["stop_price"],
-                bars=pos.get("bars_held"),
+                direction=direction,
+                qty=qty,
+                initial_qty=_number(pos.get("initial_qty")),
+                entry_fee=_number(s.get("entry_fee")),
+                entry=entry,
+                stop=stop,
+                notional=notional,
+                entry_notional=entry_notional,
                 upnl=upnl,
+                upnl_pct=upnl_pct,
+                stop_distance=stop_distance,
+                stop_distance_pct=stop_distance_pct,
+                stop_pnl=stop_pnl,
+                protection_mode=protection_mode,
+                protection_status=protection_status,
+                entry_time=entry_time.isoformat() if entry_time else None,
+                position_age_s=_age(entry_time),
+                bars=pos.get("bars_held"),
+                pyramid_adds=pos.get("pyramid_adds", 0),
+                best_close=_number(pos.get("best_close")),
+                last_add_price=_number(pos.get("last_add_price")),
                 position_as_of=trend_observed_at.isoformat() if trend_observed_at else None,
+                market_price=mark_price,
                 market_price_as_of=price_snapshot.observed_at.isoformat()
                 if price_snapshot.observed_at
                 else None,
@@ -833,17 +911,135 @@ def summary():
             )
         slots.append(row)
 
+    open_slots = [slot for slot in slots if slot["state"] != "FLAT"]
+    trend_valuation_complete = not open_slots or all(
+        slot.get("notional") is not None
+        and slot.get("upnl") is not None
+        and slot.get("entry_notional") is not None
+        for slot in open_slots
+    )
+    trend_total_notional = (
+        sum(slot["notional"] for slot in open_slots) if trend_valuation_complete else None
+    )
+    trend_total_upnl = (
+        sum(slot["upnl"] for slot in open_slots) if trend_valuation_complete else None
+    )
+    trend_entry_notional = (
+        sum(slot["entry_notional"] for slot in open_slots) if trend_valuation_complete else None
+    )
+    protected_slots = [slot for slot in open_slots if slot.get("protection_status") == "ACTIVE"]
+    pending_protection_slots = [
+        slot for slot in open_slots if slot.get("protection_status") == "PENDING"
+    ]
+    if not open_slots:
+        trend_protection_status = "NONE"
+    elif pending_protection_slots:
+        trend_protection_status = "PENDING"
+    elif len(protected_slots) == len(open_slots):
+        trend_protection_status = "ACTIVE"
+    else:
+        trend_protection_status = "PARTIAL"
+
+    carry_entry_time = _timestamp(
+        carry_state.get("entry_timestamp") or carry_state.get("entry_time")
+    )
+    carry_last_funding = _timestamp(carry_state.get("last_funding_ts"))
+    carry_spot_qty = _number(carry_state.get("spot_qty"))
+    carry_perp_qty = _number(carry_state.get("perp_qty"))
+    carry_spot_notional = _number(carry_state.get("spot_notional"))
+    carry_perp_notional = _number(carry_state.get("perp_notional"))
+    carry_in_position = bool(carry_state.get("in_position"))
+    carry_position_known = "in_position" in carry_state
+    if not carry_in_position:
+        carry_spot_notional = carry_perp_notional = None
+    persisted_carry_notionals = carry_spot_notional is not None and carry_perp_notional is not None
+    if (
+        carry_in_position
+        and carry_spot_notional is None
+        and carry_spot_qty is not None
+        and mark_price is not None
+    ):
+        carry_spot_notional = abs(carry_spot_qty) * mark_price
+    if (
+        carry_in_position
+        and carry_perp_notional is None
+        and carry_perp_qty is not None
+        and mark_price is not None
+    ):
+        carry_perp_notional = abs(carry_perp_qty) * mark_price
+    carry_notional_source = (
+        "PERSISTED"
+        if persisted_carry_notionals
+        else "MODELLED_FROM_QTY_AND_MARK"
+        if carry_spot_notional is not None and carry_perp_notional is not None
+        else None
+    )
+    carry_net_notional = (
+        carry_spot_notional - carry_perp_notional
+        if carry_spot_notional is not None and carry_perp_notional is not None
+        else 0.0
+        if carry_position_known and not carry_in_position
+        else None
+    )
+    carry_gross_notional = (
+        abs(carry_spot_notional) + abs(carry_perp_notional)
+        if carry_spot_notional is not None and carry_perp_notional is not None
+        else 0.0
+        if carry_position_known and not carry_in_position
+        else None
+    )
+    carry_pnl_net, _ = carry_funding_curve(carry_eq, flows, PORTFOLIO.carry_capital)
+    funding_ledger = None
+    if store is not None:
+        try:
+            funding_ledger = store.read_funding_ledger()
+        except sqlite3.Error:
+            funding_ledger = None
+    funding_ledger_status = (
+        "UNAVAILABLE" if funding_ledger is None else "AVAILABLE" if funding_ledger else "EMPTY"
+    )
+    funding_gross_total = (
+        sum(_number(row.get("funding_pnl")) or 0.0 for row in funding_ledger)
+        if funding_ledger
+        else None
+    )
+    borrow_cost_total = (
+        sum(_number(row.get("borrow_cost")) or 0.0 for row in funding_ledger)
+        if funding_ledger
+        else None
+    )
+    last_funding_ledger = funding_ledger[-1] if funding_ledger else None
+
     # funding horaire sur Hyperliquid : prochain paiement à l'heure pile
     next_funding = (int(time.time() // 3600) + 1) * 3600 * 1000
 
     # exposition brute / levier effectif (somme des notionnels / équity totale)
-    trend_notional = 0.0
-    for sl in slots:
-        if sl.get("qty") and price and market_valuation_status != "UNKNOWN":
-            trend_notional += abs(sl["qty"]) * price
+    trend_notional = trend_total_notional
     carry_notional = carry_equity * CARRY_POLICY.leverage if carry_state.get("in_position") else 0.0
-    gross_notional = trend_notional + carry_notional
-    leverage = gross_notional / total if total else 0.0
+    gross_notional = trend_notional + carry_notional if trend_notional is not None else None
+    leverage = gross_notional / total if gross_notional is not None and total else None
+    trend_directional_net = (
+        sum(slot["direction"] * slot["notional"] for slot in open_slots)
+        if trend_valuation_complete
+        else None
+    )
+    portfolio_gross_notional = (
+        trend_total_notional + carry_gross_notional
+        if mark_price is not None
+        and trend_total_notional is not None
+        and carry_gross_notional is not None
+        else None
+    )
+    portfolio_directional_net = (
+        trend_directional_net + carry_net_notional
+        if mark_price is not None
+        and trend_directional_net is not None
+        and carry_net_notional is not None
+        else None
+    )
+    gross_equity_ratio = (
+        portfolio_gross_notional / total if portfolio_gross_notional is not None and total else None
+    )
 
     # prochaine bougie 4h (le trend décide à la clôture des bougies 4h UTC)
     now_ts = pd.Timestamp.now(tz="UTC")
@@ -907,6 +1103,7 @@ def summary():
                 "received_at": price_snapshot.received_at.isoformat(),
                 "age_seconds": price_snapshot.age_seconds,
                 "freshness": price_snapshot.freshness.value,
+                "price_semantics": "HYPERLIQUID_1M_CLOSE",
                 "valuation_status": market_valuation_status,
             },
             "funding": {
@@ -931,6 +1128,16 @@ def summary():
                 "daily_lockout": trend_state.get("daily_lockout", False),
                 "peak_equity": trend_state.get("peak_equity"),
                 "slots": slots,
+                "open_slots": len(open_slots),
+                "total_slots": len(slots),
+                "total_notional": trend_total_notional if mark_price is not None else None,
+                "total_upnl": trend_total_upnl if mark_price is not None else None,
+                "total_upnl_pct": trend_total_upnl / trend_entry_notional
+                if trend_entry_notional
+                else None,
+                "protected_slots": len(protected_slots),
+                "pending_protection_slots": len(pending_protection_slots),
+                "protection_status": trend_protection_status,
             },
             "carry": {
                 "alive": carry_age is not None and carry_age < 900,
@@ -954,6 +1161,32 @@ def summary():
                 "halted": carry_state.get("halted", False),
                 "daily_lockout": carry_state.get("daily_lockout", False),
                 "peak_equity": carry_state.get("peak_equity"),
+                "mode": "PAPER_SYNTHETIC",
+                "position_status": "OPEN" if carry_state.get("in_position") else "FLAT",
+                "entry_time": carry_entry_time.isoformat() if carry_entry_time else None,
+                "position_age_s": _age(carry_entry_time),
+                "spot_notional_derived": carry_spot_notional,
+                "perp_notional_derived": carry_perp_notional,
+                "gross_notional": carry_gross_notional,
+                "net_notional": carry_net_notional,
+                "notional_source": carry_notional_source,
+                "pnl_net": carry_pnl_net,
+                "costs": None,
+                "last_funding_age_s": _age(carry_last_funding),
+                "entry_price": _number(carry_state.get("entry_price")),
+                "borrow_principal": _number(carry_state.get("borrow_principal")),
+                "position_generation": carry_state.get("position_generation"),
+                "funding_price_source": carry_state.get("funding_notional_price_source"),
+                "funding_price_timestamp": carry_state.get("funding_notional_price_timestamp"),
+                "state_updated_at": carry_observed_at.isoformat() if carry_observed_at else None,
+                "pnl_carry_ex_flows": carry_pnl_net,
+                "funding_gross_total": funding_gross_total,
+                "borrow_cost_total": borrow_cost_total,
+                "funding_ledger_status": funding_ledger_status,
+                "funding_ledger_last_timestamp": last_funding_ledger.get("funding_timestamp")
+                if last_funding_ledger
+                else None,
+                "other_costs": None,
             },
             "totals": {
                 "equity": total if accounting_available else None,
@@ -972,6 +1205,27 @@ def summary():
                 else None,
                 "gross_notional": gross_notional if accounting_available else None,
                 "leverage": leverage if accounting_available else None,
+                "trend_notional": trend_total_notional if mark_price is not None else None,
+                "carry_notional": carry_notional if accounting_available else None,
+                "trend_upnl": trend_total_upnl if mark_price is not None else None,
+                "trend_open_slots": len(open_slots),
+                "trend_slots_total": len(slots),
+                "protection_status": trend_protection_status,
+                "freshness_status": accounting_status,
+                "valuation_status": market_valuation_status,
+                # Legacy risk-engine contract: one-leg carry policy equivalent.
+                "risk_engine_notional": gross_notional if accounting_available else None,
+                "risk_engine_leverage": leverage if accounting_available else None,
+                # Reporting contract: actual two-leg modelled gross exposure.
+                "portfolio_gross_notional": portfolio_gross_notional,
+                "portfolio_directional_net_notional": portfolio_directional_net,
+                "carry_spot_notional": carry_spot_notional,
+                "carry_perp_notional": carry_perp_notional,
+                "carry_gross_notional": carry_gross_notional,
+                "gross_equity_ratio": gross_equity_ratio,
+                "trend_directional_net_notional": trend_directional_net
+                if mark_price is not None
+                else None,
             },
             "health": {
                 "server_uptime_s": max(0.0, time.monotonic() - START_TIME),
