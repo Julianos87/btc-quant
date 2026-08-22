@@ -28,6 +28,7 @@ def _summary_fixture(
     price=105.0,
     ledger=_MISSING,
     trend_override=None,
+    carry_override=None,
 ):
     """Build a read-only summary fixture without changing production state."""
 
@@ -56,24 +57,30 @@ def _summary_fixture(
         }[key],
     )
     store = StateStore(tmp_path / "btcquant.db")
-    carry_state = carry_state or {
-        "equity": 4_000.0,
-        "in_position": False,
-        "peak_equity": 4_000.0,
-        "day_start_equity": 4_000.0,
-    }
+    if carry_state is None:
+        carry_state = {
+            "equity": 4_000.0,
+            "in_position": False,
+            "peak_equity": 4_000.0,
+            "day_start_equity": 4_000.0,
+        }
     store.save_engine_state("trend", trend_state)
     store.save_engine_state("carry", carry_state)
     store.append_equity("trend", 6_000.0, now.isoformat())
     store.append_equity("carry", 4_000.0, now.isoformat())
     if ledger is not _MISSING:
         monkeypatch.setattr(StateStore, "read_funding_ledger", lambda _self: ledger)
-    if trend_override is not None:
-        monkeypatch.setattr(
-            dashboard_app,
-            "_engine_state",
-            lambda engine, _legacy_name: trend_override if engine == "trend" else carry_state,
-        )
+    if trend_override is not None or carry_override is not None:
+        original_engine_state = dashboard_app._engine_state
+
+        def engine_state_override(engine, legacy_name):
+            if engine == "trend" and trend_override is not None:
+                return trend_override
+            if engine == "carry" and carry_override is not None:
+                return carry_override
+            return original_engine_state(engine, legacy_name)
+
+        monkeypatch.setattr(dashboard_app, "_engine_state", engine_state_override)
     return (
         dashboard_app.app.test_client()
         .get(
@@ -582,6 +589,7 @@ def test_summary_distinguishes_carry_two_leg_gross_and_funding_ledger(tmp_path, 
 
     carry = payload["carry"]
     assert carry["notional_source"] == "PERSISTED"
+    assert carry["persisted_notional_status"] == "VALID"
     assert carry["gross_notional"] == pytest.approx(580.0)
     assert carry["net_notional"] == pytest.approx(20.0)
     assert carry["funding_ledger_status"] == "AVAILABLE"
@@ -664,6 +672,8 @@ def test_summary_keeps_flat_and_stale_values_explicitly_unknown(tmp_path, monkey
     assert payload["carry"]["position_status"] == "FLAT"
     assert payload["carry"]["gross_notional"] == pytest.approx(0.0)
     assert payload["carry"]["net_notional"] == pytest.approx(0.0)
+    assert payload["carry"]["notional_source"] is None
+    assert payload["carry"]["persisted_notional_status"] == "N/A"
     assert payload["totals"]["portfolio_gross_notional"] == pytest.approx(0.0)
 
 
@@ -878,3 +888,91 @@ def test_protection_source_unavailable_is_unknown_not_unprotected_zero(tmp_path,
     assert slot["protection_status"] == "UNKNOWN"
     assert slot["protection_reason"] is None
     assert slot["protection_protected"] is None
+
+
+def test_missing_carry_state_is_unknown_not_flat(tmp_path, monkeypatch):
+    payload = _summary_fixture(
+        tmp_path,
+        monkeypatch,
+        _trend_state_with_positions(mode="SOFTWARE"),
+        carry_override={},
+    )
+    carry = payload["carry"]
+    assert carry["position_status"] == "UNKNOWN"
+    assert carry["position_known"] is False
+    assert carry["in_position"] is None
+    assert carry["gross_notional"] is None
+    assert carry["net_notional"] is None
+    assert carry["notional_source"] is None
+    assert carry["accounting_uncertain"] is None
+
+
+@pytest.mark.parametrize("invalid_field", ["spot_notional", "perp_notional"])
+def test_zero_persisted_carry_leg_is_invalid_and_can_fall_back_to_model(
+    tmp_path, monkeypatch, invalid_field
+):
+    carry_state = {
+        "equity": 4_000.0,
+        "in_position": True,
+        "spot_qty": 1.0,
+        "perp_qty": -1.0,
+        "spot_notional": 300.0,
+        "perp_notional": 280.0,
+    }
+    carry_state[invalid_field] = 0.0
+    payload = _summary_fixture(
+        tmp_path,
+        monkeypatch,
+        _trend_state_with_positions(mode="SOFTWARE"),
+        carry_state=carry_state,
+    )
+    carry = payload["carry"]
+    assert carry["persisted_notional_status"] == "INVALID"
+    assert carry["notional_source"] == "MODELLED_FROM_QTY_AND_MARK"
+    assert carry["gross_notional"] == pytest.approx(210.0)
+    assert carry["net_notional"] == pytest.approx(0.0)
+
+
+def test_zero_persisted_legs_and_zero_quantities_do_not_become_active_zero_exposure(
+    tmp_path, monkeypatch
+):
+    payload = _summary_fixture(
+        tmp_path,
+        monkeypatch,
+        _trend_state_with_positions(mode="SOFTWARE"),
+        carry_state={
+            "equity": 4_000.0,
+            "in_position": True,
+            "spot_qty": 0.0,
+            "perp_qty": 0.0,
+            "spot_notional": 0.0,
+            "perp_notional": 0.0,
+        },
+    )
+    carry = payload["carry"]
+    assert carry["position_status"] == "OPEN"
+    assert carry["persisted_notional_status"] == "INVALID"
+    assert carry["notional_source"] is None
+    assert carry["gross_notional"] is None
+    assert carry["net_notional"] is None
+
+
+def test_positive_quantities_without_persisted_legs_use_modelled_pair(tmp_path, monkeypatch):
+    payload = _summary_fixture(
+        tmp_path,
+        monkeypatch,
+        _trend_state_with_positions(mode="SOFTWARE"),
+        carry_state={
+            "equity": 4_000.0,
+            "in_position": True,
+            "spot_qty": 2.0,
+            "perp_qty": -3.0,
+        },
+    )
+    carry = payload["carry"]
+    assert carry["persisted_notional_status"] == "MISSING"
+    assert carry["notional_source"] == "MODELLED_FROM_QTY_AND_MARK"
+    assert carry["spot_notional_derived"] == pytest.approx(210.0)
+    assert carry["perp_notional_derived"] == pytest.approx(315.0)
+    assert carry["gross_notional"] == pytest.approx(525.0)
+    assert carry["net_notional"] == pytest.approx(-105.0)

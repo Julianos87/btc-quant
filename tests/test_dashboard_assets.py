@@ -95,4 +95,7 @@ def test_position_cards_expose_operational_detail_contract(monkeypatch):
     assert b"prix observ\xc3\xa9" in javascript.lower()
     assert b"PROTECTION INCONNUE" in javascript
     assert b"PROTECTION NON CONFIRM\xc3\x89E" in javascript
+    assert b"carry.position_status" in javascript
+    assert b"badge unknown" in javascript
+    assert "ÉTAT INCONNU".encode() in javascript
     assert b"aucune position venue" in page

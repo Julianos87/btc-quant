@@ -826,6 +826,10 @@ def summary():
         number = _number(value)
         return number if number is not None and number >= 0 else None
 
+    def _positive_magnitude(value):
+        number = _number(value)
+        return number if number is not None and number > 0 else None
+
     def _timestamp(value):
         if value is None:
             return None
@@ -1023,50 +1027,71 @@ def summary():
     persisted_notional_fields_present = any(
         key in carry_state for key in ("spot_notional", "perp_notional")
     )
-    carry_in_position = bool(carry_state.get("in_position"))
     carry_position_known = "in_position" in carry_state
+    carry_in_position = carry_state.get("in_position") if carry_position_known else None
+    carry_is_open = carry_in_position is True
+    carry_is_flat = carry_in_position is False
+    carry_position_status = (
+        "UNKNOWN" if not carry_position_known else "OPEN" if carry_is_open else "FLAT"
+    )
     persisted_carry_notionals = (
-        _magnitude(raw_carry_spot_notional) is not None
-        and _magnitude(raw_carry_perp_notional) is not None
+        _positive_magnitude(raw_carry_spot_notional) is not None
+        and _positive_magnitude(raw_carry_perp_notional) is not None
     )
     persisted_notional_status = (
         "N/A"
-        if not carry_in_position
+        if not carry_is_open
         else "VALID"
         if persisted_carry_notionals
         else "INVALID"
         if persisted_notional_fields_present
         else "MISSING"
     )
-    if not carry_in_position:
+    if not carry_is_open:
         carry_spot_notional = carry_perp_notional = None
     elif persisted_carry_notionals:
-        carry_spot_notional = _magnitude(raw_carry_spot_notional)
-        carry_perp_notional = _magnitude(raw_carry_perp_notional)
-    elif carry_spot_qty is not None and carry_perp_qty is not None and mark_price is not None:
-        carry_spot_notional = _number(abs(carry_spot_qty) * mark_price)
-        carry_perp_notional = _number(abs(carry_perp_qty) * mark_price)
+        carry_spot_notional = _positive_magnitude(raw_carry_spot_notional)
+        carry_perp_notional = _positive_magnitude(raw_carry_perp_notional)
+    elif (
+        carry_spot_qty is not None
+        and carry_perp_qty is not None
+        and abs(carry_spot_qty) > 0
+        and abs(carry_perp_qty) > 0
+        and mark_price is not None
+    ):
+        modelled_spot_notional = _number(abs(carry_spot_qty) * mark_price)
+        modelled_perp_notional = _number(abs(carry_perp_qty) * mark_price)
+        if (
+            modelled_spot_notional is not None
+            and modelled_perp_notional is not None
+            and modelled_spot_notional > 0
+            and modelled_perp_notional > 0
+        ):
+            carry_spot_notional = modelled_spot_notional
+            carry_perp_notional = modelled_perp_notional
+        else:
+            carry_spot_notional = carry_perp_notional = None
     else:
         carry_spot_notional = carry_perp_notional = None
     carry_notional_source = (
         "PERSISTED"
-        if persisted_carry_notionals
+        if carry_is_open and persisted_carry_notionals
         else "MODELLED_FROM_QTY_AND_MARK"
-        if carry_spot_notional is not None and carry_perp_notional is not None
+        if carry_is_open and carry_spot_notional is not None and carry_perp_notional is not None
         else None
     )
     carry_net_notional = (
         _number(carry_spot_notional - carry_perp_notional)
         if carry_spot_notional is not None and carry_perp_notional is not None
         else 0.0
-        if carry_position_known and not carry_in_position
+        if carry_is_flat
         else None
     )
     carry_gross_notional = (
         _number(abs(carry_spot_notional) + abs(carry_perp_notional))
         if carry_spot_notional is not None and carry_perp_notional is not None
         else 0.0
-        if carry_position_known and not carry_in_position
+        if carry_is_flat
         else None
     )
     carry_pnl_net, _ = carry_funding_curve(carry_eq, flows, PORTFOLIO.carry_capital)
@@ -1109,7 +1134,11 @@ def summary():
     # exposition brute / levier effectif (somme des notionnels / équity totale)
     trend_notional = trend_total_notional
     carry_notional = (
-        _number(carry_equity * CARRY_POLICY.leverage) if carry_state.get("in_position") else 0.0
+        _number(carry_equity * CARRY_POLICY.leverage)
+        if carry_is_open
+        else 0.0
+        if carry_is_flat
+        else None
     )
     gross_notional = (
         _number(trend_notional + carry_notional)
@@ -1248,14 +1277,21 @@ def summary():
                 "age_s": carry_age,
                 "equity": carry_equity if accounting_available else None,
                 "initial": PORTFOLIO.carry_capital,
-                "in_position": carry_state.get("in_position", False),
+                "in_position": carry_in_position,
+                "position_known": carry_position_known,
                 "execution_state": carry_state.get("execution_state"),
-                "qty": _number(carry_state.get("qty")),
-                "spot_qty": carry_spot_qty,
-                "perp_qty": carry_perp_qty,
-                "spot_notional": _magnitude(raw_carry_spot_notional),
-                "perp_notional": _magnitude(raw_carry_perp_notional),
-                "accounting_uncertain": bool(carry_state.get("accounting_uncertain", False)),
+                "qty": _number(carry_state.get("qty")) if carry_is_open else None,
+                "spot_qty": carry_spot_qty if carry_is_open else None,
+                "perp_qty": carry_perp_qty if carry_is_open else None,
+                "spot_notional": _positive_magnitude(raw_carry_spot_notional)
+                if carry_is_open
+                else None,
+                "perp_notional": _positive_magnitude(raw_carry_perp_notional)
+                if carry_is_open
+                else None,
+                "accounting_uncertain": bool(carry_state.get("accounting_uncertain"))
+                if carry_position_known
+                else None,
                 "last_funding_ts": carry_state.get("last_funding_ts"),
                 # Le carry a des coupe-circuits depuis le 27/07/2026 ; les
                 # exposer permet à la bannière d'alerte de les signaler comme
@@ -1264,9 +1300,11 @@ def summary():
                 "daily_lockout": carry_state.get("daily_lockout", False),
                 "peak_equity": carry_state.get("peak_equity"),
                 "mode": "PAPER_SYNTHETIC",
-                "position_status": "OPEN" if carry_state.get("in_position") else "FLAT",
-                "entry_time": carry_entry_time.isoformat() if carry_entry_time else None,
-                "position_age_s": _age(carry_entry_time),
+                "position_status": carry_position_status,
+                "entry_time": carry_entry_time.isoformat()
+                if carry_is_open and carry_entry_time
+                else None,
+                "position_age_s": _age(carry_entry_time) if carry_is_open else None,
                 "spot_notional_derived": carry_spot_notional,
                 "perp_notional_derived": carry_perp_notional,
                 "gross_notional": carry_gross_notional,
@@ -1276,11 +1314,19 @@ def summary():
                 "pnl_net": carry_pnl_net,
                 "costs": None,
                 "last_funding_age_s": _age(carry_last_funding),
-                "entry_price": _number(carry_state.get("entry_price")),
-                "borrow_principal": _number(carry_state.get("borrow_principal")),
-                "position_generation": carry_state.get("position_generation"),
-                "funding_price_source": carry_state.get("funding_notional_price_source"),
-                "funding_price_timestamp": carry_state.get("funding_notional_price_timestamp"),
+                "entry_price": _number(carry_state.get("entry_price")) if carry_is_open else None,
+                "borrow_principal": _number(carry_state.get("borrow_principal"))
+                if carry_is_open
+                else None,
+                "position_generation": carry_state.get("position_generation")
+                if carry_is_open
+                else None,
+                "funding_price_source": carry_state.get("funding_notional_price_source")
+                if carry_is_open
+                else None,
+                "funding_price_timestamp": carry_state.get("funding_notional_price_timestamp")
+                if carry_is_open
+                else None,
                 "state_updated_at": carry_observed_at.isoformat() if carry_observed_at else None,
                 "pnl_carry_ex_flows": carry_pnl_net,
                 "funding_gross_total": funding_gross_total,

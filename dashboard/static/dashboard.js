@@ -472,39 +472,48 @@ function fmtTimeUTC(value) {
 }
 
 function renderCarryCard(carry) {
-  const view = BTCQuantDashboardUx.carryPresentation(carry);
-  const open = view.position === "OPEN";
+  const positionStatus = ["OPEN", "FLAT", "UNKNOWN"].includes(carry.position_status)
+    ? carry.position_status
+    : "UNKNOWN";
+  const open = positionStatus === "OPEN";
+  const accounting = carry.position_known !== true
+    ? "N/A"
+    : carry.accounting_uncertain === true
+      ? "INCERTAINE"
+      : "OK";
   if ($("carry-mode")) $("carry-mode").textContent = carry.mode || t("carry_mode_value");
-  $("carry-pos").innerHTML = open
-    ? `<span class="badge long">● ${esc(view.position)}</span><span class="carry-synth">${esc(t("carry_synthetic"))}</span>`
-    : `<span class="badge flat">${esc(view.position)}</span><span class="carry-synth">${esc(t("carry_synthetic"))}</span>`;
+  const positionBadge = positionStatus === "OPEN"
+    ? `<span class="badge long">● OPEN</span>`
+    : positionStatus === "FLAT"
+      ? `<span class="badge flat">FLAT</span>`
+      : `<span class="badge unknown">? ÉTAT INCONNU</span>`;
+  $("carry-pos").innerHTML = positionBadge + `<span class="carry-synth">${esc(t("carry_synthetic"))}</span>`;
   const qty = $("carry-perp-qty");
-  if (qty) qty.textContent = view.perp_qty == null ? "N/A" : fmtNum(view.perp_qty, 6);
+  if (qty) qty.textContent = !open || carry.perp_qty == null ? "N/A" : fmtNum(carry.perp_qty, 6);
   const spot = $("carry-spot-notional");
-  if (spot) spot.textContent = carry.spot_notional_derived == null ? "N/A" : fmt$(carry.spot_notional_derived, 0);
+  if (spot) spot.textContent = !open || carry.spot_notional_derived == null ? "N/A" : fmt$(carry.spot_notional_derived, 0);
   const perp = $("carry-perp-notional");
-  if (perp) perp.textContent = carry.perp_notional_derived == null ? "N/A" : fmt$(carry.perp_notional_derived, 0);
+  if (perp) perp.textContent = !open || carry.perp_notional_derived == null ? "N/A" : fmt$(carry.perp_notional_derived, 0);
   if ($("carry-gross-net")) $("carry-gross-net").textContent =
     carry.gross_notional == null || carry.net_notional == null ? "N/A" : fmt$(carry.gross_notional, 0) + " / " + fmt$(carry.net_notional, 0);
-  if ($("carry-pnl-net")) $("carry-pnl-net").textContent = carry.pnl_net == null ? "N/A" : fmt$(carry.pnl_net, 0);
-  if ($("carry-costs")) $("carry-costs").textContent = carry.costs == null ? "N/A" : fmt$(carry.costs, 0);
+  if ($("carry-pnl-net")) $("carry-pnl-net").textContent = carry.pnl_net == null || positionStatus === "UNKNOWN" ? "N/A" : fmt$(carry.pnl_net, 0);
+  if ($("carry-costs")) $("carry-costs").textContent = carry.costs == null || positionStatus === "UNKNOWN" ? "N/A" : fmt$(carry.costs, 0);
   if ($("carry-notional-source")) $("carry-notional-source").textContent =
     (carry.notional_source || "N/A") + " · persisted " + (carry.persisted_notional_status || "N/A");
   if ($("carry-entry-age")) $("carry-entry-age").textContent = open ? durationNA(carry.position_age_s) : "N/A";
-  if ($("carry-funding-age")) $("carry-funding-age").textContent = durationNA(carry.last_funding_age_s);
-  if ($("carry-entry-price")) $("carry-entry-price").textContent = carry.entry_price == null ? "N/A" : fmt$(carry.entry_price, 2);
-  if ($("carry-borrow-principal")) $("carry-borrow-principal").textContent = carry.borrow_principal == null ? "N/A" : fmt$(carry.borrow_principal, 0);
-  if ($("carry-generation")) $("carry-generation").textContent = carry.position_generation || "N/A";
-  if ($("carry-funding-price-source")) $("carry-funding-price-source").textContent = carry.funding_price_source || "N/A";
-  if ($("carry-funding-price-time")) $("carry-funding-price-time").textContent = fmtTimeUTC(carry.funding_price_timestamp);
-  if ($("carry-state-age")) $("carry-state-age").textContent = fmtTimeUTC(carry.state_updated_at);
+  if ($("carry-funding-age")) $("carry-funding-age").textContent = open ? durationNA(carry.last_funding_age_s) : "N/A";
+  if ($("carry-entry-price")) $("carry-entry-price").textContent = !open || carry.entry_price == null ? "N/A" : fmt$(carry.entry_price, 2);
+  if ($("carry-borrow-principal")) $("carry-borrow-principal").textContent = !open || carry.borrow_principal == null ? "N/A" : fmt$(carry.borrow_principal, 0);
+  if ($("carry-generation")) $("carry-generation").textContent = !open ? "N/A" : carry.position_generation || "N/A";
+  if ($("carry-funding-price-source")) $("carry-funding-price-source").textContent = !open ? "N/A" : carry.funding_price_source || "N/A";
+  if ($("carry-funding-price-time")) $("carry-funding-price-time").textContent = !open ? "N/A" : fmtTimeUTC(carry.funding_price_timestamp);
+  if ($("carry-state-age")) $("carry-state-age").textContent = positionStatus === "UNKNOWN" ? "N/A" : fmtTimeUTC(carry.state_updated_at);
   if ($("carry-funding-gross")) $("carry-funding-gross").textContent = carry.funding_gross_total == null ? "N/A" : fmt$(carry.funding_gross_total, 2);
   if ($("carry-borrow-cost")) $("carry-borrow-cost").textContent = carry.borrow_cost_total == null ? "N/A" : fmt$(carry.borrow_cost_total, 2);
   if ($("carry-ledger-status")) $("carry-ledger-status").textContent = carry.funding_ledger_status || "N/A";
-  if ($("carry-accounting")) $("carry-accounting").textContent =
-    carry.accounting_uncertain ? "INCERTAINE" : carry.equity == null ? "N/A" : "OK";
+  if ($("carry-accounting")) $("carry-accounting").textContent = accounting;
   const note = $("carry-uncertain");
-  if (note) note.style.display = view.accounting_uncertain ? "block" : "none";
+  if (note) note.style.display = carry.accounting_uncertain === true ? "block" : "none";
 }
 function cdText(ts) {
   if (!ts) return "—";
