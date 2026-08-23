@@ -691,8 +691,13 @@
     .detail-grid, .exposure-breakdown { grid-template-columns:1fr; }
   }
   /* ── hiérarchie visuelle dashboard : détails à la demande ─────────────── */
-  html, body { overflow-x:clip; }
   .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+  .grid, .card, .table-wrap, .position-table, .carry-primary-grid, .technical-details, .modal { min-width:0; max-width:100%; }
+  .position-table { width:100%; }
+  .slotclick, .position-table td, .protection-cell, .carry-metric, .exposure-hero, .modal-grid { min-width:0; max-width:100%; }
+  .technical-details .technical-value, .technical-note, .modal-detail strong { overflow-wrap:anywhere; word-break:break-word; }
+  .slot-detail-toggle { display:flex; flex-direction:column; align-items:flex-start; gap:2px; width:100%; min-width:0; padding:0; border:0; background:transparent; color:inherit; text-align:left; cursor:pointer; }
+  .slot-detail-toggle:focus-visible { outline:2px solid color-mix(in srgb,var(--s1) 55%,transparent); outline-offset:3px; border-radius:4px; }
   .trend-next-line { display:flex; align-items:center; gap:8px; margin:-4px 0 10px; color:var(--muted); font-size:11px; line-height:1.3; }
   .trend-next-line strong { color:var(--ink-2); font-size:11px; }
   .trend-next-line span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

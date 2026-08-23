@@ -337,17 +337,30 @@ async function refreshSummary() {
   if ($("carry-last")) $("carry-last").textContent = s.carry.last_funding_ts
     ? new Date(s.carry.last_funding_ts).toLocaleString(LOCALE(), {day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit"}) : "—";
 
+  function trendDirectionSummary(trend) {
+    const rawOpen = trend && trend.open_slots;
+    const open = typeof rawOpen === "number" && Number.isFinite(rawOpen) && rawOpen >= 0 ? rawOpen : null;
+    if (open == null) return "état indisponible";
+    const slots = trend && trend.slots;
+    const states = ["LONG", "SHORT", "UNKNOWN", "FLAT"];
+    if (!Array.isArray(slots) || slots.some(slot => !slot || !states.includes(slot.state))) return "N/A";
+    if (open === 0) return "FLAT";
+    const counts = {LONG:0, SHORT:0, UNKNOWN:0, FLAT:0};
+    slots.forEach(slot => counts[slot.state]++);
+    const labels = [
+      counts.LONG ? counts.LONG + " LONG" : "",
+      counts.SHORT ? counts.SHORT + " SHORT" : "",
+      counts.UNKNOWN ? counts.UNKNOWN + " UNKNOWN" : "",
+    ].filter(Boolean);
+    return labels.length ? labels.join(" · ") : "N/A";
+  }
+
   function renderTrendOverview(summary) {
     const trend = summary.trend || {};
     const open = trend.open_slots == null ? null : trend.open_slots;
     const total = trend.total_slots == null ? null : trend.total_slots;
     $("trend-open-slots").textContent = open == null ? "—" : (open + "/" + (total == null ? "—" : total));
-    const slots = Array.isArray(trend.slots) ? trend.slots : [];
-    const long = slots.filter(slot => slot.state === "LONG").length;
-    const short = slots.filter(slot => slot.state === "SHORT").length;
-    const directionText = [long ? long + " LONG" : "", short ? short + " SHORT" : ""].filter(Boolean).join(" · ");
-    const directionSummary = Array.isArray(trend.slots) ? (directionText || "FLAT") : "N/A";
-    $("trend-open-detail").textContent = open == null ? "état indisponible" : directionSummary;
+    $("trend-open-detail").textContent = trendDirectionSummary(trend);
     $("trend-total-notional").textContent = trend.total_notional == null ? "N/A" : fmt$(trend.total_notional, 0);
     $("trend-total-upnl").textContent = trend.total_upnl == null ? "N/A" : fmt$(trend.total_upnl, 0);
     $("trend-total-upnl-pct").textContent = trend.total_upnl_pct == null ? "N/A" : fmtPct(trend.total_upnl_pct, 2);
@@ -384,8 +397,8 @@ async function refreshSummary() {
     const stopPnl = sl.stop_pnl;
     const stopPnlText = stopPnl == null ? "N/A" : stopPnl > 0 ? "gain protégé " + money(stopPnl) : stopPnl < 0 ? "risque au stop " + money(Math.abs(stopPnl)) : "PnL au stop 0 $";
     const positionText = sl.state === "FLAT" ? "aucune position" : "ouverte depuis " + durationNA(sl.position_age_s);
-    return `<tr class="slotclick" data-name="${esc(sl.name)}" title="Voir les détails" role="button" tabindex="0" aria-label="Détails ${esc(sl.name)}">
-      <td class="slot-cell"><strong class="position-primary">${esc(sl.name).replace("trend_ls_", "Donchian ")}</strong><small class="position-secondary">Voir les détails</small></td>
+    return `<tr class="slotclick" data-name="${esc(sl.name)}" title="Voir les détails">
+      <td class="slot-cell"><button type="button" class="slot-detail-toggle" aria-label="Détails ${esc(sl.name)}"><strong class="position-primary">${esc(sl.name).replace("trend_ls_", "Donchian ")}</strong><small class="position-secondary">Voir les détails</small></button></td>
       <td class="position-cell"><span class="badge ${badge}">${arrow}${sl.state}</span><small class="position-secondary">${positionText}</small></td>
       <td class="price-cell num"><span class="cell-label">entrée → observé</span><strong>${f(sl.entry)} → ${f(sl.market_price)}</strong><small class="position-secondary">${money(sl.notional)} · notionnel estimé</small></td>
       <td class="pnl-cell num ${pnlCls}"><strong>${pnl}</strong><small class="position-secondary">${percentNA(sl.upnl_pct)} · notionnel d’entrée</small></td>
@@ -395,7 +408,6 @@ async function refreshSummary() {
   document.querySelectorAll("#slots .slotclick").forEach(tr => {
     const open = () => openDrill(tr.dataset.name);
     tr.onclick = open;
-    tr.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } };
   });
   renderExposureHealth(s);
   renderViewFocus(s);

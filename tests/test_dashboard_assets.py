@@ -120,8 +120,10 @@ def test_dashboard_visual_hierarchy_uses_progressive_disclosure(monkeypatch):
     assert "@media (max-width:899px)" in css
     assert ".position-table thead { display:none; }" in css
     assert ".position-table .protection-cell { grid-column:1/-1;" in css
-    assert "overflow-x:clip" in css
-    assert 'role="button" tabindex="0"' in javascript
+    assert "html, body { overflow-x:clip; }" not in css
+    assert ".grid > .card" in css
+    assert 'class="slot-detail-toggle"' in javascript
+    assert 'type="button"' in javascript
     assert "slot.protection_reason" in javascript
     assert "raison ${protectionReason}" not in javascript
     for field in (
