@@ -266,11 +266,20 @@ def structure_scenarios(
     policy: FinancingPolicy,
     *,
     reference_price: float,
-    documented_borrow_cap: float = 1000.0,
+    documented_borrow_cap: float | None = None,
 ) -> dict[str, FinancingStructure]:
-    """Build A/B/C without selecting or optimizing any trading policy."""
+    """Build current A/B structural scenarios without policy selection.
 
-    cap = _non_negative(documented_borrow_cap, "documented borrow cap")
+    The historical pre-alpha cap scenario is deliberately excluded from the
+    current decision tree.  A current cap may be supplied for diagnostics,
+    but an absent cap remains unknown rather than defaulting to the historical cap.
+    """
+
+    cap = (
+        None
+        if documented_borrow_cap is None
+        else _non_negative(documented_borrow_cap, "documented borrow cap")
+    )
     return {
         "A_CURRENT_V1_3X": FinancingStructure(
             name="A_CURRENT_V1_3X",
@@ -279,10 +288,16 @@ def structure_scenarios(
             spot_notional=policy.equity * 3.0,
             borrow_principal=policy.equity * 2.0,
             borrow_rate_ann=policy.borrow_rate_ann,
-            feasibility="NOT_EXECUTABLE_UNDER_DOCUMENTED_PRE_ALPHA_CAP",
-            capital_mechanics="current V1 requires 8000 USDC financing versus the documented 1000 USDC cap; perp collateral reuse remains unproven",
+            feasibility="CURRENT_3X_CAPITAL_MECHANICS_NOT_QUALIFIED",
+            capital_mechanics=(
+                "current beta PM rules remove the historical cap blocker, but BTC "
+                "collateral treatment, borrow capacity, and perp collateral reuse "
+                "are not fully qualified"
+            ),
             documented_borrow_cap=cap,
-            capital_denominator_reason="Current 3x is over the documented pre-alpha cap and total venue capital is unqualified",
+            capital_denominator_reason=(
+                "Current PM account eligibility and total venue capital are unqualified"
+            ),
         ),
         "B_THEORETICAL_CASH_FUNDED_SPOT": FinancingStructure(
             name="B_THEORETICAL_CASH_FUNDED_SPOT",
@@ -292,21 +307,30 @@ def structure_scenarios(
             borrow_principal=0.0,
             borrow_rate_ann=policy.borrow_rate_ann,
             feasibility="CONDITIONAL_NON_QUALIFIED",
-            capital_mechanics="cash-funded spot leg is theoretical; perp initial margin, buffer, and collateral reuse are unknown",
-            capital_denominator_reason="4000 allocated equity cannot also be assumed available for perp collateral",
+            capital_mechanics=(
+                "cash-funded spot leg is theoretical; perp initial margin, buffer, "
+                "and collateral reuse are unknown"
+            ),
+            capital_denominator_reason=(
+                "4000 allocated equity cannot also be assumed available for perp collateral"
+            ),
         ),
-        "C_DOCUMENTED_CAP_SCENARIO": FinancingStructure(
-            name="C_DOCUMENTED_CAP_SCENARIO",
-            equity=policy.equity,
-            reference_price=reference_price,
-            spot_notional=policy.equity + cap,
-            borrow_principal=cap,
-            borrow_rate_ann=policy.borrow_rate_ann,
-            feasibility="STRUCTURAL_SCENARIO_ONLY",
-            capital_mechanics="uses the documented cap as a diagnostic upper bound only; perp collateral and total capital remain unknown",
-            documented_borrow_cap=cap,
-            capital_denominator_reason="Borrow cap does not establish total capital or collateral reuse",
-        ),
+    }
+
+
+def recursive_financing_ceiling(initial_cash: float, ltv: float) -> dict[str, float]:
+    """Return an idealized recursive collateral ceiling as a diagnostic only."""
+
+    cash = _positive(initial_cash, "initial cash")
+    ratio = _finite(ltv, "LTV")
+    if not 0 <= ratio < 1:
+        raise FinancingInputError("LTV must be in [0, 1)")
+    max_spot = cash / (1.0 - ratio)
+    return {
+        "initial_cash": cash,
+        "ltv": ratio,
+        "max_theoretical_spot_value": max_spot,
+        "max_theoretical_borrow": max_spot - cash,
     }
 
 

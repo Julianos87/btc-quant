@@ -15,6 +15,7 @@ from btcquant.research.carry_v2_financing import (
     funding_distribution,
     funding_fraction_above,
     structure_scenarios,
+    recursive_financing_ceiling,
 )
 
 
@@ -37,16 +38,12 @@ def test_current_three_x_break_even_is_two_thirds_of_borrow_rate() -> None:
     assert structure.gross_exposure == pytest.approx(24_000.0)
 
 
-def test_unlevered_has_zero_borrow_drag_and_partial_cap_is_structural_only() -> None:
+def test_unlevered_has_zero_borrow_drag_and_no_historical_cap_scenario() -> None:
     structures = structure_scenarios(FinancingPolicy(), reference_price=80_000.0)
     unlevered = structures["B_THEORETICAL_CASH_FUNDED_SPOT"]
-    partial = structures["C_DOCUMENTED_CAP_SCENARIO"]
     assert unlevered.borrow_principal == pytest.approx(0.0)
     assert unlevered.recurring_break_even == pytest.approx(0.0)
-    assert partial.borrow_principal == pytest.approx(1000.0)
-    assert partial.spot_notional == pytest.approx(5000.0)
-    assert partial.recurring_break_even == pytest.approx(0.02)
-    assert partial.feasibility == "STRUCTURAL_SCENARIO_ONLY"
+    assert "C_DOCUMENTED_CAP_SCENARIO" not in structures
 
 
 def test_fully_loaded_break_even_includes_round_trip_costs_and_target_return() -> None:
@@ -138,18 +135,25 @@ def test_artifact_provenance_and_governance_are_fail_closed() -> None:
     }
 
 
-def test_current_three_x_is_over_documented_pre_alpha_cap() -> None:
-    structure = structure_scenarios(FinancingPolicy(), reference_price=80_000.0)["A_CURRENT_V1_3X"]
+def test_current_three_x_is_not_blocked_by_historical_cap() -> None:
+    structure = structure_scenarios(
+        FinancingPolicy(), reference_price=80_000.0, documented_borrow_cap=50_000_000.0
+    )["A_CURRENT_V1_3X"]
     assert structure.borrow_principal == pytest.approx(8000.0)
-    assert structure.documented_borrow_cap == pytest.approx(1000.0)
-    assert structure.borrow_principal / structure.documented_borrow_cap == pytest.approx(8.0)
-    assert structure.feasibility == "NOT_EXECUTABLE_UNDER_DOCUMENTED_PRE_ALPHA_CAP"
-    assert structure.as_dict(FinancingPolicy())["documented_cap_exceeded"] is True
+    assert structure.documented_borrow_cap == pytest.approx(50_000_000.0)
+    assert structure.as_dict(FinancingPolicy())["documented_cap_exceeded"] is False
+    assert structure.feasibility == "CURRENT_3X_CAPITAL_MECHANICS_NOT_QUALIFIED"
+
+
+def test_recursive_ceiling_is_explicitly_diagnostic() -> None:
+    capacity = recursive_financing_ceiling(4000.0, 0.5)
+    assert capacity["max_theoretical_spot_value"] == pytest.approx(8000.0)
+    assert capacity["max_theoretical_borrow"] == pytest.approx(4000.0)
 
 
 def test_unknown_perp_collateral_does_not_double_count_allocated_equity() -> None:
     structures = structure_scenarios(FinancingPolicy(), reference_price=80_000.0)
-    for name in ("B_THEORETICAL_CASH_FUNDED_SPOT", "C_DOCUMENTED_CAP_SCENARIO"):
+    for name in ("B_THEORETICAL_CASH_FUNDED_SPOT",):
         structure = structures[name]
         assert structure.allocated_equity == pytest.approx(4000.0)
         assert structure.spot_cash_required == pytest.approx(structure.spot_notional)
@@ -208,11 +212,7 @@ def test_funding_above_break_even_is_descriptive_only() -> None:
     assert distribution["statistic_classification"] == "DESCRIPTIVE_HOURLY_FUNDING_STATISTIC"
 
 
-def test_c_structure_keeps_borrow_but_not_total_capital() -> None:
-    structure = structure_scenarios(FinancingPolicy(), reference_price=80_000.0)[
-        "C_DOCUMENTED_CAP_SCENARIO"
-    ]
-    assert structure.borrow_principal == pytest.approx(1000.0)
-    assert structure.spot_cash_required == pytest.approx(5000.0)
-    assert structure.total_capital_required == "UNKNOWN"
-    assert structure.feasibility == "STRUCTURAL_SCENARIO_ONLY"
+def test_current_cap_is_optional_and_never_defaults_to_pre_alpha() -> None:
+    structure = structure_scenarios(FinancingPolicy(), reference_price=80_000.0)["A_CURRENT_V1_3X"]
+    assert structure.documented_borrow_cap is None
+    assert structure.feasibility == "CURRENT_3X_CAPITAL_MECHANICS_NOT_QUALIFIED"
