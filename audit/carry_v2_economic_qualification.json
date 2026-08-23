@@ -1,0 +1,265 @@
+{
+  "adoption": {
+    "adopted": false,
+    "real_market_inputs_complete": false,
+    "research_passed": false,
+    "target_venue_execution_feasible": "PARTIAL"
+  },
+  "break_even": {
+    "180d": 0.07477777777777778,
+    "30d": 0.11533333333333333,
+    "365d": 0.07066666666666667,
+    "90d": 0.08288888888888889,
+    "recurring": 0.06666666666666667
+  },
+  "candidate_search": {
+    "adopted": false,
+    "performed": false,
+    "status": "MODEL_IMPLEMENTED_DATA_QUALIFICATION_INCOMPLETE"
+  },
+  "data": {
+    "basis_input_classification": "ABSENT_NATIVE_SPOT_SERIES",
+    "basis_input_complete": false,
+    "borrow_input_classification": "FIXED_ASSUMPTION",
+    "borrow_input_complete": false,
+    "borrow_present": false,
+    "fees_input_classification": "CONFIG_ASSUMPTION_NO_HISTORICAL_TIER_SERIES",
+    "fees_input_complete": false,
+    "funding_annualization": "duration based / native event cadence",
+    "funding_native_events": true,
+    "funding_present": true,
+    "perp_present": true,
+    "real_market_inputs_complete": false,
+    "sources": {
+      "borrow": {
+        "cadence_status": "NOT_DECLARED",
+        "coverage_end": null,
+        "coverage_start": null,
+        "duplicates": null,
+        "exists": false,
+        "expected_frequency": null,
+        "missing_rows": null,
+        "out_of_order": null,
+        "path": "audit/baselines/data/hyperliquid_v1/borrow_rates.csv.gz",
+        "purpose": "historical quote borrow rate",
+        "rows": 0,
+        "sha256": null,
+        "status": "ABSENT",
+        "suitable_for_research": false,
+        "symbol": "USDC",
+        "timezone": "UTC",
+        "venue": "Hyperliquid"
+      },
+      "funding": {
+        "cadence_status": "DECLARED",
+        "coverage_end": "2026-08-10T19:00:00.045000+00:00",
+        "coverage_start": "2026-01-14T12:00:00.043000+00:00",
+        "duplicates": 0,
+        "exists": true,
+        "expected_frequency": "1h",
+        "missing_rows": 0,
+        "out_of_order": false,
+        "path": "audit/baselines/data/hyperliquid_v1/hyperliquid_btc_funding_v1_window.csv.gz",
+        "purpose": "native hourly perp funding events",
+        "rows": 5000,
+        "sha256": "c292d9765c1c52c6dcb74fbc02aa7c945f5ab27df79411dedaefc3ea28a4397e",
+        "status": "PRESENT",
+        "suitable_for_research": true,
+        "symbol": "BTC/USDC:USDC",
+        "timezone": "UTC",
+        "venue": "Hyperliquid"
+      },
+      "perp_price": {
+        "cadence_status": "DECLARED",
+        "coverage_end": "2026-08-10T19:00:00+00:00",
+        "coverage_start": "2026-01-14T12:00:00+00:00",
+        "duplicates": 0,
+        "exists": true,
+        "expected_frequency": "1h",
+        "missing_rows": 0,
+        "out_of_order": false,
+        "path": "audit/baselines/data/hyperliquid_v1/hyperliquid_btc_perp_1h_v1.csv.gz",
+        "purpose": "native hourly perp OHLC reference",
+        "rows": 5000,
+        "sha256": "9a8a474ed62ceb2e9963c8bb6c457f5029e3b68ab476a3fb2a4295a6f9d98534",
+        "status": "PRESENT",
+        "suitable_for_research": true,
+        "symbol": "BTC/USDC:USDC",
+        "timezone": "UTC",
+        "venue": "Hyperliquid"
+      },
+      "spot_price": {
+        "cadence_status": "DECLARED",
+        "coverage_end": null,
+        "coverage_start": null,
+        "duplicates": null,
+        "exists": false,
+        "expected_frequency": "1h",
+        "missing_rows": null,
+        "out_of_order": null,
+        "path": "audit/baselines/data/hyperliquid_v1/hyperliquid_btc_spot_1h_v1.csv.gz",
+        "purpose": "native hourly spot price",
+        "rows": 0,
+        "sha256": null,
+        "status": "ABSENT",
+        "suitable_for_research": false,
+        "symbol": "BTC/USDC",
+        "timezone": "UTC",
+        "venue": "Hyperliquid"
+      }
+    },
+    "spot_perp_synchronized": false,
+    "spot_present": false,
+    "synchronization": {
+      "pairs": 0,
+      "reason": "SPOT_SOURCE_ABSENT",
+      "synchronized": false,
+      "tolerance": "1min"
+    }
+  },
+  "economic_assumptions": {
+    "borrow_rate_ann": 0.1,
+    "fee_semantics": "SEPARATE_RESEARCH_FIELDS; CURRENT_V1 VALUES ARE SHARED ASSUMPTIONS",
+    "perp_fee_rate": 0.0005,
+    "perp_slippage_bps": 5.0,
+    "spot_fee_rate": 0.0005,
+    "spot_slippage_bps": 5.0
+  },
+  "future_paper_v2": {
+    "required_state": [
+      "spot_qty",
+      "perp_qty",
+      "spot_entry",
+      "perp_entry",
+      "spot_mark",
+      "perp_mark",
+      "basis",
+      "funding",
+      "borrow",
+      "fees",
+      "slippage",
+      "leg_pnls",
+      "total_pnl",
+      "delta",
+      "margin_metrics",
+      "provenance"
+    ],
+    "schema_impact": "FUTURE_ONLY; NO MIGRATION IN THIS TASK"
+  },
+  "generated_at_utc": "2026-08-23T11:59:33.452341+00:00",
+  "identity_tests": {
+    "adverse_basis_negative": true,
+    "basis_fixture": {
+      "basis_abs": {
+        "median": 0.5,
+        "p90": 0.9,
+        "p95": 0.95,
+        "p99": 0.99,
+        "worst": 1.0
+      },
+      "basis_change_abs": {
+        "median": 0.5,
+        "p90": 0.9,
+        "p95": 0.95,
+        "p99": 0.99,
+        "worst": 1.0
+      },
+      "basis_pct": {
+        "median": 0.004545454545454519,
+        "p90": 0.008181818181818134,
+        "p95": 0.008636363636363586,
+        "p99": 0.008999999999999947,
+        "worst": 0.009090909090909038
+      },
+      "basis_pnl_identity_max_abs_error": 0.0,
+      "count": 2,
+      "end": "2030-01-01T01:00:00+00:00",
+      "net_price_pnl": {
+        "median": -0.5,
+        "p90": -0.09999999999999998,
+        "p95": -0.050000000000000044,
+        "p99": -0.010000000000000009,
+        "worst": 0.0
+      },
+      "start": "2030-01-01T00:00:00+00:00"
+    },
+    "basis_not_double_counted": true,
+    "equal_price_move_cancels": true,
+    "execution_stress": {
+      "filled_perp_qty": 0.5,
+      "filled_spot_qty": 1.0,
+      "margin_impact": null,
+      "perp_price_pnl": 0.0,
+      "spot_price_pnl": 0.0,
+      "temporary_delta_qty": 0.5
+    },
+    "favorable_basis_positive": true,
+    "funding_borrow_and_costs_are_explicit": true,
+    "mismatched_quantity_is_diagnostic": true,
+    "missing_inputs_fail_closed": true
+  },
+  "purpose": "Research-only realistic two-leg Carry V2 accounting qualification",
+  "qualification_source_files": {
+    "scripts/qualify_carry_v2.py": "4e4ff9a68a671fcbca1e835da55aa074e00e0da9",
+    "src/btcquant/research/carry_v2.py": "06fe7c6cc41f9d0eda50642fa46cd5444f6132c3",
+    "tests/test_carry_v2_economics.py": "6157b80a814ee82ea7f4311131fcfd05949f1c3a"
+  },
+  "qualification_source_sha": "aff4e17212fd43752baa80650aeba54045f12588",
+  "qualification_source_tree": "6854e8c9e239c9f461c2a0e598984937e9d70d43",
+  "research_protocol": {
+    "development": "NOT_STARTED",
+    "governed_selection_permitted": false,
+    "previous_sealed_data_consumed": true,
+    "reason": "native spot and historical applicable borrow inputs are incomplete",
+    "sealed_oos": "NOT_AVAILABLE_FOR_V2",
+    "validation": "NOT_STARTED"
+  },
+  "risk_gaps": {
+    "basis_divergence": "NOT_MODELLED_IN_V1; V2 RESEARCH PRIMITIVE ONLY",
+    "execution_mismatch": "NOT_MODELLED_IN_V1; V2 STRESS DIAGNOSTIC",
+    "leg_latency": "NOT_MODELLED_IN_V1; V2 STRESS DIAGNOSTIC",
+    "liquidation": "NOT_QUALIFIED",
+    "margin": "NOT_QUALIFIED",
+    "partial_fills": "NOT_MODELLED_IN_V1; V2 STRESS DIAGNOSTIC",
+    "variable_borrow": "NOT_MODELLED_IN_V1; V2 INPUT CONTRACT ONLY"
+  },
+  "schema_version": 1,
+  "v1_baseline_reference": {
+    "adopted": false,
+    "artifact": "audit/carry_net_edge_research.json",
+    "real_market_inputs_complete": false,
+    "research_passed": true,
+    "sealed_data_reused_for_selection": false
+  },
+  "v1_freeze": {
+    "preserved": true,
+    "production_policy": {
+      "borrow_rate_ann": 0.1,
+      "capital": 4000.0,
+      "enter_ann": 0.03,
+      "exit_ann": 0.0,
+      "fee_rate": 0.0005,
+      "leverage": 3.0,
+      "slippage_bps": 5.0,
+      "smooth_days": 14
+    },
+    "runtime_behavior": "funding exact-once minus fixed borrow and execution cost; no leg mark-to-market"
+  },
+  "venue_feasibility": {
+    "borrow_mechanism": "PORTFOLIO_MARGIN_PRE_ALPHA_BORROW_PRIMITIVE_DOCUMENTED",
+    "classification": "TARGET_VENUE_LEVERAGED_CASH_AND_CARRY_NOT_DIRECTLY_QUALIFIED",
+    "exact_btc_usdc_borrow_eligibility": "NOT_PROVEN_FOR_THIS_ACCOUNT_OR_SIZE",
+    "margin": "PARTIAL_VENUE_CONTRACT_REQUIRES_ACCOUNT_AND_ASSET_ELIGIBILITY_CHECK",
+    "perp_instrument": "AVAILABLE_FOR_PERPETUAL_TRADING",
+    "references": [
+      "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/portfolio-margin",
+      "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/fees",
+      "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/funding",
+      "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/entry-price-and-pnl"
+    ],
+    "shared_collateral": "PORTFOLIO_MARGIN_DOCUMENTED",
+    "spot_holding": "SUPPORTED_AT_TRADING_LAYER",
+    "spot_instrument": "AVAILABLE_FOR_SPOT_TRADING",
+    "three_x_structure": "PARTIAL"
+  }
+}
