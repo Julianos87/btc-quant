@@ -117,13 +117,19 @@ def test_artifact_provenance_and_governance_are_fail_closed() -> None:
             ["git", "rev-parse", f"{source_sha}^{{tree}}"], text=True
         ).strip()
     )
-    current = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    parent = subprocess.check_output(["git", "rev-parse", "HEAD^"], text=True).strip()
-    if current != source_sha:
-        assert parent == source_sha
-        assert subprocess.check_output(
-            ["git", "diff", "--name-only", "HEAD^", "HEAD"], text=True
-        ).splitlines() == ["audit/carry_v2_financing_feasibility.json"]
+    artifact_commit = subprocess.check_output(
+        ["git", "log", "--all", "--format=%H", "-1", "--", str(artifact_path)],
+        text=True,
+    ).strip()
+    assert artifact_commit != source_sha
+    assert (
+        subprocess.check_output(["git", "rev-parse", f"{artifact_commit}^"], text=True).strip()
+        == source_sha
+    )
+    assert subprocess.check_output(
+        ["git", "diff", "--name-only", f"{artifact_commit}^", artifact_commit],
+        text=True,
+    ).splitlines() == ["audit/carry_v2_financing_feasibility.json"]
     assert artifact["financing"]["liquidation"]["qualification"] is False
     assert artifact["account_specific"]["portfolio_margin_eligibility"] == "UNKNOWN"
     assert artifact["governance"] == {
