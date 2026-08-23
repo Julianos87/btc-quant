@@ -90,12 +90,44 @@ def test_position_cards_expose_operational_detail_contract(monkeypatch):
     ):
         assert b'id="' + element_id + b'"' in page
     assert b'class="position-table"' in page
-    assert b"Brut total = somme des notionnels absolus" in page
+    assert b"Brut = somme des notionnels absolus" in page
     javascript = (dashboard.ROOT / "dashboard" / "static" / "dashboard.js").read_bytes()
     assert b"prix observ\xc3\xa9" in javascript.lower()
-    assert b"PROTECTION INCONNUE" in javascript
-    assert b"PROTECTION NON CONFIRM\xc3\x89E" in javascript
+    assert b"? Inconnu" in javascript
+    assert b"! Non prot\xc3\xa9g\xc3\xa9" in javascript
     assert b"carry.position_status" in javascript
     assert b"badge unknown" in javascript
     assert "ÉTAT INCONNU".encode() in javascript
     assert b"aucune position venue" in page
+
+
+def test_dashboard_visual_hierarchy_uses_progressive_disclosure(monkeypatch):
+    monkeypatch.setattr(dashboard, "AUTH_TOKEN", None)
+    html = dashboard.app.test_client().get("/").data.decode("utf-8")
+    css = (dashboard.ROOT / "dashboard" / "static" / "dashboard.css").read_text(encoding="utf-8")
+    javascript = (dashboard.ROOT / "dashboard" / "static" / "dashboard.js").read_text(
+        encoding="utf-8"
+    )
+
+    trend = html.split('id="trend-overview"', 1)[1].split('class="table-wrap', 1)[0]
+    assert trend.count('class="summary-item"') == 4
+    assert 'class="summary-item trend-next"' not in trend
+    assert 'class="trend-next-line"' in trend
+    assert '<details class="technical-details carry-tech-details">' in html
+    assert '<details class="technical-details carry-tech-details" open' not in html
+    assert "Détails techniques" in html
+
+    assert "@media (max-width:899px)" in css
+    assert ".position-table thead { display:none; }" in css
+    assert ".position-table .protection-cell { grid-column:1/-1;" in css
+    assert "overflow-x:clip" in css
+    assert 'role="button" tabindex="0"' in javascript
+    assert "slot.protection_reason" in javascript
+    assert "raison ${protectionReason}" not in javascript
+    for field in (
+        "carry-funding-price-source",
+        "carry-ledger-status",
+        "carry-entry-price",
+        "carry-state-age",
+    ):
+        assert f'id="{field}"' in html

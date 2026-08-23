@@ -342,19 +342,16 @@ async function refreshSummary() {
     const open = trend.open_slots == null ? null : trend.open_slots;
     const total = trend.total_slots == null ? null : trend.total_slots;
     $("trend-open-slots").textContent = open == null ? "—" : (open + "/" + (total == null ? "—" : total));
-    $("trend-open-detail").textContent = open == null ? "état indisponible" : ((trend.protected_slots == null ? "N/A" : trend.protected_slots) + " protégés · " + (trend.pending_protection_slots == null ? "N/A" : trend.pending_protection_slots) + " en transition");
+    const slots = Array.isArray(trend.slots) ? trend.slots : [];
+    const long = slots.filter(slot => slot.state === "LONG").length;
+    const short = slots.filter(slot => slot.state === "SHORT").length;
+    const directionText = [long ? long + " LONG" : "", short ? short + " SHORT" : ""].filter(Boolean).join(" · ");
+    const directionSummary = Array.isArray(trend.slots) ? (directionText || "FLAT") : "N/A";
+    $("trend-open-detail").textContent = open == null ? "état indisponible" : directionSummary;
     $("trend-total-notional").textContent = trend.total_notional == null ? "N/A" : fmt$(trend.total_notional, 0);
     $("trend-total-upnl").textContent = trend.total_upnl == null ? "N/A" : fmt$(trend.total_upnl, 0);
     $("trend-total-upnl-pct").textContent = trend.total_upnl_pct == null ? "N/A" : fmtPct(trend.total_upnl_pct, 2);
-    const protectionSummary = {
-      ACTIVE: "PROTECTION ACTIVE",
-      REPLACEMENT_PENDING: "REMPLACEMENT EN COURS",
-      PENDING: "PROTECTION EN TRANSITION",
-      UNSAFE: "PROTECTION NON CONFIRMÉE",
-      UNKNOWN: "PROTECTION INCONNUE",
-      NONE: "AUCUNE POSITION",
-    };
-    $("trend-protection").textContent = protectionSummary[trend.protection_status] || "N/A";
+    $("trend-protection").textContent = trend.protection_status === "NONE" ? "Aucune position" : (trend.protected_slots == null || open == null ? "N/A" : trend.protected_slots + "/" + open + " protégés");
     $("trend-protection-mode").textContent = trend.protection_mode || "UNKNOWN";
     const next = summary.health && summary.health.next_bar_ts;
     $("trend-next-boundary").textContent = fmtTimeUTC(next);
@@ -371,39 +368,35 @@ async function refreshSummary() {
     const pnlCls = sl.upnl > 0 ? "up" : sl.upnl < 0 ? "down" : "";
     const stopPct = sl.stop_distance_pct;
     const protectionLabel = {
-      ACTIVE: "PROTECTION ACTIVE",
-      REPLACEMENT_PENDING: "REMPLACEMENT EN COURS",
-      PENDING: "PROTECTION EN TRANSITION",
-      UNSAFE: "PROTECTION NON CONFIRMÉE",
-      UNKNOWN: "PROTECTION INCONNUE",
+      ACTIVE: "✓ Protégé",
+      REPLACEMENT_PENDING: "↻ Remplacement",
+      PENDING: "↻ En transition",
+      UNSAFE: "! Non protégé",
+      UNKNOWN: "? Inconnu",
     }[sl.protection_status] || "N/A";
     const protectionClass = sl.protection_status === "ACTIVE" || sl.protection_status === "REPLACEMENT_PENDING"
       ? "protected"
       : sl.protection_status === "UNSAFE" ? "unsafe" : "unknown";
-    const protection = `${protectionLabel} · ${sl.protection_mode || "UNKNOWN"}`;
-    const protectionReason = sl.protection_reason || "N/A";
+    const protection = sl.protection_status === "ACTIVE" || sl.protection_status === "REPLACEMENT_PENDING"
+      ? `${protectionLabel} · ${sl.protection_mode || "UNKNOWN"}`
+      : protectionLabel;
     const gap = stopPct == null ? "N/A" : (stopPct < 0 ? "stop dépassé" : percentNA(stopPct, 1) + " au stop");
     const stopPnl = sl.stop_pnl;
-    const stopPnlText = stopPnl == null ? "N/A" : stopPnl > 0 ? "gain protégé au stop " + money(stopPnl) : stopPnl < 0 ? "risque restant au stop " + money(Math.abs(stopPnl)) : "PnL au stop 0 $";
-    const details = [
-      sl.qty == null ? "qty N/A" : "qty " + f(sl.qty),
-      sl.initial_qty == null ? "initial qty N/A" : "initial qty " + f(sl.initial_qty),
-      sl.pyramid_adds == null ? "adds N/A" : "adds " + f(sl.pyramid_adds),
-      sl.bars == null ? "bars N/A" : "bars " + f(sl.bars),
-      sl.cash == null ? "cash poche N/A" : "cash poche " + money(sl.cash),
-      sl.entry_fee == null ? "frais entrée N/A" : "frais entrée " + money(sl.entry_fee),
-    ].join(" · ");
-    const timestamp = sl.entry_time ? fmtTimeUTC(sl.entry_time) : "N/A";
-    const updated = sl.updated_at ? fmtTimeUTC(sl.updated_at) : "N/A";
-    return `<tr class="slotclick" data-name="${esc(sl.name)}" title="Voir le détail">
-      <td><strong class="position-primary">${esc(sl.name).replace("trend_ls_", "Donchian ")}</strong><small class="position-secondary">${details}</small></td>
-      <td><span class="badge ${badge}">${arrow}${sl.state}</span><small class="position-secondary">entrée ${timestamp} · âge ${durationNA(sl.position_age_s)}</small></td>
-      <td class="num"><div>entrée ${f(sl.entry)}</div><div>prix observé ${f(sl.market_price)}</div><small class="position-secondary">${money(sl.notional)} notionnel estimé · ${sl.price_source || "N/A"}</small></td>
-      <td class="num ${pnlCls}"><strong>${pnl}</strong><small class="position-secondary">${percentNA(sl.upnl_pct)} · % notionnel d’entrée</small></td>
-      <td><div class="protection-cell"><strong><span class="badge protection-${protectionClass}">${protection}</span></strong><small class="position-secondary">raison ${protectionReason}</small><small class="position-secondary">stop ${f(sl.stop)} · ${money(sl.stop_distance)} · ${gap}</small><small class="position-secondary">${stopPnlText} · estimé hors frais/slippage</small><small class="position-secondary">best close ${f(sl.best_close)} · barre ${sl.last_bar_ts || "N/A"} · maj ${updated}</small></div></td>
+    const stopPnlText = stopPnl == null ? "N/A" : stopPnl > 0 ? "gain protégé " + money(stopPnl) : stopPnl < 0 ? "risque au stop " + money(Math.abs(stopPnl)) : "PnL au stop 0 $";
+    const positionText = sl.state === "FLAT" ? "aucune position" : "ouverte depuis " + durationNA(sl.position_age_s);
+    return `<tr class="slotclick" data-name="${esc(sl.name)}" title="Voir les détails" role="button" tabindex="0" aria-label="Détails ${esc(sl.name)}">
+      <td class="slot-cell"><strong class="position-primary">${esc(sl.name).replace("trend_ls_", "Donchian ")}</strong><small class="position-secondary">Voir les détails</small></td>
+      <td class="position-cell"><span class="badge ${badge}">${arrow}${sl.state}</span><small class="position-secondary">${positionText}</small></td>
+      <td class="price-cell num"><span class="cell-label">entrée → observé</span><strong>${f(sl.entry)} → ${f(sl.market_price)}</strong><small class="position-secondary">${money(sl.notional)} · notionnel estimé</small></td>
+      <td class="pnl-cell num ${pnlCls}"><strong>${pnl}</strong><small class="position-secondary">${percentNA(sl.upnl_pct)} · notionnel d’entrée</small></td>
+      <td class="protection-cell"><span class="badge protection-${protectionClass}">${protection}</span><strong class="stop-price">Stop ${f(sl.stop)}</strong><small class="stop-profit">${stopPnlText}</small><small class="position-secondary">${gap}</small></td>
     </tr>`;
   }).join("");
-  document.querySelectorAll("#slots .slotclick").forEach(tr => tr.onclick = () => openDrill(tr.dataset.name));
+  document.querySelectorAll("#slots .slotclick").forEach(tr => {
+    const open = () => openDrill(tr.dataset.name);
+    tr.onclick = open;
+    tr.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } };
+  });
   renderExposureHealth(s);
   renderViewFocus(s);
   renderCockpitStatus(s);
@@ -494,12 +487,16 @@ function renderCarryCard(carry) {
   if (spot) spot.textContent = !open || carry.spot_notional_derived == null ? "N/A" : fmt$(carry.spot_notional_derived, 0);
   const perp = $("carry-perp-notional");
   if (perp) perp.textContent = !open || carry.perp_notional_derived == null ? "N/A" : fmt$(carry.perp_notional_derived, 0);
-  if ($("carry-gross-net")) $("carry-gross-net").textContent =
-    carry.gross_notional == null || carry.net_notional == null ? "N/A" : fmt$(carry.gross_notional, 0) + " / " + fmt$(carry.net_notional, 0);
+  const grossNet = carry.gross_notional == null || carry.net_notional == null
+    ? null
+    : fmt$(carry.gross_notional, 0) + " / " + fmt$(carry.net_notional, 0);
+  if ($("carry-gross-primary")) $("carry-gross-primary").textContent = grossNet == null ? "N/A" : fmt$(carry.gross_notional, 0);
+  if ($("carry-net-primary")) $("carry-net-primary").textContent = grossNet == null ? "N/A" : fmt$(carry.net_notional, 0);
   if ($("carry-pnl-net")) $("carry-pnl-net").textContent = carry.pnl_net == null || positionStatus === "UNKNOWN" ? "N/A" : fmt$(carry.pnl_net, 0);
   if ($("carry-costs")) $("carry-costs").textContent = carry.costs == null || positionStatus === "UNKNOWN" ? "N/A" : fmt$(carry.costs, 0);
   if ($("carry-notional-source")) $("carry-notional-source").textContent =
     (carry.notional_source || "N/A") + " · persisted " + (carry.persisted_notional_status || "N/A");
+  if ($("carry-gross-net")) $("carry-gross-net").textContent = grossNet || "N/A";
   if ($("carry-entry-age")) $("carry-entry-age").textContent = open ? durationNA(carry.position_age_s) : "N/A";
   if ($("carry-funding-age")) $("carry-funding-age").textContent = open ? durationNA(carry.last_funding_age_s) : "N/A";
   if ($("carry-entry-price")) $("carry-entry-price").textContent = !open || carry.entry_price == null ? "N/A" : fmt$(carry.entry_price, 2);
@@ -509,6 +506,8 @@ function renderCarryCard(carry) {
   if ($("carry-funding-price-time")) $("carry-funding-price-time").textContent = !open ? "N/A" : fmtTimeUTC(carry.funding_price_timestamp);
   if ($("carry-state-age")) $("carry-state-age").textContent = positionStatus === "UNKNOWN" ? "N/A" : fmtTimeUTC(carry.state_updated_at);
   if ($("carry-funding-gross")) $("carry-funding-gross").textContent = carry.funding_gross_total == null ? "N/A" : fmt$(carry.funding_gross_total, 2);
+  if ($("carry-funding-gross-note")) $("carry-funding-gross-note").textContent = carry.funding_gross_total == null ? "N/A" : fmt$(carry.funding_gross_total, 2);
+  if ($("carry-borrow-cost-note")) $("carry-borrow-cost-note").textContent = carry.borrow_cost_total == null ? "N/A" : fmt$(carry.borrow_cost_total, 2);
   if ($("carry-borrow-cost")) $("carry-borrow-cost").textContent = carry.borrow_cost_total == null ? "N/A" : fmt$(carry.borrow_cost_total, 2);
   if ($("carry-ledger-status")) $("carry-ledger-status").textContent = carry.funding_ledger_status || "N/A";
   if ($("carry-accounting")) $("carry-accounting").textContent = accounting;
@@ -1483,6 +1482,44 @@ async function openDrill(name) {
   const st = d.stats || {};
   const money = v => v == null ? "—" : (v >= 0 ? "+" : "") + fmt$(v, 1);
   let body = "";
+  const slot = (lastSummary && lastSummary.trend && lastSummary.trend.slots || []).find(item => item.name === name) || null;
+  if (slot) {
+    const value = v => v == null || (typeof v === "number" && !Number.isFinite(v)) ? "N/A" : esc(String(v));
+    const f = v => v == null || isNaN(v) ? "N/A" : Number(v).toLocaleString(LOCALE(), {maximumFractionDigits: 6});
+    const detail = (label, valueText, className="") => `<div class="modal-detail"><span>${label}</span><strong class="${className}">${valueText}</strong></div>`;
+    const section = (title, rows) => `<section class="modal-section"><h4>${title}</h4><div class="modal-grid">${rows.join("")}</div></section>`;
+    const stopPnl = slot.stop_pnl;
+    const stopPnlText = stopPnl == null ? "N/A" : stopPnl > 0 ? "gain protégé " + money(stopPnl) : stopPnl < 0 ? "risque au stop " + money(Math.abs(stopPnl)) : "PnL au stop 0 $";
+    body += section("Position", [
+      detail("État", value(slot.state || "UNKNOWN")),
+      detail("Quantité", value(f(slot.qty))),
+      detail("Quantité initiale", value(f(slot.initial_qty))),
+      detail("Entrée", value(fmtTimeUTC(slot.entry_time))),
+      detail("Âge", value(durationNA(slot.position_age_s))),
+      detail("Ajouts / bars", value((slot.pyramid_adds == null ? "N/A" : slot.pyramid_adds) + " / " + (slot.bars == null ? "N/A" : slot.bars))),
+    ]) + section("Économie", [
+      detail("Notionnel estimé", value(fmt$(slot.notional, 0))),
+      detail("Frais d’entrée", value(fmt$(slot.entry_fee, 2))),
+      detail("Cash poche", value(fmt$(slot.cash, 0))),
+      detail("PnL latent estimé", value(fmt$(slot.upnl, 2))),
+      detail("PnL %", value(percentNA(slot.upnl_pct) + " · notionnel d’entrée")),
+    ]) + section("Protection", [
+      detail("Stop", value(f(slot.stop))),
+      detail("Distance", value(fmt$(slot.stop_distance, 2))),
+      detail("Distance %", value(percentNA(slot.stop_distance_pct))),
+      detail("PnL au stop", value(stopPnlText)),
+      detail("Mode", value(slot.protection_mode || "N/A"), "technical-value"),
+      detail("Raison", value(slot.protection_reason || "N/A"), "technical-value"),
+      detail("Statut", value(slot.protection_status || "N/A"), "technical-value"),
+    ]) + section("Marché / état", [
+      detail("Prix observé", value(f(slot.market_price))),
+      detail("Source prix", value(slot.price_source || "N/A"), "technical-value"),
+      detail("Prix observé à", value(fmtTimeUTC(slot.market_price_as_of))),
+      detail("Meilleur close", value(f(slot.best_close))),
+      detail("Dernière barre", value(slot.last_bar_ts)),
+      detail("État mis à jour", value(fmtTimeUTC(slot.updated_at))),
+    ]);
+  }
   if (st.n) {
     body += `<div class="mstat">
       ${["n","win_rate","pnl","avg_pnl","best","worst"].map(k => {
