@@ -1,0 +1,399 @@
+{
+  "artifact_contract": "TWO_COMMIT_SOURCE_THEN_ARTIFACT",
+  "data": {
+    "availability_note": "Current public candle endpoint returned only its available recent window; the requested 2026-01-14 start was unavailable and replay begins at the maximum common public overlap.",
+    "basis": {
+      "basis_abs": {
+        "max": 138.0,
+        "median": 2.0,
+        "min": -633.0,
+        "p10": -58.0,
+        "p90": 51.0,
+        "p95": 65.0,
+        "p99": 95.0600000000004
+      },
+      "basis_change": {
+        "max": 661.0,
+        "median": 0.0,
+        "min": -701.0,
+        "p10": -24.0,
+        "p90": 24.0,
+        "p95": 34.0,
+        "p99": 59.0
+      },
+      "basis_pct": {
+        "max": 0.0019028892201324865,
+        "median": 2.929673194951299e-05,
+        "min": -0.010058156163599952,
+        "p10": -0.0008070997380095646,
+        "p90": 0.0007648428701733325,
+        "p95": 0.000931736582524745,
+        "p99": 0.0013423623804164737
+      },
+      "negative_basis_pct": 0.4817891373801917,
+      "positive_basis_pct": 0.5122470713525027,
+      "zero_basis_pct": 0.005963791267305644
+    },
+    "endpoint": "https://api.hyperliquid.xyz/info",
+    "metadata": {
+      "path": "audit/baselines/data/carry_v2/hyperliquid_carry_v2_20260114_20260810_v2.metadata.json",
+      "sha256": "58c89092eb32ce7ed7c448ed20095048c25879afaf68e56514a432d00ef8107c"
+    },
+    "replay_input": {
+      "dropped_before_first_price": 0,
+      "funding_events_input": 4693,
+      "funding_events_replayed": 4693,
+      "lookahead": "forbidden",
+      "matching": "backward_only",
+      "price_lookup": "last synchronized close at or before funding timestamp",
+      "status": "PASS"
+    },
+    "requested_window": {
+      "end": "2026-08-10T19:00:00Z",
+      "start": "2026-01-14T00:00:00Z"
+    },
+    "source_files": {
+      "borrow": {
+        "classification": "UNAVAILABLE",
+        "fixed_assumption_for_diagnostic": "10% annualized",
+        "path": null,
+        "present": false
+      },
+      "fees": {
+        "classification": "OBSERVED_VENUE_SCHEDULE_ACCOUNT_TIER_UNKNOWN",
+        "historical": false,
+        "perp_base_maker": 0.00015,
+        "perp_base_taker": 0.00045,
+        "replay_assumption": {
+          "perp_fee_rate": 0.0005,
+          "source": "CURRENT_V1_SHARED_FEE_ASSUMPTION",
+          "spot_fee_rate": 0.0005
+        },
+        "spot_base_maker": 0.0004,
+        "spot_base_taker": 0.0007
+      },
+      "funding": {
+        "cadence": "native hourly",
+        "classification": "OBSERVED_HISTORICAL_NATIVE",
+        "coverage_end": "2026-08-10T18:00:00.012000+00:00",
+        "coverage_start": "2026-01-27T06:00:00+00:00",
+        "funding_notional_price_realism": "APPROXIMATION",
+        "path": "audit/baselines/data/carry_v2/hyperliquid_btc_funding_1h_20260114_20260810_v2.csv.gz",
+        "present": true,
+        "reference_price": "previous completed BTC 1h close approximation; close_timestamp <= funding timestamp; not oracle",
+        "rows": 4693,
+        "sha256": "59f2ad235c89cf88d7a557c819293e2d3ac013e61901a6dc5300ec37e49d717b"
+      },
+      "perp": {
+        "classification": "NATIVE_HYPERLIQUID_PERP",
+        "coverage_end": "2026-08-10T19:59:59.999000+00:00",
+        "coverage_start": "2026-01-27T05:59:59.999000+00:00",
+        "path": "audit/baselines/data/carry_v2/hyperliquid_btc_perp_1h_20260114_20260810_v2.csv.gz",
+        "present": true,
+        "price_type": "1h OHLC close available at candle T; research mark proxy only",
+        "rows": 4695,
+        "sha256": "1d3cf430201b024eb78738b4963a1a227e5ec0130ec201ce290cb7e17b3136b2"
+      },
+      "spot": {
+        "classification": "NATIVE_HYPERLIQUID_SPOT_MARKET_WRAPPED_BTC",
+        "coverage_end": "2026-08-10T19:59:59.999000+00:00",
+        "coverage_start": "2026-01-27T03:59:59.999000+00:00",
+        "path": "audit/baselines/data/carry_v2/hyperliquid_ubtc_usdc_spot_1h_20260114_20260810_v2.csv.gz",
+        "present": true,
+        "price_type": "1h OHLC close available at candle T; not mark/oracle/execution fill",
+        "rows": 4697,
+        "sha256": "d423ec61fe2bbccf7a4a1e48376071429c155efd26673967eca90f8d37656f5e"
+      }
+    },
+    "spot_perp_synchronization": {
+      "coverage_end": "2026-08-10T19:59:59.999000+00:00",
+      "coverage_start": "2026-01-27T05:59:59.999000+00:00",
+      "dropped_perp_rows": 0,
+      "dropped_spot_rows": 2,
+      "matching": "backward_only",
+      "max_timestamp_skew_seconds": 0.0,
+      "missing_periods": 0,
+      "pairs": 4695,
+      "status": "PASS",
+      "tolerance": "0 days 00:01:00"
+    },
+    "venue": "Hyperliquid"
+  },
+  "data_completeness": {
+    "fees_complete": false,
+    "funding_notional_price_realism": "APPROXIMATION",
+    "historical_borrow": false,
+    "native_funding": true,
+    "native_perp": true,
+    "native_spot": true,
+    "real_market_inputs_complete": false,
+    "reason": "historical financing and account-specific fee evidence are missing",
+    "synchronization": true
+  },
+  "financing": {
+    "borrow_asset": "USDC",
+    "collateral_asset_in_pre_alpha": "HYPE",
+    "documented_pre_alpha_usdc_borrow_cap": 1000.0,
+    "historical_borrow": "UNAVAILABLE",
+    "mechanism": "PORTFOLIO_MARGIN_PRE_ALPHA",
+    "reason": "The documented pre-alpha structure and cap do not prove an approximately $8k USDC borrow against this $4k Carry allocation.",
+    "required_approximate_borrow_for_4000_at_3x": 8000.0,
+    "source": "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/portfolio-margin",
+    "three_x_construction_feasibility": "PARTIAL"
+  },
+  "future_paper_v2": {
+    "design": "read-only shadow accounting for both legs, basis, funding, borrow and costs",
+    "started": false
+  },
+  "governance": {
+    "adopted": false,
+    "candidate_search": {
+      "performed": false
+    },
+    "governed_selection_permitted": false,
+    "policy_changed": false,
+    "readiness": "DATA_QUALIFICATION_INCOMPLETE",
+    "research_passed": false
+  },
+  "instrument": {
+    "asset_representation": "WRAPPED_TOKENIZED_BTC",
+    "classification": "WRAPPED_TOKENIZED_BTC_REPRESENTATION",
+    "evm_contract": "0x9fdbda0a5e284c32744d2f17ee5c74b284993463",
+    "is_canonical": false,
+    "minimum_size": "not provided by public spot metadata",
+    "pair": "UBTC/USDC",
+    "spot_index": 142,
+    "sz_decimals": 5,
+    "target_spot_instrument": "@142",
+    "tick_size": "not provided by public spot metadata",
+    "token_id": "0x8f254b963e8468305d409b33aa137c67",
+    "token_index": 197
+  },
+  "qualification_source_files": {
+    "scripts/acquire_carry_v2_data.py": "1d6431d97ec06c8be313ccd8578905f822199c6c",
+    "scripts/replay_carry_v2.py": "e5466c0ede73221bebde64e3ee52f5f611f5c607",
+    "src/btcquant/research/carry_v2.py": "06fe7c6cc41f9d0eda50642fa46cd5444f6132c3",
+    "src/btcquant/research/carry_v2_replay.py": "acdd29ed2d59e0a6169aa61399371a5d323e4fcb",
+    "tests/test_carry_v2_economics.py": "74ad9ac2a0f2d9f275e7d29ef1c8698b7b6b896e",
+    "tests/test_carry_v2_replay.py": "8dad7c9297dcbe75fb6bc20ae9a050855fcbbfec"
+  },
+  "qualification_source_sha": "7575ee48668400278083becd8ee7711b790786b4",
+  "qualification_source_tree": "65e9de0722d42892fdf1c0215f60021013e4bc6f",
+  "replay": {
+    "baseline": {
+      "basis_hedge": {
+        "completed_positions": 2,
+        "gross_abs_perp_pnl": 755.6012324710243,
+        "gross_abs_spot_pnl": 767.1017803485386,
+        "net_price_pnl": 11.500547877514293,
+        "residual_ratio": 0.015105437870276394
+      },
+      "cagr": -0.09983617345200235,
+      "cycles": [
+        {
+          "borrow_principal": 8000.0,
+          "completed": true,
+          "entry_timestamp": "2026-02-20T21:00:00.083000+00:00",
+          "exit_timestamp": "2026-03-11T07:00:00.014000+00:00",
+          "holding_seconds": 1591199.931,
+          "net_price_pnl": 9.037478956850464,
+          "perp_entry_price": 67719.0,
+          "perp_price_pnl": -387.54836232611717,
+          "qty": 0.17720546974216606,
+          "spot_entry_price": 67717.0,
+          "spot_price_pnl": 396.58584128296764
+        },
+        {
+          "borrow_principal": 7845.46095729536,
+          "completed": true,
+          "entry_timestamp": "2026-03-28T19:00:00.007000+00:00",
+          "exit_timestamp": "2026-04-06T00:00:00.029000+00:00",
+          "holding_seconds": 709200.022,
+          "net_price_pnl": 2.4630689206638294,
+          "perp_entry_price": 66896.0,
+          "perp_price_pnl": -368.0528701449071,
+          "qty": 0.1759334943331296,
+          "spot_entry_price": 66884.0,
+          "spot_price_pnl": 370.51593906557093
+        },
+        {
+          "borrow_principal": 7693.971800972233,
+          "completed": false,
+          "entry_timestamp": "2026-05-14T00:00:00.062000+00:00",
+          "holding_seconds": 7667999.95,
+          "mark_timestamp": "2026-08-10T18:00:00.012000+00:00",
+          "net_price_pnl": -3.784708044396666,
+          "perp_entry_price": 79283.0,
+          "perp_price_pnl": 2234.2878374401253,
+          "qty": 0.14556569401525346,
+          "spot_entry_price": 79284.0,
+          "spot_price_pnl": -2238.072545484522
+        }
+      ],
+      "entries": 3,
+      "entry_edge": {
+        "entries_with_smooth_above_threshold": 3,
+        "net_recurring_non_positive": 3,
+        "net_recurring_positive": 0,
+        "net_recurring_positive_fraction": 0.0
+      },
+      "exits": 2,
+      "exposure_fraction": 0.5901534465235247,
+      "final_equity": 3781.03425822714,
+      "holding_period_days": {
+        "count": 2,
+        "mean": 13.31249972800926,
+        "median": 13.31249972800926
+      },
+      "identity_residual_max_abs": 0.0,
+      "max_drawdown": -0.05800368475813489,
+      "pnl": {
+        "borrow_cost": 244.92032320794527,
+        "fees": 59.8386920797542,
+        "funding_pnl": 137.91612576147622,
+        "net_price_basis_pnl": 7.71583983311757,
+        "perp_price_pnl": 1478.686604969101,
+        "slippage": 59.8386920797542,
+        "spot_price_pnl": -1470.9707651359834,
+        "total": -218.96574177285987
+      },
+      "policy": {
+        "borrow_rate_ann": 0.1,
+        "capital": 4000.0,
+        "enter_ann": 0.03,
+        "exit_ann": 0.0,
+        "leverage": 3.0,
+        "perp_fee_rate": 0.0005,
+        "slippage_bps": 5.0,
+        "smooth_days": 14,
+        "spot_fee_rate": 0.0005
+      },
+      "sharpe": -3.7977812219438296,
+      "terminal_exit_costs_included": false,
+      "terminal_position_marked_to_market": true,
+      "terminal_position_open": true,
+      "terminal_valuation": {
+        "exit_perp_fee": 4.653298540585607,
+        "exit_perp_slippage": 4.653298540585608,
+        "exit_spot_fee": 4.651478969410417,
+        "exit_spot_slippage": 4.651478969410417,
+        "hypothetical_exit_costs": 18.60955501999205,
+        "hypothetical_terminal_liquidation_value_if_closed_at_final_mark": 3762.424703207148,
+        "is_strategy_exit": false,
+        "strategy_mark_to_market_equity": 3781.03425822714
+      },
+      "total_return": -0.05474143544321497
+    },
+    "basis_not_double_counted": true,
+    "equity_identity": {
+      "formula": "equity = capital + spot price PnL + perp price PnL + funding - borrow - fees - slippage",
+      "max_absolute_residual": 0.0,
+      "status": "PASS"
+    },
+    "policy": {
+      "capital": 4000.0,
+      "enter_ann": 0.03,
+      "exit_ann": 0.0,
+      "leverage": 3.0,
+      "smooth_days": 14
+    },
+    "retrospective": true,
+    "sensitivity": {
+      "fixed_borrow_sensitivity": {
+        "10%": {
+          "borrow_cost": 244.92032320794527,
+          "fees": 59.8386920797542,
+          "funding_pnl": 137.91612576147622,
+          "net_price_basis_pnl": 7.71583983311757,
+          "perp_price_pnl": 1478.686604969101,
+          "slippage": 59.8386920797542,
+          "spot_price_pnl": -1470.9707651359834,
+          "total": -218.96574177285987
+        },
+        "15%": {
+          "borrow_cost": 365.16336967354965,
+          "fees": 59.63013131695428,
+          "funding_pnl": 136.8843947474391,
+          "net_price_basis_pnl": 7.731263401047499,
+          "perp_price_pnl": 1463.9976068233755,
+          "slippage": 59.63013131695428,
+          "spot_price_pnl": -1456.266343422328,
+          "total": -339.80797415897155
+        },
+        "20%": {
+          "borrow_cost": 483.9371501463038,
+          "fees": 59.421842508998644,
+          "funding_pnl": 135.85614810446043,
+          "net_price_basis_pnl": 7.74659778489854,
+          "perp_price_pnl": 1449.3612581558498,
+          "slippage": 59.421842508998644,
+          "spot_price_pnl": -1441.6146603709512,
+          "total": -459.17808927494207
+        },
+        "5%": {
+          "borrow_cost": 123.2014026749434,
+          "fees": 60.04752479739842,
+          "funding_pnl": 138.95134114657134,
+          "net_price_basis_pnl": 7.700327081108071,
+          "perp_price_pnl": 1493.4282525930266,
+          "slippage": 60.04752479739842,
+          "spot_price_pnl": -1485.7279255119186,
+          "total": -96.64478404206082
+        }
+      },
+      "slippage_sensitivity": {
+        "0bps": {
+          "borrow_cost": 247.3614097668484,
+          "fees": 60.131266921710974,
+          "funding_pnl": 139.68077842060436,
+          "net_price_basis_pnl": 7.683956795958466,
+          "perp_price_pnl": 1504.2615924077438,
+          "slippage": 0.0,
+          "spot_price_pnl": -1496.5776356117854,
+          "total": -160.12794147199656
+        },
+        "10bps": {
+          "borrow_cost": 242.49368436292684,
+          "fees": 59.547009129774466,
+          "funding_pnl": 136.16290030306558,
+          "net_price_basis_pnl": 7.747430385820508,
+          "perp_price_pnl": 1453.2842846043807,
+          "slippage": 119.09401825954892,
+          "spot_price_pnl": -1445.5368542185602,
+          "total": -277.22438106336415
+        },
+        "20bps": {
+          "borrow_cost": 237.68374981454437,
+          "fees": 58.966318905746064,
+          "funding_pnl": 132.69073098839579,
+          "net_price_basis_pnl": 7.809734037856742,
+          "perp_price_pnl": 1402.9976450967072,
+          "slippage": 235.86527562298426,
+          "spot_price_pnl": -1395.1879110588504,
+          "total": -392.0148793170222
+        },
+        "5bps": {
+          "borrow_cost": 244.92032320794527,
+          "fees": 59.8386920797542,
+          "funding_pnl": 137.91612576147622,
+          "net_price_basis_pnl": 7.71583983311757,
+          "perp_price_pnl": 1478.686604969101,
+          "slippage": 59.8386920797542,
+          "spot_price_pnl": -1470.9707651359834,
+          "total": -218.96574177285987
+        }
+      }
+    },
+    "timing_contract": "funding event is observed, smoothing updates, decision applies after the event; fills and marks use the last synchronized close whose close_timestamp / available_at is at or before the event"
+  },
+  "slippage": {
+    "baseline_bps_per_leg": 5.0,
+    "classification": "SLIPPAGE_ASSUMPTION",
+    "diagnostic_scenarios_bps": [
+      0.0,
+      5.0,
+      10.0,
+      20.0
+    ]
+  }
+}

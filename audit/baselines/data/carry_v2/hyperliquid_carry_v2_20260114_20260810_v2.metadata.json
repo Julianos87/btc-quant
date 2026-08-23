@@ -1,0 +1,89 @@
+{
+  "downloaded_at": "2026-08-23T14:10:14.572898+00:00",
+  "endpoint": "https://api.hyperliquid.xyz/info",
+  "funding": {
+    "coin": "BTC",
+    "inventory": {
+      "availability_semantics": "timestamp is close_timestamp / available_at",
+      "coverage_end": "2026-08-10T18:00:00.012000+00:00",
+      "coverage_start": "2026-01-27T06:00:00+00:00",
+      "duplicates": 0,
+      "frequency": "1h",
+      "out_of_order": false,
+      "path": "audit/baselines/data/carry_v2/hyperliquid_btc_funding_1h_20260114_20260810_v2.csv.gz",
+      "rows": 4693,
+      "sha256": "59f2ad235c89cf88d7a557c819293e2d3ac013e61901a6dc5300ec37e49d717b",
+      "timezone": "UTC"
+    },
+    "rate_semantics": "native hourly funding rate returned by Hyperliquid",
+    "reference_price_semantics": "previous completed BTC 1h close approximation; selected by close_timestamp <= funding timestamp; not oracle/mark",
+    "request": {
+      "type": "fundingHistory"
+    }
+  },
+  "perp": {
+    "coin": "BTC",
+    "instrument": "BTC linear perpetual",
+    "inventory": {
+      "availability_semantics": "timestamp is close_timestamp / available_at",
+      "coverage_end": "2026-08-10T19:59:59.999000+00:00",
+      "coverage_start": "2026-01-27T05:59:59.999000+00:00",
+      "duplicates": 0,
+      "frequency": "1h",
+      "out_of_order": false,
+      "path": "audit/baselines/data/carry_v2/hyperliquid_btc_perp_1h_20260114_20260810_v2.csv.gz",
+      "rows": 4695,
+      "sha256": "1d3cf430201b024eb78738b4963a1a227e5ec0130ec201ce290cb7e17b3136b2",
+      "timezone": "UTC"
+    },
+    "request": {
+      "interval": "1h",
+      "type": "candleSnapshot"
+    }
+  },
+  "schema_version": 2,
+  "spot": {
+    "coin": "@142",
+    "instrument": "@142 / UBTC/USDC",
+    "inventory": {
+      "availability_semantics": "timestamp is close_timestamp / available_at",
+      "coverage_end": "2026-08-10T19:59:59.999000+00:00",
+      "coverage_start": "2026-01-27T03:59:59.999000+00:00",
+      "duplicates": 0,
+      "frequency": "1h",
+      "out_of_order": false,
+      "path": "audit/baselines/data/carry_v2/hyperliquid_ubtc_usdc_spot_1h_20260114_20260810_v2.csv.gz",
+      "rows": 4697,
+      "sha256": "d423ec61fe2bbccf7a4a1e48376071429c155efd26673967eca90f8d37656f5e",
+      "timezone": "UTC"
+    },
+    "representation": "WRAPPED_TOKENIZED_BTC",
+    "request": {
+      "interval": "1h",
+      "type": "candleSnapshot"
+    }
+  },
+  "spot_perp_synchronization": {
+    "contract": "causal timestamp pairing, UTC, max skew 1 minute, no forward fill",
+    "status": "TO_BE_VALIDATED_BY_REPLAY"
+  },
+  "supersedes": [
+    "hyperliquid_ubtc_usdc_spot_1h_20260114_20260810.csv.gz",
+    "hyperliquid_btc_perp_1h_20260114_20260810.csv.gz",
+    "hyperliquid_btc_funding_1h_20260114_20260810.csv.gz",
+    "hyperliquid_carry_v2_20260114_20260810.metadata.json"
+  ],
+  "temporal_semantics": {
+    "available_at": "close_timestamp",
+    "close_timestamp": "row.T / candle end",
+    "generic_timestamp": "close_timestamp / available_at",
+    "new_baseline_status": "CAUSAL_CLOSE_AVAILABILITY",
+    "old_baseline_status": "TEMPORAL_SEMANTICS_INVALID_FOR_CAUSAL_CLOSE_REPLAY",
+    "open_timestamp": "row.t / candle begin"
+  },
+  "venue": "Hyperliquid",
+  "window": {
+    "end": "2026-08-10T19:00:00Z",
+    "start": "2026-01-14T00:00:00Z"
+  }
+}

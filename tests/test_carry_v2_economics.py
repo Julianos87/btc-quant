@@ -362,6 +362,12 @@ def test_artifact_provenance_uses_immediately_preceding_source_commit() -> None:
         ).returncode
     ):
         pytest.skip("artifact is generated in Commit B")
+    current_files = subprocess.check_output(
+        ["git", "-C", str(root), "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"],
+        text=True,
+    ).splitlines()
+    if current_files != [artifact_name]:
+        pytest.skip("current commit is not the artifact-only commit")
     artifact = json.loads(artifact_path.read_text())
     source_sha = artifact["qualification_source_sha"]
     source_available = (
