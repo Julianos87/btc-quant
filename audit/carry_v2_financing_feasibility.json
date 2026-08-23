@@ -1,0 +1,810 @@
+{
+  "account_specific": {
+    "account_reason": "No private/authenticated account query was performed",
+    "borrow_allowance": "UNKNOWN",
+    "collateral_balance": "NOT_QUERIED",
+    "fee_tier": "UNKNOWN",
+    "portfolio_margin_eligibility": "UNKNOWN"
+  },
+  "artifact_contract": "TWO_COMMIT_SOURCE_THEN_ARTIFACT",
+  "blockers": [
+    {
+      "finding": "Current 3x construction requires approximately $8,000 USDC financing versus a documented $1,000 pre-alpha cap.",
+      "severity": "BLOCKER"
+    },
+    {
+      "finding": "Account-specific portfolio-margin eligibility, collateral balance, borrow allowance, and UBTC collateral treatment are unknown.",
+      "severity": "MAJOR"
+    },
+    {
+      "finding": "No deterministic historical native borrow/utilization series was established.",
+      "severity": "MAJOR"
+    },
+    {
+      "finding": "UBTC is a non-canonical wrapped/tokenized BTC representation, not native BTC.",
+      "severity": "INFO"
+    }
+  ],
+  "borrow_sensitivity": {
+    "A_CURRENT_V1_3X": {
+      "scenarios": [
+        {
+          "annual_borrow_cost": 400.0,
+          "borrow_rate_ann": 0.05,
+          "capital_denominator_status": "N/A_CAPITAL_DENOMINATOR_UNKNOWN",
+          "fully_loaded_break_even_target_0pct": "N/A",
+          "recurring_break_even": 0.033333333333333326
+        },
+        {
+          "annual_borrow_cost": 800.0,
+          "borrow_rate_ann": 0.1,
+          "capital_denominator_status": "N/A_CAPITAL_DENOMINATOR_UNKNOWN",
+          "fully_loaded_break_even_target_0pct": "N/A",
+          "recurring_break_even": 0.06666666666666665
+        },
+        {
+          "annual_borrow_cost": 1200.0,
+          "borrow_rate_ann": 0.15,
+          "capital_denominator_status": "N/A_CAPITAL_DENOMINATOR_UNKNOWN",
+          "fully_loaded_break_even_target_0pct": "N/A",
+          "recurring_break_even": 0.09999999999999999
+        },
+        {
+          "annual_borrow_cost": 1600.0,
+          "borrow_rate_ann": 0.2,
+          "capital_denominator_status": "N/A_CAPITAL_DENOMINATOR_UNKNOWN",
+          "fully_loaded_break_even_target_0pct": "N/A",
+          "recurring_break_even": 0.1333333333333333
+        }
+      ],
+      "status": "FIXED_BORROW_SENSITIVITY"
+    },
+    "B_THEORETICAL_CASH_FUNDED_SPOT": {
+      "scenarios": [],
+      "status": "N/A_NO_BORROW"
+    },
+    "C_DOCUMENTED_CAP_SCENARIO": {
+      "scenarios": [
+        {
+          "annual_borrow_cost": 50.0,
+          "borrow_rate_ann": 0.05,
+          "capital_denominator_status": "N/A_CAPITAL_DENOMINATOR_UNKNOWN",
+          "fully_loaded_break_even_target_0pct": "N/A",
+          "recurring_break_even": 0.01
+        },
+        {
+          "annual_borrow_cost": 100.0,
+          "borrow_rate_ann": 0.1,
+          "capital_denominator_status": "N/A_CAPITAL_DENOMINATOR_UNKNOWN",
+          "fully_loaded_break_even_target_0pct": "N/A",
+          "recurring_break_even": 0.02
+        },
+        {
+          "annual_borrow_cost": 150.0,
+          "borrow_rate_ann": 0.15,
+          "capital_denominator_status": "N/A_CAPITAL_DENOMINATOR_UNKNOWN",
+          "fully_loaded_break_even_target_0pct": "N/A",
+          "recurring_break_even": 0.03
+        },
+        {
+          "annual_borrow_cost": 200.0,
+          "borrow_rate_ann": 0.2,
+          "capital_denominator_status": "N/A_CAPITAL_DENOMINATOR_UNKNOWN",
+          "fully_loaded_break_even_target_0pct": "N/A",
+          "recurring_break_even": 0.04
+        }
+      ],
+      "status": "FIXED_BORROW_SENSITIVITY"
+    }
+  },
+  "created_at": "2026-08-23",
+  "current_structure": {
+    "additional_collateral_required": "UNKNOWN",
+    "allocated_equity": 4000.0,
+    "balance_sheet_statement": "4000 own capital + 8000 borrowed USDC -> 12000 UBTC spot; equal-BTC BTC perp short",
+    "borrow_principal": 8000.0,
+    "capital_denominator_qualified": false,
+    "collateral_reuse_status": "UNKNOWN",
+    "equity": 4000.0,
+    "feasibility": "NOT_EXECUTABLE_UNDER_DOCUMENTED_PRE_ALPHA_CAP",
+    "gross_two_leg_exposure": 24000.0,
+    "perp_initial_margin_required": "UNKNOWN",
+    "perp_notional": 12000.0,
+    "required_borrow": 8000.0,
+    "spot_cash_required": 12000.0,
+    "spot_notional": 12000.0,
+    "total_capital_required": "UNKNOWN"
+  },
+  "data": {
+    "fraction_funding_above_recurring_break_even": {
+      "A_CURRENT_V1_3X": 0.46814404432132967,
+      "B_THEORETICAL_CASH_FUNDED_SPOT": 0.7291711059024079,
+      "C_DOCUMENTED_CAP_SCENARIO": 0.6522480289793309
+    },
+    "fraction_funding_above_recurring_break_even_semantics": "DESCRIPTIVE_HOURLY_FUNDING_STATISTIC",
+    "funding_distribution_annualized": {
+      "annualization": "native hourly rate * 365.25 * 24",
+      "count": 4693,
+      "max": 0.1658360646,
+      "median": 0.057364704,
+      "p75": 0.109575,
+      "p90": 0.109575,
+      "p95": 0.109575,
+      "p99": 0.109575,
+      "statistic_classification": "DESCRIPTIVE_HOURLY_FUNDING_STATISTIC"
+    },
+    "requested_window": {
+      "end": "2026-08-10T19:00:00Z",
+      "start": "2026-01-14T00:00:00Z"
+    },
+    "source_files": {
+      "funding": {
+        "cadence": "native hourly",
+        "classification": "OBSERVED_HISTORICAL_NATIVE",
+        "coverage_end": "2026-08-10T18:00:00.012000+00:00",
+        "coverage_start": "2026-01-27T06:00:00+00:00",
+        "path": "audit/baselines/data/carry_v2/hyperliquid_btc_funding_1h_20260114_20260810_v2.csv.gz",
+        "rows": 4693,
+        "sha256": "59f2ad235c89cf88d7a557c819293e2d3ac013e61901a6dc5300ec37e49d717b"
+      },
+      "metadata": {
+        "path": "audit/baselines/data/carry_v2/hyperliquid_carry_v2_20260114_20260810_v2.metadata.json",
+        "sha256": "58c89092eb32ce7ed7c448ed20095048c25879afaf68e56514a432d00ef8107c"
+      },
+      "perp": {
+        "classification": "NATIVE_HYPERLIQUID_PERP",
+        "coverage_end": "2026-08-10T19:59:59.999000+00:00",
+        "coverage_start": "2026-01-27T05:59:59.999000+00:00",
+        "path": "audit/baselines/data/carry_v2/hyperliquid_btc_perp_1h_20260114_20260810_v2.csv.gz",
+        "rows": 4695,
+        "sha256": "1d3cf430201b024eb78738b4963a1a227e5ec0130ec201ce290cb7e17b3136b2"
+      },
+      "spot": {
+        "classification": "NATIVE_HYPERLIQUID_SPOT_MARKET_WRAPPED_BTC",
+        "coverage_end": "2026-08-10T19:59:59.999000+00:00",
+        "coverage_start": "2026-01-27T03:59:59.999000+00:00",
+        "path": "audit/baselines/data/carry_v2/hyperliquid_ubtc_usdc_spot_1h_20260114_20260810_v2.csv.gz",
+        "rows": 4697,
+        "sha256": "d423ec61fe2bbccf7a4a1e48376071429c155efd26673967eca90f8d37656f5e"
+      }
+    },
+    "spot_perp_synchronization": {
+      "coverage_end": "2026-08-10T19:59:59.999000+00:00",
+      "coverage_start": "2026-01-27T05:59:59.999000+00:00",
+      "dropped_perp_rows": 0,
+      "dropped_spot_rows": 2,
+      "matching": "backward_only",
+      "max_timestamp_skew_seconds": 0.0,
+      "missing_periods": 0,
+      "pairs": 4695,
+      "status": "PASS",
+      "tolerance": "0 days 00:01:00"
+    }
+  },
+  "data_completeness": {
+    "account_fees": false,
+    "historical_borrow": false,
+    "margin_liquidation": false,
+    "native_funding": true,
+    "native_perp": true,
+    "native_spot": true,
+    "real_market_inputs_complete": false,
+    "reason": "financing account eligibility, collateral, historical borrow, and liquidation evidence are incomplete"
+  },
+  "decision_tree": {
+    "reason": "the documented cap blocks current 3x; lower-financing capital and collateral reuse remain unqualified without private state or account mutation",
+    "result": "CURRENT_3X_NOT_EXECUTABLE_UNDER_DOCUMENTED_PRE_ALPHA_CAP",
+    "structure_a": "NOT_EXECUTABLE_UNDER_DOCUMENTED_PRE_ALPHA_CAP",
+    "structure_b": "UNLEVERED_OR_LOWER_FINANCING_CAPITAL_REQUIREMENT_NOT_YET_QUALIFIED",
+    "structure_c": "STRUCTURAL_SCENARIO_ONLY"
+  },
+  "fees": {
+    "account_tier": "UNKNOWN",
+    "perp_base_maker": 0.00015,
+    "perp_base_taker": 0.00045,
+    "replay_classification": "VENUE_BASE_SCHEDULE",
+    "spot_base_maker": 0.0004,
+    "spot_base_taker": 0.0007,
+    "v1_diagnostic_assumption": {
+      "classification": "ASSUMPTION",
+      "perp": 0.0005,
+      "spot": 0.0005
+    }
+  },
+  "financing": {
+    "account_specific_eligibility": "ACCOUNT_SPECIFIC_PM_ELIGIBILITY_UNKNOWN",
+    "borrow_asset": "USDC",
+    "cap_classification_reason": "8000 required USDC borrow exceeds the documented 1000 USDC pre-alpha cap by 8x",
+    "collateral": {
+      "hype_ltv": 0.5,
+      "pre_alpha_documented_asset": "HYPE",
+      "ubtc_collateral_haircut": "UNKNOWN"
+    },
+    "documented_current_rule": "DOCUMENTED_CURRENT_RULE",
+    "documented_usdc_borrow_cap": 1000.0,
+    "historical_borrow_reconstruction": {
+      "classification": "NO_PUBLIC_HISTORY",
+      "deterministic_reconstruction": false,
+      "reason": "no validated public historical utilization/supply/borrow state series in this audit"
+    },
+    "interest_mechanism": {
+      "accrual": "continuous",
+      "formula": "0.05 + 4.75 * max(0, utilization - 0.8) APY for stablecoins in pre-alpha",
+      "historical_series": "NO_PUBLIC_HISTORY",
+      "indexing": "hourly",
+      "rate_type": "VARIABLE_UTILIZATION_BASED"
+    },
+    "liquidation": {
+      "qualification": false,
+      "reason": "account collateral, balances, portfolio ratio, and oracle path not available",
+      "sequence": "not deterministic across oracle update order"
+    },
+    "margin": {
+      "borrow_oracle": "documented composite oracle; account calculation not run",
+      "initial_margin": "UNKNOWN_IN_PORTFOLIO_MODE",
+      "maintenance_margin": "UNKNOWN_IN_PORTFOLIO_MODE",
+      "min_borrow_offset_usdc": 20.0,
+      "portfolio_ratio_liquidation_threshold": 0.95,
+      "portfolio_status": "PRE_ALPHA"
+    },
+    "mechanism": "PORTFOLIO_MARGIN_PRE_ALPHA",
+    "required_approximate_borrow_for_current_3x": 8000.0,
+    "required_to_documented_cap_ratio": 8.0,
+    "spot_leverage_mechanism": "PORTFOLIO_MARGIN_FINANCING",
+    "three_x_feasibility": "NOT_EXECUTABLE_UNDER_DOCUMENTED_PRE_ALPHA_CAP"
+  },
+  "governance": {
+    "adopted": false,
+    "candidate_search": {
+      "performed": false
+    },
+    "governed_selection_permitted": false,
+    "policy_changed": false,
+    "threshold_search": {
+      "performed": false
+    }
+  },
+  "historical_entries": [
+    {
+      "completed": true,
+      "entry_timestamp": "2026-02-20T21:00:00.083000+00:00",
+      "holding_days_to_exit_or_final_mark": 18.416665868055556,
+      "smooth_funding_ann": 0.030209190921428573,
+      "structures": {
+        "A_CURRENT_V1_3X": {
+          "allocated_equity_model_diagnostic": {
+            "annual_borrow_cost": 800.0,
+            "annual_funding_income": 362.5102910571429,
+            "annual_recurring_net": -437.4897089428571,
+            "borrow_drag_on_equity": 0.2,
+            "capital_denominator_reason": "explicit qualified return capital base",
+            "capital_denominator_status": "QUALIFIED",
+            "cost_loaded_net_on_equity": -0.3473633877820794,
+            "funding_income_on_equity": 0.09062757276428574,
+            "recurring_net_on_equity": -0.10937242723571428,
+            "round_trip_cost": 48.0,
+            "smooth_funding_ann": 0.030209190921428573
+          },
+          "allocated_equity_model_diagnostic_status": "MODEL_DIAGNOSTIC_NOT_VENUE_QUALIFIED",
+          "annual_borrow_cost": 800.0,
+          "annual_funding_income": 362.5102910571429,
+          "annual_recurring_net": -437.4897089428571,
+          "borrow_drag_on_equity": "N/A",
+          "capital_denominator_reason": "Current 3x is over the documented pre-alpha cap and total venue capital is unqualified",
+          "capital_denominator_status": "N/A_UNKNOWN",
+          "cost_loaded_net_on_equity": "N/A",
+          "funding_income_on_equity": "N/A",
+          "recurring_net_on_equity": "N/A",
+          "round_trip_cost": 48.0,
+          "smooth_funding_ann": 0.030209190921428573
+        },
+        "B_THEORETICAL_CASH_FUNDED_SPOT": {
+          "annual_borrow_cost": 0.0,
+          "annual_funding_income": 120.83676368571429,
+          "annual_recurring_net": 120.83676368571429,
+          "borrow_drag_on_equity": "N/A",
+          "capital_denominator_reason": "4000 allocated equity cannot also be assumed available for perp collateral",
+          "capital_denominator_status": "N/A_UNKNOWN",
+          "cost_loaded_net_on_equity": "N/A",
+          "funding_income_on_equity": "N/A",
+          "recurring_net_on_equity": "N/A",
+          "round_trip_cost": 16.0,
+          "smooth_funding_ann": 0.030209190921428573
+        },
+        "C_DOCUMENTED_CAP_SCENARIO": {
+          "annual_borrow_cost": 100.0,
+          "annual_funding_income": 151.04595460714287,
+          "annual_recurring_net": 51.045954607142875,
+          "borrow_drag_on_equity": "N/A",
+          "capital_denominator_reason": "Borrow cap does not establish total capital or collateral reuse",
+          "capital_denominator_status": "N/A_UNKNOWN",
+          "cost_loaded_net_on_equity": "N/A",
+          "funding_income_on_equity": "N/A",
+          "recurring_net_on_equity": "N/A",
+          "round_trip_cost": 20.0,
+          "smooth_funding_ann": 0.030209190921428573
+        }
+      }
+    },
+    {
+      "completed": true,
+      "entry_timestamp": "2026-03-28T19:00:00.007000+00:00",
+      "holding_days_to_exit_or_final_mark": 8.208333587962963,
+      "smooth_funding_ann": 0.030177398517857154,
+      "structures": {
+        "A_CURRENT_V1_3X": {
+          "allocated_equity_model_diagnostic": {
+            "annual_borrow_cost": 800.0,
+            "annual_funding_income": 362.1287822142859,
+            "annual_recurring_net": -437.8712177857141,
+            "borrow_drag_on_equity": 0.2,
+            "capital_denominator_reason": "explicit qualified return capital base",
+            "capital_denominator_status": "QUALIFIED",
+            "cost_loaded_net_on_equity": -0.6434373310294382,
+            "funding_income_on_equity": 0.09053219555357148,
+            "recurring_net_on_equity": -0.10946780444642853,
+            "round_trip_cost": 48.0,
+            "smooth_funding_ann": 0.030177398517857154
+          },
+          "allocated_equity_model_diagnostic_status": "MODEL_DIAGNOSTIC_NOT_VENUE_QUALIFIED",
+          "annual_borrow_cost": 800.0,
+          "annual_funding_income": 362.1287822142859,
+          "annual_recurring_net": -437.8712177857141,
+          "borrow_drag_on_equity": "N/A",
+          "capital_denominator_reason": "Current 3x is over the documented pre-alpha cap and total venue capital is unqualified",
+          "capital_denominator_status": "N/A_UNKNOWN",
+          "cost_loaded_net_on_equity": "N/A",
+          "funding_income_on_equity": "N/A",
+          "recurring_net_on_equity": "N/A",
+          "round_trip_cost": 48.0,
+          "smooth_funding_ann": 0.030177398517857154
+        },
+        "B_THEORETICAL_CASH_FUNDED_SPOT": {
+          "annual_borrow_cost": 0.0,
+          "annual_funding_income": 120.70959407142861,
+          "annual_recurring_net": 120.70959407142861,
+          "borrow_drag_on_equity": "N/A",
+          "capital_denominator_reason": "4000 allocated equity cannot also be assumed available for perp collateral",
+          "capital_denominator_status": "N/A_UNKNOWN",
+          "cost_loaded_net_on_equity": "N/A",
+          "funding_income_on_equity": "N/A",
+          "recurring_net_on_equity": "N/A",
+          "round_trip_cost": 16.0,
+          "smooth_funding_ann": 0.030177398517857154
+        },
+        "C_DOCUMENTED_CAP_SCENARIO": {
+          "annual_borrow_cost": 100.0,
+          "annual_funding_income": 150.88699258928577,
+          "annual_recurring_net": 50.88699258928577,
+          "borrow_drag_on_equity": "N/A",
+          "capital_denominator_reason": "Borrow cap does not establish total capital or collateral reuse",
+          "capital_denominator_status": "N/A_UNKNOWN",
+          "cost_loaded_net_on_equity": "N/A",
+          "funding_income_on_equity": "N/A",
+          "recurring_net_on_equity": "N/A",
+          "round_trip_cost": 20.0,
+          "smooth_funding_ann": 0.030177398517857154
+        }
+      }
+    },
+    {
+      "completed": false,
+      "entry_timestamp": "2026-05-14T00:00:00.062000+00:00",
+      "holding_days_to_exit_or_final_mark": 88.7499994212963,
+      "smooth_funding_ann": 0.030154319935714286,
+      "structures": {
+        "A_CURRENT_V1_3X": {
+          "allocated_equity_model_diagnostic": {
+            "annual_borrow_cost": 800.0,
+            "annual_funding_income": 361.85183922857146,
+            "annual_recurring_net": -438.14816077142854,
+            "borrow_drag_on_equity": 0.2,
+            "capital_denominator_reason": "explicit qualified return capital base",
+            "capital_denominator_status": "QUALIFIED",
+            "cost_loaded_net_on_equity": -0.15892295600784095,
+            "funding_income_on_equity": 0.09046295980714286,
+            "recurring_net_on_equity": -0.10953704019285715,
+            "round_trip_cost": 48.0,
+            "smooth_funding_ann": 0.030154319935714286
+          },
+          "allocated_equity_model_diagnostic_status": "MODEL_DIAGNOSTIC_NOT_VENUE_QUALIFIED",
+          "annual_borrow_cost": 800.0,
+          "annual_funding_income": 361.85183922857146,
+          "annual_recurring_net": -438.14816077142854,
+          "borrow_drag_on_equity": "N/A",
+          "capital_denominator_reason": "Current 3x is over the documented pre-alpha cap and total venue capital is unqualified",
+          "capital_denominator_status": "N/A_UNKNOWN",
+          "cost_loaded_net_on_equity": "N/A",
+          "funding_income_on_equity": "N/A",
+          "recurring_net_on_equity": "N/A",
+          "round_trip_cost": 48.0,
+          "smooth_funding_ann": 0.030154319935714286
+        },
+        "B_THEORETICAL_CASH_FUNDED_SPOT": {
+          "annual_borrow_cost": 0.0,
+          "annual_funding_income": 120.61727974285715,
+          "annual_recurring_net": 120.61727974285715,
+          "borrow_drag_on_equity": "N/A",
+          "capital_denominator_reason": "4000 allocated equity cannot also be assumed available for perp collateral",
+          "capital_denominator_status": "N/A_UNKNOWN",
+          "cost_loaded_net_on_equity": "N/A",
+          "funding_income_on_equity": "N/A",
+          "recurring_net_on_equity": "N/A",
+          "round_trip_cost": 16.0,
+          "smooth_funding_ann": 0.030154319935714286
+        },
+        "C_DOCUMENTED_CAP_SCENARIO": {
+          "annual_borrow_cost": 100.0,
+          "annual_funding_income": 150.77159967857142,
+          "annual_recurring_net": 50.77159967857142,
+          "borrow_drag_on_equity": "N/A",
+          "capital_denominator_reason": "Borrow cap does not establish total capital or collateral reuse",
+          "capital_denominator_status": "N/A_UNKNOWN",
+          "cost_loaded_net_on_equity": "N/A",
+          "funding_income_on_equity": "N/A",
+          "recurring_net_on_equity": "N/A",
+          "round_trip_cost": 20.0,
+          "smooth_funding_ann": 0.030154319935714286
+        }
+      }
+    }
+  ],
+  "instrument": {
+    "asset_representation": "WRAPPED_TOKENIZED_BTC",
+    "evm_contract": "0x9fdbda0a5e284c32744d2f17ee5c74b284993463",
+    "full_name": "Unit Bitcoin",
+    "is_canonical": false,
+    "minimum_size": "UNKNOWN",
+    "pair": "UBTC/USDC",
+    "quote": "USDC",
+    "spot_pair": "@142",
+    "tick_size": "UNKNOWN",
+    "token_id": "0x8f254b963e8468305d409b33aa137c67",
+    "token_index": 197
+  },
+  "official_evidence": [
+    {
+      "classification": "OFFICIAL_API",
+      "facts": {
+        "base_evm_contract": "0x9fdbda0a5e284c32744d2f17ee5c74b284993463",
+        "base_full_name": "Unit Bitcoin",
+        "base_is_canonical": false,
+        "base_name": "UBTC",
+        "base_sz_decimals": 5,
+        "base_token_id": "0x8f254b963e8468305d409b33aa137c67",
+        "minimum_size": "UNKNOWN_FROM_PUBLIC_METADATA",
+        "pair": "@142",
+        "pair_is_canonical": false,
+        "quote_is_canonical": true,
+        "quote_name": "USDC",
+        "tick_size": "UNKNOWN_FROM_PUBLIC_METADATA",
+        "tokens": [
+          197,
+          0
+        ]
+      },
+      "request": {
+        "type": "spotMeta"
+      },
+      "retrieved_at": "2026-08-23",
+      "topic": "spot_pair_and_token_metadata",
+      "url": "https://api.hyperliquid.xyz/info"
+    },
+    {
+      "classification": "OFFICIAL_DOC",
+      "facts": {
+        "borrow_asset": "USDC",
+        "carry_trade_described": true,
+        "documented_hype_supply_cap": 200.0,
+        "documented_usdc_borrow_cap": 1000.0,
+        "interest": "continuous accrual indexed hourly",
+        "liquidatable_when_portfolio_margin_ratio_exceeds": 0.95,
+        "liquidation_sequence": "not deterministic across oracle update order",
+        "pre_alpha_collateral_asset": "HYPE",
+        "pre_alpha_hype_ltv": 0.5,
+        "spot_perp_unified": true,
+        "stablecoin_rate_formula": "0.05 + 4.75 * max(0, utilization - 0.8) APY",
+        "status": "PRE_ALPHA",
+        "utilization": "total_borrowed_value / total_supplied_value"
+      },
+      "retrieved_at": "2026-08-23",
+      "topic": "portfolio_margin",
+      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/portfolio-margin"
+    },
+    {
+      "classification": "OFFICIAL_DOC",
+      "facts": {
+        "cross_margin_default": true,
+        "cross_margin_maintenance": "account value including unrealized PnL vs maintenance",
+        "initial_margin_formula": "position_size * mark_price / leverage",
+        "portfolio_mode_not_replaced_by_standard_cross_formula": true
+      },
+      "retrieved_at": "2026-08-23",
+      "topic": "standard_margining",
+      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/margining"
+    },
+    {
+      "classification": "OFFICIAL_DOC",
+      "facts": {
+        "btc_first_tier_notional_usdc": 150000000,
+        "btc_mainnet_max_leverage": 40,
+        "standard_btc_maintenance_rate_reference": 0.0125
+      },
+      "retrieved_at": "2026-08-23",
+      "topic": "perp_margin_tiers",
+      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/margin-tiers"
+    },
+    {
+      "classification": "OFFICIAL_DOC",
+      "facts": {
+        "account_specific_liquidation_price": "not calculated by this audit",
+        "backstop_trigger": "below two-thirds of maintenance if book liquidation fails",
+        "liquidation_when_equity_below_maintenance": true,
+        "mark_price_used": true
+      },
+      "retrieved_at": "2026-08-23",
+      "topic": "liquidations",
+      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/liquidations"
+    },
+    {
+      "classification": "OFFICIAL_DOC",
+      "facts": {
+        "account_tier_required_for_exact_fee": true,
+        "fee_tier_basis": "rolling 14-day weighted volume",
+        "perp_base_maker": 0.00015,
+        "perp_base_taker": 0.00045,
+        "spot_and_perp_schedules_separate": true,
+        "spot_base_maker": 0.0004,
+        "spot_base_taker": 0.0007
+      },
+      "retrieved_at": "2026-08-23",
+      "topic": "fees",
+      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/fees"
+    },
+    {
+      "classification": "OFFICIAL_DOC",
+      "facts": {
+        "spot_symbol_contract": "@{spot_pair_index}",
+        "ui_btc_usdc_can_map_to_ubtc_usdc": true
+      },
+      "retrieved_at": "2026-08-23",
+      "topic": "api_spot_symbol_contract",
+      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint"
+    }
+  ],
+  "qualification_source_files": {
+    "scripts/audit_carry_v2_financing.py": "666f3639b99fbd14a30fdbf7004daf9d5b34e0e1",
+    "scripts/replay_carry_v2.py": "e5466c0ede73221bebde64e3ee52f5f611f5c607",
+    "src/btcquant/research/carry_v2.py": "06fe7c6cc41f9d0eda50642fa46cd5444f6132c3",
+    "src/btcquant/research/carry_v2_financing.py": "bbdae351615292cad62f525571f309762f2f2ea6",
+    "src/btcquant/research/carry_v2_replay.py": "acdd29ed2d59e0a6169aa61399371a5d323e4fcb",
+    "tests/test_carry_v2_economics.py": "74ad9ac2a0f2d9f275e7d29ef1c8698b7b6b896e",
+    "tests/test_carry_v2_financing.py": "943cc368ded8cc0aa77cf8e39dfad1f4e501a178",
+    "tests/test_carry_v2_replay.py": "8dad7c9297dcbe75fb6bc20ae9a050855fcbbfec"
+  },
+  "qualification_source_sha": "dc1e1332d4c72723e6823b16492fc346dd3dfaab",
+  "qualification_source_tree": "c7544dfc5d7e3240c2f1ae446d1ed70875965fd2",
+  "replay_reference": {
+    "causal_pairs": 4693,
+    "entries": 3,
+    "exits": 2,
+    "identity_residual": 0.0,
+    "net_recurring_non_positive_entries": 3,
+    "net_recurring_positive_entries": 0,
+    "replay_input": {
+      "dropped_before_first_price": 0,
+      "funding_events_input": 4693,
+      "funding_events_replayed": 4693,
+      "lookahead": "forbidden",
+      "matching": "backward_only",
+      "price_lookup": "last synchronized close at or before funding timestamp",
+      "status": "PASS"
+    },
+    "source_artifact": "audit/carry_v2_real_data_replay.json",
+    "source_artifact_sha256": "7548d14c1664f0a9409080b3bfcb7eb7be3e5c26c5f20550e7b2f7d9bcaecca0",
+    "strategy_mtm_equity": 3781.03425822714,
+    "terminal_position_open": true,
+    "total_pnl": -218.96574177285987
+  },
+  "scope": {
+    "account_queries": false,
+    "parameter_search": false,
+    "policy_mutation": false,
+    "production_integration": false
+  },
+  "structures": {
+    "A_CURRENT_V1_3X": {
+      "additional_collateral_required": "UNKNOWN",
+      "allocated_equity": 4000.0,
+      "annual_borrow_cost": 800.0,
+      "balance_sheet": {
+        "additional_collateral_required": "UNKNOWN",
+        "capital_denominator_qualified": false,
+        "collateral_reuse": "UNKNOWN",
+        "collateral_reuse_status": "UNKNOWN",
+        "free_collateral": "UNKNOWN",
+        "gross_assets": 12000.0,
+        "gross_liabilities": 8000.0,
+        "identity_residual": 0.0,
+        "net_equity": 4000.0,
+        "perp_collateral_requirement": "UNKNOWN",
+        "perp_initial_margin_required": "UNKNOWN",
+        "spot_net_equity": 4000.0,
+        "total_capital_required": "UNKNOWN"
+      },
+      "borrow_principal": 8000.0,
+      "borrow_rate_ann": 0.1,
+      "borrow_to_documented_cap_ratio": 8.0,
+      "capital_denominator_qualified": false,
+      "capital_denominator_reason": "Current 3x is over the documented pre-alpha cap and total venue capital is unqualified",
+      "capital_mechanics": "current V1 requires 8000 USDC financing versus the documented 1000 USDC cap; perp collateral reuse remains unproven",
+      "collateral_reuse_status": "UNKNOWN",
+      "documented_borrow_cap": 1000.0,
+      "documented_cap_exceeded": true,
+      "effective_leverage": 3.0,
+      "equity": 4000.0,
+      "feasibility": "NOT_EXECUTABLE_UNDER_DOCUMENTED_PRE_ALPHA_CAP",
+      "fully_loaded_break_even": {
+        "180": {
+          "target_0pct": "N/A",
+          "target_3pct": "N/A"
+        },
+        "30": {
+          "target_0pct": "N/A",
+          "target_3pct": "N/A"
+        },
+        "365": {
+          "target_0pct": "N/A",
+          "target_3pct": "N/A"
+        },
+        "90": {
+          "target_0pct": "N/A",
+          "target_3pct": "N/A"
+        }
+      },
+      "fully_loaded_break_even_status": "N/A_CAPITAL_DENOMINATOR_UNKNOWN",
+      "gross_exposure": 24000.0,
+      "name": "A_CURRENT_V1_3X",
+      "perp_collateral_requirement": "UNKNOWN",
+      "perp_initial_margin_required": "UNKNOWN",
+      "perp_notional": 12000.000000000002,
+      "perp_qty": 0.17720546974216606,
+      "quantity_delta": 0.0,
+      "recurring_break_even": 0.06666666666666665,
+      "reference_price": 67718.0,
+      "round_trip_cost": 48.0,
+      "spot_cash_required": 12000.0,
+      "spot_notional": 12000.0,
+      "spot_qty": 0.17720546974216606,
+      "total_capital_required": "UNKNOWN"
+    },
+    "B_THEORETICAL_CASH_FUNDED_SPOT": {
+      "additional_collateral_required": "UNKNOWN",
+      "allocated_equity": 4000.0,
+      "annual_borrow_cost": 0.0,
+      "balance_sheet": {
+        "additional_collateral_required": "UNKNOWN",
+        "capital_denominator_qualified": false,
+        "collateral_reuse": "UNKNOWN",
+        "collateral_reuse_status": "UNKNOWN",
+        "free_collateral": "UNKNOWN",
+        "gross_assets": 4000.0,
+        "gross_liabilities": 0.0,
+        "identity_residual": 0.0,
+        "net_equity": 4000.0,
+        "perp_collateral_requirement": "UNKNOWN",
+        "perp_initial_margin_required": "UNKNOWN",
+        "spot_net_equity": 4000.0,
+        "total_capital_required": "UNKNOWN"
+      },
+      "borrow_principal": 0.0,
+      "borrow_rate_ann": 0.1,
+      "capital_denominator_qualified": false,
+      "capital_denominator_reason": "4000 allocated equity cannot also be assumed available for perp collateral",
+      "capital_mechanics": "cash-funded spot leg is theoretical; perp initial margin, buffer, and collateral reuse are unknown",
+      "collateral_reuse_status": "UNKNOWN",
+      "documented_borrow_cap": null,
+      "effective_leverage": 1.0,
+      "equity": 4000.0,
+      "feasibility": "CONDITIONAL_NON_QUALIFIED",
+      "fully_loaded_break_even": {
+        "180": {
+          "target_0pct": "N/A",
+          "target_3pct": "N/A"
+        },
+        "30": {
+          "target_0pct": "N/A",
+          "target_3pct": "N/A"
+        },
+        "365": {
+          "target_0pct": "N/A",
+          "target_3pct": "N/A"
+        },
+        "90": {
+          "target_0pct": "N/A",
+          "target_3pct": "N/A"
+        }
+      },
+      "fully_loaded_break_even_status": "N/A_CAPITAL_DENOMINATOR_UNKNOWN",
+      "gross_exposure": 8000.0,
+      "name": "B_THEORETICAL_CASH_FUNDED_SPOT",
+      "perp_collateral_requirement": "UNKNOWN",
+      "perp_initial_margin_required": "UNKNOWN",
+      "perp_notional": 4000.0,
+      "perp_qty": 0.05906848991405535,
+      "quantity_delta": 0.0,
+      "recurring_break_even": 0.0,
+      "reference_price": 67718.0,
+      "round_trip_cost": 16.0,
+      "spot_cash_required": 4000.0,
+      "spot_notional": 4000.0,
+      "spot_qty": 0.05906848991405535,
+      "total_capital_required": "UNKNOWN"
+    },
+    "C_DOCUMENTED_CAP_SCENARIO": {
+      "additional_collateral_required": "UNKNOWN",
+      "allocated_equity": 4000.0,
+      "annual_borrow_cost": 100.0,
+      "balance_sheet": {
+        "additional_collateral_required": "UNKNOWN",
+        "capital_denominator_qualified": false,
+        "collateral_reuse": "UNKNOWN",
+        "collateral_reuse_status": "UNKNOWN",
+        "free_collateral": "UNKNOWN",
+        "gross_assets": 5000.0,
+        "gross_liabilities": 1000.0,
+        "identity_residual": 0.0,
+        "net_equity": 4000.0,
+        "perp_collateral_requirement": "UNKNOWN",
+        "perp_initial_margin_required": "UNKNOWN",
+        "spot_net_equity": 4000.0,
+        "total_capital_required": "UNKNOWN"
+      },
+      "borrow_principal": 1000.0,
+      "borrow_rate_ann": 0.1,
+      "borrow_to_documented_cap_ratio": 1.0,
+      "capital_denominator_qualified": false,
+      "capital_denominator_reason": "Borrow cap does not establish total capital or collateral reuse",
+      "capital_mechanics": "uses the documented cap as a diagnostic upper bound only; perp collateral and total capital remain unknown",
+      "collateral_reuse_status": "UNKNOWN",
+      "documented_borrow_cap": 1000.0,
+      "documented_cap_exceeded": false,
+      "effective_leverage": 1.25,
+      "equity": 4000.0,
+      "feasibility": "STRUCTURAL_SCENARIO_ONLY",
+      "fully_loaded_break_even": {
+        "180": {
+          "target_0pct": "N/A",
+          "target_3pct": "N/A"
+        },
+        "30": {
+          "target_0pct": "N/A",
+          "target_3pct": "N/A"
+        },
+        "365": {
+          "target_0pct": "N/A",
+          "target_3pct": "N/A"
+        },
+        "90": {
+          "target_0pct": "N/A",
+          "target_3pct": "N/A"
+        }
+      },
+      "fully_loaded_break_even_status": "N/A_CAPITAL_DENOMINATOR_UNKNOWN",
+      "gross_exposure": 10000.0,
+      "name": "C_DOCUMENTED_CAP_SCENARIO",
+      "perp_collateral_requirement": "UNKNOWN",
+      "perp_initial_margin_required": "UNKNOWN",
+      "perp_notional": 5000.0,
+      "perp_qty": 0.07383561239256918,
+      "quantity_delta": 0.0,
+      "recurring_break_even": 0.02,
+      "reference_price": 67718.0,
+      "round_trip_cost": 20.0,
+      "spot_cash_required": 5000.0,
+      "spot_notional": 5000.0,
+      "spot_qty": 0.07383561239256918,
+      "total_capital_required": "UNKNOWN"
+    }
+  }
+}
