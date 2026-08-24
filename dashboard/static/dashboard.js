@@ -1563,18 +1563,23 @@ async function refreshMetrics() {
 
 // ── calques accessibles : focus piégé, Escape, restitution du focus ──────
 const layerReturns = new WeakMap();
+const layerCloseTimers = new WeakMap();
 let activeLayer = null;
-let layerCloseTimer = null;
 const focusableSelector = [
   "a[href]", "button:not([disabled])", "input:not([disabled])",
   "select:not([disabled])", "textarea:not([disabled])", "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
-function openLayer(panel, backdrop, trigger) {
-  if (layerCloseTimer !== null) {
-    window.clearTimeout(layerCloseTimer);
-    layerCloseTimer = null;
+function cancelLayerClose(panel) {
+  const timer = layerCloseTimers.get(panel);
+  if (timer != null) {
+    window.clearTimeout(timer);
+    layerCloseTimers.delete(panel);
   }
+}
+
+function openLayer(panel, backdrop, trigger) {
+  cancelLayerClose(panel);
   const wasHidden = backdrop.hidden || panel.hidden;
   if (wasHidden) {
     const returnTarget = trigger || document.activeElement;
@@ -1596,10 +1601,7 @@ function openLayer(panel, backdrop, trigger) {
 
 function closeLayer(panel, backdrop) {
   if (backdrop.hidden && panel.hidden) return;
-  if (layerCloseTimer !== null) {
-    window.clearTimeout(layerCloseTimer);
-    layerCloseTimer = null;
-  }
+  cancelLayerClose(panel);
   backdrop.classList.remove("open");
   panel.classList.remove("open");
   panel.inert = true;
@@ -1612,11 +1614,12 @@ function closeLayer(panel, backdrop) {
     : returnTarget && returnTarget.id ? document.getElementById(returnTarget.id) : null;
   if (replacement) replacement.focus();
   const delay = matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 300;
-  layerCloseTimer = window.setTimeout(() => {
+  const timer = window.setTimeout(() => {
     backdrop.hidden = true;
     panel.hidden = true;
-    layerCloseTimer = null;
+    layerCloseTimers.delete(panel);
   }, delay);
+  layerCloseTimers.set(panel, timer);
 }
 
 document.addEventListener("keydown", event => {

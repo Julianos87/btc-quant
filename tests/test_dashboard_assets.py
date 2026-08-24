@@ -171,8 +171,13 @@ def test_dashboard_interactions_are_accessible_and_fail_closed(monkeypatch):
     assert "function closeLayer(panel, backdrop)" in javascript
     assert "if (!backdrop.hidden)" not in javascript
     assert "const wasHidden = backdrop.hidden || panel.hidden;" in javascript
-    assert "if (layerCloseTimer !== null)" in javascript
-    assert javascript.count("layerCloseTimer = null;") >= 3
+    assert "const layerCloseTimers = new WeakMap();" in javascript
+    assert "function cancelLayerClose(panel)" in javascript
+    assert "const timer = layerCloseTimers.get(panel);" in javascript
+    assert "layerCloseTimers.delete(panel);" in javascript
+    assert "layerCloseTimers.set(panel, timer);" in javascript
+    assert "layerCloseTimer =" not in javascript
+    assert javascript.count("cancelLayerClose(panel);") == 2
     assert 'document.body.classList.add("dialog-open");' in javascript
     assert 'backdrop.classList.add("open");' in javascript
     assert 'panel.classList.add("open");' in javascript
