@@ -315,15 +315,24 @@ def login():
         """<!doctype html><html lang="fr"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Connexion TANDEM</title>
-<style>body{font:16px system-ui;background:#0b1020;color:#eef2ff;display:grid;
-place-items:center;height:100vh;margin:0}form{display:grid;gap:16px;width:min(360px,85vw);
-padding:28px;background:#151c30;border-radius:14px}input,button{font:inherit;padding:12px;
-border-radius:8px;border:1px solid #3b4664}button{cursor:pointer;font-weight:700}</style>
-<form method="post"><h1>TANDEM</h1><label>Jeton d’accès
+<style>*{box-sizing:border-box}body{font:16px system-ui;background:#0b1020;color:#eef2ff;
+min-height:100vh;margin:0;display:grid;place-items:center;padding:20px}main{width:min(360px,100%)}
+form{display:grid;gap:16px;width:100%;padding:28px;background:#151c30;border:1px solid #293552;
+border-radius:14px;box-shadow:0 24px 70px -30px #000}label{display:grid;gap:7px;font-weight:650}
+input,button{font:inherit;padding:12px;border-radius:8px;border:1px solid #53617f}
+input{background:#0f1629;color:#fff}button{cursor:pointer;font-weight:700}
+input:focus-visible,button:focus-visible{outline:3px solid #6ca9ff;outline-offset:2px}
+.err{margin:0;color:#ff9c9c;font-weight:650}
+form.has-error{animation:login-shake .32s ease-out}
+@keyframes login-shake{0%,100%{transform:translateX(0)}30%{transform:translateX(-5px)}65%{transform:translateX(4px)}}
+@media(prefers-reduced-motion:reduce){form.has-error{animation:none}}</style>"""
+        + '<main><form method="post"'
+        + (' class="has-error"' if error else "")
+        + """><h1>TANDEM</h1><label>Jeton d’accès
 <input type="password" name="token" required autocomplete="current-password"></label>
 <button type="submit">Se connecter</button>"""
-        + (f"<p>{error}</p>" if error else "")
-        + "</form></html>",
+        + (f'<p class="err" role="alert">{error}</p>' if error else "")
+        + "</form></main></html>",
         status=403 if error else 200,
         mimetype="text/html",
     )

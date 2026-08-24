@@ -94,23 +94,9 @@ if (matchMedia("(hover:hover)").matches && !matchMedia("(prefers-reduced-motion:
   sync();
 })();
 
-// ── View Transitions : bascule thème + changement de vue ───────────────
-// Enveloppe les handlers déjà posés par le script précédent (ils s'exécutent
-// normalement) dans document.startViewTransition quand elle existe ; sinon
-// comportement strictement identique à avant (changement instantané).
-function withViewTransition(fn) {
-  return (...args) => {
-    if (document.startViewTransition && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      document.startViewTransition(() => fn(...args));
-    } else {
-      fn(...args);
-    }
-  };
-}
-if ($("theme-btn") && $("theme-btn").onclick) $("theme-btn").onclick = withViewTransition($("theme-btn").onclick);
-document.querySelectorAll("#dashboard-view [data-view]").forEach(btn => {
-  if (btn.onclick) btn.onclick = withViewTransition(btn.onclick);
-});
+// Les transitions restent locales à leur composant (curseur d'onglet,
+// drawer, modal). Une transition plein écran peut expirer sur ce dashboard
+// dense et n'apporte aucun repère spatial supplémentaire.
 
 // ── équilibrage des deux colonnes : DÉPLACE une carte plutôt que d'en
 // étirer une artificiellement (un fond de carte étiré sur des centaines de

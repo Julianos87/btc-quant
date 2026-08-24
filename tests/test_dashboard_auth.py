@@ -59,6 +59,10 @@ def test_invalid_login_does_not_create_session(monkeypatch):
 
     assert response.status_code == 403
     assert "Set-Cookie" not in response.headers
+    assert b"<main>" in response.data
+    assert b'role="alert"' in response.data
+    assert b'class="has-error"' in response.data
+    assert b"prefers-reduced-motion:reduce" in response.data
 
 
 def test_manifest_never_contains_authentication_secret(monkeypatch):

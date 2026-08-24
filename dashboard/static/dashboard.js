@@ -175,6 +175,7 @@ function applyI18n() {
   });
   $("f-refresh").textContent = PREFS.refresh
     ? t("auto_refresh") + " " + (PREFS.refresh/1000) + " s" : (PREFS.lang==="en"?"Manual refresh":"Rafraîchissement manuel");
+  if ($("refresh-btn")) swapText($("refresh-label"), refreshLabel($("refresh-btn").dataset.state || "idle"));
   if (lastSummary) { renderCockpitStatus(lastSummary); renderViewFocus(lastSummary); }
   if (pcData) drawPChart();
   updateDataFreshness();
@@ -183,21 +184,58 @@ function applyI18n() {
 // ── formatage devise / pourcentage ─────────────────────────
 let fx = {eur_usd:null}, btcPrice = null;
 function fmt$(v, dp=0) {
-  if (v == null || isNaN(v)) return "—";
+  if (v == null || !Number.isFinite(Number(v))) return "—";
   const c = PREFS.currency;
   if (c === "eur" && fx.eur_usd) return (v/fx.eur_usd).toLocaleString(LOCALE(), {minimumFractionDigits:dp, maximumFractionDigits:dp}) + " €";
   if (c === "btc" && btcPrice) return (v/btcPrice).toLocaleString(LOCALE(), {minimumFractionDigits:4, maximumFractionDigits:6}) + " ₿";
   return v.toLocaleString(LOCALE(), {minimumFractionDigits:dp, maximumFractionDigits:dp}) + " $";
 }
-const fmtPct = (v, dp=2) => v == null || isNaN(v) ? "—" :
+const fmtPct = (v, dp=2) => v == null || !Number.isFinite(Number(v)) ? "—" :
   (v >= 0 ? "+" : "") + (v*100).toFixed(dp).replace(".", PREFS.lang==="en"?".":",") + " %";
-const fmtDrawdown = (v, dp=1) => v == null || isNaN(v) ? "—" :
+const fmtDrawdown = (v, dp=1) => v == null || !Number.isFinite(Number(v)) ? "—" :
   (v*100).toFixed(dp).replace(".", PREFS.lang==="en"?".":",") + " %";
-const fmtNum = (v, dp=2) => v == null || isNaN(v) ? "—" : v.toFixed(dp).replace(".", PREFS.lang==="en"?".":",");
+const fmtNum = (v, dp=2) => v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(dp).replace(".", PREFS.lang==="en"?".":",");
 const cls = (el, v) => { el.classList.toggle("up", v > 0); el.classList.toggle("down", v < 0); };
 let range = PREFS.range, unit = "pct", chartData = null, showBH = false, lastSummary = null, lastTradeRows = [];
 let lastMetrics = null;
 let lastSummaryUpdatedAt = null;
+
+function setPressed(container, predicate) {
+  document.querySelectorAll(container + " .chip").forEach(button => {
+    const active = predicate(button);
+    button.classList.toggle("on", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+}
+
+function updateViewIndicator() {
+  const tabs = $("dashboard-view");
+  const active = tabs && tabs.querySelector('[role="tab"][aria-selected="true"]');
+  const indicator = tabs && tabs.querySelector(".view-indicator");
+  if (!active || !indicator) return;
+  indicator.style.width = active.offsetWidth + "px";
+  indicator.style.transform = `translateX(${active.offsetLeft - 3}px)`;
+}
+
+const textSwapFrames = new WeakMap();
+function swapText(element, next) {
+  if (!element) return;
+  const pending = textSwapFrames.get(element);
+  if (pending) cancelAnimationFrame(pending);
+  element.classList.remove("is-exit", "is-enter-start");
+  if (element.textContent === next) return;
+  element.textContent = next;
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    return;
+  }
+  element.classList.add("is-enter-start");
+  void element.offsetHeight;
+  const frame = requestAnimationFrame(() => {
+    element.classList.remove("is-enter-start");
+    textSwapFrames.delete(element);
+  });
+  textSwapFrames.set(element, frame);
+}
 
 // ── couleur d'accent ───────────────────────────────────────
 function applyAccent() { document.documentElement.style.setProperty("--s1", PREFS.accent); }
@@ -230,14 +268,21 @@ function applyDashboardView() {
     const active = button.dataset.view === view;
     button.classList.toggle("on", active);
     button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
+    if (active) $("dashboard-content").setAttribute("aria-labelledby", button.id);
   });
-  document.querySelectorAll("#unit .chip").forEach(button => button.classList.toggle("on", button.dataset.u === unit));
+  setPressed("#unit", button => button.dataset.u === unit);
+  requestAnimationFrame(() => {
+    updateViewIndicator();
+    if (typeof drawChart === "function") drawChart();
+    if (typeof drawPChart === "function") drawPChart();
+  });
   if (typeof drawYearly === "function") drawYearly(); // la carte devient visible en vue performance
 }
 
 function setChartUnit(next) {
   unit = next;
-  document.querySelectorAll("#unit .chip").forEach(button => button.classList.toggle("on", button.dataset.u === unit));
+  setPressed("#unit", button => button.dataset.u === unit);
   drawChart();
 }
 
@@ -247,6 +292,18 @@ document.querySelectorAll("#dashboard-view [data-view]").forEach(button => butto
   applyDashboardView();
   if (PREFS.view === "risk") setChartUnit("dd");
   if (PREFS.view === "performance") setChartUnit("pct");
+});
+$("dashboard-view").addEventListener("keydown", event => {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const tabs = [...$("dashboard-view").querySelectorAll('[role="tab"]')];
+  const current = tabs.indexOf(document.activeElement);
+  if (current < 0) return;
+  event.preventDefault();
+  const next = event.key === "Home" ? 0
+    : event.key === "End" ? tabs.length - 1
+      : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+  tabs[next].focus();
+  tabs[next].click();
 });
 
 function markSummaryUnavailable() {
@@ -259,6 +316,9 @@ function markSummaryUnavailable() {
   $("alert").style.display = "flex";
   $("alert").className = "";
   $("alert-msg").textContent = "Données opérationnelles indisponibles — aucun état LIVE confirmé";
+  $("cockpit-status").dataset.status = "crit";
+  $("status-title").textContent = t("status_crit");
+  $("status-detail").textContent = "Source indisponible · utilisez Actualiser pour réessayer";
 }
 
 let summaryRequestSequence = 0;
@@ -375,8 +435,8 @@ async function refreshSummary() {
   $("slots").innerHTML = (s.trend.slots || []).map(sl => {
     const badge = sl.state === "LONG" ? "long" : sl.state === "SHORT" ? "short" : sl.state === "FLAT" ? "flat" : "unknown";
     const arrow = sl.state === "LONG" ? "▲ " : sl.state === "SHORT" ? "▼ " : sl.state === "UNKNOWN" ? "? " : "";
-    const f = v => v == null || isNaN(v) ? "N/A" : Number(v).toLocaleString(LOCALE(), {maximumFractionDigits: 2});
-    const money = v => v == null || isNaN(v) ? "N/A" : fmt$(v, 0);
+    const f = v => v == null || !Number.isFinite(Number(v)) ? "N/A" : Number(v).toLocaleString(LOCALE(), {maximumFractionDigits: 2});
+    const money = v => v == null || !Number.isFinite(Number(v)) ? "N/A" : fmt$(v, 0);
     const pnl = money(sl.upnl);
     const pnlCls = sl.upnl > 0 ? "up" : sl.upnl < 0 ? "down" : "";
     const stopPct = sl.stop_distance_pct;
@@ -398,7 +458,7 @@ async function refreshSummary() {
     const stopPnlText = stopPnl == null ? "N/A" : stopPnl > 0 ? "gain protégé " + money(stopPnl) : stopPnl < 0 ? "risque au stop " + money(Math.abs(stopPnl)) : "PnL au stop 0 $";
     const positionText = sl.state === "FLAT" ? "aucune position" : "ouverte depuis " + durationNA(sl.position_age_s);
     return `<tr class="slotclick" data-name="${esc(sl.name)}" title="Voir les détails">
-      <td class="slot-cell"><button type="button" class="slot-detail-toggle" aria-label="Détails ${esc(sl.name)}"><strong class="position-primary">${esc(sl.name).replace("trend_ls_", "Donchian ")}</strong><small class="position-secondary">Voir les détails</small></button></td>
+      <td class="slot-cell"><button type="button" class="slot-detail-toggle" id="slot-detail-${esc(sl.name)}" aria-haspopup="dialog" aria-label="Détails ${esc(sl.name)}"><strong class="position-primary">${esc(sl.name).replace("trend_ls_", "Donchian ")}</strong><small class="position-secondary">Voir les détails</small></button></td>
       <td class="position-cell"><span class="badge ${badge}">${arrow}${sl.state}</span><small class="position-secondary">${positionText}</small></td>
       <td class="price-cell num"><span class="cell-label">entrée → observé</span><strong>${f(sl.entry)} → ${f(sl.market_price)}</strong><small class="position-secondary">${money(sl.notional)} · notionnel estimé</small></td>
       <td class="pnl-cell num ${pnlCls}"><strong>${pnl}</strong><small class="position-secondary">${percentNA(sl.upnl_pct)} · notionnel d’entrée</small></td>
@@ -406,8 +466,10 @@ async function refreshSummary() {
     </tr>`;
   }).join("");
   document.querySelectorAll("#slots .slotclick").forEach(tr => {
-    const open = () => openDrill(tr.dataset.name);
-    tr.onclick = open;
+    tr.onclick = event => openDrill(
+      tr.dataset.name,
+      event.target.closest(".slot-detail-toggle") || tr.querySelector(".slot-detail-toggle")
+    );
   });
   renderExposureHealth(s);
   renderViewFocus(s);
@@ -466,8 +528,8 @@ function hColor(state) {
 function fmtDur(sec) {
   return BTCQuantDashboardUx.formatDuration(sec) || "—";
 }
-function durationNA(sec) { return sec == null || isNaN(sec) ? "N/A" : (fmtDur(sec) || "N/A"); }
-function percentNA(value, dp=2) { return value == null || isNaN(value) ? "N/A" : fmtPct(value, dp); }
+function durationNA(sec) { return sec == null || !Number.isFinite(Number(sec)) ? "N/A" : (fmtDur(sec) || "N/A"); }
+function percentNA(value, dp=2) { return value == null || !Number.isFinite(Number(value)) ? "N/A" : fmtPct(value, dp); }
 
 function fmtTimeUTC(value) {
   if (value == null) return "N/A";
@@ -486,7 +548,8 @@ function renderCarryCard(carry) {
     : carry.accounting_uncertain === true
       ? "INCERTAINE"
       : "OK";
-  if ($("carry-mode")) $("carry-mode").textContent = carry.mode || t("carry_mode_value");
+  if ($("carry-mode")) $("carry-mode").textContent =
+    carry.mode === "PAPER_SYNTHETIC" ? t("carry_mode_value") : carry.mode || t("carry_mode_value");
   const positionBadge = positionStatus === "OPEN"
     ? `<span class="badge long">● OPEN</span>`
     : positionStatus === "FLAT"
@@ -738,8 +801,9 @@ async function refreshEvents() {
   drawChart();
 }
 document.querySelectorAll("#evfilter .chip").forEach(b => b.onclick = () => {
-  document.querySelectorAll("#evfilter .chip").forEach(x => x.classList.remove("on"));
-  b.classList.add("on"); evFilter = b.dataset.f; renderEvents();
+  evFilter = b.dataset.f;
+  setPressed("#evfilter", x => x.dataset.f === evFilter);
+  renderEvents();
 });
 
 async function refreshAnalytics() {
@@ -799,11 +863,15 @@ function drawFunding(pts) {
 (function initTheme() {
   const saved = localStorage.getItem("btcq-theme");
   if (saved) document.documentElement.setAttribute("data-theme", saved);
+  const initialTheme = document.documentElement.getAttribute("data-theme")
+    || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  $("theme-btn").setAttribute("aria-pressed", String(initialTheme === "dark"));
   $("theme-btn").onclick = () => {
     const cur = document.documentElement.getAttribute("data-theme")
       || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
     const next = cur === "dark" ? "light" : "dark";
     document.documentElement.setAttribute("data-theme", next);
+    $("theme-btn").setAttribute("aria-pressed", String(next === "dark"));
     localStorage.setItem("btcq-theme", next);
     drawChart(); drawSpark(); refreshPrice(); refreshAnalytics(); drawYearly();
   };
@@ -945,6 +1013,8 @@ function renderReadiness(report) {
     </div>`;
   const toggle = $("rdy-toggle");
   if (toggle) {
+    toggle.setAttribute("aria-expanded", String(readinessDetailOpen));
+    toggle.setAttribute("aria-controls", "rdy-detail");
     toggle.onclick = () => {
       readinessDetailOpen = !readinessDetailOpen;
       renderReadiness(report);
@@ -1077,6 +1147,7 @@ function drawPChart() {
   $("signal-rule").textContent = t(sideKnown
     ? (isShort ? "signal_short_rule" : "signal_long_rule")
     : "signal_unknown_rule");
+  if (W < 180 || H < 100) return;
   if (all.length < 10 || !sideKnown) { svg.innerHTML = ""; pcView = null; return; }
   // fenêtre affichée : les pcRange dernières bougies 1h (chips 2 j / 4 j / 8 j)
   const start = Math.max(0, all.length - pcRange);
@@ -1253,13 +1324,15 @@ function drawPChart() {
 })();
 
 document.querySelectorAll("#prange .chip").forEach(b => b.onclick = () => {
-  document.querySelectorAll("#prange .chip").forEach(x => x.classList.remove("on"));
-  b.classList.add("on"); pcRange = +b.dataset.n; drawPChart();
+  pcRange = +b.dataset.n;
+  setPressed("#prange", x => +x.dataset.n === pcRange);
+  drawPChart();
 });
 
 document.querySelectorAll("#range .chip").forEach(b => b.onclick = () => {
-  document.querySelectorAll("#range .chip").forEach(x => x.classList.remove("on"));
-  b.classList.add("on"); range = +b.dataset.r; drawChart();
+  range = +b.dataset.r;
+  setPressed("#range", x => +x.dataset.r === range);
+  drawChart();
 });
 document.querySelectorAll("#unit .chip").forEach(b => b.onclick = () => {
   setChartUnit(b.dataset.u);
@@ -1317,6 +1390,7 @@ function eventTimestamp(event) {
 function drawChart() {
   const svg = $("chart");
   const W = svg.clientWidth, H = svg.clientHeight;
+  if (W < 180 || H < 100) return;
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   const cutoff = range ? Date.now() - range * 3600e3 : 0;
 
@@ -1374,7 +1448,7 @@ function drawChart() {
     g += `<line x1="${M.l}" x2="${W - M.r}" y1="${y}" y2="${y}" stroke="${col("--grid")}"/>`;
     g += `<text x="${M.l + 2}" y="${y - 5}" fill="${col("--muted")}" font-size="10.5" style="font-variant-numeric:tabular-nums">${fmtY(v)}</text>`;
   }
-  const nx = Math.min(6, Math.floor(W / 150));
+  const nx = Math.max(1, Math.min(6, Math.floor(W / 150)));
   for (let i = 0; i <= nx; i++) {
     const t = x0 + (x1 - x0) * i / nx, d = new Date(t);
     const lab = (x1 - x0 < 86400e3 * 2)
@@ -1487,17 +1561,107 @@ async function refreshMetrics() {
     tile(t("vol"), fmtPct(m.vol_annual, 0), PREFS.lang==="en"?"annualized":"annualisée", "");
 }
 
+// ── calques accessibles : focus piégé, Escape, restitution du focus ──────
+const layerReturns = new WeakMap();
+let activeLayer = null;
+let layerCloseTimer = null;
+const focusableSelector = [
+  "a[href]", "button:not([disabled])", "input:not([disabled])",
+  "select:not([disabled])", "textarea:not([disabled])", "[tabindex]:not([tabindex='-1'])",
+].join(",");
+
+function openLayer(panel, backdrop, trigger) {
+  if (layerCloseTimer) window.clearTimeout(layerCloseTimer);
+  if (!backdrop.hidden) {
+    activeLayer = panel;
+    return;
+  }
+  const returnTarget = trigger || document.activeElement;
+  layerReturns.set(panel, { element: returnTarget, id: returnTarget && returnTarget.id });
+  backdrop.hidden = false;
+  panel.hidden = false;
+  panel.inert = false;
+  document.body.classList.add("dialog-open");
+  requestAnimationFrame(() => {
+    backdrop.classList.add("open");
+    panel.classList.add("open");
+    activeLayer = panel;
+    const preferred = panel.querySelector("[data-autofocus], .iconbtn, " + focusableSelector);
+    (preferred || panel).focus();
+  });
+}
+
+function closeLayer(panel, backdrop) {
+  if (backdrop.hidden) return;
+  backdrop.classList.remove("open");
+  panel.classList.remove("open");
+  panel.inert = true;
+  activeLayer = null;
+  document.body.classList.remove("dialog-open");
+  const returnTarget = layerReturns.get(panel);
+  const previous = returnTarget && returnTarget.element;
+  const replacement = previous && previous.isConnected
+    ? previous
+    : returnTarget && returnTarget.id ? document.getElementById(returnTarget.id) : null;
+  if (replacement) replacement.focus();
+  const delay = matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 300;
+  layerCloseTimer = window.setTimeout(() => {
+    backdrop.hidden = true;
+    panel.hidden = true;
+  }, delay);
+}
+
+document.addEventListener("keydown", event => {
+  if (!activeLayer) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    if (activeLayer === $("modal")) closeLayer($("modal"), $("modal-bd"));
+    else closeDrawer();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const controls = [...activeLayer.querySelectorAll(focusableSelector)].filter(
+    element => !element.hidden && element.getClientRects().length
+  );
+  if (!controls.length) {
+    event.preventDefault();
+    activeLayer.focus();
+    return;
+  }
+  const first = controls[0], last = controls[controls.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+});
+
 // ── drill-down par stratégie ───────────────────────────────
-async function openDrill(name) {
-  const d = await (await fetch("/api/strategy/" + encodeURIComponent(name))).json();
+async function openDrill(name, trigger=null) {
   $("modal-title").textContent = name.replace("trend_ls_", "Donchian ");
+  $("modal-body").innerHTML = '<div class="modal-loading" role="status">Chargement des détails…</div>';
+  openLayer($("modal"), $("modal-bd"), trigger || document.activeElement);
+  let d;
+  try {
+    const response = await fetch("/api/strategy/" + encodeURIComponent(name));
+    if (!response.ok) throw new Error("strategy_http_" + response.status);
+    d = await response.json();
+  } catch (error) {
+    console.error(error);
+    $("modal-body").innerHTML = '<div class="modal-error" role="alert"><strong>Détails indisponibles</strong><span>La source n’a pas répondu. Aucune valeur n’a été déduite.</span><button type="button" class="iconbtn" id="modal-retry">Réessayer</button></div>';
+    $("modal-retry").onclick = () => openDrill(name);
+    return;
+  }
   const st = d.stats || {};
   const money = v => v == null ? "—" : (v >= 0 ? "+" : "") + fmt$(v, 1);
+  const moneyNA = (v, dp=0) => v == null || !Number.isFinite(Number(v)) ? "N/A" : fmt$(Number(v), dp);
   let body = "";
   const slot = (lastSummary && lastSummary.trend && lastSummary.trend.slots || []).find(item => item.name === name) || null;
   if (slot) {
     const value = v => v == null || (typeof v === "number" && !Number.isFinite(v)) ? "N/A" : esc(String(v));
-    const f = v => v == null || isNaN(v) ? "N/A" : Number(v).toLocaleString(LOCALE(), {maximumFractionDigits: 6});
+    const f = v => v == null || !Number.isFinite(Number(v)) ? "N/A" : Number(v).toLocaleString(LOCALE(), {maximumFractionDigits: 6});
     const detail = (label, valueText, className="") => `<div class="modal-detail"><span>${label}</span><strong class="${className}">${valueText}</strong></div>`;
     const section = (title, rows) => `<section class="modal-section"><h4>${title}</h4><div class="modal-grid">${rows.join("")}</div></section>`;
     const stopPnl = slot.stop_pnl;
@@ -1510,10 +1674,10 @@ async function openDrill(name) {
       detail("Âge", value(durationNA(slot.position_age_s))),
       detail("Ajouts / bars", value((slot.pyramid_adds == null ? "N/A" : slot.pyramid_adds) + " / " + (slot.bars == null ? "N/A" : slot.bars))),
     ]) + section("Économie", [
-      detail("Notionnel estimé", value(fmt$(slot.notional, 0))),
-      detail("Frais d’entrée", value(fmt$(slot.entry_fee, 2))),
-      detail("Cash poche", value(fmt$(slot.cash, 0))),
-      detail("PnL latent estimé", value(fmt$(slot.upnl, 2))),
+      detail("Notionnel estimé", value(moneyNA(slot.notional, 0))),
+      detail("Frais d’entrée", value(moneyNA(slot.entry_fee, 2))),
+      detail("Cash poche", value(moneyNA(slot.cash, 0))),
+      detail("PnL latent estimé", value(moneyNA(slot.upnl, 2))),
       detail("PnL %", value(percentNA(slot.upnl_pct) + " · notionnel d’entrée")),
     ]) + section("Protection", [
       detail("Stop", value(f(slot.stop))),
@@ -1558,10 +1722,9 @@ async function openDrill(name) {
     body += `<div class="empty">Aucun trade clôturé pour ce sous-système.</div>`;
   }
   $("modal-body").innerHTML = body;
-  $("modal-bd").classList.add("open");
 }
-$("modal-close").onclick = () => $("modal-bd").classList.remove("open");
-$("modal-bd").onclick = e => { if (e.target === $("modal-bd")) $("modal-bd").classList.remove("open"); };
+$("modal-close").onclick = () => closeLayer($("modal"), $("modal-bd"));
+$("modal-bd").onclick = e => { if (e.target === $("modal-bd")) closeLayer($("modal"), $("modal-bd")); };
 
 // ── notifications ──────────────────────────────────────────
 function notify(title, body, tag) {
@@ -1607,7 +1770,7 @@ function checkAlerts(s) {
 const ACCENTS = ["#2a78d6","#149467","#c88800","#6b4de0","#d03b3b","#0ca3a3"];
 function buildDrawer() {
   const acc = $("pref-accent");
-  acc.innerHTML = ACCENTS.map(c => `<span class="sw-dot ${c===PREFS.accent?"on":""}" data-c="${c}" style="background:${c}"></span>`).join("");
+  acc.innerHTML = ACCENTS.map(c => `<button type="button" class="sw-dot ${c===PREFS.accent?"on":""}" data-c="${c}" style="background:${c}" aria-label="Accent ${c}" aria-pressed="${c===PREFS.accent}"></button>`).join("");
   acc.querySelectorAll(".sw-dot").forEach(d => d.onclick = () => {
     PREFS.accent = d.dataset.c; savePrefs(); applyAccent(); buildDrawer(); redrawAll();
   });
@@ -1622,7 +1785,7 @@ function buildDrawer() {
   const CARDS = ["performance_brief","risk_radar","monitor_pulse","chart","price","events","trend","carry","breakdown","conformity","yearly","trades","metrics","exposure","protocol","readiness"];
   $("pref-cards").innerHTML = CARDS.map(k =>
     `<div class="setrow"><span class="sk">${(t("cards")||{})[k]||k}</span>
-     <label class="toggle"><input type="checkbox" data-card-k="${k}" ${PREFS.hidden[k]?"":"checked"}><span class="sl"></span></label></div>`).join("");
+     <label class="toggle"><input type="checkbox" data-card-k="${k}" aria-label="${esc((t("cards")||{})[k]||k)}" ${PREFS.hidden[k]?"":"checked"}><span class="sl"></span></label></div>`).join("");
   $("pref-cards").querySelectorAll("[data-card-k]").forEach(inp => inp.onchange = () => {
     PREFS.hidden[inp.dataset.cardK] = !inp.checked; savePrefs(); applyCardVisibility();
   });
@@ -1634,13 +1797,21 @@ function applyCardVisibility() {
 }
 function redrawAll() { drawChart(); drawSpark(); drawPChart(); drawYearly(); if (lastSummary) renderExposureHealth(lastSummary); }
 
-$("settings-btn").onclick = () => { buildDrawer(); $("drawer").classList.add("open"); $("drawer-bd").classList.add("open"); };
-$("drawer-close").onclick = () => { $("drawer").classList.remove("open"); $("drawer-bd").classList.remove("open"); };
-$("drawer-bd").onclick = () => { $("drawer").classList.remove("open"); $("drawer-bd").classList.remove("open"); };
+$("settings-btn").onclick = () => {
+  buildDrawer();
+  $("settings-btn").setAttribute("aria-expanded", "true");
+  openLayer($("drawer"), $("drawer-bd"), $("settings-btn"));
+};
+function closeDrawer() {
+  $("settings-btn").setAttribute("aria-expanded", "false");
+  closeLayer($("drawer"), $("drawer-bd"));
+}
+$("drawer-close").onclick = closeDrawer;
+$("drawer-bd").onclick = closeDrawer;
 $("pref-lang").onchange = e => { PREFS.lang = e.target.value; savePrefs(); applyI18n(); buildDrawer(); refreshMetrics(); redrawAll(); };
 $("pref-currency").onchange = e => { PREFS.currency = e.target.value; savePrefs(); if (lastSummary) refreshSummary(); refreshTrades(); refreshAnalytics(); };
 $("pref-range").onchange = e => { PREFS.range = +e.target.value; range = PREFS.range;
-  document.querySelectorAll("#range .chip").forEach(x => x.classList.toggle("on", +x.dataset.r === range)); savePrefs(); drawChart(); };
+  setPressed("#range", x => +x.dataset.r === range); savePrefs(); drawChart(); };
 $("pref-refresh").onchange = e => { PREFS.refresh = +e.target.value; savePrefs(); applyI18n(); restartTimer(); };
 $("pref-notif").onchange = async e => {
   if (e.target.checked && "Notification" in window) {
@@ -1653,28 +1824,86 @@ $("pref-notif-pos").onchange = e => { PREFS.notifPos = e.target.checked; savePre
 $("pref-dd").onchange = e => { PREFS.ddAlert = Math.max(1, Math.min(30, +e.target.value || 12)); savePrefs(); };
 
 // buy&hold + filtre de dates
-$("bh-toggle").onclick = () => { showBH = !showBH; $("bh-toggle").classList.toggle("on", showBH); drawChart(); };
+$("bh-toggle").onclick = () => {
+  showBH = !showBH;
+  $("bh-toggle").classList.toggle("on", showBH);
+  $("bh-toggle").setAttribute("aria-pressed", String(showBH));
+  drawChart();
+};
 $("tr-from").onchange = refreshTrades; $("tr-to").onchange = refreshTrades;
 $("tr-clear").onclick = () => { $("tr-from").value = ""; $("tr-to").value = ""; refreshTrades(); };
 
 // ── boucle de rafraîchissement (fréquence configurable) ────
 let timer = null;
+let tickPromise = null;
+let refreshResetTimer = null;
 function restartTimer() { if (timer) clearInterval(timer); if (PREFS.refresh) timer = setInterval(tick, PREFS.refresh); }
-window.addEventListener("resize", () => { drawChart(); drawSpark(); drawYearly(); });
+function refreshLabel(state) {
+  const english = PREFS.lang === "en";
+  if (state === "loading") return english ? "Refreshing…" : "Actualisation…";
+  if (state === "success") return english ? "Up to date" : "À jour";
+  if (state === "error") return english ? "Retry" : "Réessayer";
+  return english ? "Refresh" : "Actualiser";
+}
+function setRefreshState(state) {
+  const button = $("refresh-btn");
+  const check = button.querySelector(".t-success-check");
+  button.dataset.state = state;
+  button.disabled = state === "loading";
+  button.setAttribute("aria-busy", String(state === "loading"));
+  $("dashboard-content").setAttribute("aria-busy", String(state === "loading"));
+  swapText($("refresh-label"), refreshLabel(state));
+  if (refreshResetTimer) window.clearTimeout(refreshResetTimer);
+  if (state === "success") {
+    check.dataset.state = "out";
+    void check.offsetWidth;
+    check.dataset.state = "in";
+    refreshResetTimer = window.setTimeout(() => setRefreshState("idle"), 1400);
+  } else {
+    check.dataset.state = "out";
+  }
+}
+window.addEventListener("resize", () => { drawChart(); drawSpark(); drawYearly(); updateViewIndicator(); });
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawChart(); drawSpark(); drawYearly(); });
 // PWA/onglet remis au premier plan : rafraîchir tout de suite plutôt que
 // d'afficher des données figées jusqu'au prochain tick (et remettre le timer
 // à zéro pour ne pas cumuler un tick immédiat + un tick programmé)
 document.addEventListener("visibilitychange", () => { if (!document.hidden) { tick(); restartTimer(); } });
-async function tick() {
-  try { await Promise.all([refreshSummary(), refreshEvents(), refreshEquity(), refreshTrades(), refreshConformity(), refreshPrice(), refreshAnalytics(), refreshMetrics(), refreshReadiness()]); }
-  catch (e) { console.error(e); }
+async function tick(options={}) {
+  if (tickPromise) {
+    if (!options.feedback) return tickPromise;
+    setRefreshState("loading");
+    const result = await tickPromise;
+    setRefreshState(result ? "success" : "error");
+    return result;
+  }
+  if (options.feedback) setRefreshState("loading");
+  tickPromise = (async () => {
+    try {
+      await Promise.all([refreshSummary(), refreshEvents(), refreshEquity(), refreshTrades(), refreshConformity(), refreshPrice(), refreshAnalytics(), refreshMetrics(), refreshReadiness()]);
+      if (options.feedback) setRefreshState("success");
+      else if ($("refresh-btn").dataset.state === "error") setRefreshState("idle");
+      return true;
+    } catch (error) {
+      console.error(error);
+      setRefreshState("error");
+      return false;
+    }
+  })();
+  try {
+    return await tickPromise;
+  } finally {
+    tickPromise = null;
+  }
 }
+$("refresh-btn").onclick = () => tick({feedback:true});
 
 // ── init ───────────────────────────────────────────────────
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 applyAccent(); applyI18n(); applyCardVisibility(); applyDashboardView();
-document.querySelectorAll("#range .chip").forEach(x => x.classList.toggle("on", +x.dataset.r === range));
+setPressed("#range", x => +x.dataset.r === range);
+setPressed("#prange", x => +x.dataset.n === pcRange);
+setPressed("#evfilter", x => x.dataset.f === evFilter);
 tick();
 refreshYearly(); // référence statique : un seul chargement, redessinée aux changements de vue/thème
 restartTimer();
