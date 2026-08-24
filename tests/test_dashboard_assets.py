@@ -133,3 +133,68 @@ def test_dashboard_visual_hierarchy_uses_progressive_disclosure(monkeypatch):
         "carry-state-age",
     ):
         assert f'id="{field}"' in html
+
+
+def test_dashboard_interactions_are_accessible_and_fail_closed(monkeypatch):
+    monkeypatch.setattr(dashboard, "AUTH_TOKEN", None)
+    html = dashboard.app.test_client().get("/").data.decode("utf-8")
+    css = (dashboard.ROOT / "dashboard" / "static" / "dashboard.css").read_text(encoding="utf-8")
+    javascript = (dashboard.ROOT / "dashboard" / "static" / "dashboard.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'class="skip-link" href="#dashboard-content"' in html
+    assert '<main id="dashboard-content"' in html
+    assert 'id="alert" role="alert"' in html
+    assert 'class="view-indicator" aria-hidden="true"' in html
+    assert 'id="refresh-btn"' in html
+    assert 'id="drawer" role="dialog" aria-modal="true"' in html
+    assert (
+        'id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" hidden inert'
+        in html
+    )
+    assert 'id="modal" role="dialog" aria-modal="true"' in html
+    assert 'for="pref-lang"' in html
+    assert 'for="pref-currency"' in html
+    assert 'for="tr-from"' in html
+    assert 'for="tr-to"' in html
+
+    assert "overflow-x:clip" not in css
+    assert "overflow-x:hidden" not in css
+    assert ".mode .blink, .fresh-dot" in css
+    assert ".view-indicator" in css
+    assert ".t-text-swap" in css
+    assert ".t-success-check" in css
+
+    assert '"ArrowLeft", "ArrowRight", "Home", "End"' in javascript
+    assert "function openLayer(panel, backdrop, trigger)" in javascript
+    assert "function closeLayer(panel, backdrop)" in javascript
+    assert "if (!backdrop.hidden)" not in javascript
+    assert "const wasHidden = backdrop.hidden || panel.hidden;" in javascript
+    assert "const layerCloseTimers = new WeakMap();" in javascript
+    assert "function cancelLayerClose(panel)" in javascript
+    assert "const timer = layerCloseTimers.get(panel);" in javascript
+    assert "layerCloseTimers.delete(panel);" in javascript
+    assert "layerCloseTimers.set(panel, timer);" in javascript
+    assert "layerCloseTimer =" not in javascript
+    assert javascript.count("cancelLayerClose(panel);") == 2
+    assert 'document.body.classList.add("dialog-open");' in javascript
+    assert 'backdrop.classList.add("open");' in javascript
+    assert 'panel.classList.add("open");' in javascript
+    assert "panel.inert = false;" in javascript
+    assert (
+        'if (activeLayer !== panel || panel.hidden || panel.inert || !panel.classList.contains("open")) return;'
+        in javascript
+    )
+    assert 'id="slot-detail-${esc(sl.name)}"' in javascript
+    assert "document.getElementById(returnTarget.id)" in javascript
+    assert "if (replacement) replacement.focus();" in javascript
+    assert 'event.key === "Escape"' in javascript
+    assert 'setRefreshState("loading")' in javascript
+    assert 'setRefreshState("success")' in javascript
+    assert 'setRefreshState("error")' in javascript
+    assert "if (W < 180 || H < 100) return;" in javascript
+    assert 'carry.mode === "PAPER_SYNTHETIC" ? t("carry_mode_value")' in javascript
+
+    effects = (dashboard.ROOT / "dashboard" / "static" / "effects.js").read_text(encoding="utf-8")
+    assert "document.startViewTransition(" not in effects

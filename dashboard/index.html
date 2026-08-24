@@ -13,6 +13,7 @@
 </head>
 <body data-view="monitor">
 <canvas id="fx" aria-hidden="true"></canvas>
+<a class="skip-link" href="#dashboard-content">Aller au contenu principal</a>
 
 <header>
   <div class="brand">
@@ -23,8 +24,8 @@
     </div>
   </div>
   <span class="mode"><span class="blink"></span><span data-i18n="paper">PAPER TRADING</span></span>
-  <button class="iconbtn" id="theme-btn" title="Basculer le thème">🌗 <span data-i18n="theme">Thème</span></button>
-  <button class="iconbtn" id="settings-btn" title="Préférences">⚙️ <span data-i18n="settings">Réglages</span></button>
+  <button type="button" class="iconbtn" id="theme-btn" title="Basculer le thème" aria-pressed="false">🌗 <span data-i18n="theme">Thème</span></button>
+  <button type="button" class="iconbtn" id="settings-btn" title="Préférences" aria-expanded="false" aria-controls="drawer">⚙️ <span data-i18n="settings">Réglages</span></button>
   <span class="spacer"></span>
   <div class="hm"><div class="lab" data-i18n="btcusdt">BTC-PERP / USDC</div><div class="val num display" id="h-price">—</div></div>
   <div class="hm"><div class="lab" data-i18n="h24">24 heures</div><div class="val num" id="h-change">—</div></div>
@@ -34,10 +35,11 @@
 <section class="cockpitbar" aria-label="Vue et état du portefeuille">
   <div class="view-control">
     <span class="eyebrow" data-i18n="workspace">Vue</span>
-    <div class="chips" id="dashboard-view" role="tablist" aria-label="Vue du dashboard">
-      <button class="chip" role="tab" data-view="monitor" data-i18n="view_monitor">Surveillance</button>
-      <button class="chip" role="tab" data-view="performance" data-i18n="view_performance">Performance</button>
-      <button class="chip" role="tab" data-view="risk" data-i18n="view_risk">Risque</button>
+    <div class="chips view-tabs" id="dashboard-view" role="tablist" aria-label="Vue du dashboard">
+      <span class="view-indicator" aria-hidden="true"></span>
+      <button class="chip" id="view-monitor" role="tab" data-view="monitor" aria-controls="dashboard-content" data-i18n="view_monitor">Surveillance</button>
+      <button class="chip" id="view-performance" role="tab" data-view="performance" aria-controls="dashboard-content" data-i18n="view_performance">Performance</button>
+      <button class="chip" id="view-risk" role="tab" data-view="risk" aria-controls="dashboard-content" data-i18n="view_risk">Risque</button>
     </div>
   </div>
   <div class="cockpit-status" id="cockpit-status" data-status="good" role="status" aria-live="polite">
@@ -45,9 +47,17 @@
     <div class="status-copy"><span class="status-title" id="status-title">Initialisation…</span><span class="status-detail" id="status-detail"></span></div>
   </div>
   <div class="data-freshness" id="data-freshness"><span class="fresh-dot"></span><span id="data-age">En attente des données</span></div>
+  <button type="button" class="refresh-action" id="refresh-btn" data-state="idle" aria-label="Actualiser toutes les données">
+    <span class="refresh-icon" aria-hidden="true">
+      <svg class="refresh-glyph" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 5v6h-6"/></svg>
+      <span class="t-success-check" data-state="out"><svg viewBox="0 0 24 24"><path d="m5 12 4 4 10-10"/></svg></span>
+    </span>
+    <span class="t-text-swap" id="refresh-label">Actualiser</span>
+  </button>
 </section>
 
-<div id="alert"><span class="ic">⚠</span><span id="alert-msg"></span></div>
+<main id="dashboard-content" aria-labelledby="view-monitor" tabindex="-1">
+<div id="alert" role="alert" aria-live="assertive"><span class="ic" aria-hidden="true">⚠</span><span id="alert-msg"></span></div>
 
 <section class="tiles" id="top-tiles">
   <div class="card tile hero" data-view-tile="equity">
@@ -98,16 +108,16 @@
       <h2 data-i18n="cards.chart">Courbe d’équity</h2>
       <div class="controls">
         <div class="chips" id="range">
-          <button class="chip" data-r="24">24 h</button>
-          <button class="chip" data-r="168">7 j</button>
-          <button class="chip on" data-r="0">Tout</button>
+          <button class="chip" data-r="24" aria-pressed="false">24 h</button>
+          <button class="chip" data-r="168" aria-pressed="false">7 j</button>
+          <button class="chip on" data-r="0" aria-pressed="true">Tout</button>
         </div>
         <div class="chips" id="unit">
-          <button class="chip on" data-u="pct" data-i18n="base100">Base 100</button>
-          <button class="chip" data-u="usd" data-i18n="dollars">Dollars</button>
-          <button class="chip" data-u="dd" data-i18n="drawdown">Drawdown</button>
+          <button class="chip on" data-u="pct" aria-pressed="true" data-i18n="base100">Base 100</button>
+          <button class="chip" data-u="usd" aria-pressed="false" data-i18n="dollars">Dollars</button>
+          <button class="chip" data-u="dd" aria-pressed="false" data-i18n="drawdown">Drawdown</button>
         </div>
-        <button class="chip" id="bh-toggle" style="border:1px solid var(--ring);border-radius:8px" data-i18n="vs_bh">vs Buy&amp;Hold</button>
+        <button class="chip" id="bh-toggle" aria-pressed="false" style="border:1px solid var(--ring);border-radius:8px" data-i18n="vs_bh">vs Buy&amp;Hold</button>
         <span class="legend">
           <span><span class="swatch" style="background:var(--s1)"></span><span data-i18n="portfolio">Portefeuille</span></span>
           <span><span class="swatch" style="background:var(--s2)"></span>Trend 4x</span>
@@ -124,9 +134,9 @@
       <div class="card-head">
       <h2>BTC-PERP / USDC · Hyperliquid · 1 h <span style="color:var(--muted);font-weight:500;font-size:11.5px" id="pos-note">— aucune position ouverte</span></h2>
         <span class="chips" id="prange">
-          <button class="chip" data-n="48">2 j</button>
-          <button class="chip" data-n="96">4 j</button>
-          <button class="chip on" data-n="200">8 j</button>
+          <button class="chip" data-n="48" aria-pressed="false">2 j</button>
+          <button class="chip" data-n="96" aria-pressed="false">4 j</button>
+          <button class="chip on" data-n="200" aria-pressed="true">8 j</button>
         </span>
       </div>
       <div class="signal-guide" id="signal-guide" data-side="unknown">
@@ -151,9 +161,9 @@
       <div class="card-head">
         <h2>Journal des événements</h2>
         <span class="chips" id="evfilter">
-          <button class="chip on" data-f="all">Tout</button>
-          <button class="chip" data-f="trend">Trend</button>
-          <button class="chip" data-f="carry">Carry</button>
+          <button class="chip on" data-f="all" aria-pressed="true">Tout</button>
+          <button class="chip" data-f="trend" aria-pressed="false">Trend</button>
+          <button class="chip" data-f="carry" aria-pressed="false">Carry</button>
         </span>
       </div>
       <div id="events"><div class="empty">Chargement…</div></div>
@@ -254,9 +264,9 @@
         <a class="iconbtn" href="/api/trades.csv" download style="margin-left:auto;text-decoration:none">⬇ CSV</a>
       </h2>
       <div class="controls" style="margin:8px 0 2px">
-        <span class="sk" style="font-size:11.5px;color:var(--muted)" data-i18n="from">Du</span>
+        <label class="sk" for="tr-from" style="font-size:11.5px;color:var(--muted)" data-i18n="from">Du</label>
         <input type="date" id="tr-from" style="background:var(--surface-2);border:1px solid var(--ring);color:var(--ink);border-radius:8px;padding:4px 8px;font:inherit;font-size:12px">
-        <span class="sk" style="font-size:11.5px;color:var(--muted)" data-i18n="to">au</span>
+        <label class="sk" for="tr-to" style="font-size:11.5px;color:var(--muted)" data-i18n="to">au</label>
         <input type="date" id="tr-to" style="background:var(--surface-2);border:1px solid var(--ring);color:var(--ink);border-radius:8px;padding:4px 8px;font:inherit;font-size:12px">
         <button class="iconbtn" id="tr-clear" data-i18n="reset">Réinitialiser</button>
       </div>
@@ -320,45 +330,46 @@
       <div id="readiness"><div class="empty">Chargement…</div></div>
     </div>
 </div>
+</main>
 
 <!-- ── panneau de préférences ─────────────────────────────── -->
-<div class="drawer-backdrop" id="drawer-bd"></div>
-<aside class="drawer" id="drawer">
-  <div class="dh"><h3 data-i18n="settings">Réglages</h3><span class="spacer" style="flex:1"></span>
-    <button class="iconbtn" id="drawer-close">✕</button></div>
+<div class="drawer-backdrop" id="drawer-bd" hidden></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" hidden inert>
+  <div class="dh"><h3 id="drawer-title" data-i18n="settings">Réglages</h3><span class="spacer" style="flex:1"></span>
+    <button type="button" class="iconbtn" id="drawer-close" aria-label="Fermer les réglages">✕</button></div>
 
   <div class="setgrp">
     <div class="gl" data-i18n="grp_display">Affichage</div>
-    <div class="setrow"><span class="sk" data-i18n="pref_lang">Langue</span>
+    <div class="setrow"><label class="sk" for="pref-lang" data-i18n="pref_lang">Langue</label>
       <select id="pref-lang"><option value="fr">Français</option><option value="en">English</option></select></div>
-    <div class="setrow"><span class="sk" data-i18n="pref_currency">Devise d’affichage</span>
+    <div class="setrow"><label class="sk" for="pref-currency" data-i18n="pref_currency">Devise d’affichage</label>
       <select id="pref-currency"><option value="usd">$ USD</option><option value="eur">€ EUR</option><option value="btc">₿ BTC</option><option value="pct">%</option></select></div>
     <div class="setrow"><span class="sk" data-i18n="pref_accent">Couleur d’accent</span>
       <span class="swatches" id="pref-accent"></span></div>
-    <div class="setrow"><span class="sk" data-i18n="pref_range">Plage par défaut</span>
+    <div class="setrow"><label class="sk" for="pref-range" data-i18n="pref_range">Plage par défaut</label>
       <select id="pref-range"><option value="24">24 h</option><option value="168">7 j</option><option value="0" data-i18n="all">Tout</option></select></div>
   </div>
 
   <div class="setgrp">
     <div class="gl" data-i18n="grp_refresh">Rafraîchissement</div>
-    <div class="setrow"><span class="sk" data-i18n="pref_refresh">Fréquence</span>
+    <div class="setrow"><label class="sk" for="pref-refresh" data-i18n="pref_refresh">Fréquence</label>
       <select id="pref-refresh"><option value="10000">10 s</option><option value="30000">30 s</option><option value="60000">1 min</option><option value="0" data-i18n="manual">Manuel</option></select></div>
   </div>
 
   <div class="setgrp">
     <div class="gl" data-i18n="grp_alerts">Alertes &amp; notifications</div>
-    <div class="setrow"><span class="sk" data-i18n="pref_notif">Notifications navigateur</span>
+    <div class="setrow"><label class="sk" for="pref-notif" data-i18n="pref_notif">Notifications navigateur</label>
       <label class="toggle"><input type="checkbox" id="pref-notif"><span class="sl"></span></label></div>
-    <div class="setrow"><span class="sk" data-i18n="pref_notif_pos">Prévenir à l’ouverture d’une position</span>
+    <div class="setrow"><label class="sk" for="pref-notif-pos" data-i18n="pref_notif_pos">Prévenir à l’ouverture d’une position</label>
       <label class="toggle"><input type="checkbox" id="pref-notif-pos"><span class="sl"></span></label></div>
-    <div class="setrow"><span class="sk" data-i18n="pref_notif_dd">Alerte si drawdown dépasse</span>
+    <div class="setrow"><label class="sk" for="pref-dd" data-i18n="pref_notif_dd">Alerte si drawdown dépasse</label>
       <span><input type="number" id="pref-dd" min="1" max="30" step="1" style="width:56px"> %</span></div>
   </div>
 
   <div class="setgrp">
     <div class="gl">Effets visuels</div>
     <div class="fx-note">Fond animé (WebGL) réagissant au régime de marché et à la volatilité — à couper pour économiser la batterie.</div>
-    <div class="setrow"><span class="sk">Fond animé</span>
+    <div class="setrow"><label class="sk" for="pref-fx">Fond animé</label>
       <label class="toggle"><input type="checkbox" id="pref-fx" checked><span class="sl"></span></label></div>
   </div>
 
@@ -369,9 +380,9 @@
 </aside>
 
 <!-- ── modal drill-down par stratégie ─────────────────────── -->
-<div class="modal-backdrop" id="modal-bd">
-  <div class="modal" id="modal">
-    <div class="mh"><h3 id="modal-title">—</h3><span style="flex:1"></span><button class="iconbtn" id="modal-close">✕</button></div>
+<div class="modal-backdrop" id="modal-bd" hidden>
+  <div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" tabindex="-1" inert>
+    <div class="mh"><h3 id="modal-title">—</h3><span style="flex:1"></span><button type="button" class="iconbtn" id="modal-close" aria-label="Fermer les détails">✕</button></div>
     <div id="modal-body"></div>
   </div>
 </div>
