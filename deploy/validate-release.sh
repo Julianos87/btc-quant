@@ -49,6 +49,11 @@ run_isolated() {
     -u BTCQUANT_CURRENT \
     -u BTCQUANT_DATABASE \
     -u BTCQUANT_CLONE \
+    -u GIT_DIR \
+    -u GIT_WORK_TREE \
+    -u GIT_INDEX_FILE \
+    -u GIT_OBJECT_DIRECTORY \
+    -u GIT_ALTERNATE_OBJECT_DIRECTORIES \
     "$@"
 }
 

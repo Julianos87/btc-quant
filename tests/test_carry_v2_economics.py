@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from tests.carry_v2_git import require_git_worktree
 from btcquant.research.carry_v2 import (
     BorrowObservation,
     CarryLeg,
@@ -354,13 +355,13 @@ def test_artifact_provenance_uses_immediately_preceding_source_commit() -> None:
     root = Path(__file__).resolve().parents[1]
     artifact_path = root / "audit" / "carry_v2_economic_qualification.json"
     artifact_name = "audit/carry_v2_economic_qualification.json"
-    if (
-        not artifact_path.exists()
-        or subprocess.run(
-            ["git", "-C", str(root), "cat-file", "-e", f"HEAD:{artifact_name}"],
-            check=False,
-        ).returncode
-    ):
+    if not artifact_path.exists():
+        pytest.skip("artifact is generated in Commit B")
+    require_git_worktree(root)
+    if subprocess.run(
+        ["git", "-C", str(root), "cat-file", "-e", f"HEAD:{artifact_name}"],
+        check=False,
+    ).returncode:
         pytest.skip("artifact is generated in Commit B")
     current_files = subprocess.check_output(
         ["git", "-C", str(root), "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"],

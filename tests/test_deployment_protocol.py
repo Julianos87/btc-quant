@@ -269,6 +269,11 @@ def test_deployment_scripts_expose_fail_closed_guards():
     assert "-u BTCQUANT_CURRENT" in validate
     assert "-u BTCQUANT_DATABASE" in validate
     assert "-u BTCQUANT_CLONE" in validate
+    assert "-u GIT_DIR" in validate
+    assert "-u GIT_WORK_TREE" in validate
+    assert "-u GIT_INDEX_FILE" in validate
+    assert "-u GIT_OBJECT_DIRECTORY" in validate
+    assert "-u GIT_ALTERNATE_OBJECT_DIRECTORIES" in validate
     assert 'HYPOTHESIS_STORAGE_DIRECTORY="${VALIDATION_ROOT}/hypothesis"' in validate
     assert "-u BTCQUANT_ROOT" in create
     assert "--validate-existing" in create
@@ -1005,6 +1010,12 @@ def test_process_local_source_git_handles_foreign_owned_checkout(tmp_path):
     assert "dubious ownership" in wrong_scope.stderr
 
 
+def test_git_worktree_guard_reports_git_free_tree(tmp_path):
+    from tests.carry_v2_git import git_worktree_available
+
+    assert not git_worktree_available(tmp_path)
+
+
 def test_validate_release_isolates_and_cleans_validation_artifacts(tmp_path):
     import subprocess
     import textwrap
@@ -1089,7 +1100,10 @@ def test_validate_release_isolates_and_cleans_validation_artifacts(tmp_path):
         case " $* " in *" -p no:cacheprovider "*) ;; *) exit 11 ;; esac
         case "$COVERAGE_FILE" in "$RELEASE"/*|"") exit 12 ;; esac
         if [ -n "${BTCQUANT_ROOT:-}" ] || [ -n "${BTCQUANT_CURRENT:-}" ] \
-          || [ -n "${BTCQUANT_DATABASE:-}" ] || [ -n "${BTCQUANT_CLONE:-}" ]; then
+          || [ -n "${BTCQUANT_DATABASE:-}" ] || [ -n "${BTCQUANT_CLONE:-}" ] \
+          || [ -n "${GIT_DIR:-}" ] || [ -n "${GIT_WORK_TREE:-}" ] \
+          || [ -n "${GIT_INDEX_FILE:-}" ] || [ -n "${GIT_OBJECT_DIRECTORY:-}" ] \
+          || [ -n "${GIT_ALTERNATE_OBJECT_DIRECTORIES:-}" ]; then
           printf 'runtime root leaked into pytest\\n' >&2
           exit 15
         fi
@@ -1163,6 +1177,11 @@ def test_validate_release_isolates_and_cleans_validation_artifacts(tmp_path):
             "BTCQUANT_CURRENT": str(runtime_root / "current"),
             "BTCQUANT_DATABASE": str(runtime_root / "state" / "btcquant.db"),
             "BTCQUANT_CLONE": str(runtime_root / "clone"),
+            "GIT_DIR": str(runtime_root / "git-dir"),
+            "GIT_WORK_TREE": str(runtime_root / "git-work-tree"),
+            "GIT_INDEX_FILE": str(runtime_root / "git-index"),
+            "GIT_OBJECT_DIRECTORY": str(runtime_root / "git-objects"),
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(runtime_root / "git-alternates"),
         }
     )
     command = ["bash", "deploy/validate-release.sh", str(release), str(uv)]

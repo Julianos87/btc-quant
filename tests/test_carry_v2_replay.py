@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from scripts.acquire_carry_v2_data import _normalize_funding
+from tests.carry_v2_git import require_git_worktree
 from btcquant.research.carry_v2_replay import (
     ReplayInputError,
     ReplayPolicy,
@@ -252,6 +253,7 @@ def test_terminal_open_position_reports_mark_and_hypothetical_close() -> None:
 
 def test_real_data_artifact_has_reproducible_source_and_data_provenance() -> None:
     root = Path(__file__).resolve().parents[1]
+    require_git_worktree(root)
     if subprocess.check_output(
         ["git", "-C", str(root), "status", "--porcelain"], text=True
     ).strip():
