@@ -1571,28 +1571,35 @@ const focusableSelector = [
 ].join(",");
 
 function openLayer(panel, backdrop, trigger) {
-  if (layerCloseTimer) window.clearTimeout(layerCloseTimer);
-  if (!backdrop.hidden) {
-    activeLayer = panel;
-    return;
+  if (layerCloseTimer !== null) {
+    window.clearTimeout(layerCloseTimer);
+    layerCloseTimer = null;
   }
-  const returnTarget = trigger || document.activeElement;
-  layerReturns.set(panel, { element: returnTarget, id: returnTarget && returnTarget.id });
+  const wasHidden = backdrop.hidden || panel.hidden;
+  if (wasHidden) {
+    const returnTarget = trigger || document.activeElement;
+    layerReturns.set(panel, {element: returnTarget, id: returnTarget && returnTarget.id});
+  }
   backdrop.hidden = false;
   panel.hidden = false;
   panel.inert = false;
   document.body.classList.add("dialog-open");
+  backdrop.classList.add("open");
+  panel.classList.add("open");
+  activeLayer = panel;
   requestAnimationFrame(() => {
-    backdrop.classList.add("open");
-    panel.classList.add("open");
-    activeLayer = panel;
+    if (activeLayer !== panel || panel.hidden || panel.inert || !panel.classList.contains("open")) return;
     const preferred = panel.querySelector("[data-autofocus], .iconbtn, " + focusableSelector);
     (preferred || panel).focus();
   });
 }
 
 function closeLayer(panel, backdrop) {
-  if (backdrop.hidden) return;
+  if (backdrop.hidden && panel.hidden) return;
+  if (layerCloseTimer !== null) {
+    window.clearTimeout(layerCloseTimer);
+    layerCloseTimer = null;
+  }
   backdrop.classList.remove("open");
   panel.classList.remove("open");
   panel.inert = true;
@@ -1608,6 +1615,7 @@ function closeLayer(panel, backdrop) {
   layerCloseTimer = window.setTimeout(() => {
     backdrop.hidden = true;
     panel.hidden = true;
+    layerCloseTimer = null;
   }, delay);
 }
 

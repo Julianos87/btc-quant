@@ -169,6 +169,18 @@ def test_dashboard_interactions_are_accessible_and_fail_closed(monkeypatch):
     assert '"ArrowLeft", "ArrowRight", "Home", "End"' in javascript
     assert "function openLayer(panel, backdrop, trigger)" in javascript
     assert "function closeLayer(panel, backdrop)" in javascript
+    assert "if (!backdrop.hidden)" not in javascript
+    assert "const wasHidden = backdrop.hidden || panel.hidden;" in javascript
+    assert "if (layerCloseTimer !== null)" in javascript
+    assert javascript.count("layerCloseTimer = null;") >= 3
+    assert 'document.body.classList.add("dialog-open");' in javascript
+    assert 'backdrop.classList.add("open");' in javascript
+    assert 'panel.classList.add("open");' in javascript
+    assert "panel.inert = false;" in javascript
+    assert (
+        'if (activeLayer !== panel || panel.hidden || panel.inert || !panel.classList.contains("open")) return;'
+        in javascript
+    )
     assert 'id="slot-detail-${esc(sl.name)}"' in javascript
     assert "document.getElementById(returnTarget.id)" in javascript
     assert "if (replacement) replacement.focus();" in javascript
