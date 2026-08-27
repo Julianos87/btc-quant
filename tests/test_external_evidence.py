@@ -321,6 +321,143 @@ def test_same_stable_fill_id_fee_enrichment_conflicts_without_mutation(tmp_path)
     assert persisted[0].fee is None
 
 
+def test_client_order_id_omission_is_compatible_and_does_not_mutate_first_row(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    order_id = _order(store)
+    first = _fill(order_id, client_order_id="C1")
+    second = _fill(order_id, client_order_id=None)
+
+    persisted, created = store.append_external_fill(first)
+    duplicate, duplicate_created = store.append_external_fill(second)
+
+    assert created is True
+    assert duplicate_created is False
+    assert duplicate == persisted
+    assert duplicate.client_order_id == "C1"
+    assert store.get_external_fills(order_id)[0].client_order_id == "C1"
+
+
+def test_client_order_id_enrichment_is_compatible_and_does_not_mutate_first_row(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    order_id = _order(store)
+    first = _fill(order_id, client_order_id=None)
+    second = _fill(order_id, client_order_id="C1")
+
+    persisted, created = store.append_external_fill(first)
+    duplicate, duplicate_created = store.append_external_fill(second)
+
+    assert created is True
+    assert duplicate_created is False
+    assert duplicate == persisted
+    assert duplicate.client_order_id is None
+    assert store.get_external_fills(order_id)[0].client_order_id is None
+
+
+def test_different_known_client_order_ids_conflict(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    order_id = _order(store)
+    store.append_external_fill(_fill(order_id, client_order_id="C1"))
+
+    with pytest.raises(ExternalFillConflict):
+        store.append_external_fill(_fill(order_id, client_order_id="C2"))
+
+
+def test_external_order_id_omission_is_compatible(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    order_id = _order(store)
+    store.append_external_fill(_fill(order_id, external_order_id="O1"))
+
+    duplicate, duplicate_created = store.append_external_fill(
+        _fill(order_id, external_order_id=None)
+    )
+
+    assert duplicate_created is False
+    assert duplicate.external_order_id == "O1"
+    assert len(store.get_external_fills(order_id)) == 1
+
+
+def test_different_known_external_order_ids_conflict(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    order_id = _order(store)
+    store.append_external_fill(_fill(order_id, external_order_id="O1"))
+
+    with pytest.raises(ExternalFillConflict):
+        store.append_external_fill(_fill(order_id, external_order_id="O2"))
+
+
+def test_venue_event_time_omission_is_compatible(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    order_id = _order(store)
+    store.append_external_fill(_fill(order_id, venue_event_at=VENUE_AT))
+
+    duplicate, duplicate_created = store.append_external_fill(_fill(order_id, venue_event_at=None))
+
+    assert duplicate_created is False
+    assert duplicate.venue_event_at == VENUE_AT.replace("Z", "+00:00")
+    assert len(store.get_external_fills(order_id)) == 1
+
+
+def test_different_known_venue_event_times_conflict(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    order_id = _order(store)
+    store.append_external_fill(_fill(order_id, venue_event_at=VENUE_AT))
+
+    with pytest.raises(ExternalFillConflict):
+        store.append_external_fill(_fill(order_id, venue_event_at="2026-08-26T12:00:00Z"))
+
+
+def test_cross_source_redelivery_omitting_both_order_ids_is_a_noop(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    order_id = _order(store)
+    lookup = _fill(
+        order_id,
+        client_order_id=None,
+        external_order_id=None,
+        source_kind=ExternalEvidenceSource.FILL_LOOKUP,
+    )
+    private_event = _fill(
+        order_id,
+        client_order_id=None,
+        external_order_id=None,
+        source_kind=ExternalEvidenceSource.PRIVATE_EVENT,
+        observed_at="2026-08-26T12:00:01Z",
+        raw_payload_hash=RAW_B,
+    )
+
+    persisted, created = store.append_external_fill(lookup)
+    duplicate, duplicate_created = store.append_external_fill(private_event)
+
+    assert created is True
+    assert duplicate_created is False
+    assert duplicate == persisted
+    assert len(store.get_external_fills(order_id)) == 1
+
+
+def test_delivery_metadata_differences_are_ignored_for_fill_semantics(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    order_id = _order(store)
+    first = _fill(
+        order_id,
+        persisted_at="2026-08-26T12:00:01Z",
+        raw_payload_hash=RAW_A,
+    )
+    second = _fill(
+        order_id,
+        source_kind=ExternalEvidenceSource.PRIVATE_EVENT,
+        observed_at="2026-08-26T12:00:01Z",
+        persisted_at="2026-08-26T12:00:02Z",
+        raw_payload_hash=RAW_B,
+    )
+
+    persisted, created = store.append_external_fill(first)
+    duplicate, duplicate_created = store.append_external_fill(second)
+
+    assert created is True
+    assert duplicate_created is False
+    assert duplicate == persisted
+    assert duplicate.persisted_at == "2026-08-26T12:00:01+00:00"
+
+
 def test_evidence_requires_existing_matching_local_order(tmp_path):
     store = StateStore(tmp_path / "state.db")
     with pytest.raises(InvalidExternalObservation, match="introuvable"):

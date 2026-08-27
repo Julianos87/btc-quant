@@ -1881,7 +1881,7 @@ class StateStore:
             ).fetchone()
             if existing_row is not None:
                 existing = self._external_fill_from_row(existing_row)
-                if existing.semantic_content() != persisted.semantic_content():
+                if not existing.is_semantically_compatible_with(persisted):
                     raise ExternalFillConflict(
                         f"Fill externe conflictuel pour {persisted.fill_key}"
                     )

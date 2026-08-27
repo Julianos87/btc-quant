@@ -360,29 +360,39 @@ class ExternalFill:
     def with_persisted_at(self, persisted_at: str) -> ExternalFill:
         return replace(self, persisted_at=persisted_at)
 
-    def semantic_content(self) -> dict[str, Any]:
-        """Faits de fill qui doivent coïncider pour une identité venue stable.
+    def is_semantically_compatible_with(self, other: ExternalFill) -> bool:
+        """Compare une redelivery avec la preuve immuable déjà persistée.
 
-        Les métadonnées de livraison locales (source, observation, persistance et
-        représentation brute) ne redéfinissent pas un fill déjà identifié par la
-        venue. Une fee absente puis explicite reste volontairement un conflit :
-        A.3.1 ne réécrit pas une preuve immuable pour l'enrichir.
+        Les faits économiques et l'attribution locale sont stricts. Les champs
+        de corrélation venue sont optionnels : l'absence d'une valeur n'est pas
+        contradictoire avec une valeur connue, mais deux valeurs connues
+        différentes le sont. Les métadonnées de livraison sont exclues.
         """
 
-        return {
-            "local_order_id": self.local_order_id,
-            "intent_id": self.intent_id,
-            "venue": self.venue,
-            "account_scope": self.account_scope,
-            "instrument": self.instrument,
-            "side": self.side,
-            "client_order_id": self.client_order_id,
-            "external_order_id": self.external_order_id,
-            "venue_fill_id": self.venue_fill_id,
-            "quantity": self.quantity,
-            "price": self.price,
-            "fee": self.fee,
-            "fee_asset": self.fee_asset,
-            "venue_event_at": self.venue_event_at,
-            "fill_key": self.fill_key,
-        }
+        required_fields = (
+            "local_order_id",
+            "intent_id",
+            "venue",
+            "account_scope",
+            "instrument",
+            "side",
+            "venue_fill_id",
+            "quantity",
+            "price",
+            "fee",
+            "fee_asset",
+        )
+        optional_correlation_fields = (
+            "client_order_id",
+            "external_order_id",
+            "venue_event_at",
+        )
+        if any(getattr(self, field) != getattr(other, field) for field in required_fields):
+            return False
+        return all(
+            left == right or left is None or right is None
+            for left, right in (
+                (getattr(self, field), getattr(other, field))
+                for field in optional_correlation_fields
+            )
+        )
