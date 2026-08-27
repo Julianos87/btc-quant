@@ -116,12 +116,76 @@ def test_observation_insert_read_duplicate_and_append_only(tmp_path):
 def test_observation_conflict_same_key_fails_closed(tmp_path):
     store = StateStore(tmp_path / "state.db")
     order_id = _order(store)
-    store.append_external_order_observation(_observation(order_id))
+    first = _observation(order_id)
+    store.append_external_order_observation(first)
 
     with pytest.raises(ExternalObservationConflict):
-        store.append_external_order_observation(_observation(order_id, raw_payload_hash=RAW_B))
+        store.append_external_order_observation(
+            _observation(
+                order_id,
+                normalized_external_status=ExternalOrderState.PARTIAL_OPEN,
+                cumulative_filled_qty=0.25,
+                remaining_qty=0.75,
+                observation_key=first.observation_key,
+            )
+        )
 
     assert len(store.get_external_order_observations(order_id)) == 1
+
+
+def test_observation_redelivery_with_later_observed_at_is_a_noop(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    order_id = _order(store)
+    first = _observation(order_id)
+    redelivery = _observation(
+        order_id,
+        observed_at="2026-08-26T12:00:01Z",
+        raw_payload_hash=RAW_B,
+    )
+
+    persisted, created = store.append_external_order_observation(first)
+    duplicate, duplicate_created = store.append_external_order_observation(redelivery)
+
+    assert created is True
+    assert duplicate_created is False
+    assert duplicate == persisted
+
+
+def test_observation_redelivery_with_different_persisted_at_is_a_noop(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    order_id = _order(store)
+    first = _observation(order_id, persisted_at="2026-08-26T12:00:01Z")
+    redelivery = _observation(order_id, persisted_at="2026-08-26T12:00:02Z")
+
+    persisted, created = store.append_external_order_observation(first)
+    duplicate, duplicate_created = store.append_external_order_observation(redelivery)
+
+    assert created is True
+    assert duplicate_created is False
+    assert duplicate == persisted
+    assert duplicate.persisted_at == "2026-08-26T12:00:01+00:00"
+
+
+def test_distinct_observations_same_venue_timestamp_persist_separately(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    order_id = _order(store)
+    opened = _observation(order_id)
+    partial = _observation(
+        order_id,
+        normalized_external_status=ExternalOrderState.PARTIAL_OPEN,
+        cumulative_filled_qty=0.25,
+        remaining_qty=0.75,
+        raw_payload_hash=RAW_B,
+    )
+
+    _, opened_created = store.append_external_order_observation(opened)
+    _, partial_created = store.append_external_order_observation(partial)
+
+    assert opened.venue_event_at == partial.venue_event_at
+    assert opened.observation_key != partial.observation_key
+    assert opened_created is True
+    assert partial_created is True
+    assert len(store.get_external_order_observations(order_id)) == 2
 
 
 def test_fill_insert_read_duplicate_conflict_and_same_client_multiple_fills(tmp_path):
@@ -152,6 +216,109 @@ def test_fill_insert_read_duplicate_conflict_and_same_client_multiple_fills(tmp_
     assert store.get_external_fills(order_id) == [first, second]
     assert first.fill_key != second.fill_key
     assert not hasattr(store, "update_external_fill")
+
+
+def test_fill_redelivery_with_later_observed_at_is_a_noop(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    order_id = _order(store)
+    first = _fill(order_id)
+    redelivery = _fill(order_id, observed_at="2026-08-26T12:00:01Z")
+
+    persisted, created = store.append_external_fill(first)
+    duplicate, duplicate_created = store.append_external_fill(redelivery)
+
+    assert created is True
+    assert duplicate_created is False
+    assert duplicate == persisted
+
+
+def test_fill_cross_source_redelivery_is_a_noop(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    order_id = _order(store)
+    lookup = _fill(order_id)
+    private_event = _fill(
+        order_id,
+        source_kind=ExternalEvidenceSource.PRIVATE_EVENT,
+        observed_at="2026-08-26T12:00:01Z",
+        raw_payload_hash=RAW_B,
+    )
+
+    persisted, created = store.append_external_fill(lookup)
+    duplicate, duplicate_created = store.append_external_fill(private_event)
+
+    assert lookup.fill_key == private_event.fill_key
+    assert created is True
+    assert duplicate_created is False
+    assert duplicate == persisted
+    assert len(store.get_external_fills(order_id)) == 1
+
+
+def test_fill_redelivery_with_only_raw_hash_change_is_a_noop(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    order_id = _order(store)
+    persisted, created = store.append_external_fill(_fill(order_id))
+    duplicate, duplicate_created = store.append_external_fill(
+        _fill(order_id, raw_payload_hash=RAW_B)
+    )
+
+    assert created is True
+    assert duplicate_created is False
+    assert duplicate == persisted
+
+
+def test_same_stable_fill_id_with_different_quantity_conflicts(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    order_id = _order(store)
+    store.append_external_fill(_fill(order_id))
+
+    with pytest.raises(ExternalFillConflict):
+        store.append_external_fill(_fill(order_id, quantity=0.5))
+
+
+def test_same_stable_fill_id_with_different_price_conflicts(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    order_id = _order(store)
+    store.append_external_fill(_fill(order_id))
+
+    with pytest.raises(ExternalFillConflict):
+        store.append_external_fill(_fill(order_id, price=99_999.0))
+
+
+def test_same_stable_fill_id_with_different_attribution_conflicts(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    first_order_id = _order(store, "intent-evidence-first")
+    second_order_id = _order(store, "intent-evidence-second")
+    store.append_external_fill(_fill(first_order_id, intent_id="intent-evidence-first"))
+
+    with pytest.raises(ExternalFillConflict):
+        store.append_external_fill(_fill(second_order_id, intent_id="intent-evidence-second"))
+
+
+def test_distinct_fills_for_one_client_order_have_distinct_keys(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    order_id = _order(store)
+    first, first_created = store.append_external_fill(_fill(order_id))
+    second, second_created = store.append_external_fill(
+        _fill(order_id, venue_fill_id="fill-2", quantity=0.75, raw_payload_hash=RAW_B)
+    )
+
+    assert first_created is True
+    assert second_created is True
+    assert first.fill_key != second.fill_key
+    assert len(store.get_external_fills(order_id)) == 2
+
+
+def test_same_stable_fill_id_fee_enrichment_conflicts_without_mutation(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    order_id = _order(store)
+    store.append_external_fill(_fill(order_id, fee=None, fee_asset=None))
+
+    with pytest.raises(ExternalFillConflict):
+        store.append_external_fill(_fill(order_id, fee=1.0, fee_asset="USDC"))
+
+    persisted = store.get_external_fills(order_id)
+    assert len(persisted) == 1
+    assert persisted[0].fee is None
 
 
 def test_evidence_requires_existing_matching_local_order(tmp_path):

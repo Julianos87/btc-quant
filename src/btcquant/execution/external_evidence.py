@@ -205,36 +205,34 @@ class ExternalOrderObservation:
         return max(1e-9, self.requested_qty * 1e-9)
 
     def derived_observation_key(self) -> str:
-        identity: dict[str, Any] = {
-            "account_scope": self.account_scope,
-            "client_order_id": self.client_order_id,
-            "external_order_id": self.external_order_id,
-            "instrument": self.instrument,
-            "source_kind": ExternalEvidenceSource(self.source_kind).value,
-            "venue": self.venue,
-            "venue_event_at": self.venue_event_at,
-        }
-        if self.venue_event_at is None or (
-            self.client_order_id is None and self.external_order_id is None
-        ):
-            identity.update(
-                {
-                    "cumulative_filled_qty": self.cumulative_filled_qty,
-                    "normalized_external_status": ExternalOrderState(
-                        self.normalized_external_status
-                    ).value,
-                    "raw_payload_hash": self.raw_payload_hash,
-                    "remaining_qty": self.remaining_qty,
-                    "requested_qty": self.requested_qty,
-                    "side": self.side,
-                }
-            )
-        return _sha256_key("obs", identity)
+        """Identité d'un snapshot venue normalisé, hors métadonnées locales."""
+
+        return _sha256_key(
+            "obs",
+            {
+                "account_scope": self.account_scope,
+                "client_order_id": self.client_order_id,
+                "cumulative_filled_qty": self.cumulative_filled_qty,
+                "external_order_id": self.external_order_id,
+                "instrument": self.instrument,
+                "normalized_external_status": ExternalOrderState(
+                    self.normalized_external_status
+                ).value,
+                "remaining_qty": self.remaining_qty,
+                "requested_qty": self.requested_qty,
+                "side": self.side,
+                "source_kind": ExternalEvidenceSource(self.source_kind).value,
+                "venue": self.venue,
+                "venue_event_at": self.venue_event_at,
+            },
+        )
 
     def with_persisted_at(self, persisted_at: str) -> ExternalOrderObservation:
         return replace(self, persisted_at=persisted_at)
 
-    def immutable_content(self) -> dict[str, Any]:
+    def semantic_content(self) -> dict[str, Any]:
+        """Faits attribués et normalisés qui doivent coïncider pour une clé."""
+
         return {
             "local_order_id": self.local_order_id,
             "intent_id": self.intent_id,
@@ -250,9 +248,7 @@ class ExternalOrderObservation:
             "cumulative_filled_qty": self.cumulative_filled_qty,
             "remaining_qty": self.remaining_qty,
             "venue_event_at": self.venue_event_at,
-            "observed_at": self.observed_at,
             "observation_key": self.observation_key,
-            "raw_payload_hash": self.raw_payload_hash,
         }
 
 
@@ -364,7 +360,15 @@ class ExternalFill:
     def with_persisted_at(self, persisted_at: str) -> ExternalFill:
         return replace(self, persisted_at=persisted_at)
 
-    def immutable_content(self) -> dict[str, Any]:
+    def semantic_content(self) -> dict[str, Any]:
+        """Faits de fill qui doivent coïncider pour une identité venue stable.
+
+        Les métadonnées de livraison locales (source, observation, persistance et
+        représentation brute) ne redéfinissent pas un fill déjà identifié par la
+        venue. Une fee absente puis explicite reste volontairement un conflit :
+        A.3.1 ne réécrit pas une preuve immuable pour l'enrichir.
+        """
+
         return {
             "local_order_id": self.local_order_id,
             "intent_id": self.intent_id,
@@ -372,7 +376,6 @@ class ExternalFill:
             "account_scope": self.account_scope,
             "instrument": self.instrument,
             "side": self.side,
-            "source_kind": ExternalEvidenceSource(self.source_kind).value,
             "client_order_id": self.client_order_id,
             "external_order_id": self.external_order_id,
             "venue_fill_id": self.venue_fill_id,
@@ -381,7 +384,5 @@ class ExternalFill:
             "fee": self.fee,
             "fee_asset": self.fee_asset,
             "venue_event_at": self.venue_event_at,
-            "observed_at": self.observed_at,
             "fill_key": self.fill_key,
-            "raw_payload_hash": self.raw_payload_hash,
         }

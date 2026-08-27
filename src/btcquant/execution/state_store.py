@@ -1829,7 +1829,7 @@ class StateStore:
             ).fetchone()
             if existing_row is not None:
                 existing = self._external_order_observation_from_row(existing_row)
-                if existing.immutable_content() != persisted.immutable_content():
+                if existing.semantic_content() != persisted.semantic_content():
                     raise ExternalObservationConflict(
                         f"Observation externe conflictuelle pour {persisted.observation_key}"
                     )
@@ -1881,7 +1881,7 @@ class StateStore:
             ).fetchone()
             if existing_row is not None:
                 existing = self._external_fill_from_row(existing_row)
-                if existing.immutable_content() != persisted.immutable_content():
+                if existing.semantic_content() != persisted.semantic_content():
                     raise ExternalFillConflict(
                         f"Fill externe conflictuel pour {persisted.fill_key}"
                     )
