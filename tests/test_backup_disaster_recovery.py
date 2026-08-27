@@ -46,7 +46,7 @@ from btcquant.backup import (
     verify_backup_set,
     write_recovery_marker,
 )
-from btcquant.execution.state_store import StateStore
+from btcquant.execution.state_store import SCHEMA_VERSION, StateStore
 
 
 APP_SHA = "a" * 40
@@ -76,12 +76,18 @@ def _source(path: Path, logical: str = "trading_state") -> BackupSource:
     return BackupSource(logical, path, "AUTHORITATIVE_TRADING_STATE")
 
 
-def _create(root: Path, source: Path, *, when: datetime | None = None) -> Path:
+def _create(
+    root: Path,
+    source: Path,
+    *,
+    app_schema_version: int = 6,
+    when: datetime | None = None,
+) -> Path:
     return create_backup_set(
         [_source(source)],
         root,
         app_git_sha=APP_SHA,
-        app_schema_version=6,
+        app_schema_version=app_schema_version,
         source_identity=SOURCE_IDENTITY,
         now=when,
     )
@@ -251,13 +257,13 @@ def test_restore_is_staging_only_and_creates_trading_recovery_gate(tmp_path: Pat
     store.save_engine_state(
         "trend", {"equity": 1000.0, "cash": 1000.0, "slots": {}, "halted": False}
     )
-    backup = _create(tmp_path / "backups", source)
+    backup = _create(tmp_path / "backups", source, app_schema_version=SCHEMA_VERSION)
     runtime = tmp_path / "runtime"
     restored = restore_to_staging(
         backup,
         tmp_path / "restore-staging",
         runtime_root=tmp_path / "restore-staging",
-        expected_app_schema_version=6,
+        expected_app_schema_version=SCHEMA_VERSION,
     )
     runtime = tmp_path / "restore-staging"
     assert restored.staging_path.is_dir()

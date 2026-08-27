@@ -215,8 +215,8 @@ def test_old_current_without_migrate_module_target_migrates_schema4(tmp_path: Pa
     assert result.returncode == 0, result.stderr
     assert "OLD_CURRENT_PYTHON" not in result.stderr
     assert not (old / "old-python.invoked").exists()
-    assert inspect_sqlite(database).metadata_schema_version == 6
-    assert SCHEMA_VERSION == 6
+    assert inspect_sqlite(database).metadata_schema_version == SCHEMA_VERSION
+    assert SCHEMA_VERSION == 7
     proof = json.loads((tmp_path / "runtime-proof.json").read_text(encoding="utf-8"))
     assert Path(proof["executable"]).resolve() == (target / "venv" / "bin" / "python").resolve()
     assert str(target / "venv") in proof["executable"]
@@ -224,7 +224,7 @@ def test_old_current_without_migrate_module_target_migrates_schema4(tmp_path: Pa
         Path(proof["state_store"]).resolve()
         == (ROOT / "src/btcquant/execution/state_store.py").resolve()
     )
-    assert proof["schema"] == 6
+    assert proof["schema"] == SCHEMA_VERSION
     assert (tmp_path / "current").resolve() == current_before == old.resolve()
     assert (old / "venv" / "bin" / "python").stat().st_mtime_ns == old_mtime
     backup = tmp_path / "backups" / f"pre-migration-{TARGET_SHA}.db"
@@ -269,7 +269,7 @@ def test_requested_target_sha_exact_passes_identity_guard(tmp_path: Path) -> Non
     _make_realistic_v4_fixture(database)
     result = _run_migrate(tmp_path, target, sha=TARGET_SHA)
     assert result.returncode == 0, result.stderr
-    assert inspect_sqlite(database).metadata_schema_version == 6
+    assert inspect_sqlite(database).metadata_schema_version == SCHEMA_VERSION
 
 
 def test_writers_active_refused_before_python(tmp_path: Path) -> None:
@@ -300,17 +300,17 @@ def test_open_db_handle_refused_without_backup(tmp_path: Path) -> None:
     assert inspect_sqlite(database).metadata_schema_version == 4
 
 
-def test_schema6_database_is_idempotent_no_op(tmp_path: Path) -> None:
+def test_schema7_database_is_idempotent_no_op(tmp_path: Path) -> None:
     _old_current(tmp_path)
     target = _target_release(tmp_path)
     database = tmp_path / "state" / "btcquant.db"
     database.parent.mkdir()
     StateStore(database)
-    assert inspect_sqlite(database).metadata_schema_version == 6
+    assert inspect_sqlite(database).metadata_schema_version == SCHEMA_VERSION
     result = _run_migrate(tmp_path, target)
     assert result.returncode == 0, result.stderr
-    assert "Schéma déjà à jour: 6" in result.stdout
-    assert inspect_sqlite(database).metadata_schema_version == 6
+    assert f"Schéma déjà à jour: {SCHEMA_VERSION}" in result.stdout
+    assert inspect_sqlite(database).metadata_schema_version == SCHEMA_VERSION
 
 
 def test_python_quiescence_failure_preserves_schema4_and_skips_backup(tmp_path: Path) -> None:

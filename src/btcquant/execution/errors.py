@@ -62,3 +62,19 @@ class MigrationRequiredError(ExecutionError):
             f"Migration explicite requise pour {database}: "
             f"schéma actuel={current}, cible={target_version}"
         )
+
+
+class InvalidExternalObservation(ExecutionError):
+    """Une preuve externe normalisée ne respecte pas le contrat passif."""
+
+
+class ExternalObservationConflict(ExecutionError):
+    """Une clé d'observation existante désigne un contenu immuable différent."""
+
+
+class FillInvariantViolation(ExecutionError):
+    """Un fill externe normalisé viole une invariant de quantité ou de prix."""
+
+
+class ExternalFillConflict(ExecutionError):
+    """Une clé de fill existante désigne un contenu immuable différent."""

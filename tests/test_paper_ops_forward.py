@@ -9,8 +9,8 @@ from btcquant.execution.state_store import SCHEMA_VERSION, StateStore
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_schema_remains_v6_after_compaction_change():
-    assert SCHEMA_VERSION == 6
+def test_schema_remains_v7_after_compaction_change():
+    assert SCHEMA_VERSION == 7
 
 
 def test_compact_script_keeps_lot7_recovery_fence_and_90d_window():
