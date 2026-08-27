@@ -22,13 +22,17 @@ from typing import Any
 
 from .errors import (
     AccountingIdentityCollision,
+    ExternalFillConflict,
+    ExternalObservationConflict,
+    InvalidExternalObservation,
     InvalidOrderStateTransition,
     MigrationRequiredError,
     OrderIdentityCollision,
 )
+from .external_evidence import ExternalFill, ExternalOrderObservation
 from .order_state import ExternalOrderState, LocalOrderState, LogicalOrderIdentity
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 DEPOSIT_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}")
 
 
@@ -365,6 +369,11 @@ class StateStore:
                 current_version = 6
             else:
                 self._ensure_funding_accounting_schema(connection)
+            if current_version < 7:
+                self._migrate_v7(connection)
+                current_version = 7
+            else:
+                self._ensure_external_evidence_schema(connection)
             connection.execute(
                 "UPDATE metadata SET value = ? WHERE key = 'schema_version'",
                 (str(current_version),),
@@ -598,6 +607,148 @@ class StateStore:
     def _migrate_v6(cls, connection: sqlite3.Connection) -> None:
         """Migration additive, idempotente, de v5 vers le ledger funding v6."""
         cls._ensure_funding_accounting_schema(connection)
+
+    @staticmethod
+    def _ensure_external_evidence_schema(connection: sqlite3.Connection) -> None:
+        """Crée les preuves externes v7 sans modifier les ordres existants."""
+        connection.executescript(
+            """
+            BEGIN IMMEDIATE;
+            CREATE TABLE IF NOT EXISTS external_order_observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                local_order_id INTEGER NOT NULL,
+                intent_id TEXT NOT NULL,
+                venue TEXT NOT NULL,
+                account_scope TEXT NOT NULL,
+                instrument TEXT NOT NULL,
+                side TEXT NOT NULL CHECK(side IN ('BUY', 'SELL')),
+                source_kind TEXT NOT NULL CHECK(source_kind IN (
+                    'ORDER_LOOKUP', 'OPEN_ORDERS', 'HISTORICAL_ORDERS',
+                    'FILL_LOOKUP', 'PRIVATE_EVENT', 'SUBMISSION_RESPONSE'
+                )),
+                external_state TEXT NOT NULL CHECK(external_state IN (
+                    'OPEN', 'PARTIAL_OPEN', 'FILLED', 'PARTIAL_TERMINAL',
+                    'CANCELED', 'REJECTED', 'EXPIRED', 'UNKNOWN'
+                )),
+                client_order_id TEXT,
+                external_order_id TEXT,
+                requested_qty REAL NOT NULL CHECK(requested_qty > 0),
+                cumulative_filled_qty REAL CHECK(
+                    cumulative_filled_qty IS NULL OR cumulative_filled_qty >= 0
+                ),
+                remaining_qty REAL CHECK(remaining_qty IS NULL OR remaining_qty >= 0),
+                venue_event_at TEXT,
+                observed_at TEXT NOT NULL,
+                persisted_at TEXT NOT NULL,
+                observation_key TEXT NOT NULL UNIQUE,
+                raw_payload_hash TEXT NOT NULL,
+                FOREIGN KEY(local_order_id) REFERENCES orders(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_external_order_observations_order_id
+                ON external_order_observations(local_order_id, id);
+            CREATE INDEX IF NOT EXISTS idx_external_order_observations_venue_order
+                ON external_order_observations(venue, account_scope, external_order_id, id);
+
+            CREATE TABLE IF NOT EXISTS external_fills (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                local_order_id INTEGER NOT NULL,
+                intent_id TEXT NOT NULL,
+                venue TEXT NOT NULL,
+                account_scope TEXT NOT NULL,
+                instrument TEXT NOT NULL,
+                side TEXT NOT NULL CHECK(side IN ('BUY', 'SELL')),
+                source_kind TEXT NOT NULL CHECK(source_kind IN (
+                    'ORDER_LOOKUP', 'OPEN_ORDERS', 'HISTORICAL_ORDERS',
+                    'FILL_LOOKUP', 'PRIVATE_EVENT', 'SUBMISSION_RESPONSE'
+                )),
+                client_order_id TEXT,
+                external_order_id TEXT,
+                venue_fill_id TEXT,
+                quantity REAL NOT NULL CHECK(quantity > 0),
+                price REAL NOT NULL CHECK(price > 0),
+                fee REAL CHECK(fee IS NULL OR fee >= 0),
+                fee_asset TEXT,
+                venue_event_at TEXT,
+                observed_at TEXT NOT NULL,
+                persisted_at TEXT NOT NULL,
+                fill_key TEXT NOT NULL UNIQUE,
+                raw_payload_hash TEXT NOT NULL,
+                FOREIGN KEY(local_order_id) REFERENCES orders(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_external_fills_order_id
+                ON external_fills(local_order_id, id);
+            CREATE INDEX IF NOT EXISTS idx_external_fills_venue_fill
+                ON external_fills(venue, account_scope, venue_fill_id);
+            """
+        )
+        required_observation = {
+            "id",
+            "local_order_id",
+            "intent_id",
+            "venue",
+            "account_scope",
+            "instrument",
+            "side",
+            "source_kind",
+            "external_state",
+            "client_order_id",
+            "external_order_id",
+            "requested_qty",
+            "cumulative_filled_qty",
+            "remaining_qty",
+            "venue_event_at",
+            "observed_at",
+            "persisted_at",
+            "observation_key",
+            "raw_payload_hash",
+        }
+        required_fill = {
+            "id",
+            "local_order_id",
+            "intent_id",
+            "venue",
+            "account_scope",
+            "instrument",
+            "side",
+            "source_kind",
+            "client_order_id",
+            "external_order_id",
+            "venue_fill_id",
+            "quantity",
+            "price",
+            "fee",
+            "fee_asset",
+            "venue_event_at",
+            "observed_at",
+            "persisted_at",
+            "fill_key",
+            "raw_payload_hash",
+        }
+        observed_columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(external_order_observations)"
+            ).fetchall()
+        }
+        fill_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(external_fills)").fetchall()
+        }
+        if not required_observation <= observed_columns:
+            raise RuntimeError(
+                "Migration v7 incomplète pour external_order_observations: "
+                f"{sorted(required_observation - observed_columns)}"
+            )
+        if not required_fill <= fill_columns:
+            raise RuntimeError(
+                "Migration v7 incomplète pour external_fills: "
+                f"{sorted(required_fill - fill_columns)}"
+            )
+
+    @classmethod
+    def _migrate_v7(cls, connection: sqlite3.Connection) -> None:
+        """Migration additive, idempotente, de v6 vers les preuves externes v7."""
+        cls._ensure_external_evidence_schema(connection)
 
     @staticmethod
     def _json(payload: Any) -> str:
@@ -1582,6 +1733,214 @@ class StateStore:
                 str(order_id),
                 row["intent_id"],
             )
+
+    @staticmethod
+    def _external_order_observation_from_row(row: sqlite3.Row) -> ExternalOrderObservation:
+        return ExternalOrderObservation(
+            local_order_id=int(row["local_order_id"]),
+            intent_id=str(row["intent_id"]),
+            venue=str(row["venue"]),
+            account_scope=str(row["account_scope"]),
+            instrument=str(row["instrument"]),
+            side=str(row["side"]),
+            source_kind=str(row["source_kind"]),
+            normalized_external_status=str(row["external_state"]),
+            requested_qty=float(row["requested_qty"]),
+            cumulative_filled_qty=(
+                float(row["cumulative_filled_qty"])
+                if row["cumulative_filled_qty"] is not None
+                else None
+            ),
+            remaining_qty=(
+                float(row["remaining_qty"]) if row["remaining_qty"] is not None else None
+            ),
+            client_order_id=row["client_order_id"],
+            external_order_id=row["external_order_id"],
+            venue_event_at=row["venue_event_at"],
+            observed_at=str(row["observed_at"]),
+            persisted_at=str(row["persisted_at"]),
+            observation_key=str(row["observation_key"]),
+            raw_payload_hash=str(row["raw_payload_hash"]),
+        )
+
+    @staticmethod
+    def _external_fill_from_row(row: sqlite3.Row) -> ExternalFill:
+        return ExternalFill(
+            local_order_id=int(row["local_order_id"]),
+            intent_id=str(row["intent_id"]),
+            venue=str(row["venue"]),
+            account_scope=str(row["account_scope"]),
+            instrument=str(row["instrument"]),
+            side=str(row["side"]),
+            source_kind=str(row["source_kind"]),
+            client_order_id=row["client_order_id"],
+            external_order_id=row["external_order_id"],
+            venue_fill_id=row["venue_fill_id"],
+            quantity=float(row["quantity"]),
+            price=float(row["price"]),
+            fee=float(row["fee"]) if row["fee"] is not None else None,
+            fee_asset=row["fee_asset"],
+            venue_event_at=row["venue_event_at"],
+            observed_at=str(row["observed_at"]),
+            persisted_at=str(row["persisted_at"]),
+            fill_key=str(row["fill_key"]),
+            raw_payload_hash=str(row["raw_payload_hash"]),
+        )
+
+    @staticmethod
+    def _assert_evidence_attribution(
+        connection: sqlite3.Connection,
+        *,
+        local_order_id: int,
+        intent_id: str,
+    ) -> None:
+        row = connection.execute(
+            "SELECT intent_id FROM orders WHERE id = ?", (local_order_id,)
+        ).fetchone()
+        if row is None:
+            raise InvalidExternalObservation(
+                f"Preuve externe refusée : ordre local {local_order_id} introuvable"
+            )
+        if str(row["intent_id"]) != intent_id:
+            raise InvalidExternalObservation(
+                f"Preuve externe refusée : intent_id incohérent pour l'ordre {local_order_id}"
+            )
+
+    def append_external_order_observation(
+        self,
+        observation: ExternalOrderObservation,
+    ) -> tuple[ExternalOrderObservation, bool]:
+        """Ajoute une preuve d'ordre une seule fois, sans toucher à l'ordre local."""
+
+        persisted = (
+            observation
+            if observation.persisted_at is not None
+            else observation.with_persisted_at(utc_now())
+        )
+        with self._transaction() as connection:
+            self._assert_evidence_attribution(
+                connection,
+                local_order_id=persisted.local_order_id,
+                intent_id=persisted.intent_id,
+            )
+            existing_row = connection.execute(
+                "SELECT * FROM external_order_observations WHERE observation_key = ?",
+                (persisted.observation_key,),
+            ).fetchone()
+            if existing_row is not None:
+                existing = self._external_order_observation_from_row(existing_row)
+                if existing.semantic_content() != persisted.semantic_content():
+                    raise ExternalObservationConflict(
+                        f"Observation externe conflictuelle pour {persisted.observation_key}"
+                    )
+                return existing, False
+            connection.execute(
+                """
+                INSERT INTO external_order_observations(
+                    local_order_id, intent_id, venue, account_scope, instrument, side,
+                    source_kind, external_state, client_order_id, external_order_id,
+                    requested_qty, cumulative_filled_qty, remaining_qty, venue_event_at,
+                    observed_at, persisted_at, observation_key, raw_payload_hash
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    persisted.local_order_id,
+                    persisted.intent_id,
+                    persisted.venue,
+                    persisted.account_scope,
+                    persisted.instrument,
+                    persisted.side,
+                    str(persisted.source_kind),
+                    str(persisted.normalized_external_status),
+                    persisted.client_order_id,
+                    persisted.external_order_id,
+                    persisted.requested_qty,
+                    persisted.cumulative_filled_qty,
+                    persisted.remaining_qty,
+                    persisted.venue_event_at,
+                    persisted.observed_at,
+                    persisted.persisted_at,
+                    persisted.observation_key,
+                    persisted.raw_payload_hash,
+                ),
+            )
+        return persisted, True
+
+    def append_external_fill(self, fill: ExternalFill) -> tuple[ExternalFill, bool]:
+        """Ajoute un fill externe une seule fois, sans application métier."""
+
+        persisted = fill if fill.persisted_at is not None else fill.with_persisted_at(utc_now())
+        with self._transaction() as connection:
+            self._assert_evidence_attribution(
+                connection,
+                local_order_id=persisted.local_order_id,
+                intent_id=persisted.intent_id,
+            )
+            existing_row = connection.execute(
+                "SELECT * FROM external_fills WHERE fill_key = ?", (persisted.fill_key,)
+            ).fetchone()
+            if existing_row is not None:
+                existing = self._external_fill_from_row(existing_row)
+                if not existing.is_semantically_compatible_with(persisted):
+                    raise ExternalFillConflict(
+                        f"Fill externe conflictuel pour {persisted.fill_key}"
+                    )
+                return existing, False
+            connection.execute(
+                """
+                INSERT INTO external_fills(
+                    local_order_id, intent_id, venue, account_scope, instrument, side,
+                    source_kind, client_order_id, external_order_id, venue_fill_id,
+                    quantity, price, fee, fee_asset, venue_event_at, observed_at,
+                    persisted_at, fill_key, raw_payload_hash
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    persisted.local_order_id,
+                    persisted.intent_id,
+                    persisted.venue,
+                    persisted.account_scope,
+                    persisted.instrument,
+                    persisted.side,
+                    str(persisted.source_kind),
+                    persisted.client_order_id,
+                    persisted.external_order_id,
+                    persisted.venue_fill_id,
+                    persisted.quantity,
+                    persisted.price,
+                    persisted.fee,
+                    persisted.fee_asset,
+                    persisted.venue_event_at,
+                    persisted.observed_at,
+                    persisted.persisted_at,
+                    persisted.fill_key,
+                    persisted.raw_payload_hash,
+                ),
+            )
+        return persisted, True
+
+    def get_external_order_observations(
+        self,
+        local_order_id: int,
+    ) -> list[ExternalOrderObservation]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM external_order_observations
+                WHERE local_order_id = ?
+                ORDER BY id
+                """,
+                (local_order_id,),
+            ).fetchall()
+        return [self._external_order_observation_from_row(row) for row in rows]
+
+    def get_external_fills(self, local_order_id: int) -> list[ExternalFill]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM external_fills WHERE local_order_id = ? ORDER BY id",
+                (local_order_id,),
+            ).fetchall()
+        return [self._external_fill_from_row(row) for row in rows]
 
     def record_submission_error(self, order_id: int, *, error: str, ambiguous: bool) -> None:
         now = utc_now()

@@ -29,7 +29,7 @@ from btcquant.deployment import (
 )
 from btcquant.entrypoints.migrate import main as migrate_main
 from btcquant.execution.errors import MigrationRequiredError
-from btcquant.execution.state_store import StateStore
+from btcquant.execution.state_store import SCHEMA_VERSION, StateStore
 
 
 def _release(root, name: str):
@@ -137,7 +137,7 @@ def test_sqlite_backup_uses_integrity_check_and_metadata(tmp_path):
     result = backup_sqlite_database(database, backup, target_git_sha="a" * 40)
 
     assert result["target_git_sha"] == "a" * 40
-    assert result["source_schema_version"] == 6
+    assert result["source_schema_version"] == SCHEMA_VERSION
     assert result["integrity_check"] == "ok"
     assert inspect_sqlite(backup).integrity_check == "ok"
     assert (
@@ -183,7 +183,7 @@ def test_migration_cli_requires_confirmation_and_then_is_idempotent(tmp_path):
         )
         == 0
     )
-    assert inspect_sqlite(database).metadata_schema_version == 6
+    assert inspect_sqlite(database).metadata_schema_version == SCHEMA_VERSION
     assert (
         migrate_main(
             [
@@ -233,7 +233,7 @@ def test_database_newer_than_code_is_rejected(tmp_path):
     database = tmp_path / "newer.db"
     StateStore(database)
     with sqlite3.connect(database) as connection:
-        connection.execute("UPDATE metadata SET value='7' WHERE key='schema_version'")
+        connection.execute("UPDATE metadata SET value='8' WHERE key='schema_version'")
         connection.commit()
     with pytest.raises(RuntimeError, match="plus récente"):
         StateStore(database)
@@ -652,7 +652,7 @@ def test_quiescence_refusal_leaves_database_and_release_state_untouched(tmp_path
     assert inspect_sqlite(database).metadata_schema_version == 5
 
 
-def test_v4_to_v6_migration_preserves_realistic_data_and_is_idempotent(tmp_path):
+def test_v4_to_v7_migration_preserves_realistic_data_and_is_idempotent(tmp_path):
     database = tmp_path / "v4.db"
     _make_realistic_v4_fixture(database)
     backup = tmp_path / "backups" / "pre.db"
@@ -670,7 +670,7 @@ def test_v4_to_v6_migration_preserves_realistic_data_and_is_idempotent(tmp_path)
     ]
     assert migrate_main(args) == 0
     after = inspect_sqlite(database)
-    assert after.metadata_schema_version == 6
+    assert after.metadata_schema_version == SCHEMA_VERSION
     assert after.integrity_check == "ok"
     with sqlite3.connect(database) as connection:
         assert (
@@ -702,9 +702,13 @@ def test_v4_to_v6_migration_preserves_realistic_data_and_is_idempotent(tmp_path)
             ).fetchone()[0]
             == 1
         )
+        assert {"external_order_observations", "external_fills"} <= {
+            row[0]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
     migrated_hash = after.sha256
     assert migrate_main(args) == 0
-    assert inspect_sqlite(database).metadata_schema_version == 6
+    assert inspect_sqlite(database).metadata_schema_version == SCHEMA_VERSION
     assert inspect_sqlite(database).sha256 == migrated_hash
 
 
@@ -882,14 +886,14 @@ def test_first_writer_started_refuses_db_restore_and_old_code(tmp_path):
     backup = tmp_path / "pre.db"
     backup_sqlite_database(database, backup, target_git_sha="e" * 40)
     StateStore(database, allow_migration=True)
-    assert inspect_sqlite(database).metadata_schema_version == 6
+    assert inspect_sqlite(database).metadata_schema_version == SCHEMA_VERSION
     assert not migration_auto_rollback_allowed(db_migrated=True, target_writers_started=True)
     assert (
         migration_rollback_disposition(db_migrated=True, target_writers_started=True)
         == "MANUAL_RECOVERY_REQUIRED"
     )
     assert backup.exists()
-    assert inspect_sqlite(database).metadata_schema_version == 6
+    assert inspect_sqlite(database).metadata_schema_version == SCHEMA_VERSION
 
 
 def test_durable_write_after_writer_frontier_also_requires_manual_recovery(tmp_path):
@@ -905,7 +909,7 @@ def test_durable_write_after_writer_frontier_also_requires_manual_recovery(tmp_p
         migration_rollback_disposition(db_migrated=True, target_writers_started=True)
         == "MANUAL_RECOVERY_REQUIRED"
     )
-    assert inspect_sqlite(database).metadata_schema_version == 6
+    assert inspect_sqlite(database).metadata_schema_version == SCHEMA_VERSION
 
 
 def test_migration_rollback_frontier_is_irreversible_after_writer_start():

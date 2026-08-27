@@ -227,11 +227,11 @@ def test_create_release_refuses_existing_invalid_and_protects_active() -> None:
 def test_schema_version_is_unchanged() -> None:
     from btcquant.execution.state_store import SCHEMA_VERSION
 
-    assert SCHEMA_VERSION == 6
+    assert SCHEMA_VERSION == 7
 
 
-def test_native_v6_trend_carry_restore_fixture_is_unchanged(tmp_path: Path) -> None:
-    """Schema-6 OPEN Trend SOFTWARE + genuine Carry PAPER is loaded, not rewritten."""
+def test_native_v7_trend_carry_restore_fixture_is_unchanged(tmp_path: Path) -> None:
+    """Schema-7 OPEN Trend SOFTWARE + genuine Carry PAPER is loaded, not rewritten."""
 
     from btcquant.deployment import inspect_sqlite
     from btcquant.execution.state_contract import (
@@ -294,7 +294,7 @@ def test_native_v6_trend_carry_restore_fixture_is_unchanged(tmp_path: Path) -> N
     store.save_engine_state("trend", trend_payload)
     store.save_engine_state("carry", carry_payload)
     restored = StateStore(db, initialize=False, read_only=True)
-    assert inspect_sqlite(db).metadata_schema_version == SCHEMA_VERSION == 6
+    assert inspect_sqlite(db).metadata_schema_version == SCHEMA_VERSION == 7
     loaded_trend = restored.load_engine_state("trend")
     loaded_carry = restored.load_engine_state("carry")
     assert loaded_trend == trend_payload
