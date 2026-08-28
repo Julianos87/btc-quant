@@ -1,0 +1,199 @@
+{
+  "classification": "SOURCE_DERIVED_SYNTHETIC",
+  "matrix": [
+    {
+      "concept": "cloid_format",
+      "official_evidence": "SOURCE_VERIFIED: utils/types.py Cloid requires 0x and exactly 32 characters after the prefix; to_raw returns the original value",
+      "ccxt_evidence": "CCXT_SOURCE_VERIFIED: clientOrderId is documented as an optional 128-bit hex string",
+      "btcquant_representation": "0x plus first 32 lowercase SHA-256 hex characters",
+      "verdict": "EXACT",
+      "a33_usability": "PRIMARY_LOOKUP_CANDIDATE"
+    },
+    {
+      "concept": "cloid_hex_character_validation",
+      "official_evidence": "SOURCE_VERIFIED: SDK validates prefix and length only",
+      "ccxt_evidence": "NOT_PROVEN: no additional character-validation contract relied on",
+      "btcquant_representation": "lowercase hexadecimal digest",
+      "verdict": "BTCQUANT_STRONGER",
+      "a33_usability": "SAFE"
+    },
+    {
+      "concept": "market_order",
+      "official_evidence": "SOURCE_VERIFIED: Exchange.market_open creates an aggressive limit order with tif Ioc and DEFAULT_SLIPPAGE = 0.05",
+      "ccxt_evidence": "CCXT_SOURCE_VERIFIED: market create_order requires a reference price, applies configured defaultSlippage, and selects Ioc",
+      "btcquant_representation": "CCXT create_order type=market with reference price and configured defaultSlippage=0.01",
+      "verdict": "COMPATIBLE",
+      "a33_usability": "NOT_ORDER_EVIDENCE"
+    },
+    {
+      "concept": "query_order_by_cloid",
+      "official_evidence": "SOURCE_VERIFIED: Info.query_order_by_cloid sends type=orderStatus and oid=cloid.to_raw()",
+      "ccxt_evidence": "CCXT_SOURCE_VERIFIED: fetch_order with clientOrderId sends orderStatus with oid=clientOrderId",
+      "btcquant_representation": "lookup_order passes the deterministic Hyperliquid cloid as clientOrderId",
+      "verdict": "COMPATIBLE",
+      "a33_usability": "PRIMARY_LOOKUP_CANDIDATE"
+    },
+    {
+      "concept": "status_vocabulary",
+      "official_evidence": "NOT_PROVEN: SDK query response is Any and does not declare a complete order-status vocabulary",
+      "ccxt_evidence": "CCXT_SOURCE_VERIFIED: known adapter mappings include triggered/open, filled/closed, canceled, rejected, and marginCanceled/canceled",
+      "btcquant_representation": "unrecognized CCXT status normalizes to UNKNOWN; contradictory open quantities normalize to UNKNOWN",
+      "verdict": "LOSSY_SAFE",
+      "a33_usability": "REQUIRES_RAW_EVIDENCE"
+    },
+    {
+      "concept": "open_orders_absence",
+      "official_evidence": "SOURCE_VERIFIED: open_orders and frontend_open_orders describe open orders only; no absence-to-terminality contract is declared",
+      "ccxt_evidence": "NOT_PROVEN: no stronger CCXT absence guarantee relied on",
+      "btcquant_representation": "absence remains unresolved",
+      "verdict": "LOSSY_SAFE",
+      "a33_usability": "INSUFFICIENT_ALONE"
+    },
+    {
+      "concept": "historical_orders_absence",
+      "official_evidence": "SOURCE_VERIFIED: historical_orders returns at most 2000 most recent historical orders with current status",
+      "ccxt_evidence": "NOT_PROVEN: no stronger CCXT history-completeness guarantee relied on",
+      "btcquant_representation": "absence is not never-accepted proof; an explicitly returned record can corroborate existence and its reported status",
+      "verdict": "LOSSY_SAFE",
+      "a33_usability": "INSUFFICIENT_ALONE"
+    },
+    {
+      "concept": "fill_shape",
+      "official_evidence": "TYPE_VERIFIED: Fill declares coin, px, sz, side, time, hash, oid, fee, tid, and feeToken",
+      "ccxt_evidence": "CCXT_SOURCE_VERIFIED: parse_trade maps tid to id, oid to order, px to price, sz to amount, time to timestamp, fee to cost, and feeToken to currency",
+      "btcquant_representation": "A.3.1 ExternalFill can store normalized substantive economics and provenance",
+      "verdict": "COMPATIBLE",
+      "a33_usability": "RICHER_READ_ONLY_EVIDENCE_REQUIRED"
+    },
+    {
+      "concept": "fill_tid",
+      "official_evidence": "TYPE_VERIFIED: Fill includes tid: int; uniqueness, scope, and cross-surface stability are not declared",
+      "ccxt_evidence": "CCXT_SOURCE_VERIFIED: parse_trade maps tid to trade id",
+      "btcquant_representation": "candidate venue_fill_id only",
+      "verdict": "UNPROVEN",
+      "a33_usability": "NOT_PRIMARY_UNTIL_PROVEN"
+    },
+    {
+      "concept": "fill_hash",
+      "official_evidence": "TYPE_VERIFIED: Fill includes hash: str; its identity role is not declared",
+      "ccxt_evidence": "CCXT_SOURCE_VERIFIED: hash is retained in raw trade info rather than unified trade id",
+      "btcquant_representation": "provenance/corroborating field only, not fill identity",
+      "verdict": "UNPROVEN",
+      "a33_usability": "INSUFFICIENT_ALONE"
+    },
+    {
+      "concept": "fill_oid",
+      "official_evidence": "TYPE_VERIFIED: Fill includes oid: int; order lookup accepts oid: int",
+      "ccxt_evidence": "CCXT_SOURCE_VERIFIED: parse_trade maps oid to order and parse_order maps oid to id",
+      "btcquant_representation": "candidate external_order_id for evidence correlation",
+      "verdict": "COMPATIBLE",
+      "a33_usability": "CORROBORATING"
+    },
+    {
+      "concept": "fill_side",
+      "official_evidence": "TYPE_VERIFIED: SDK Side is A or B",
+      "ccxt_evidence": "CCXT_SOURCE_VERIFIED: parse_trade and parse_order map A to sell and B to buy",
+      "btcquant_representation": "SELL or BUY test target",
+      "verdict": "COMPATIBLE",
+      "a33_usability": "SAFE_AFTER_ADAPTER_NORMALIZATION"
+    },
+    {
+      "concept": "fill_redelivery",
+      "official_evidence": "EXISTING_BTCQUANT_TEST_VERIFIED: A.3.1 committed contract keeps stable fill identity separate from delivery metadata",
+      "ccxt_evidence": "NOT_PROVEN: cross-surface delivery equivalence is not assumed from CCXT",
+      "btcquant_representation": "stable venue fill identity ignores delivery metadata but rejects substantive disagreement",
+      "verdict": "EXACT",
+      "a33_usability": "SAFE_IF_STABLE_FILL_ID_PROVEN"
+    },
+    {
+      "concept": "user_fills_by_time_aggregation",
+      "official_evidence": "SOURCE_VERIFIED: aggregate_by_time defaults to false; true combines specified partial fills",
+      "ccxt_evidence": "NOT_PROVEN: no CCXT aggregation-preservation guarantee relied on",
+      "btcquant_representation": "future evidence ingestion must keep aggregate_by_time=false for individual-fill evidence",
+      "verdict": "LOSSY_SAFE",
+      "a33_usability": "NON_AGGREGATED_REQUIRED"
+    },
+    {
+      "concept": "account_position_state",
+      "official_evidence": "SOURCE_VERIFIED: user_state returns assetPositions, szi, and margin summaries",
+      "ccxt_evidence": "NOT_PROVEN: no local order attribution follows from net position state",
+      "btcquant_representation": "corroborating state only",
+      "verdict": "LOSSY_SAFE",
+      "a33_usability": "CORROBORATING_ONLY"
+    },
+    {
+      "concept": "reduce_only_trigger",
+      "official_evidence": "SOURCE_VERIFIED: Exchange.order accepts reduce_only; order type wire supports trigger orders",
+      "ccxt_evidence": "CCXT_SOURCE_VERIFIED: market order with stopLossPrice creates trigger isMarket=true and forwards reduceOnly",
+      "btcquant_representation": "Hyperliquid stop path supplies stopLossPrice and reduceOnly=true",
+      "verdict": "COMPATIBLE",
+      "a33_usability": "OUT_OF_SCOPE_FOR_READ_ONLY_RESOLVER"
+    }
+  ],
+  "ccxt_mapping": [
+    {
+      "ccxt_field": "clientOrderId",
+      "hyperliquid_concept": "cloid",
+      "btcquant_field": "client_order_id / deterministic lookup key",
+      "evidence": "CCXT_SOURCE_VERIFIED",
+      "lossiness": "none for request construction; lookup response completeness is NOT_PROVEN",
+      "resolver_safe": "PRIMARY_LOOKUP_CANDIDATE"
+    },
+    {
+      "ccxt_field": "id",
+      "hyperliquid_concept": "oid",
+      "btcquant_field": "external_order_id / BrokerOrderSnapshot.broker_order_id",
+      "evidence": "CCXT_SOURCE_VERIFIED",
+      "lossiness": "numeric/string normalization",
+      "resolver_safe": "CORROBORATING"
+    },
+    {
+      "ccxt_field": "status",
+      "hyperliquid_concept": "adapter-normalized order status",
+      "btcquant_field": "ExternalOrderState",
+      "evidence": "CCXT_SOURCE_VERIFIED",
+      "lossiness": "official complete vocabulary NOT_PROVEN; unknown maps fail-closed",
+      "resolver_safe": "ONLY_WITH_FILL_AND_RAW_EVIDENCE"
+    },
+    {
+      "ccxt_field": "amount",
+      "hyperliquid_concept": "origSz / totalSz",
+      "btcquant_field": "requested_qty",
+      "evidence": "CCXT_SOURCE_VERIFIED",
+      "lossiness": "source-dependent field selection",
+      "resolver_safe": "CORROBORATING"
+    },
+    {
+      "ccxt_field": "filled",
+      "hyperliquid_concept": "filled.totalSz or derived amount minus sz",
+      "btcquant_field": "filled_qty",
+      "evidence": "CCXT_SOURCE_VERIFIED",
+      "lossiness": "order-level aggregate, not individual fills",
+      "resolver_safe": "NOT_SUFFICIENT_FOR_FILL_IDENTITY"
+    },
+    {
+      "ccxt_field": "remaining",
+      "hyperliquid_concept": "sz",
+      "btcquant_field": "remaining_qty",
+      "evidence": "CCXT_SOURCE_VERIFIED",
+      "lossiness": "contradictory explicit values map to UNKNOWN",
+      "resolver_safe": "CORROBORATING"
+    },
+    {
+      "ccxt_field": "average / price",
+      "hyperliquid_concept": "avgPx / limitPx",
+      "btcquant_field": "Fill.price / BrokerOrderSnapshot.price",
+      "evidence": "CCXT_SOURCE_VERIFIED",
+      "lossiness": "order-level price is not individual-fill price",
+      "resolver_safe": "NOT_SUFFICIENT_FOR_FILL_EVIDENCE"
+    },
+    {
+      "ccxt_field": "fee / fees",
+      "hyperliquid_concept": "fee / feeToken",
+      "btcquant_field": "Fill.fee / BrokerOrderSnapshot.fee",
+      "evidence": "CCXT_SOURCE_VERIFIED",
+      "lossiness": "order aggregate cannot identify individual fill fees",
+      "resolver_safe": "NOT_SUFFICIENT_FOR_FILL_EVIDENCE"
+    }
+  ]
+}

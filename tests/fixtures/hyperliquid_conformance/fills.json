@@ -1,0 +1,31 @@
+{
+  "classification": "SOURCE_DERIVED_SYNTHETIC",
+  "fills": [
+    {
+      "coin": "BTC",
+      "px": "100000.25",
+      "sz": "0.25",
+      "side": "A",
+      "time": 1761040800123,
+      "hash": "0xsynthetic-hash",
+      "oid": 9001,
+      "crossed": true,
+      "fee": "1.25",
+      "tid": 10001,
+      "feeToken": "USDC"
+    },
+    {
+      "coin": "BTC",
+      "px": "100001.50",
+      "sz": "0.75",
+      "side": "B",
+      "time": 1761040801123,
+      "hash": "0xsynthetic-hash",
+      "oid": 9001,
+      "crossed": false,
+      "fee": "0",
+      "tid": 10002,
+      "feeToken": "USDC"
+    }
+  ]
+}
