@@ -177,6 +177,7 @@ class CcxtBroker(Broker):
         if exchange_requested <= 0:
             exchange_requested = requested_qty
         remaining_raw = order.get("remaining")
+        remaining_is_explicit = remaining_raw is not None
         if remaining_raw is None:
             remaining = (
                 max(0.0, exchange_requested - fill.qty)
@@ -207,11 +208,18 @@ class CcxtBroker(Broker):
             status = ExternalOrderState.EXPIRED
             remaining = 0.0
         elif raw_status in ("open", "new", "pending"):
-            remaining = max(remaining, exchange_requested - fill.qty)
-            if remaining <= 1e-9:
+            tolerance = max(1e-9, exchange_requested * 1e-9)
+            expected_remaining = max(0.0, exchange_requested - fill.qty)
+            explicit_remainder_conflicts = remaining_is_explicit and (
+                abs(fill.qty + remaining - exchange_requested) > tolerance
+            )
+            if not remaining_is_explicit:
+                remaining = expected_remaining
+            if remaining <= tolerance or explicit_remainder_conflicts:
                 # Un exchange qui annonce simultanément ``open`` et aucun
-                # reste fournit un état contradictoire. Ce n'est ni une preuve
-                # de fill terminal ni une preuve de rejet.
+                # reste, ou des quantités explicitement incompatibles, fournit
+                # un état contradictoire. Ce n'est ni une preuve de fill
+                # terminal ni une preuve de rejet.
                 status = ExternalOrderState.UNKNOWN
             else:
                 status = (

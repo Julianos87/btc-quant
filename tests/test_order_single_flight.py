@@ -181,6 +181,47 @@ def test_ccxt_normalization_never_infers_terminal_state_from_fill_quantity(
         assert result.remaining_qty == 0.0
 
 
+@pytest.mark.parametrize(
+    ("raw_status", "filled", "remaining", "expected_status", "expected_remaining"),
+    [
+        ("open", 0.0, 0.0, ExternalOrderState.UNKNOWN, 0.0),
+        ("open", 0.25, 0.0, ExternalOrderState.UNKNOWN, 0.0),
+        ("open", 0.0, 1.0, ExternalOrderState.OPEN, 1.0),
+        ("open", 0.25, 0.75, ExternalOrderState.PARTIAL_OPEN, 0.75),
+        ("open", 0.0, None, ExternalOrderState.OPEN, 1.0),
+        ("open", 0.25, None, ExternalOrderState.PARTIAL_OPEN, 0.75),
+        ("open", 1.0, None, ExternalOrderState.UNKNOWN, 0.0),
+        ("open", 0.25, 0.40, ExternalOrderState.UNKNOWN, 0.40),
+        ("pending", 0.0, 0.0, ExternalOrderState.UNKNOWN, 0.0),
+        ("new", 0.0, 0.0, ExternalOrderState.UNKNOWN, 0.0),
+    ],
+)
+def test_ccxt_open_like_statuses_preserve_explicit_remaining_evidence(
+    raw_status,
+    filled,
+    remaining,
+    expected_status,
+    expected_remaining,
+):
+    broker = object.__new__(CcxtBroker)
+
+    result = broker._result_from_order(
+        {
+            "id": "external-open-remaining",
+            "status": raw_status,
+            "amount": 1.0,
+            "filled": filled,
+            "remaining": remaining,
+            "average": 100.0,
+        },
+        100.0,
+        1.0,
+    )
+
+    assert result.status == expected_status
+    assert result.remaining_qty == pytest.approx(expected_remaining)
+
+
 def test_ccxt_direct_market_helpers_fail_closed_without_reserved_client_id():
     broker = object.__new__(CcxtBroker)
     broker.exchange = _OpenExchange()
