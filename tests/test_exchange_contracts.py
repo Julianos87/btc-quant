@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 import ccxt
 
+from btcquant.execution.broker import Broker
 from btcquant.execution.ccxt_broker import CcxtBroker
 
 
@@ -156,3 +157,109 @@ def test_cancel_order_not_found_is_not_swallowed():
 
     with pytest.raises(ccxt.OrderNotFound):
         broker.cancel_stop("gone")
+
+
+def test_broker_order_result_accepts_signed_fees():
+    from btcquant.execution.broker import BrokerOrderResult, Fill
+    from btcquant.execution.order_state import ExternalOrderState
+
+    for fee in (1.25, 0.0, -1.25):
+        result = BrokerOrderResult(
+            Fill(price=100.0, qty=1.0, fee=fee),
+            ExternalOrderState.FILLED,
+            requested_qty=1.0,
+            remaining_qty=0.0,
+        )
+        assert result.fill.fee == fee
+
+
+@pytest.mark.parametrize("fee", [float("nan"), float("inf"), float("-inf")])
+def test_broker_order_result_rejects_nonfinite_fees(fee):
+    from btcquant.execution.broker import BrokerOrderResult, Fill
+    from btcquant.execution.order_state import ExternalOrderState
+
+    with pytest.raises(ValueError, match="fee"):
+        BrokerOrderResult(
+            Fill(price=100.0, qty=1.0, fee=fee),
+            ExternalOrderState.FILLED,
+            requested_qty=1.0,
+            remaining_qty=0.0,
+        )
+
+
+def test_ccxt_detailed_fee_records_take_precedence_even_when_net_zero():
+    broker = object.__new__(CcxtBroker)
+    fill = broker._fill_from_order(
+        {
+            "id": "order-1",
+            "average": 100.0,
+            "filled": 1.0,
+            "fees": [{"cost": 1.0}, {"cost": -1.0}],
+            "fee": {"cost": 2.0},
+        },
+        fallback_price=100.0,
+    )
+    assert fill.fee == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize(
+    "fees, singular, expected",
+    [
+        ([{"cost": -1.0}], {"cost": 2.0}, -1.0),
+        ([{"cost": 1.0}, {"cost": 2.0}], {"cost": 9.0}, 3.0),
+        ([{"cost": None}], {"cost": 2.0}, 0.0),
+        (None, {"cost": -1.0}, -1.0),
+        ([], {"cost": -1.0}, -1.0),
+        ([{"cost": 0.0}], {"cost": 2.0}, 0.0),
+    ],
+)
+def test_ccxt_fee_aggregation_preserves_signed_detailed_evidence(fees, singular, expected):
+    broker = object.__new__(CcxtBroker)
+    order = {"id": "order-1", "average": 100.0, "filled": 1.0, "fee": singular}
+    if fees is not None:
+        order["fees"] = fees
+    fill = broker._fill_from_order(order, fallback_price=100.0)
+    assert fill.fee == pytest.approx(expected)
+
+
+class _ProtectiveFeeBroker(Broker):
+    def __init__(self, raw):
+        self.raw = raw
+
+    def market_buy(self, qty, ref_price):
+        raise AssertionError("not used")
+
+    def market_sell(self, qty, ref_price):
+        raise AssertionError("not used")
+
+    def stop_status(self, order_id):
+        return self.raw
+
+
+def _protective_fee_snapshot(raw):
+    return _ProtectiveFeeBroker(raw).protective_order_snapshot("stop-1")
+
+
+@pytest.mark.parametrize(
+    "fees, singular, expected",
+    [
+        ([{"cost": 1.0}, {"cost": -1.0}], {"cost": 2.0}, 0.0),
+        ([{"cost": -1.25}], {"cost": 2.0}, -1.25),
+        (None, {"cost": -1.25}, -1.25),
+        ([], {"cost": -1.25}, -1.25),
+    ],
+)
+def test_protective_fee_aggregation_preserves_signed_detailed_evidence(fees, singular, expected):
+    raw = {
+        "id": "stop-1",
+        "status": "closed",
+        "amount": 1.0,
+        "filled": 1.0,
+        "remaining": 0.0,
+        "average": 100.0,
+        "fee": singular,
+    }
+    if fees is not None:
+        raw["fees"] = fees
+    snapshot = _protective_fee_snapshot(raw)
+    assert snapshot.fee == pytest.approx(expected)

@@ -216,7 +216,7 @@ def test_old_current_without_migrate_module_target_migrates_schema4(tmp_path: Pa
     assert "OLD_CURRENT_PYTHON" not in result.stderr
     assert not (old / "old-python.invoked").exists()
     assert inspect_sqlite(database).metadata_schema_version == SCHEMA_VERSION
-    assert SCHEMA_VERSION == 7
+    assert SCHEMA_VERSION == 8
     proof = json.loads((tmp_path / "runtime-proof.json").read_text(encoding="utf-8"))
     assert Path(proof["executable"]).resolve() == (target / "venv" / "bin" / "python").resolve()
     assert str(target / "venv") in proof["executable"]
@@ -300,7 +300,7 @@ def test_open_db_handle_refused_without_backup(tmp_path: Path) -> None:
     assert inspect_sqlite(database).metadata_schema_version == 4
 
 
-def test_schema7_database_is_idempotent_no_op(tmp_path: Path) -> None:
+def test_schema8_database_is_idempotent_no_op(tmp_path: Path) -> None:
     _old_current(tmp_path)
     target = _target_release(tmp_path)
     database = tmp_path / "state" / "btcquant.db"

@@ -150,10 +150,12 @@ class CcxtBroker(Broker):
         # retomber sur `amount` fabriquerait une position fantôme si l'ordre
         # n'a pas (encore) été rempli. filled=0 → Fill.qty=0, l'appelant gère.
         qty = order.get("filled") or 0.0
-        fee = 0.0
-        for f in order.get("fees") or []:
-            fee += f.get("cost") or 0.0
-        if not fee and order.get("fee"):
+        detailed_fees = order.get("fees")
+        if detailed_fees:
+            fee = sum(f.get("cost") or 0.0 for f in detailed_fees)
+        else:
+            fee = 0.0
+        if not detailed_fees and order.get("fee"):
             fee = order["fee"].get("cost") or 0.0
         broker_order_id = str(order["id"]) if order.get("id") is not None else None
         return Fill(
