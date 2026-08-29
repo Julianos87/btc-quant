@@ -1407,6 +1407,32 @@ class StateStore:
             ),
         )
 
+    def append_external_order_lookup_attempt(
+        self,
+        *,
+        engine: str,
+        aggregate_id: str,
+        payload: dict[str, Any],
+        event_type: str,
+    ) -> None:
+        """Journalise une tentative de lookup sans modifier l'état métier."""
+
+        if self.read_only:
+            raise RuntimeError("Un StateStore read-only ne peut pas journaliser une tentative")
+        normalized_engine = str(engine).strip()
+        normalized_aggregate_id = str(aggregate_id).strip()
+        if not normalized_engine or not normalized_aggregate_id:
+            raise ValueError("engine et aggregate_id doivent être non vides")
+        with self._transaction() as connection:
+            self._insert_event(
+                connection,
+                normalized_engine,
+                event_type,
+                payload,
+                aggregate_type="external_order_lookup",
+                aggregate_id=normalized_aggregate_id,
+            )
+
     @staticmethod
     def _local_state_for_legacy_status(status: str) -> LocalOrderState:
         if status == "OPEN":
