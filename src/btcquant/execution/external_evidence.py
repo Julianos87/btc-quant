@@ -61,16 +61,18 @@ def _optional_text(value: str | None, field: str) -> str | None:
     return None if value is None else _required_text(value, field)
 
 
-def _finite(value: float, field: str, *, positive: bool = False) -> float:
+def _finite(value: float, field: str, *, positive: bool = False, signed: bool = False) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise InvalidExternalObservation(f"{field} doit être un nombre")
     normalized = float(value)
     if (
         not math.isfinite(normalized)
         or (positive and normalized <= 0)
-        or (not positive and normalized < 0)
+        or (not positive and not signed and normalized < 0)
     ):
-        qualifier = "strictement positif" if positive else "positif ou nul"
+        qualifier = (
+            "strictement positif" if positive else "fini et signé" if signed else "positif ou nul"
+        )
         raise InvalidExternalObservation(f"{field} doit être fini et {qualifier}")
     return normalized
 
@@ -302,7 +304,7 @@ class ExternalFill:
             object.__setattr__(self, field, _optional_text(getattr(self, field), field))
         if self.fee is not None:
             try:
-                object.__setattr__(self, "fee", _finite(self.fee, "fee"))
+                object.__setattr__(self, "fee", _finite(self.fee, "fee", signed=True))
             except InvalidExternalObservation as error:
                 raise FillInvariantViolation(str(error)) from error
         elif self.fee_asset is not None:

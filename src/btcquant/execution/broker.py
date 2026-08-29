@@ -47,10 +47,11 @@ class BrokerOrderResult:
             ("requested_qty", self.requested_qty),
             ("remaining_qty", self.remaining_qty),
             ("filled_qty", self.fill.qty),
-            ("fee", self.fill.fee),
         ):
             if not math.isfinite(value) or value < 0:
                 raise ValueError(f"{name} doit être un nombre fini positif ou nul")
+        if not math.isfinite(self.fill.fee):
+            raise ValueError("fee doit être un nombre fini signé")
         if self.requested_qty <= 0:
             raise ValueError("requested_qty doit être strictement positive")
         tolerance = max(1e-9, self.requested_qty * 1e-9)
@@ -216,8 +217,12 @@ class Broker(ABC):
             status = "OPEN"
         else:
             status = "UNKNOWN"
-        fee = sum(float(item.get("cost") or 0.0) for item in raw.get("fees") or [])
-        if not fee and raw.get("fee"):
+        detailed_fees = raw.get("fees")
+        if detailed_fees:
+            fee = sum(float(item.get("cost") or 0.0) for item in detailed_fees)
+        else:
+            fee = 0.0
+        if not detailed_fees and raw.get("fee"):
             fee = float(raw["fee"].get("cost") or 0.0)
         average = raw.get("average")
         return ProtectiveOrderSnapshot(

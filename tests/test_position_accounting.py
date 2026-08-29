@@ -83,3 +83,39 @@ def test_overfill_is_rejected():
             Fill(110, 3, 1),
             entry_fee=1,
         )
+
+
+def test_signed_entry_fee_is_a_rebate():
+    result = PositionAccountingService.open_position(
+        Fill(101, 2, -1.5),
+        entry_time=pd.Timestamp("2030-01-01T01:00:00Z"),
+        stop_price=90,
+        direction=1,
+    )
+
+    assert result.cash_delta == pytest.approx(1.5)
+    assert result.entry_fee == pytest.approx(-1.5)
+
+
+def test_signed_exit_fee_increases_trade_pnl():
+    result = PositionAccountingService.close_position(
+        _position(),
+        Fill(110, 2, -1),
+        entry_fee=1,
+    )
+
+    assert result.cash_delta == pytest.approx(21.0)
+    assert result.trade_pnl == pytest.approx(20.0)
+
+
+def test_partial_signed_entry_fee_is_allocated_proportionally():
+    result = PositionAccountingService.close_position(
+        _position(),
+        Fill(110, 0.5, -0.25),
+        entry_fee=-2.0,
+    )
+
+    assert result.cash_delta == pytest.approx(5.25)
+    assert result.trade_pnl == pytest.approx(5.75)
+    assert result.entry_fee_share == pytest.approx(-0.5)
+    assert result.remaining_entry_fee == pytest.approx(-1.5)

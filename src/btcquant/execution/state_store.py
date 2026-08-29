@@ -32,7 +32,7 @@ from .errors import (
 from .external_evidence import ExternalFill, ExternalOrderObservation
 from .order_state import ExternalOrderState, LocalOrderState, LogicalOrderIdentity
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 DEPOSIT_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}")
 
 
@@ -374,6 +374,9 @@ class StateStore:
                 current_version = 7
             else:
                 self._ensure_external_evidence_schema(connection)
+            if current_version < 8:
+                self._migrate_v8(connection)
+                current_version = 8
             connection.execute(
                 "UPDATE metadata SET value = ? WHERE key = 'schema_version'",
                 (str(current_version),),
@@ -666,7 +669,7 @@ class StateStore:
                 venue_fill_id TEXT,
                 quantity REAL NOT NULL CHECK(quantity > 0),
                 price REAL NOT NULL CHECK(price > 0),
-                fee REAL CHECK(fee IS NULL OR fee >= 0),
+                fee REAL,
                 fee_asset TEXT,
                 venue_event_at TEXT,
                 observed_at TEXT NOT NULL,
@@ -749,6 +752,107 @@ class StateStore:
     def _migrate_v7(cls, connection: sqlite3.Connection) -> None:
         """Migration additive, idempotente, de v6 vers les preuves externes v7."""
         cls._ensure_external_evidence_schema(connection)
+
+    @staticmethod
+    def _has_legacy_external_fills_fee_check(connection: sqlite3.Connection) -> bool:
+        row = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'external_fills'"
+        ).fetchone()
+        if row is None or row[0] is None:
+            return False
+        table_sql = " ".join(str(row[0]).lower().split())
+        return "fee real check(fee is null or fee >= 0)" in table_sql
+
+    @classmethod
+    def _migrate_v8(cls, connection: sqlite3.Connection) -> None:
+        """Reconstruit v7 external_fills sans la contrainte fee >= 0."""
+
+        if not cls._has_legacy_external_fills_fee_check(connection):
+            return
+        if connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'external_fills_v8'"
+        ).fetchone():
+            raise RuntimeError("Migration v8 interrompue : table temporaire déjà présente")
+
+        expected_columns = [
+            "id",
+            "local_order_id",
+            "intent_id",
+            "venue",
+            "account_scope",
+            "instrument",
+            "side",
+            "source_kind",
+            "client_order_id",
+            "external_order_id",
+            "venue_fill_id",
+            "quantity",
+            "price",
+            "fee",
+            "fee_asset",
+            "venue_event_at",
+            "observed_at",
+            "persisted_at",
+            "fill_key",
+            "raw_payload_hash",
+        ]
+        actual_columns = [
+            row[1] for row in connection.execute("PRAGMA table_info(external_fills)").fetchall()
+        ]
+        if actual_columns != expected_columns:
+            raise RuntimeError("Migration v8 refusée : colonnes external_fills inattendues")
+
+        column_list = ", ".join(expected_columns)
+        old_count = connection.execute("SELECT COUNT(*) FROM external_fills").fetchone()[0]
+        connection.execute(
+            r"""
+            CREATE TABLE external_fills_v8 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                local_order_id INTEGER NOT NULL,
+                intent_id TEXT NOT NULL,
+                venue TEXT NOT NULL,
+                account_scope TEXT NOT NULL,
+                instrument TEXT NOT NULL,
+                side TEXT NOT NULL CHECK(side IN ('BUY', 'SELL')),
+                source_kind TEXT NOT NULL CHECK(source_kind IN (
+                    'ORDER_LOOKUP', 'OPEN_ORDERS', 'HISTORICAL_ORDERS',
+                    'FILL_LOOKUP', 'PRIVATE_EVENT', 'SUBMISSION_RESPONSE'
+                )),
+                client_order_id TEXT,
+                external_order_id TEXT,
+                venue_fill_id TEXT,
+                quantity REAL NOT NULL CHECK(quantity > 0),
+                price REAL NOT NULL CHECK(price > 0),
+                fee REAL,
+                fee_asset TEXT,
+                venue_event_at TEXT,
+                observed_at TEXT NOT NULL,
+                persisted_at TEXT NOT NULL,
+                fill_key TEXT NOT NULL UNIQUE,
+                raw_payload_hash TEXT NOT NULL,
+                FOREIGN KEY(local_order_id) REFERENCES orders(id)
+            )
+            """
+        )
+        connection.execute(
+            f"INSERT INTO external_fills_v8({column_list}) SELECT {column_list} FROM external_fills"
+        )
+        new_count = connection.execute("SELECT COUNT(*) FROM external_fills_v8").fetchone()[0]
+        if new_count != old_count:
+            raise RuntimeError(
+                f"Migration v8 refusée : lignes external_fills {old_count} != {new_count}"
+            )
+        connection.execute("DROP TABLE external_fills")
+        connection.execute("ALTER TABLE external_fills_v8 RENAME TO external_fills")
+        connection.execute(
+            "CREATE INDEX idx_external_fills_order_id ON external_fills(local_order_id, id)"
+        )
+        connection.execute(
+            "CREATE INDEX idx_external_fills_venue_fill "
+            "ON external_fills(venue, account_scope, venue_fill_id)"
+        )
+        if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise RuntimeError("Migration v8 refusée : foreign_key_check non vide")
 
     @staticmethod
     def _json(payload: Any) -> str:

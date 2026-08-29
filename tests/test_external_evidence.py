@@ -553,7 +553,7 @@ def test_fallback_keys_are_deterministic_and_json_order_independent(tmp_path):
     assert first.fill_key.startswith("fill-")
 
 
-def test_schema_v6_to_v7_is_additive_preserves_orders_and_checks_integrity(tmp_path):
+def test_schema_v6_to_v8_is_additive_preserves_orders_and_checks_integrity(tmp_path):
     database = tmp_path / "v6.db"
     current = StateStore(database)
     order_id = _order(current, "pre-v7-order")
@@ -577,7 +577,7 @@ def test_schema_v6_to_v7_is_additive_preserves_orders_and_checks_integrity(tmp_p
         }
         foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
 
-    assert version == str(SCHEMA_VERSION) == "7"
+    assert version == str(SCHEMA_VERSION) == "8"
     assert {"external_order_observations", "external_fills"} <= tables
     assert migrated.read_order_by_intent("pre-v7-order")["id"] == order_id
     assert foreign_keys == []
@@ -619,3 +619,172 @@ def test_schema_v7_failure_rolls_back_evidence_tables_and_metadata(tmp_path, mon
     assert version == "6"
     assert "external_order_observations" not in tables
     assert "external_fills" not in tables
+
+
+def test_signed_fee_is_persisted_and_redelivered_idempotently(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    order_id = _order(store)
+    first = _fill(order_id, fee=-1.25, fee_asset="USDC")
+    same = _fill(
+        order_id,
+        fee=-1.25,
+        fee_asset="USDC",
+        observed_at="2026-08-26T12:00:01Z",
+        raw_payload_hash=RAW_B,
+    )
+
+    persisted, created = store.append_external_fill(first)
+    duplicate, duplicate_created = store.append_external_fill(same)
+
+    assert created is True
+    assert duplicate_created is False
+    assert duplicate.fee == -1.25
+    assert len(store.get_external_fills(order_id)) == 1
+
+
+@pytest.mark.parametrize("second_fee", [1.25, 0.0, -2.5])
+def test_signed_fee_conflicts_remain_fail_closed(tmp_path, second_fee):
+    store = StateStore(tmp_path / "state.db")
+    order_id = _order(store)
+    store.append_external_fill(_fill(order_id, fee=-1.25, fee_asset="USDC"))
+
+    with pytest.raises(ExternalFillConflict):
+        store.append_external_fill(_fill(order_id, fee=second_fee, fee_asset="USDC"))
+
+
+def test_negative_fee_with_different_fee_asset_conflicts(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    order_id = _order(store)
+    store.append_external_fill(_fill(order_id, fee=-1.25, fee_asset="USDC"))
+
+    with pytest.raises(ExternalFillConflict):
+        store.append_external_fill(_fill(order_id, fee=-1.25, fee_asset="HYPE"))
+
+
+def test_fee_asset_requires_explicit_fee(tmp_path):
+    order_id = _order(StateStore(tmp_path / "state.db"))
+    with pytest.raises(FillInvariantViolation):
+        _fill(order_id, fee=None, fee_asset="USDC")
+
+
+def _rewrite_external_fills_as_v7(database):
+    columns = [
+        "id",
+        "local_order_id",
+        "intent_id",
+        "venue",
+        "account_scope",
+        "instrument",
+        "side",
+        "source_kind",
+        "client_order_id",
+        "external_order_id",
+        "venue_fill_id",
+        "quantity",
+        "price",
+        "fee",
+        "fee_asset",
+        "venue_event_at",
+        "observed_at",
+        "persisted_at",
+        "fill_key",
+        "raw_payload_hash",
+    ]
+    with sqlite3.connect(database) as connection:
+        rows = connection.execute(
+            f"SELECT {', '.join(columns)} FROM external_fills ORDER BY id"
+        ).fetchall()
+        connection.execute("DROP INDEX idx_external_fills_order_id")
+        connection.execute("DROP INDEX idx_external_fills_venue_fill")
+        connection.execute("DROP TABLE external_fills")
+        connection.execute(
+            """
+            CREATE TABLE external_fills (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                local_order_id INTEGER NOT NULL,
+                intent_id TEXT NOT NULL,
+                venue TEXT NOT NULL,
+                account_scope TEXT NOT NULL,
+                instrument TEXT NOT NULL,
+                side TEXT NOT NULL CHECK(side IN ('BUY', 'SELL')),
+                source_kind TEXT NOT NULL CHECK(source_kind IN (
+                    'ORDER_LOOKUP', 'OPEN_ORDERS', 'HISTORICAL_ORDERS',
+                    'FILL_LOOKUP', 'PRIVATE_EVENT', 'SUBMISSION_RESPONSE'
+                )),
+                client_order_id TEXT,
+                external_order_id TEXT,
+                venue_fill_id TEXT,
+                quantity REAL NOT NULL CHECK(quantity > 0),
+                price REAL NOT NULL CHECK(price > 0),
+                fee REAL CHECK(fee IS NULL OR fee >= 0),
+                fee_asset TEXT,
+                venue_event_at TEXT,
+                observed_at TEXT NOT NULL,
+                persisted_at TEXT NOT NULL,
+                fill_key TEXT NOT NULL UNIQUE,
+                raw_payload_hash TEXT NOT NULL,
+                FOREIGN KEY(local_order_id) REFERENCES orders(id)
+            )
+            """
+        )
+        placeholders = ", ".join("?" for _ in columns)
+        connection.executemany(
+            f"INSERT INTO external_fills({', '.join(columns)}) VALUES({placeholders})",
+            rows,
+        )
+        connection.execute("UPDATE metadata SET value='7' WHERE key='schema_version'")
+        connection.commit()
+    return rows
+
+
+def test_schema_v7_to_v8_preserves_external_fill_rows_and_constraints(tmp_path):
+    database = tmp_path / "v7.db"
+    store = StateStore(database)
+    order_id = _order(store)
+    expected_fills = [
+        _fill(order_id, venue_fill_id="fill-none", fee=None, fee_asset=None),
+        _fill(order_id, venue_fill_id="fill-zero", fee=0.0, fee_asset="USDC"),
+        _fill(order_id, venue_fill_id="fill-positive", fee=1.25, fee_asset="USDC"),
+    ]
+    for fill in expected_fills:
+        store.append_external_fill(fill)
+
+    before_rows = _rewrite_external_fills_as_v7(database)
+    with pytest.raises(MigrationRequiredError):
+        StateStore(database)
+
+    migrated = StateStore(database, allow_migration=True)
+    with sqlite3.connect(database) as connection:
+        version = connection.execute(
+            "SELECT value FROM metadata WHERE key='schema_version'"
+        ).fetchone()[0]
+        after_rows = connection.execute(
+            "SELECT id, local_order_id, intent_id, venue, account_scope, instrument, side, "
+            "source_kind, client_order_id, external_order_id, venue_fill_id, quantity, price, "
+            "fee, fee_asset, venue_event_at, observed_at, persisted_at, fill_key, raw_payload_hash "
+            "FROM external_fills ORDER BY id"
+        ).fetchall()
+        table_sql = (
+            connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='external_fills'"
+            )
+            .fetchone()[0]
+            .lower()
+        )
+        indexes = {
+            row[1] for row in connection.execute("PRAGMA index_list(external_fills)").fetchall()
+        }
+        foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
+
+    assert version == "8"
+    assert after_rows == before_rows
+    assert "fee >= 0" not in table_sql
+    assert {"idx_external_fills_order_id", "idx_external_fills_venue_fill"} <= indexes
+    assert foreign_keys == []
+    assert migrated.integrity_check()
+    StateStore(database)
+
+    negative = _fill(order_id, venue_fill_id="fill-negative", fee=-1.25, fee_asset="USDC")
+    persisted, created = migrated.append_external_fill(negative)
+    assert created is True
+    assert persisted.fee == -1.25
