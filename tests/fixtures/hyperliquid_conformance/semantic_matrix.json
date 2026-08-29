@@ -70,7 +70,7 @@
       "official_evidence": "TYPE_VERIFIED: websocket userFills and SDK Fill both include tid: int; uniqueness, scope, and cross-surface stability are not declared",
       "ccxt_evidence": "CCXT_SOURCE_VERIFIED: parse_trade maps tid to trade id",
       "btcquant_representation": "candidate venue_fill_id only",
-      "verdict": "TID_CANDIDATE_NOT_FULLY_PROVEN",
+      "verdict": "UNPROVEN",
       "a33_usability": "NOT_PRIMARY_UNTIL_PROVEN"
     },
     {

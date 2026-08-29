@@ -25,6 +25,10 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures" / "hyperliquid_conformance"
 RAW_A = "a" * 64
 RAW_B = "b" * 64
 OBSERVED_AT = "2026-08-28T12:00:00Z"
+MATRIX_VERDICTS = frozenset(
+    {"EXACT", "COMPATIBLE", "BTCQUANT_STRONGER", "LOSSY_SAFE", "UNPROVEN", "CONFLICT"}
+)
+DEDICATED_TID_CONCLUSION = "TID_CANDIDATE_NOT_FULLY_PROVEN"
 
 
 def _fixture(name: str) -> dict:
@@ -132,8 +136,16 @@ def test_conformance_matrix_preserves_unproven_venue_boundaries() -> None:
     assert matrix["cloid_hex_character_validation"]["verdict"] == "BTCQUANT_STRONGER"
     assert matrix["market_order"]["verdict"] == "COMPATIBLE"
     assert matrix["status_vocabulary"]["verdict"] == "LOSSY_SAFE"
-    assert matrix["fill_tid"]["verdict"] == "TID_CANDIDATE_NOT_FULLY_PROVEN"
+    assert matrix["fill_tid"]["verdict"] == "UNPROVEN"
+    assert DEDICATED_TID_CONCLUSION == "TID_CANDIDATE_NOT_FULLY_PROVEN"
     assert all(entry["verdict"] != "CONFLICT" for entry in matrix.values())
+
+
+def test_conformance_matrix_uses_closed_verdict_vocabulary() -> None:
+    entries = _fixture("semantic_matrix.json")["matrix"]
+
+    assert entries
+    assert all(entry["verdict"] in MATRIX_VERDICTS for entry in entries)
 
 
 def test_hyperliquid_cloid_has_pinned_format_and_is_restart_stable() -> None:
@@ -292,7 +304,8 @@ def test_matrix_preserves_absence_aggregation_and_account_boundaries() -> None:
     assert matrix["historical_orders_absence"]["a33_usability"] == "INSUFFICIENT_ALONE"
     assert matrix["user_fills_by_time_aggregation"]["a33_usability"] == "NON_AGGREGATED_REQUIRED"
     assert matrix["account_position_state"]["a33_usability"] == "CORROBORATING_ONLY"
-    assert matrix["fill_tid"]["verdict"] == "TID_CANDIDATE_NOT_FULLY_PROVEN"
+    assert matrix["fill_tid"]["verdict"] == "UNPROVEN"
+    assert DEDICATED_TID_CONCLUSION == "TID_CANDIDATE_NOT_FULLY_PROVEN"
     assert matrix["fill_hash"]["verdict"] == "UNPROVEN"
 
 
