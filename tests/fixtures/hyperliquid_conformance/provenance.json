@@ -1,0 +1,24 @@
+{
+  "classification": "SOURCE_DERIVED_SYNTHETIC",
+  "official_sdk": {
+    "repository": "https://github.com/hyperliquid-dex/hyperliquid-python-sdk",
+    "branch": "master",
+    "sha": "2fdb18f9517675ea03695a0962bd19eece9c83f0",
+    "tree": "e4fad7c49595cf81be3513b82fb458d61b26285f",
+    "version": "0.24.0",
+    "retrieved_at": "2026-08-28",
+    "verified_at": "2026-08-28",
+    "source_files": [
+      "hyperliquid/exchange.py",
+      "hyperliquid/info.py",
+      "hyperliquid/utils/signing.py",
+      "hyperliquid/utils/types.py"
+    ]
+  },
+  "ccxt": {
+    "version": "4.5.71",
+    "lock_provenance": "uv.lock sha256:171f9dd4c9c915b5e8dadf2730ebd9c675b590c7f03b0e420841f03a5a2195f8",
+    "source": "local locked site-packages/ccxt/hyperliquid.py"
+  },
+  "fixtures_are_not_live_exchange_responses": true
+}
