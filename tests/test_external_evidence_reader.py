@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import sqlite3
 from pathlib import Path
 
@@ -131,25 +132,62 @@ def test_unsupported_reader_is_explicit():
     assert result.outcome == EvidenceLookupOutcome.UNSUPPORTED
 
 
-def test_unknown_raw_status_is_preserved_and_normalized_unknown():
-    _, result = read(order(status="futureVenueStatus"))
+def test_unknown_ccxt_status_is_preserved_and_normalized_unknown():
+    _, result = read(order(status="futureCcxtStatus"))
     assert result.outcome == EvidenceLookupOutcome.FOUND
     assert result.evidence is not None
-    assert result.evidence.raw_status == "futureVenueStatus"
+    assert result.evidence.ccxt_status == "futureCcxtStatus"
+    assert result.evidence.venue_status is None
     assert result.evidence.normalized_state == ExternalOrderState.UNKNOWN
 
 
-def test_canceled_raw_status_is_preserved_without_resolution():
+def test_canceled_ccxt_status_is_preserved_without_venue_status():
     _, result = read(order(status="canceled", filled=0.0, remaining=0.0))
     assert result.outcome == EvidenceLookupOutcome.FOUND
     assert result.evidence is not None
-    assert result.evidence.raw_status == "canceled"
+    assert result.evidence.ccxt_status == "canceled"
+    assert result.evidence.venue_status is None
     assert result.evidence.normalized_state == ExternalOrderState.CANCELED
 
 
-@pytest.mark.parametrize("raw_status", ["open", "new", "pending"])
-def test_active_explicit_zero_remaining_is_unknown_and_preserved(raw_status):
-    _, result = read(order(status=raw_status, filled=0.0, remaining=0.0))
+def test_margin_canceled_preserves_ccxt_and_venue_status_separately():
+    _, result = read(order(status="canceled", info={"status": "marginCanceled"}))
+    assert result.outcome == EvidenceLookupOutcome.FOUND
+    assert result.evidence is not None
+    assert result.evidence.ccxt_status == "canceled"
+    assert result.evidence.venue_status == "marginCanceled"
+    assert result.evidence.normalized_state == ExternalOrderState.CANCELED
+
+
+def test_unknown_venue_status_is_preserved_without_interpretation():
+    _, result = read(order(status="open", info={"status": "futureVenueStatus"}))
+    assert result.outcome == EvidenceLookupOutcome.FOUND
+    assert result.evidence is not None
+    assert result.evidence.ccxt_status == "open"
+    assert result.evidence.venue_status == "futureVenueStatus"
+    assert result.evidence.normalized_state == ExternalOrderState.OPEN
+
+
+def test_missing_venue_status_is_not_fabricated():
+    _, result = read(order(status="open"))
+    assert result.outcome == EvidenceLookupOutcome.FOUND
+    assert result.evidence is not None
+    assert result.evidence.ccxt_status == "open"
+    assert result.evidence.venue_status is None
+
+
+def test_missing_ccxt_status_keeps_venue_status_and_is_unknown():
+    _, result = read(order(status=None, info={"status": "open"}))
+    assert result.outcome == EvidenceLookupOutcome.INCOMPLETE_RESPONSE
+    assert result.evidence is not None
+    assert result.evidence.ccxt_status is None
+    assert result.evidence.venue_status == "open"
+    assert result.evidence.normalized_state == ExternalOrderState.UNKNOWN
+
+
+@pytest.mark.parametrize("ccxt_status", ["open", "new", "pending"])
+def test_active_explicit_zero_remaining_is_unknown_and_preserved(ccxt_status):
+    _, result = read(order(status=ccxt_status, filled=0.0, remaining=0.0))
     assert result.evidence is not None
     assert result.evidence.normalized_state == ExternalOrderState.UNKNOWN
     assert result.evidence.remaining_qty == 0.0
@@ -210,6 +248,14 @@ def test_raw_payload_hash_is_deterministic_for_mapping_order():
     assert first_result.evidence.raw_payload_hash == second_result.evidence.raw_payload_hash
 
 
+def test_venue_status_changes_the_evidence_hash():
+    _, first_result = read(order(status="canceled", info={"status": "marginCanceled"}))
+    _, second_result = read(order(status="canceled", info={"status": "canceled"}))
+    assert first_result.evidence is not None
+    assert second_result.evidence is not None
+    assert first_result.evidence.raw_payload_hash != second_result.evidence.raw_payload_hash
+
+
 def test_reader_has_no_state_store_write_path():
     reader = CcxtExternalEvidenceReader(FakeExchange(order()))
     assert not hasattr(reader, "store")
@@ -226,11 +272,17 @@ def _valid_lookup(order_id: int, intent_id: str):
 def test_valid_found_persists_one_normalized_observation_and_attempt(tmp_path: Path):
     store = StateStore(tmp_path / "state.db")
     order_id = store.begin_order("trend", "slot", "intent-reader", "MARKET", "BUY", 1.0, "entry")
-    result = _valid_lookup(order_id, "intent-reader")
+    result = CcxtExternalEvidenceReader(
+        FakeExchange(order(info={"status": "marginCanceled"}))
+    ).lookup_order(context(local_order_id=order_id), observed_at=OBSERVED)
     persisted = ExternalEvidencePersistence.persist(store, result)
     assert persisted.observation_created is True
     assert len(store.get_external_order_observations(order_id)) == 1
-    assert store.read_events("trend")[-1]["event_type"] == "external_order_lookup_found"
+    event = store.read_events("trend")[-1]
+    assert event["event_type"] == "external_order_lookup_found"
+    payload = json.loads(event["payload"])
+    assert payload["ccxt_status"] == "open"
+    assert payload["venue_status"] == "marginCanceled"
 
 
 def test_repeated_equivalent_found_is_idempotent_for_observation(tmp_path: Path):
@@ -271,11 +323,15 @@ def test_cloid_mismatch_records_attempt_only(tmp_path: Path):
     store = StateStore(tmp_path / "state.db")
     order_id = store.begin_order("trend", "slot", "intent-reader", "MARKET", "BUY", 1.0, "entry")
     lookup = CcxtExternalEvidenceReader(
-        FakeExchange(order(clientOrderId="0x" + "b" * 32))
+        FakeExchange(order(clientOrderId="0x" + "b" * 32, info={"status": "marginCanceled"}))
     ).lookup_order(context(local_order_id=order_id), observed_at=OBSERVED)
     ExternalEvidencePersistence.persist(store, lookup)
     assert len(store.get_external_order_observations(order_id)) == 0
-    assert store.read_events("trend")[-1]["event_type"] == "external_order_lookup_conflict"
+    event = store.read_events("trend")[-1]
+    assert event["event_type"] == "external_order_lookup_conflict"
+    payload = json.loads(event["payload"])
+    assert payload["ccxt_status"] == "open"
+    assert payload["venue_status"] == "marginCanceled"
 
 
 def test_incomplete_response_is_not_a_trusted_observation(tmp_path: Path):

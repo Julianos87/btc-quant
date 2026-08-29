@@ -111,10 +111,20 @@ def _safe_hash_value(value: object) -> object:
     return f"<{type(value).__module__}.{type(value).__qualname__}>"
 
 
-def _payload_hash(order: Mapping[str, Any], returned_client_order_id: str | None) -> str:
+def _payload_hash(
+    order: Mapping[str, Any],
+    returned_client_order_id: str | None,
+    *,
+    ccxt_status: str | None,
+    venue_status: str | None,
+) -> str:
     """Hash déterministe des champs CCXT utiles et non sensibles."""
 
-    safe: dict[str, object] = {"returned_client_order_id": returned_client_order_id}
+    safe: dict[str, object] = {
+        "returned_client_order_id": returned_client_order_id,
+        "ccxt_status": ccxt_status,
+        "venue_status": venue_status,
+    }
     for field in _HASH_FIELDS:
         if field in order:
             safe[field] = _safe_hash_value(order[field])
@@ -154,26 +164,38 @@ def _returned_client_order_id(order: Mapping[str, Any]) -> str | None:
     return value.strip()
 
 
-def _raw_status(order: Mapping[str, Any]) -> str | None:
+def _ccxt_status(order: Mapping[str, Any]) -> str | None:
     if "status" not in order or order.get("status") is None:
         return None
     value = order["status"]
     if not isinstance(value, str) or not value.strip():
-        raise ValueError("status retourné doit être une chaîne non vide")
+        raise ValueError("ccxt_status retourné doit être une chaîne non vide")
+    return value
+
+
+def _venue_status(order: Mapping[str, Any]) -> str | None:
+    """Extrait uniquement le statut venue conservé dans ``info.status``."""
+
+    info = order.get("info")
+    if not isinstance(info, Mapping) or info.get("status") is None:
+        return None
+    value = info["status"]
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("venue_status conservé doit être une chaîne non vide")
     return value
 
 
 def _normalization_status(
-    raw_status: str | None,
+    ccxt_status: str | None,
     requested_qty: float | None,
     filled_qty: float | None,
     remaining_qty: float | None,
     *,
     contradictory: bool,
 ) -> ExternalOrderState:
-    if contradictory or raw_status is None:
+    if contradictory or ccxt_status is None:
         return ExternalOrderState.UNKNOWN
-    status = raw_status.strip().lower()
+    status = ccxt_status.strip().lower()
     if requested_qty is None or filled_qty is None or remaining_qty is None:
         return ExternalOrderState.UNKNOWN
     tolerance = max(1e-9, abs(requested_qty) * 1e-9)
@@ -205,7 +227,7 @@ def _contradictory_quantities(
     filled_qty: float | None,
     remaining_qty: float | None,
     *,
-    raw_status: str | None,
+    ccxt_status: str | None,
     remaining_explicit: bool,
 ) -> bool:
     if any(value is not None and value < 0 for value in (requested_qty, filled_qty, remaining_qty)):
@@ -218,8 +240,8 @@ def _contradictory_quantities(
     if filled_qty is not None and filled_qty > requested_qty + tolerance:
         return True
     if (
-        raw_status is not None
-        and raw_status.strip().lower() in _ACTIVE_STATUSES
+        ccxt_status is not None
+        and ccxt_status.strip().lower() in _ACTIVE_STATUSES
         and (
             filled_qty is not None
             and remaining_qty is not None
@@ -227,7 +249,7 @@ def _contradictory_quantities(
         )
     ):
         return True
-    if raw_status is not None and raw_status.strip().lower() in _ACTIVE_STATUSES:
+    if ccxt_status is not None and ccxt_status.strip().lower() in _ACTIVE_STATUSES:
         if filled_qty is not None and remaining_qty is not None and remaining_qty <= tolerance:
             return True
         if (
@@ -291,7 +313,8 @@ class ExternalOrderEvidence:
     expected_client_order_id: str
     returned_client_order_id: str | None
     external_order_id: str | None
-    raw_status: str | None
+    ccxt_status: str | None
+    venue_status: str | None
     normalized_state: ExternalOrderState
     requested_qty: float | None
     filled_qty: float | None
@@ -329,8 +352,10 @@ class ExternalOrderEvidence:
             self, "returned_client_order_id", _optional_text(self.returned_client_order_id)
         )
         object.__setattr__(self, "external_order_id", _optional_text(self.external_order_id))
-        if self.raw_status is not None and not isinstance(self.raw_status, str):
-            raise ValueError("raw_status doit rester une chaîne ou None")
+        for field in ("ccxt_status", "venue_status"):
+            value = getattr(self, field)
+            if value is not None and not isinstance(value, str):
+                raise ValueError(f"{field} doit rester une chaîne ou None")
         try:
             object.__setattr__(self, "normalized_state", ExternalOrderState(self.normalized_state))
             object.__setattr__(self, "source_kind", ExternalEvidenceSource(self.source_kind))
@@ -443,14 +468,15 @@ class CcxtExternalEvidenceReader:
         observed = observed_at or datetime.now(UTC).isoformat()
         try:
             returned_client_order_id = _returned_client_order_id(order)
-            raw_status = _raw_status(order)
+            ccxt_status = _ccxt_status(order)
+            venue_status = _venue_status(order)
             requested_qty, requested_explicit = _numeric_field(order, "amount")
             filled_qty, filled_explicit = _numeric_field(order, "filled")
             remaining_qty, remaining_explicit = _numeric_field(order, "remaining")
             if (
                 remaining_qty is None
-                and raw_status is not None
-                and raw_status.strip().lower() in _ACTIVE_STATUSES
+                and ccxt_status is not None
+                and ccxt_status.strip().lower() in _ACTIVE_STATUSES
             ):
                 if requested_qty is not None and filled_qty is not None:
                     remaining_qty = requested_qty - filled_qty
@@ -459,11 +485,11 @@ class CcxtExternalEvidenceReader:
                 requested_qty,
                 filled_qty,
                 remaining_qty,
-                raw_status=raw_status,
+                ccxt_status=ccxt_status,
                 remaining_explicit=remaining_explicit,
             )
             normalized_state = _normalization_status(
-                raw_status,
+                ccxt_status,
                 requested_qty,
                 filled_qty,
                 remaining_qty,
@@ -485,7 +511,8 @@ class CcxtExternalEvidenceReader:
                 expected_client_order_id=context.expected_client_order_id,
                 returned_client_order_id=returned_client_order_id,
                 external_order_id=str(external_order_id) if external_order_id is not None else None,
-                raw_status=raw_status,
+                ccxt_status=ccxt_status,
+                venue_status=venue_status,
                 normalized_state=normalized_state,
                 requested_qty=requested_qty,
                 filled_qty=filled_qty,
@@ -496,7 +523,12 @@ class CcxtExternalEvidenceReader:
                 source_kind=ExternalEvidenceSource.ORDER_LOOKUP,
                 venue_event_at=_venue_timestamp(order),
                 observed_at=observed,
-                raw_payload_hash=_payload_hash(order, returned_client_order_id),
+                raw_payload_hash=_payload_hash(
+                    order,
+                    returned_client_order_id,
+                    ccxt_status=ccxt_status,
+                    venue_status=venue_status,
+                ),
                 correlation_complete=returned_client_order_id == context.expected_client_order_id,
                 quantities_complete=(
                     requested_qty is not None
@@ -526,7 +558,7 @@ class CcxtExternalEvidenceReader:
                 reason="Le cloid retourné diffère du cloid attendu",
             )
         if (
-            evidence.raw_status is None
+            evidence.ccxt_status is None
             or not evidence.quantities_complete
             or evidence.contradictory
         ):
@@ -627,7 +659,8 @@ class ExternalEvidencePersistence:
                 {
                     "returned_client_order_id": evidence.returned_client_order_id,
                     "external_order_id": evidence.external_order_id,
-                    "raw_status": evidence.raw_status,
+                    "ccxt_status": evidence.ccxt_status,
+                    "venue_status": evidence.venue_status,
                     "normalized_state": evidence.normalized_state.value,
                     "requested_qty": evidence.requested_qty,
                     "filled_qty": evidence.filled_qty,
