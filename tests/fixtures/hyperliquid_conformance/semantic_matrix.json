@@ -59,7 +59,7 @@
     },
     {
       "concept": "fill_shape",
-      "official_evidence": "TYPE_VERIFIED: Fill declares coin, px, sz, side, time, hash, oid, fee, tid, and feeToken",
+      "official_evidence": "TYPE_VERIFIED: websocket userFills and SDK Fill share the declared Fill field type, including coin, px, sz, side, time, hash, oid, fee, tid, and feeToken",
       "ccxt_evidence": "CCXT_SOURCE_VERIFIED: parse_trade maps tid to id, oid to order, px to price, sz to amount, time to timestamp, fee to cost, and feeToken to currency",
       "btcquant_representation": "A.3.1 ExternalFill can store normalized substantive economics and provenance",
       "verdict": "COMPATIBLE",
@@ -67,10 +67,10 @@
     },
     {
       "concept": "fill_tid",
-      "official_evidence": "TYPE_VERIFIED: Fill includes tid: int; uniqueness, scope, and cross-surface stability are not declared",
+      "official_evidence": "TYPE_VERIFIED: websocket userFills and SDK Fill both include tid: int; uniqueness, scope, and cross-surface stability are not declared",
       "ccxt_evidence": "CCXT_SOURCE_VERIFIED: parse_trade maps tid to trade id",
       "btcquant_representation": "candidate venue_fill_id only",
-      "verdict": "UNPROVEN",
+      "verdict": "TID_CANDIDATE_NOT_FULLY_PROVEN",
       "a33_usability": "NOT_PRIMARY_UNTIL_PROVEN"
     },
     {

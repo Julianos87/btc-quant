@@ -132,7 +132,7 @@ def test_conformance_matrix_preserves_unproven_venue_boundaries() -> None:
     assert matrix["cloid_hex_character_validation"]["verdict"] == "BTCQUANT_STRONGER"
     assert matrix["market_order"]["verdict"] == "COMPATIBLE"
     assert matrix["status_vocabulary"]["verdict"] == "LOSSY_SAFE"
-    assert matrix["fill_tid"]["verdict"] == "UNPROVEN"
+    assert matrix["fill_tid"]["verdict"] == "TID_CANDIDATE_NOT_FULLY_PROVEN"
     assert all(entry["verdict"] != "CONFLICT" for entry in matrix.values())
 
 
@@ -210,8 +210,9 @@ def test_order_absence_never_becomes_terminal_zero_fill() -> None:
 def test_synthetic_fill_side_timestamp_and_fee_contracts() -> None:
     first, second = _fixture("fills.json")["fills"]
 
+    assert first["side"] == second["side"] == "A"
     assert _target_side(first["side"]) == "SELL"
-    assert _target_side(second["side"]) == "BUY"
+    assert _target_side(second["side"]) == "SELL"
     assert _target_timestamp(first["time"]) == "2025-10-21T10:00:00.123+00:00"
     assert _target_positive_number(first["sz"], "sz") == pytest.approx(0.25)
     assert _target_positive_number(first["px"], "px") == pytest.approx(100000.25)
@@ -236,6 +237,11 @@ def test_venue_timestamp_target_contract_rejects_non_integer_milliseconds(value:
 def test_multiple_synthetic_fills_for_one_oid_have_distinct_a31_fill_keys() -> None:
     first, second = _fixture("fills.json")["fills"]
     assert first["oid"] == second["oid"] == 9001
+    assert first["side"] == second["side"] == "A"
+    assert first["tid"] != second["tid"]
+    assert first["sz"] != second["sz"]
+    assert first["px"] != second["px"]
+    assert first["time"] != second["time"]
 
     first_fill = _fill(venue_fill_id=str(first["tid"]))
     second_fill = _fill(
@@ -286,7 +292,7 @@ def test_matrix_preserves_absence_aggregation_and_account_boundaries() -> None:
     assert matrix["historical_orders_absence"]["a33_usability"] == "INSUFFICIENT_ALONE"
     assert matrix["user_fills_by_time_aggregation"]["a33_usability"] == "NON_AGGREGATED_REQUIRED"
     assert matrix["account_position_state"]["a33_usability"] == "CORROBORATING_ONLY"
-    assert matrix["fill_tid"]["verdict"] == "UNPROVEN"
+    assert matrix["fill_tid"]["verdict"] == "TID_CANDIDATE_NOT_FULLY_PROVEN"
     assert matrix["fill_hash"]["verdict"] == "UNPROVEN"
 
 
