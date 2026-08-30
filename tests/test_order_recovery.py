@@ -371,6 +371,7 @@ def test_external_terminal_zero_reported_fill_still_requires_reconciliation(
     assert order["broker_order_id"] == "remote-terminal"
     assert order["filled_qty"] == pytest.approx(0.0)
     assert order["remaining_qty"] == pytest.approx(1.0)
+    assert store.get_external_order_observations(order_id) == []
     assert_no_positions(store)
 
 
