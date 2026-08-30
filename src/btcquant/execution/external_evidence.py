@@ -75,6 +75,15 @@ def _finite(value: float, field: str, *, positive: bool = False) -> float:
     return normalized
 
 
+def _finite_signed(value: float, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise InvalidExternalObservation(f"{field} doit être un nombre")
+    normalized = float(value)
+    if not math.isfinite(normalized):
+        raise InvalidExternalObservation(f"{field} doit être fini")
+    return normalized
+
+
 def _canonical_payload(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
 
@@ -302,7 +311,7 @@ class ExternalFill:
             object.__setattr__(self, field, _optional_text(getattr(self, field), field))
         if self.fee is not None:
             try:
-                object.__setattr__(self, "fee", _finite(self.fee, "fee"))
+                object.__setattr__(self, "fee", _finite_signed(self.fee, "fee"))
             except InvalidExternalObservation as error:
                 raise FillInvariantViolation(str(error)) from error
         elif self.fee_asset is not None:
