@@ -393,9 +393,9 @@ def test_rebalance_apply_on_flat_uses_runtime_db(
     assert trend is not None and carry is not None
     assert trend["slots"]["trend_ls_20"]["position"] is None
     assert carry["in_position"] is False
-    assert SCHEMA_VERSION == 7
+    assert SCHEMA_VERSION == 8
     importlib.reload(reb)
 
 
-def test_schema_stays_seven() -> None:
-    assert SCHEMA_VERSION == 7
+def test_schema_stays_eight() -> None:
+    assert SCHEMA_VERSION == 8
