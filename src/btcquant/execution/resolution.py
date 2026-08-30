@@ -64,6 +64,7 @@ class ResolutionReasonCode(StrEnum):
     FILL_LOOKUP_INCOMPLETE = "FILL_LOOKUP_INCOMPLETE"
     FILL_LOOKUP_NO_MATCH = "FILL_LOOKUP_NO_MATCH"
     FILL_LOOKUP_UNAVAILABLE = "FILL_LOOKUP_UNAVAILABLE"
+    FILL_IDENTITY_AMBIGUITY = "FILL_IDENTITY_AMBIGUITY"
     FILL_POSITIVE_EVIDENCE = "FILL_POSITIVE_EVIDENCE"
     FILL_QUANTITY_CONFLICT = "FILL_QUANTITY_CONFLICT"
     NO_ORDER_EVIDENCE = "NO_ORDER_EVIDENCE"
@@ -71,6 +72,7 @@ class ResolutionReasonCode(StrEnum):
     ORDER_LOOKUP_INCOMPLETE = "ORDER_LOOKUP_INCOMPLETE"
     ORDER_LOOKUP_NOT_FOUND = "ORDER_LOOKUP_NOT_FOUND"
     ORDER_LOOKUP_UNAVAILABLE = "ORDER_LOOKUP_UNAVAILABLE"
+    ORDER_OBSERVATION_IDENTITY_CONFLICT = "ORDER_OBSERVATION_IDENTITY_CONFLICT"
     ORDER_QUANTITY_CONFLICT = "ORDER_QUANTITY_CONFLICT"
     STATUS_CONFLICT = "STATUS_CONFLICT"
     TERMINAL_ORDER_OBSERVED = "TERMINAL_ORDER_OBSERVED"
@@ -119,14 +121,22 @@ def _same_quantity(left: float, right: float) -> bool:
     return abs(left - right) <= tolerance
 
 
+def _canonical_acquisition_timestamp(value: object, field_name: str) -> str:
+    text = _required_text(value, field_name)
+    candidate = text[:-1] + "+00:00" if text.endswith(("Z", "z")) else text
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError as error:
+        raise ValueError(f"{field_name} must be ISO 8601 with an explicit timezone") from error
+    if parsed.tzinfo is None:
+        raise ValueError(f"{field_name} must include an explicit timezone")
+    return parsed.astimezone(UTC).isoformat()
+
+
 def _timestamp_key(value: str | None) -> tuple[int, str]:
     if value is None:
         return (0, "")
-    candidate = value[:-1] + "+00:00" if value.endswith(("Z", "z")) else value
-    try:
-        parsed = datetime.fromisoformat(candidate).astimezone(UTC)
-    except (TypeError, ValueError):
-        return (1, value)
+    parsed = datetime.fromisoformat(value).astimezone(UTC)
     return (1, parsed.isoformat())
 
 
@@ -227,12 +237,16 @@ class OrderLookupEvidence:
             "instrument",
             "engine",
             "expected_client_order_id",
-            "observed_at",
             "raw_payload_hash",
         ):
             object.__setattr__(
                 self, field_name, _required_text(getattr(self, field_name), field_name)
             )
+        object.__setattr__(
+            self,
+            "observed_at",
+            _canonical_acquisition_timestamp(self.observed_at, "observed_at"),
+        )
         object.__setattr__(self, "side", _required_text(self.side, "side").upper())
         if self.side not in {"BUY", "SELL"}:
             raise ValueError("side must be BUY or SELL")
@@ -301,12 +315,12 @@ class FillLookupFact:
     binding: ExpectedOrderBinding
     outcome: FillLookupOutcome | str
     fills: tuple[ExternalFill, ...] = ()
-    response_count: int | None = None
+    response_count: int = 0
     response_limit: int = 2000
     response_limit_reached: bool = False
     retention_limit: int = 10_000
     absence_authoritative: bool = False
-    venue_fill_id_candidates: tuple[str, ...] = ()
+    venue_fill_id_candidates: tuple[str | None, ...] = ()
     reason: str | None = None
 
     def __post_init__(self) -> None:
@@ -316,30 +330,39 @@ class FillLookupFact:
             object.__setattr__(self, "outcome", FillLookupOutcome(self.outcome))
         except ValueError as error:
             raise ValueError("invalid fill lookup outcome") from error
-        object.__setattr__(self, "fills", tuple(self.fills))
+        fills = tuple(self.fills)
+        candidates = tuple(self.venue_fill_id_candidates)
+        object.__setattr__(self, "fills", fills)
         if any(not isinstance(fill, ExternalFill) for fill in self.fills):
             raise ValueError("fills must contain ExternalFill values")
-        if self.response_count is not None and (
+        if len(fills) != len(candidates):
+            raise ValueError("venue_fill_id_candidates must align one-to-one with fills")
+        object.__setattr__(
+            self,
+            "venue_fill_id_candidates",
+            tuple(_optional_text(value, "venue_fill_id_candidate") for value in candidates),
+        )
+        if (
             isinstance(self.response_count, bool)
             or not isinstance(self.response_count, int)
             or self.response_count < 0
         ):
-            raise ValueError("response_count must be a non-negative integer or None")
-        if self.response_limit <= 0 or self.retention_limit <= 0:
-            raise ValueError("response limits must be positive")
+            raise ValueError("response_count must be a non-negative integer")
+        if self.response_limit != 2_000:
+            raise ValueError("response_limit must remain fixed at 2000")
+        if self.retention_limit != 10_000:
+            raise ValueError("retention_limit must remain fixed at 10000")
         for field_name in ("response_limit_reached", "absence_authoritative"):
             if not isinstance(getattr(self, field_name), bool):
                 raise ValueError(f"{field_name} must be boolean")
         if self.absence_authoritative:
             raise ValueError("absence_authoritative must remain false")
-        object.__setattr__(
-            self,
-            "venue_fill_id_candidates",
-            tuple(
-                _required_text(value, "venue_fill_id_candidate")
-                for value in self.venue_fill_id_candidates
-            ),
-        )
+        if self.response_limit_reached != (self.response_count >= self.response_limit):
+            raise ValueError("response_limit_reached must reflect response_count")
+        if self.outcome == FillLookupOutcome.FOUND and not fills:
+            raise ValueError("FOUND fill lookup requires at least one fill")
+        if self.outcome != FillLookupOutcome.FOUND and fills:
+            raise ValueError("only FOUND fill lookups may carry fills")
         object.__setattr__(self, "reason", _optional_text(self.reason, "reason"))
 
 
@@ -427,6 +450,11 @@ class _AssessmentState:
     evidence_conflicts: set[ResolutionReasonCode] = field(default_factory=set)
     reasons: set[ResolutionReasonCode] = field(default_factory=set)
     fills: dict[str, ExternalFill] = field(default_factory=dict)
+    fill_tid_candidates: dict[str, set[str]] = field(default_factory=dict)
+    fill_keys_without_client_order_id: set[str] = field(default_factory=set)
+    known_external_order_ids: set[str] = field(default_factory=set)
+    context_external_order_ids: set[str] = field(default_factory=set)
+    observations_by_key: dict[str, ExternalOrderObservation] = field(default_factory=dict)
     order_records: list[tuple[str, ExternalOrderState, float | None, float | None, str]] = field(
         default_factory=list
     )
@@ -450,6 +478,7 @@ def _binding_mismatch(
             (expected.expected_client_order_id, actual.expected_client_order_id),
         )
     )
+    conflict = conflict or not _same_quantity(expected.requested_qty, actual.requested_qty)
     if (
         expected.expected_external_order_id is not None
         and actual.expected_external_order_id is not None
@@ -464,11 +493,25 @@ def _binding_mismatch(
     return conflict, incomplete
 
 
+def _record_external_order_id(
+    state: _AssessmentState,
+    external_order_id: str | None,
+    *,
+    context: bool,
+) -> None:
+    if external_order_id is None:
+        return
+    state.known_external_order_ids.add(external_order_id)
+    if context:
+        state.context_external_order_ids.add(external_order_id)
+
+
 def _record_fill(
     state: _AssessmentState,
     expected: ExpectedOrderBinding,
     fill: ExternalFill,
-) -> None:
+) -> bool:
+    _record_external_order_id(state, fill.external_order_id, context=False)
     strict_pairs = (
         (fill.local_order_id, expected.local_order_id),
         (fill.intent_id, expected.intent_id),
@@ -479,7 +522,7 @@ def _record_fill(
     )
     if any(left != right for left, right in strict_pairs):
         state.binding_conflicts.add(ResolutionReasonCode.BINDING_CONFLICT)
-        return
+        return False
     if expected.expected_external_order_id is not None:
         if fill.external_order_id is None:
             state.binding_incomplete.add(ResolutionReasonCode.BINDING_INCOMPLETE)
@@ -494,8 +537,13 @@ def _record_fill(
     current = state.fills.get(fill.fill_key)
     if current is None:
         state.fills[fill.fill_key] = fill
-    elif not current.is_semantically_compatible_with(fill):
+        if fill.client_order_id is None:
+            state.fill_keys_without_client_order_id.add(fill.fill_key)
+        return True
+    if not current.is_semantically_compatible_with(fill):
         state.evidence_conflicts.add(ResolutionReasonCode.FILL_QUANTITY_CONFLICT)
+        return False
+    return True
 
 
 def _record_observation(
@@ -503,6 +551,7 @@ def _record_observation(
     expected: ExpectedOrderBinding,
     observation: ExternalOrderObservation,
 ) -> None:
+    _record_external_order_id(state, observation.external_order_id, context=True)
     strict_pairs = (
         (observation.local_order_id, expected.local_order_id),
         (observation.intent_id, expected.intent_id),
@@ -526,12 +575,12 @@ def _record_observation(
         elif observation.external_order_id != expected.expected_external_order_id:
             state.binding_conflicts.add(ResolutionReasonCode.BINDING_CONFLICT)
     assert observation.observation_key is not None
-    existing = next(
-        (item for item in state.order_records if item[4] == observation.observation_key),
-        None,
-    )
+    existing = state.observations_by_key.get(observation.observation_key)
     if existing is not None:
+        if existing.semantic_content() != observation.semantic_content():
+            state.evidence_conflicts.add(ResolutionReasonCode.ORDER_OBSERVATION_IDENTITY_CONFLICT)
         return
+    state.observations_by_key[observation.observation_key] = observation
     state.order_records.append(
         (
             observation.observed_at,
@@ -548,6 +597,7 @@ def _record_order_evidence(
     expected: ExpectedOrderBinding,
     evidence: OrderLookupEvidence,
 ) -> None:
+    _record_external_order_id(state, evidence.external_order_id, context=True)
     strict_pairs = (
         (evidence.local_order_id, expected.local_order_id),
         (evidence.intent_id, expected.intent_id),
@@ -614,6 +664,7 @@ def _record_order_lookup(
     expected: ExpectedOrderBinding,
     lookup: OrderLookupFact,
 ) -> None:
+    _record_external_order_id(state, lookup.binding.expected_external_order_id, context=True)
     conflict, incomplete = _binding_mismatch(expected, lookup.binding)
     if conflict:
         state.binding_conflicts.add(ResolutionReasonCode.BINDING_CONFLICT)
@@ -642,14 +693,20 @@ def _record_fill_lookup(
     expected: ExpectedOrderBinding,
     lookup: FillLookupFact,
 ) -> None:
+    _record_external_order_id(state, lookup.binding.expected_external_order_id, context=True)
     conflict, incomplete = _binding_mismatch(expected, lookup.binding)
     if conflict:
         state.binding_conflicts.add(ResolutionReasonCode.BINDING_CONFLICT)
     if incomplete:
         state.binding_incomplete.add(ResolutionReasonCode.BINDING_INCOMPLETE)
-    for fill in lookup.fills:
-        _record_fill(state, expected, fill)
-    if lookup.venue_fill_id_candidates:
+    for fill, candidate in sorted(
+        zip(lookup.fills, lookup.venue_fill_id_candidates, strict=True),
+        key=lambda item: item[0].fill_key or "",
+    ):
+        if _record_fill(state, expected, fill) and candidate is not None:
+            assert fill.fill_key is not None
+            state.fill_tid_candidates.setdefault(fill.fill_key, set()).add(candidate)
+    if any(candidate is not None for candidate in lookup.venue_fill_id_candidates):
         state.reasons.add(ResolutionReasonCode.TID_CANDIDATE_NOT_IDENTITY)
     if lookup.response_limit_reached:
         state.reasons.add(ResolutionReasonCode.FILL_LOOKUP_INCOMPLETE)
@@ -667,25 +724,16 @@ def _record_fill_lookup(
         FillLookupOutcome.CONFLICTING_RESPONSE,
     }:
         state.evidence_conflicts.add(ResolutionReasonCode.STATUS_CONFLICT)
-    if lookup.response_count is not None and lookup.response_count >= lookup.response_limit:
+    if lookup.response_count >= lookup.response_limit:
         state.reasons.add(ResolutionReasonCode.FILL_LOOKUP_INCOMPLETE)
 
 
 def _canonical_observations(
     observations: Iterable[ExternalOrderObservation],
 ) -> tuple[ExternalOrderObservation, ...]:
-    by_key: dict[str, ExternalOrderObservation] = {}
-    for observation in observations:
-        assert observation.observation_key is not None
-        current = by_key.get(observation.observation_key)
-        if current is None:
-            by_key[observation.observation_key] = observation
-        elif current.semantic_content() != observation.semantic_content():
-            # Keep both so the assessment can expose the conflict deterministically.
-            by_key[f"{observation.observation_key}:{observation.raw_payload_hash}"] = observation
     return tuple(
         sorted(
-            by_key.values(),
+            observations,
             key=lambda item: (
                 _timestamp_key(item.observed_at),
                 ExternalOrderState(item.normalized_external_status).value,
@@ -695,6 +743,48 @@ def _canonical_observations(
             ),
         )
     )
+
+
+def _conservative_fill_lower_bound(state: _AssessmentState) -> float:
+    """Return a lower bound valid even if same-candidate TIDs alias fills.
+
+    TID remains only a candidate. Distinct fill keys sharing a candidate can
+    be redeliveries of one venue fill, so each connected ambiguity component
+    contributes at most the smallest observed quantity.
+    """
+
+    candidate_groups: dict[str, set[str]] = {}
+    for fill_key, candidates in state.fill_tid_candidates.items():
+        for candidate in candidates:
+            candidate_groups.setdefault(candidate, set()).add(fill_key)
+    ambiguous_groups = [group for group in candidate_groups.values() if len(group) > 1]
+    if not ambiguous_groups:
+        return sum(fill.quantity for fill in state.fills.values())
+
+    state.evidence_conflicts.add(ResolutionReasonCode.FILL_IDENTITY_AMBIGUITY)
+    state.reasons.add(ResolutionReasonCode.FILL_IDENTITY_AMBIGUITY)
+    adjacency: dict[str, set[str]] = {}
+    for group in ambiguous_groups:
+        for fill_key in group:
+            adjacency.setdefault(fill_key, set()).update(group - {fill_key})
+    ambiguous_keys = set(adjacency)
+    lower_bound = sum(
+        fill.quantity for fill_key, fill in state.fills.items() if fill_key not in ambiguous_keys
+    )
+    while adjacency:
+        start = min(adjacency)
+        component: set[str] = set()
+        pending = [start]
+        while pending:
+            current = pending.pop()
+            if current in component:
+                continue
+            component.add(current)
+            pending.extend(adjacency.get(current, ()))
+        for fill_key in component:
+            adjacency.pop(fill_key, None)
+        lower_bound += min(state.fills[fill_key].quantity for fill_key in component)
+    return lower_bound
 
 
 def _canonical_fills(fills: Iterable[ExternalFill]) -> tuple[ExternalFill, ...]:
@@ -747,6 +837,7 @@ def assess_resolution(bundle: ResolutionEvidenceBundle) -> ResolutionAssessment:
         raise TypeError("bundle must be ResolutionEvidenceBundle")
     expected = bundle.binding
     state = _AssessmentState()
+    _record_external_order_id(state, expected.expected_external_order_id, context=True)
 
     observations = _canonical_observations(bundle.order_observations)
     fills = _canonical_fills(bundle.fills)
@@ -777,6 +868,16 @@ def assess_resolution(bundle: ResolutionEvidenceBundle) -> ResolutionAssessment:
     ):
         _record_fill_lookup(state, expected, fill_lookup)
 
+    if len(state.known_external_order_ids) > 1:
+        state.binding_conflicts.add(ResolutionReasonCode.BINDING_CONFLICT)
+    for fill_key in state.fill_keys_without_client_order_id:
+        fill = state.fills[fill_key]
+        if (
+            fill.external_order_id is None
+            or fill.external_order_id not in state.context_external_order_ids
+        ):
+            state.binding_incomplete.add(ResolutionReasonCode.BINDING_INCOMPLETE)
+
     for record in state.order_records:
         if record[1].is_terminal:
             state.terminal_states.add(record[1])
@@ -786,16 +887,15 @@ def assess_resolution(bundle: ResolutionEvidenceBundle) -> ResolutionAssessment:
             state.reasons.add(ResolutionReasonCode.ACTIVE_ORDER_OBSERVED)
     _assess_temporal_consistency(state)
 
+    lower_bound = 0.0
     if state.fills:
         state.reasons.add(ResolutionReasonCode.FILL_POSITIVE_EVIDENCE)
         state.reasons.add(ResolutionReasonCode.FILL_COMPLETENESS_UNPROVEN)
-        if sum(fill.quantity for fill in state.fills.values()) > (
-            expected.requested_qty + expected.quantity_tolerance
-        ):
+        lower_bound = _conservative_fill_lower_bound(state)
+        if lower_bound > expected.requested_qty + expected.quantity_tolerance:
             state.evidence_conflicts.add(ResolutionReasonCode.FILL_QUANTITY_CONFLICT)
     state.reasons.add(ResolutionReasonCode.ZERO_EFFECT_UNPROVEN)
 
-    lower_bound = sum(fill.quantity for fill in state.fills.values())
     if state.binding_conflicts:
         outcome = ResolutionOutcome.BINDING_CONFLICT
     elif state.binding_incomplete:
@@ -816,7 +916,9 @@ def assess_resolution(bundle: ResolutionEvidenceBundle) -> ResolutionAssessment:
     terminal_states = tuple(sorted(state.terminal_states, key=lambda item: item.value))
     return ResolutionAssessment(
         outcome=outcome,
-        proven_filled_lower_bound=lower_bound,
+        proven_filled_lower_bound=(
+            0.0 if state.binding_conflicts or state.binding_incomplete else lower_bound
+        ),
         requested_qty=expected.requested_qty,
         external_order_active=(
             bool(state.active_states) and not state.terminal_states and not state.evidence_conflicts

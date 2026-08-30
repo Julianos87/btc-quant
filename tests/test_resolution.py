@@ -375,7 +375,7 @@ def test_same_fill_key_with_different_economic_fee_conflicts():
     assert ResolutionReasonCode.FILL_QUANTITY_CONFLICT in result.conflicts
 
 
-def test_same_tid_candidate_does_not_deduplicate_different_fill_keys():
+def test_same_tid_candidate_different_fill_keys_does_not_speculatively_double_count():
     result = assess(
         fill_lookups=(
             FillLookupFact(
@@ -387,7 +387,9 @@ def test_same_tid_candidate_does_not_deduplicate_different_fill_keys():
         )
     )
 
-    assert result.proven_filled_lower_bound == pytest.approx(0.5)
+    assert result.outcome == ResolutionOutcome.EVIDENCE_CONFLICT
+    assert result.proven_filled_lower_bound == pytest.approx(0.25)
+    assert ResolutionReasonCode.FILL_IDENTITY_AMBIGUITY in result.conflicts
     assert len(result.deduplicated_fill_keys) == 2
     assert result.tid_identity_proven is False
 
@@ -465,7 +467,12 @@ def test_tuple_permutations_and_repeated_execution_are_identical():
         OrderLookupFact(binding(), OrderLookupOutcome.INCOMPLETE_RESPONSE),
     )
     fill_facts = (
-        FillLookupFact(binding(), FillLookupOutcome.FOUND, fills=(first, second)),
+        FillLookupFact(
+            binding(),
+            FillLookupOutcome.FOUND,
+            fills=(first, second),
+            venue_fill_id_candidates=(None, None),
+        ),
         FillLookupFact(binding(), FillLookupOutcome.NO_MATCH),
     )
     one = assess_resolution(
@@ -496,3 +503,292 @@ def test_kernel_has_no_reader_store_or_clock_dependency():
     assert "fetch_" not in source
     assert "datetime.now" not in source
     assert not hasattr(resolution, "StateStore")
+
+
+def test_same_tid_candidate_with_different_quantities_uses_conservative_component_minimum():
+    result = assess(
+        fill_lookups=(
+            FillLookupFact(
+                binding(),
+                FillLookupOutcome.FOUND,
+                fills=(fill(quantity=0.25, key="1"), fill(quantity=0.40, key="2")),
+                venue_fill_id_candidates=("tid-1", "tid-1"),
+            ),
+        )
+    )
+
+    assert result.outcome == ResolutionOutcome.EVIDENCE_CONFLICT
+    assert result.proven_filled_lower_bound == pytest.approx(0.25)
+    assert ResolutionReasonCode.FILL_IDENTITY_AMBIGUITY in result.conflicts
+
+
+def test_fill_lookup_none_candidate_is_accepted_and_aligned_with_its_fill():
+    lookup = FillLookupFact(
+        binding(),
+        FillLookupOutcome.FOUND,
+        fills=(fill(),),
+        venue_fill_id_candidates=(None,),
+    )
+
+    assert lookup.venue_fill_id_candidates == (None,)
+    assert len(lookup.fills) == len(lookup.venue_fill_id_candidates)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        (
+            {
+                "fills": (fill(),),
+                "venue_fill_id_candidates": (None, None),
+            },
+            "align one-to-one",
+        ),
+        (
+            {
+                "fills": (fill(),),
+                "venue_fill_id_candidates": (None,),
+                "response_count": 2000,
+                "response_limit_reached": False,
+            },
+            "reflect response_count",
+        ),
+        (
+            {
+                "fills": (fill(),),
+                "venue_fill_id_candidates": (None,),
+                "response_limit": 1999,
+            },
+            "fixed at 2000",
+        ),
+        (
+            {
+                "fills": (fill(),),
+                "venue_fill_id_candidates": (None,),
+                "retention_limit": 9999,
+            },
+            "fixed at 10000",
+        ),
+    ],
+)
+def test_fill_lookup_fact_rejects_contract_invariant_violations(kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        FillLookupFact(binding(), FillLookupOutcome.FOUND, **kwargs)
+
+
+def test_requested_qty_mismatch_in_order_lookup_binding_is_conflict():
+    result = assess(
+        order_lookups=(OrderLookupFact(binding(requested_qty=2.0), OrderLookupOutcome.NOT_FOUND),)
+    )
+
+    assert result.outcome == ResolutionOutcome.BINDING_CONFLICT
+
+
+def test_requested_qty_within_tolerance_in_order_lookup_binding_is_compatible():
+    result = assess(
+        order_lookups=(
+            OrderLookupFact(
+                binding(requested_qty=1.0 + 0.5e-9),
+                OrderLookupOutcome.NOT_FOUND,
+            ),
+        )
+    )
+
+    assert result.outcome == ResolutionOutcome.UNRESOLVED
+    assert result.binding_complete is True
+
+
+def test_requested_qty_mismatch_in_fill_lookup_binding_is_conflict():
+    result = assess(
+        fill_lookups=(
+            FillLookupFact(
+                binding(requested_qty=2.0),
+                FillLookupOutcome.FOUND,
+                fills=(fill(),),
+                venue_fill_id_candidates=(None,),
+            ),
+        )
+    )
+
+    assert result.outcome == ResolutionOutcome.BINDING_CONFLICT
+
+
+def test_distinct_known_oids_conflict_even_without_expected_oid():
+    result = assess(
+        binding=binding(expected_external_order_id=None),
+        fills=(
+            fill(key="a", external_order_id="oid-A"),
+            fill(key="b", external_order_id="oid-B"),
+        ),
+    )
+
+    assert result.outcome == ResolutionOutcome.BINDING_CONFLICT
+    assert result.proven_filled_lower_bound == 0.0
+
+
+def test_observation_and_fill_with_distinct_known_oids_conflict_without_expected_oid():
+    result = assess(
+        binding=binding(expected_external_order_id=None),
+        order_observations=(observation(ExternalOrderState.OPEN, external_order_id="oid-A"),),
+        fills=(fill(external_order_id="oid-B"),),
+    )
+
+    assert result.outcome == ResolutionOutcome.BINDING_CONFLICT
+
+
+def test_missing_fill_cloid_requires_oid_bound_by_independent_context():
+    result = assess(
+        binding=binding(expected_external_order_id=None),
+        fills=(fill(client_order_id=None, external_order_id="oid-A"),),
+    )
+
+    assert result.outcome == ResolutionOutcome.BINDING_INCOMPLETE
+
+
+def test_missing_fill_cloid_is_compatible_with_exact_context_oid():
+    result = assess(
+        binding=binding(expected_external_order_id="oid-A"),
+        fills=(fill(client_order_id=None, external_order_id="oid-A"),),
+    )
+
+    assert result.outcome == ResolutionOutcome.EFFECT_PROVEN_INCOMPLETE
+
+
+def test_same_observation_key_with_conflicting_semantics_is_not_silently_deduplicated():
+    key = "obs-" + "c" * 64
+    result = assess(
+        order_observations=(
+            observation(ExternalOrderState.OPEN, observation_key=key),
+            observation(ExternalOrderState.CANCELED, observation_key=key),
+        )
+    )
+
+    assert result.outcome == ResolutionOutcome.EVIDENCE_CONFLICT
+    assert ResolutionReasonCode.ORDER_OBSERVATION_IDENTITY_CONFLICT in result.conflicts
+
+
+def test_same_observation_key_with_equivalent_semantics_is_idempotent():
+    first = observation(ExternalOrderState.OPEN, observation_key="obs-" + "d" * 64)
+    redelivery = replace(first, observed_at="2026-08-30T12:01:00Z")
+
+    one = assess(order_observations=(first,))
+    two = assess(order_observations=(redelivery, first))
+
+    assert one == two
+    assert two.outcome == ResolutionOutcome.EXTERNAL_ACTIVE
+
+
+def test_order_lookup_evidence_rejects_naive_observed_at():
+    with pytest.raises(ValueError, match="explicit timezone"):
+        order_evidence(ExternalOrderState.OPEN, observed_at="2026-08-30T12:00:00")
+
+
+def test_order_lookup_evidence_canonicalizes_z_and_utc_offset_equally():
+    zulu = order_evidence(ExternalOrderState.OPEN, observed_at="2026-08-30T12:00:00Z")
+    offset = order_evidence(ExternalOrderState.OPEN, observed_at="2026-08-30T12:00:00+00:00")
+
+    assert zulu.observed_at == offset.observed_at
+    assert assess(
+        order_lookups=(OrderLookupFact(binding(), OrderLookupOutcome.FOUND, zulu),)
+    ) == assess(order_lookups=(OrderLookupFact(binding(), OrderLookupOutcome.FOUND, offset),))
+
+
+def test_candidate_alignment_survives_fill_tuple_permutation():
+    first = fill(quantity=0.25, key="a")
+    second = fill(quantity=0.40, key="b")
+    forward = FillLookupFact(
+        binding(),
+        FillLookupOutcome.FOUND,
+        fills=(first, second),
+        venue_fill_id_candidates=("tid-a", "tid-b"),
+    )
+    reverse = FillLookupFact(
+        binding(),
+        FillLookupOutcome.FOUND,
+        fills=(second, first),
+        venue_fill_id_candidates=("tid-b", "tid-a"),
+    )
+
+    assert assess(fill_lookups=(forward,)) == assess(fill_lookups=(reverse,))
+
+
+def test_binding_incomplete_does_not_attribute_a_fill_lower_bound():
+    result = assess(
+        binding=binding(expected_external_order_id=None),
+        fills=(fill(client_order_id=None, external_order_id="oid-A"),),
+    )
+
+    assert result.outcome == ResolutionOutcome.BINDING_INCOMPLETE
+    assert result.proven_filled_lower_bound == 0.0
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    (
+        FillLookupOutcome.NO_MATCH,
+        FillLookupOutcome.TRANSPORT_FAILURE,
+        FillLookupOutcome.UNSUPPORTED,
+        FillLookupOutcome.INVALID_RESPONSE,
+        FillLookupOutcome.CONFLICTING_RESPONSE,
+        FillLookupOutcome.INCOMPLETE_RESPONSE,
+    ),
+)
+def test_non_found_fill_lookup_cannot_carry_new_fills(outcome):
+    with pytest.raises(ValueError, match="only FOUND"):
+        FillLookupFact(
+            binding(),
+            outcome,
+            fills=(fill(),),
+            venue_fill_id_candidates=(None,),
+        )
+
+
+def test_found_fill_lookup_requires_a_fill():
+    with pytest.raises(ValueError, match="requires at least one fill"):
+        FillLookupFact(binding(), FillLookupOutcome.FOUND)
+
+
+def test_requested_qty_within_tolerance_in_fill_lookup_binding_is_compatible():
+    result = assess(
+        fill_lookups=(
+            FillLookupFact(
+                binding(requested_qty=1.0 + 0.5e-9),
+                FillLookupOutcome.FOUND,
+                fills=(fill(),),
+                venue_fill_id_candidates=(None,),
+            ),
+        )
+    )
+
+    assert result.outcome == ResolutionOutcome.EFFECT_PROVEN_INCOMPLETE
+    assert result.binding_complete is True
+
+
+def test_distinct_known_oids_from_order_and_fill_lookup_bindings_conflict():
+    result = assess(
+        binding=binding(expected_external_order_id=None),
+        order_lookups=(
+            OrderLookupFact(
+                binding(expected_external_order_id="oid-A"),
+                OrderLookupOutcome.NOT_FOUND,
+            ),
+        ),
+        fill_lookups=(
+            FillLookupFact(
+                binding(expected_external_order_id="oid-B"),
+                FillLookupOutcome.NO_MATCH,
+            ),
+        ),
+    )
+
+    assert result.outcome == ResolutionOutcome.BINDING_CONFLICT
+
+
+def test_missing_fill_cloid_is_compatible_with_oid_from_order_observation_context():
+    result = assess(
+        binding=binding(expected_external_order_id=None),
+        order_observations=(observation(ExternalOrderState.OPEN, external_order_id="oid-A"),),
+        fills=(fill(client_order_id=None, external_order_id="oid-A"),),
+    )
+
+    assert result.outcome == ResolutionOutcome.EFFECT_PROVEN_INCOMPLETE
