@@ -520,7 +520,7 @@ class CcxtExternalFillEvidenceReader:
         observed = observed_at or datetime.now(UTC).isoformat()
         try:
             response = fetch_my_trades(
-                context.instrument,
+                None,
                 context.start_time_ms,
                 FILL_RESPONSE_LIMIT,
                 {"until": context.end_time_ms, "aggregateByTime": False},
