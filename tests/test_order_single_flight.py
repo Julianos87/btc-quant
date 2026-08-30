@@ -621,7 +621,7 @@ def test_restart_preserves_open_quantity_and_never_reemits(
     assert order["local_state"] == LocalOrderState.PENDING_RECONCILIATION
 
 
-def test_confirmed_cancellation_after_restart_has_one_new_intent_owner(tmp_path):
+def test_terminal_cancellation_after_restart_blocks_new_intents(tmp_path):
     store = StateStore(tmp_path / "state.db")
     broker = _RecoverableResultBroker(_result(ExternalOrderState.OPEN, filled=0.0, remaining=1.0))
     first = _submit(OrderExecutionService(store, broker))
@@ -629,29 +629,27 @@ def test_confirmed_cancellation_after_restart_has_one_new_intent_owner(tmp_path)
 
     recovery = recover_interrupted_orders(store, broker, "trend", external=True)
 
-    broker.result = _result(ExternalOrderState.FILLED, filled=1.0, remaining=0.0)
     barrier = threading.Barrier(2)
 
     def restart() -> str:
         barrier.wait()
         try:
-            submitted = _submit(OrderExecutionService(StateStore(store.path), broker))
+            _submit(OrderExecutionService(StateStore(store.path), broker))
         except FinancialTransitionAlreadyReserved:
             return "loser"
-        return f"winner:{submitted.transition_sequence}"
+        return "winner"
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         outcomes = [future.result() for future in [executor.submit(restart) for _ in range(2)]]
 
     orders = store.read_orders("trend")
-    assert recovery.can_start
-    assert sorted(outcomes) == ["loser", "winner:1"]
-    assert broker.calls == 2
-    assert len(orders) == 2
+    assert not recovery.can_start
+    assert sorted(outcomes) == ["loser", "loser"]
+    assert broker.calls == 1
+    assert len(orders) == 1
     assert orders[0]["intent_id"] == first.intent_id
     assert orders[0]["external_state"] == ExternalOrderState.CANCELED
-    assert orders[1]["intent_id"] != first.intent_id
-    assert orders[1]["logical_order_key"] != first.logical_order_key
+    assert orders[0]["local_state"] == LocalOrderState.PENDING_RECONCILIATION
 
 
 def test_instance_lock_is_a_secondary_defense_and_is_released(tmp_path):

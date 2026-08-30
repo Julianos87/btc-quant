@@ -11,12 +11,6 @@ from .state_store import StateStore
 
 log = logging.getLogger(__name__)
 
-SAFE_REMOTE_TERMINAL_STATUSES = {
-    ExternalOrderState.CANCELED,
-    ExternalOrderState.REJECTED,
-    ExternalOrderState.EXPIRED,
-}
-
 
 def _external_state(value: object) -> ExternalOrderState:
     raw = str(value).upper()
@@ -55,9 +49,9 @@ def recover_interrupted_orders(
     """Récupère ce qui peut l'être sans jamais inventer un état de position.
 
     Paper n'a aucun effet externe durable : une intention interrompue peut être
-    abandonnée. Pour un broker externe, seuls l'absence confirmée de l'ordre ou
-    un ordre terminal sans fill sont récupérables automatiquement. Dès qu'un
-    fill est possible, l'ordre devient ``UNBALANCED`` et exige une intervention.
+    abandonnée. Pour un broker externe, toute soumission potentiellement initiée
+    reste UNBALANCED ou PENDING_RECONCILIATION jusqu'à réconciliation explicite;
+    le seul abandon automatique est prouvé localement avant soumission.
     """
 
     report = RecoveryReport()
@@ -135,21 +129,6 @@ def recover_interrupted_orders(
             if snapshot.remaining_qty is not None
             else max(0.0, float(order["requested_qty"]) - snapshot.filled_qty)
         )
-        if snapshot.filled_qty <= 0 and remote_status in SAFE_REMOTE_TERMINAL_STATUSES:
-            store.complete_order(
-                order_id,
-                status="RECOVERED_ABORTED",
-                filled_qty=0.0,
-                remaining_qty=0.0,
-                price=snapshot.price,
-                fee=snapshot.fee,
-                broker_order_id=snapshot.broker_order_id,
-                error=f"Ordre broker terminal sans fill ({remote_status.value})",
-                external_state=remote_status,
-            )
-            report.recovered_order_ids.append(order_id)
-            continue
-
         store.complete_order(
             order_id,
             status="UNBALANCED",
