@@ -142,12 +142,13 @@ def test_unknown_ccxt_status_is_preserved_and_normalized_unknown():
 
 
 def test_canceled_ccxt_status_is_preserved_without_venue_status():
-    _, result = read(order(status="canceled", filled=0.0, remaining=0.0))
+    _, result = read(order(status="canceled", filled=0.0, remaining=1.0))
     assert result.outcome == EvidenceLookupOutcome.FOUND
     assert result.evidence is not None
     assert result.evidence.ccxt_status == "canceled"
     assert result.evidence.venue_status is None
     assert result.evidence.normalized_state == ExternalOrderState.CANCELED
+    assert result.evidence.contradictory is False
 
 
 def test_margin_canceled_preserves_ccxt_and_venue_status_separately():
@@ -238,6 +239,68 @@ def test_contradictory_explicit_quantities_fail_closed_without_repair():
     assert result.evidence.normalized_state == ExternalOrderState.UNKNOWN
 
 
+@pytest.mark.parametrize(
+    ("status", "filled", "remaining"),
+    [
+        ("canceled", 0.0, 0.0),
+        ("cancelled", 0.0, 0.0),
+        ("rejected", 0.0, 0.0),
+        ("expired", 0.0, 0.0),
+        ("closed", 0.5, 0.0),
+    ],
+)
+def test_terminal_inconsistent_quantities_fail_closed(status, filled, remaining):
+    _, result = read(order(status=status, filled=filled, remaining=remaining))
+    assert result.outcome == EvidenceLookupOutcome.INVALID_RESPONSE
+    assert result.evidence is not None
+    assert result.evidence.contradictory is True
+    assert result.evidence.normalized_state == ExternalOrderState.UNKNOWN
+    assert result.evidence.remaining_qty == pytest.approx(remaining)
+
+
+def test_canceled_partial_quantities_are_coherent():
+    _, result = read(order(status="canceled", filled=0.25, remaining=0.75))
+    assert result.outcome == EvidenceLookupOutcome.FOUND
+    assert result.evidence is not None
+    assert result.evidence.normalized_state == ExternalOrderState.CANCELED
+    assert result.evidence.contradictory is False
+
+
+def test_canceled_zero_fill_snapshot_keeps_remaining_requested():
+    # Ce snapshot est cohérent; il ne constitue pas à lui seul une preuve de résolution.
+    _, result = read(order(status="canceled", filled=0.0, remaining=1.0))
+    assert result.outcome == EvidenceLookupOutcome.FOUND
+    assert result.evidence is not None
+    assert result.evidence.normalized_state == ExternalOrderState.CANCELED
+    assert result.evidence.remaining_qty == pytest.approx(1.0)
+
+
+def test_closed_complete_quantities_are_coherent():
+    _, result = read(order(status="closed", filled=1.0, remaining=0.0))
+    assert result.outcome == EvidenceLookupOutcome.FOUND
+    assert result.evidence is not None
+    assert result.evidence.normalized_state == ExternalOrderState.FILLED
+    assert result.evidence.contradictory is False
+
+
+def test_terminal_excessive_quantities_fail_closed():
+    _, result = read(order(status="canceled", filled=0.75, remaining=0.75))
+    assert result.outcome == EvidenceLookupOutcome.INVALID_RESPONSE
+    assert result.evidence is not None
+    assert result.evidence.contradictory is True
+    assert result.evidence.normalized_state == ExternalOrderState.UNKNOWN
+    assert result.evidence.remaining_qty == pytest.approx(0.75)
+
+
+def test_terminal_missing_remaining_is_incomplete_without_derivation():
+    _, result = read(order(status="canceled", filled=0.0, remaining=None))
+    assert result.outcome == EvidenceLookupOutcome.INCOMPLETE_RESPONSE
+    assert result.evidence is not None
+    assert result.evidence.remaining_qty is None
+    assert result.evidence.remaining_qty_explicit is False
+    assert result.evidence.contradictory is False
+
+
 def test_raw_payload_hash_is_deterministic_for_mapping_order():
     first = order()
     second = {key: first[key] for key in reversed(tuple(first))}
@@ -317,6 +380,27 @@ def test_non_found_outcomes_record_attempt_only(tmp_path: Path, error, outcome):
         store.read_events("trend")[-1]["event_type"]
         == f"external_order_lookup_{outcome.value.lower()}"
     )
+
+
+def test_terminal_contradiction_is_journaled_without_trusted_observation(tmp_path: Path):
+    store = StateStore(tmp_path / "state.db")
+    order_id = store.begin_order("trend", "slot", "intent-reader", "MARKET", "BUY", 1.0, "entry")
+    lookup = CcxtExternalEvidenceReader(
+        FakeExchange(order(status="canceled", filled=0.0, remaining=0.0))
+    ).lookup_order(context(local_order_id=order_id), observed_at=OBSERVED)
+
+    assert lookup.outcome == EvidenceLookupOutcome.INVALID_RESPONSE
+    assert lookup.evidence is not None
+    assert lookup.evidence.contradictory is True
+    persisted = ExternalEvidencePersistence.persist(store, lookup)
+    assert persisted.observation is None
+    assert persisted.observation_created is False
+    assert len(store.get_external_order_observations(order_id)) == 0
+    event = store.read_events("trend")[-1]
+    assert event["event_type"] == "external_order_lookup_invalid"
+    payload = json.loads(event["payload"])
+    assert payload["outcome"] == EvidenceLookupOutcome.INVALID_RESPONSE.value
+    assert payload["contradictory"] is True
 
 
 def test_cloid_mismatch_records_attempt_only(tmp_path: Path):
