@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pandas as pd
@@ -16,7 +17,12 @@ from btcquant.execution.broker import (
 )
 from btcquant.execution.ccxt_broker import CcxtBroker
 from btcquant.execution.errors import ReconciliationRequired
-from btcquant.execution.order_state import ExternalOrderState, LocalOrderState
+from btcquant.execution.order_state import (
+    ExternalOrderState,
+    FinancialTransitionType,
+    LocalOrderState,
+    LogicalOrderIdentity,
+)
 from btcquant.execution.recovery import recover_interrupted_orders
 from btcquant.execution.runner import LiveRunner, StrategySlot
 from btcquant.execution.state_store import StateStore
@@ -71,6 +77,7 @@ class LookupBroker(Broker):
         self.crash_before_send = crash_before_send
         self.last_client_order_id: str | None = None
         self.execute_calls = 0
+        self.lookup_calls = 0
 
     def market_buy(self, qty: float, ref_price: float) -> BrokerOrderResult:
         return self.result
@@ -108,6 +115,7 @@ class LookupBroker(Broker):
         return self.result
 
     def lookup_order(self, client_order_id: str) -> BrokerOrderSnapshot | None:
+        self.lookup_calls += 1
         if self.lookup_error is not None:
             raise self.lookup_error
         if self.snapshot is None:
@@ -119,6 +127,8 @@ class LookupBroker(Broker):
             filled_qty=self.snapshot.filled_qty,
             price=self.snapshot.price,
             fee=self.snapshot.fee,
+            requested_qty=self.snapshot.requested_qty,
+            remaining_qty=self.snapshot.remaining_qty,
         )
 
     def place_stop(
@@ -155,6 +165,16 @@ def pending_order(store: StateStore, intent_id: str = "intent-1") -> int:
         "entry",
     )
     return order_id
+
+
+def assert_no_positions(store: StateStore) -> None:
+    with sqlite3.connect(store.path) as connection:
+        assert (
+            connection.execute("SELECT COUNT(*) FROM positions WHERE engine = 'trend'").fetchone()[
+                0
+            ]
+            == 0
+        )
 
 
 def make_runner(path: Path, broker: Broker) -> tuple[LiveRunner, StrategySlot]:
@@ -261,6 +281,44 @@ def test_paper_intent_is_safely_aborted_after_restart(tmp_path):
     assert store.read_orders("trend")[0]["status"] == "RECOVERED_ABORTED"
 
 
+def test_external_intent_created_is_recovered_without_lookup(tmp_path):
+    store = StateStore(tmp_path / "btcquant.db")
+    identity = LogicalOrderIdentity(
+        "trend",
+        "recovery",
+        "2026-08-09T16:00:00Z",
+        FinancialTransitionType.ENTER_LONG,
+    )
+    reservation = store.reserve_market_order(
+        identity,
+        side="BUY",
+        requested_qty=1.0,
+        reference_price=100.0,
+        reason="entry",
+    )
+    broker = LookupBroker(
+        BrokerOrderSnapshot(
+            "intent-1",
+            "remote-never-called",
+            "CANCELED",
+            0.0,
+            requested_qty=1.0,
+            remaining_qty=1.0,
+        )
+    )
+
+    report = recover_interrupted_orders(store, broker, "trend", external=True)
+
+    assert report.can_start
+    assert report.recovered_order_ids == [reservation.order_id]
+    assert report.manual_order_ids == []
+    assert broker.lookup_calls == 0
+    order = store.read_orders("trend")[0]
+    assert order["status"] == "RECOVERED_ABORTED"
+    assert order["local_state"] == LocalOrderState.TERMINAL
+    assert_no_positions(store)
+
+
 def test_external_absence_after_submission_is_ambiguous_and_blocks(tmp_path):
     store = StateStore(tmp_path / "btcquant.db")
     order_id = pending_order(store)
@@ -282,14 +340,18 @@ def test_external_absence_after_submission_is_ambiguous_and_blocks(tmp_path):
 
 
 @pytest.mark.parametrize("remote_status", ["CANCELED", "REJECTED", "EXPIRED"])
-def test_external_terminal_order_without_fill_is_safe(remote_status, tmp_path):
+def test_external_terminal_zero_reported_fill_still_requires_reconciliation(
+    remote_status, tmp_path
+):
     store = StateStore(tmp_path / "btcquant.db")
-    pending_order(store)
+    order_id = pending_order(store)
     snapshot = BrokerOrderSnapshot(
         "intent-1",
         "remote-terminal",
         remote_status,
         0.0,
+        requested_qty=1.0,
+        remaining_qty=1.0,
     )
 
     report = recover_interrupted_orders(
@@ -300,14 +362,27 @@ def test_external_terminal_order_without_fill_is_safe(remote_status, tmp_path):
     )
 
     order = store.read_orders("trend")[0]
-    assert report.can_start
-    assert order["status"] == "RECOVERED_ABORTED"
+    assert not report.can_start
+    assert report.recovered_order_ids == []
+    assert report.manual_order_ids == [order_id]
+    assert order["status"] == "UNBALANCED"
+    assert order["local_state"] == LocalOrderState.PENDING_RECONCILIATION
+    assert order["external_state"] == ExternalOrderState(remote_status)
     assert order["broker_order_id"] == "remote-terminal"
+    assert order["filled_qty"] == pytest.approx(0.0)
+    assert order["remaining_qty"] == pytest.approx(1.0)
+    assert store.get_external_order_observations(order_id) == []
+    assert_no_positions(store)
 
 
 @pytest.mark.parametrize(
     ("remote_status", "filled_qty"),
-    [("FILLED", 1.0), ("PARTIAL", 0.4), ("OPEN", 0.0)],
+    [
+        ("FILLED", 1.0),
+        ("PARTIAL", 0.4),
+        ("OPEN", 0.0),
+        ("CANCELED", 0.4),
+    ],
 )
 def test_any_possible_external_effect_fails_closed(remote_status, filled_qty, tmp_path):
     store = StateStore(tmp_path / "btcquant.db")
@@ -353,7 +428,9 @@ def test_lookup_outage_keeps_pending_order_retryable(tmp_path):
     assert store.read_orders("trend")[0]["status"] == "PENDING"
 
 
-def test_open_order_is_rechecked_and_can_resolve_after_confirmed_cancellation(tmp_path):
+def test_open_order_is_rechecked_but_terminal_cancellation_still_requires_reconciliation(
+    tmp_path,
+):
     store = StateStore(tmp_path / "btcquant.db")
     order_id = pending_order(store)
     broker = LookupBroker(
@@ -369,14 +446,21 @@ def test_open_order_is_rechecked_and_can_resolve_after_confirmed_cancellation(tm
         remaining_qty=0.0,
     )
     second = recover_interrupted_orders(store, broker, "trend", external=True)
+    third = recover_interrupted_orders(store, broker, "trend", external=True)
 
     assert not first.can_start
-    assert second.can_start
-    assert second.recovered_order_ids == [order_id]
+    assert not second.can_start
+    assert not third.can_start
+    assert second.recovered_order_ids == []
+    assert third.recovered_order_ids == []
+    assert second.manual_order_ids == [order_id]
+    assert third.manual_order_ids == [order_id]
     order = store.read_orders("trend")[0]
-    assert order["status"] == "RECOVERED_ABORTED"
+    assert order["status"] == "UNBALANCED"
     assert order["external_state"] == ExternalOrderState.CANCELED
-    assert order["local_state"] == LocalOrderState.TERMINAL
+    assert order["local_state"] == LocalOrderState.PENDING_RECONCILIATION
+    assert order["broker_order_id"] == "remote-open"
+    assert_no_positions(store)
 
 
 def test_crash_after_submitting_before_send_is_ambiguous_and_blocks(tmp_path):
