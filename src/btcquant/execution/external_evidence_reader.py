@@ -240,13 +240,9 @@ def _contradictory_quantities(
     if filled_qty is not None and filled_qty > requested_qty + tolerance:
         return True
     if (
-        ccxt_status is not None
-        and ccxt_status.strip().lower() in _ACTIVE_STATUSES
-        and (
-            filled_qty is not None
-            and remaining_qty is not None
-            and abs(filled_qty + remaining_qty - requested_qty) > tolerance
-        )
+        filled_qty is not None
+        and remaining_qty is not None
+        and abs(filled_qty + remaining_qty - requested_qty) > tolerance
     ):
         return True
     if ccxt_status is not None and ccxt_status.strip().lower() in _ACTIVE_STATUSES:
