@@ -5,11 +5,13 @@ from __future__ import annotations
 import inspect
 import json
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 import ccxt
 import pytest
 
+from btcquant.execution.errors import ExternalObservationConflict
 from btcquant.execution.external_evidence_reader import (
     CcxtExternalEvidenceReader,
     EvidenceLookupOutcome,
@@ -332,6 +334,14 @@ def _valid_lookup(order_id: int, intent_id: str):
     )
 
 
+def _lookup_events(store: StateStore) -> list[dict]:
+    return [
+        event
+        for event in store.read_events("trend")
+        if event["aggregate_type"] == "external_order_lookup"
+    ]
+
+
 def test_valid_found_persists_one_normalized_observation_and_attempt(tmp_path: Path):
     store = StateStore(tmp_path / "state.db")
     order_id = store.begin_order("trend", "slot", "intent-reader", "MARKET", "BUY", 1.0, "entry")
@@ -357,6 +367,12 @@ def test_repeated_equivalent_found_is_idempotent_for_observation(tmp_path: Path)
     assert first.observation_created is True
     assert second.observation_created is False
     assert len(store.get_external_order_observations(order_id)) == 1
+    events = _lookup_events(store)
+    assert len(events) == 2
+    assert [event["event_type"] for event in events] == [
+        "external_order_lookup_found",
+        "external_order_lookup_found",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -380,6 +396,7 @@ def test_non_found_outcomes_record_attempt_only(tmp_path: Path, error, outcome):
         store.read_events("trend")[-1]["event_type"]
         == f"external_order_lookup_{outcome.value.lower()}"
     )
+    assert len(_lookup_events(store)) == 1
 
 
 def test_terminal_contradiction_is_journaled_without_trusted_observation(tmp_path: Path):
@@ -426,6 +443,70 @@ def test_incomplete_response_is_not_a_trusted_observation(tmp_path: Path):
     )
     ExternalEvidencePersistence.persist(store, lookup)
     assert len(store.get_external_order_observations(order_id)) == 0
+
+
+def test_atomic_persistence_rolls_back_observation_when_journal_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    store = StateStore(tmp_path / "state.db")
+    order_id = store.begin_order("trend", "slot", "intent-reader", "MARKET", "BUY", 1.0, "entry")
+    lookup = _valid_lookup(order_id, "intent-reader")
+
+    def fail_journal(self, connection, *args, **kwargs):
+        raise RuntimeError("injected lookup journal failure")
+
+    monkeypatch.setattr(StateStore, "_insert_event", fail_journal)
+    with pytest.raises(RuntimeError, match="injected lookup journal failure"):
+        ExternalEvidencePersistence.persist(store, lookup)
+
+    assert store.get_external_order_observations(order_id) == []
+    assert _lookup_events(store) == []
+
+
+class SimulatedPowerLoss(BaseException):
+    pass
+
+
+def test_atomic_persistence_rolls_back_on_base_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    store = StateStore(tmp_path / "state.db")
+    order_id = store.begin_order("trend", "slot", "intent-reader", "MARKET", "BUY", 1.0, "entry")
+    lookup = _valid_lookup(order_id, "intent-reader")
+
+    def simulate_power_loss(self, connection, *args, **kwargs):
+        raise SimulatedPowerLoss("simulated power loss")
+
+    monkeypatch.setattr(StateStore, "_insert_event", simulate_power_loss)
+    with pytest.raises(SimulatedPowerLoss, match="simulated power loss"):
+        ExternalEvidencePersistence.persist(store, lookup)
+
+    assert store.get_external_order_observations(order_id) == []
+    assert _lookup_events(store) == []
+
+
+def test_existing_observation_conflict_does_not_append_lookup_event(tmp_path: Path):
+    store = StateStore(tmp_path / "state.db")
+    order_id = store.begin_order("trend", "slot", "intent-reader", "MARKET", "BUY", 1.0, "entry")
+    first = ExternalEvidencePersistence.persist(store, _valid_lookup(order_id, "intent-reader"))
+    assert first.observation is not None
+
+    conflicting_observation = replace(
+        first.observation,
+        normalized_external_status=ExternalOrderState.CANCELED,
+        observation_key=first.observation.observation_key,
+    )
+    with pytest.raises(ExternalObservationConflict):
+        store.persist_external_order_lookup_evidence(
+            observation=conflicting_observation,
+            engine="trend",
+            aggregate_id="intent-reader",
+            payload={"outcome": "FOUND"},
+            event_type="external_order_lookup_found",
+        )
+
+    assert len(store.get_external_order_observations(order_id)) == 1
+    assert len(_lookup_events(store)) == 1
 
 
 def test_persistence_does_not_mutate_orders_positions_or_fills(tmp_path: Path):
