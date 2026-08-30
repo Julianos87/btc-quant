@@ -84,8 +84,8 @@ def fill(
 def observation(
     state: ExternalOrderState,
     *,
-    filled: float = 0.0,
-    remaining: float = 1.0,
+    filled: float | None = 0.0,
+    remaining: float | None = 1.0,
     observed_at: str = OBSERVED,
     venue_event_at: str | None = "2026-08-30T11:00:00+00:00",
     **changes: object,
@@ -383,6 +383,7 @@ def test_same_tid_candidate_different_fill_keys_does_not_speculatively_double_co
                 FillLookupOutcome.FOUND,
                 fills=(fill(key="1"), fill(key="2")),
                 venue_fill_id_candidates=("tid-1", "tid-1"),
+                response_count=2,
             ),
         )
     )
@@ -472,6 +473,7 @@ def test_tuple_permutations_and_repeated_execution_are_identical():
             FillLookupOutcome.FOUND,
             fills=(first, second),
             venue_fill_id_candidates=(None, None),
+            response_count=2,
         ),
         FillLookupFact(binding(), FillLookupOutcome.NO_MATCH),
     )
@@ -513,6 +515,7 @@ def test_same_tid_candidate_with_different_quantities_uses_conservative_componen
                 FillLookupOutcome.FOUND,
                 fills=(fill(quantity=0.25, key="1"), fill(quantity=0.40, key="2")),
                 venue_fill_id_candidates=("tid-1", "tid-1"),
+                response_count=2,
             ),
         )
     )
@@ -528,6 +531,7 @@ def test_fill_lookup_none_candidate_is_accepted_and_aligned_with_its_fill():
         FillLookupOutcome.FOUND,
         fills=(fill(),),
         venue_fill_id_candidates=(None,),
+        response_count=1,
     )
 
     assert lookup.venue_fill_id_candidates == (None,)
@@ -606,6 +610,7 @@ def test_requested_qty_mismatch_in_fill_lookup_binding_is_conflict():
                 FillLookupOutcome.FOUND,
                 fills=(fill(),),
                 venue_fill_id_candidates=(None,),
+                response_count=1,
             ),
         )
     )
@@ -701,12 +706,14 @@ def test_candidate_alignment_survives_fill_tuple_permutation():
         FillLookupOutcome.FOUND,
         fills=(first, second),
         venue_fill_id_candidates=("tid-a", "tid-b"),
+        response_count=2,
     )
     reverse = FillLookupFact(
         binding(),
         FillLookupOutcome.FOUND,
         fills=(second, first),
         venue_fill_id_candidates=("tid-b", "tid-a"),
+        response_count=2,
     )
 
     assert assess(fill_lookups=(forward,)) == assess(fill_lookups=(reverse,))
@@ -756,6 +763,7 @@ def test_requested_qty_within_tolerance_in_fill_lookup_binding_is_compatible():
                 FillLookupOutcome.FOUND,
                 fills=(fill(),),
                 venue_fill_id_candidates=(None,),
+                response_count=1,
             ),
         )
     )
@@ -792,3 +800,145 @@ def test_missing_fill_cloid_is_compatible_with_oid_from_order_observation_contex
     )
 
     assert result.outcome == ResolutionOutcome.EFFECT_PROVEN_INCOMPLETE
+
+
+def test_compatible_same_fill_key_enrichment_is_order_invariant_without_expected_oid():
+    expected = binding(expected_external_order_id=None)
+    missing_cloid = fill(
+        key="e",
+        client_order_id=None,
+        external_order_id="oid-A",
+    )
+    known_cloid = replace(missing_cloid, client_order_id=CLOID)
+
+    forward = assess(binding=expected, fills=(missing_cloid, known_cloid))
+    reverse = assess(binding=expected, fills=(known_cloid, missing_cloid))
+
+    assert forward == reverse
+    assert forward.outcome == ResolutionOutcome.EFFECT_PROVEN_INCOMPLETE
+    assert forward.proven_filled_lower_bound == pytest.approx(0.25)
+    assert forward.binding_complete is True
+
+
+def test_global_bundle_permutation_keeps_compatible_fill_enrichment_deterministic():
+    expected = binding(expected_external_order_id=None)
+    opened = observation(ExternalOrderState.OPEN, external_order_id="oid-A")
+    missing_cloid = fill(key="f", client_order_id=None, external_order_id="oid-A")
+    known_cloid = replace(missing_cloid, client_order_id=CLOID)
+    lookup = OrderLookupFact(expected, OrderLookupOutcome.NOT_FOUND)
+
+    forward = assess_resolution(
+        ResolutionEvidenceBundle(expected, (opened,), (missing_cloid, known_cloid), (lookup,))
+    )
+    reverse = assess_resolution(
+        ResolutionEvidenceBundle(expected, (opened,), (known_cloid, missing_cloid), (lookup,))
+    )
+
+    assert forward == reverse
+
+
+def test_temporal_history_detects_cumulative_decrease_across_unknown_observation():
+    result = assess(
+        order_observations=(
+            observation(
+                ExternalOrderState.PARTIAL_OPEN,
+                filled=0.8,
+                remaining=0.2,
+                observed_at="2026-08-30T12:00:00Z",
+            ),
+            observation(
+                ExternalOrderState.UNKNOWN,
+                filled=None,
+                remaining=None,
+                observed_at="2026-08-30T12:01:00Z",
+            ),
+            observation(
+                ExternalOrderState.PARTIAL_OPEN,
+                filled=0.5,
+                remaining=0.5,
+                observed_at="2026-08-30T12:02:00Z",
+            ),
+        )
+    )
+
+    assert result.outcome == ResolutionOutcome.EVIDENCE_CONFLICT
+    assert ResolutionReasonCode.ORDER_QUANTITY_CONFLICT in result.conflicts
+
+
+def test_temporal_history_keeps_terminal_memory_across_unknown_observation():
+    result = assess(
+        order_observations=(
+            observation(ExternalOrderState.CANCELED, observed_at="2026-08-30T12:00:00Z"),
+            observation(
+                ExternalOrderState.UNKNOWN,
+                filled=None,
+                remaining=None,
+                observed_at="2026-08-30T12:01:00Z",
+            ),
+            observation(ExternalOrderState.OPEN, observed_at="2026-08-30T12:02:00Z"),
+        )
+    )
+
+    assert result.outcome == ResolutionOutcome.EVIDENCE_CONFLICT
+    assert ResolutionReasonCode.STATUS_CONFLICT in result.conflicts
+
+
+def test_same_observed_at_does_not_invent_cumulative_ordering():
+    result = assess(
+        order_observations=(
+            observation(
+                ExternalOrderState.PARTIAL_OPEN,
+                filled=0.8,
+                remaining=0.2,
+                observed_at="2026-08-30T12:00:00Z",
+            ),
+            observation(
+                ExternalOrderState.PARTIAL_OPEN,
+                filled=0.5,
+                remaining=0.5,
+                observed_at="2026-08-30T12:00:00Z",
+            ),
+        )
+    )
+
+    assert ResolutionReasonCode.ORDER_QUANTITY_CONFLICT not in result.conflicts
+
+
+@pytest.mark.parametrize(
+    ("fills", "response_count"),
+    [((fill(),), 0), ((fill(key="1"), fill(key="2")), 1)],
+)
+def test_found_fill_lookup_requires_response_count_to_cover_returned_fills(fills, response_count):
+    with pytest.raises(ValueError, match="cover every returned fill"):
+        FillLookupFact(
+            binding(),
+            FillLookupOutcome.FOUND,
+            fills=fills,
+            venue_fill_id_candidates=(None,) * len(fills),
+            response_count=response_count,
+        )
+
+
+def test_active_flag_is_false_when_another_bundle_fact_conflicts_binding():
+    result = assess(
+        order_observations=(observation(ExternalOrderState.OPEN),),
+        fills=(fill(account_scope="other-account"),),
+    )
+
+    assert result.outcome == ResolutionOutcome.BINDING_CONFLICT
+    assert result.binding_complete is False
+    assert result.external_order_active is False
+
+
+def test_order_lookup_fact_found_requires_evidence():
+    with pytest.raises(ValueError, match="FOUND order lookup requires evidence"):
+        OrderLookupFact(binding(), OrderLookupOutcome.FOUND)
+
+
+def test_order_lookup_fact_not_found_cannot_carry_evidence():
+    with pytest.raises(ValueError, match="NOT_FOUND order lookup cannot carry evidence"):
+        OrderLookupFact(
+            binding(),
+            OrderLookupOutcome.NOT_FOUND,
+            order_evidence(ExternalOrderState.OPEN),
+        )

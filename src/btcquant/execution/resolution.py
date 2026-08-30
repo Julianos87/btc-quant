@@ -300,11 +300,24 @@ class OrderLookupFact:
         if not isinstance(self.binding, ExpectedOrderBinding):
             raise ValueError("binding must be ExpectedOrderBinding")
         try:
-            object.__setattr__(self, "outcome", OrderLookupOutcome(self.outcome))
+            outcome = OrderLookupOutcome(self.outcome)
         except ValueError as error:
             raise ValueError("invalid order lookup outcome") from error
+        object.__setattr__(self, "outcome", outcome)
         if self.evidence is not None and not isinstance(self.evidence, OrderLookupEvidence):
             raise ValueError("evidence must be OrderLookupEvidence or None")
+        if outcome == OrderLookupOutcome.FOUND and self.evidence is None:
+            raise ValueError("FOUND order lookup requires evidence")
+        if (
+            outcome
+            in {
+                OrderLookupOutcome.NOT_FOUND,
+                OrderLookupOutcome.TRANSPORT_FAILURE,
+                OrderLookupOutcome.UNSUPPORTED,
+            }
+            and self.evidence is not None
+        ):
+            raise ValueError(f"{outcome.value} order lookup cannot carry evidence")
         object.__setattr__(self, "reason", _optional_text(self.reason, "reason"))
 
 
@@ -361,6 +374,8 @@ class FillLookupFact:
             raise ValueError("response_limit_reached must reflect response_count")
         if self.outcome == FillLookupOutcome.FOUND and not fills:
             raise ValueError("FOUND fill lookup requires at least one fill")
+        if self.outcome == FillLookupOutcome.FOUND and self.response_count < len(fills):
+            raise ValueError("response_count must cover every returned fill")
         if self.outcome != FillLookupOutcome.FOUND and fills:
             raise ValueError("only FOUND fill lookups may carry fills")
         object.__setattr__(self, "reason", _optional_text(self.reason, "reason"))
@@ -443,6 +458,15 @@ class ResolutionAssessment:
         object.__setattr__(self, "deduplicated_fill_keys", tuple(self.deduplicated_fill_keys))
 
 
+@dataclass
+class _FillCorrelationFacts:
+    """Delivery-independent optional correlation facts for one fill key."""
+
+    known_client_order_ids: set[str] = field(default_factory=set)
+    known_external_order_ids: set[str] = field(default_factory=set)
+    known_venue_event_ats: set[str] = field(default_factory=set)
+
+
 @dataclass(frozen=True)
 class _AssessmentState:
     binding_conflicts: set[ResolutionReasonCode] = field(default_factory=set)
@@ -450,8 +474,8 @@ class _AssessmentState:
     evidence_conflicts: set[ResolutionReasonCode] = field(default_factory=set)
     reasons: set[ResolutionReasonCode] = field(default_factory=set)
     fills: dict[str, ExternalFill] = field(default_factory=dict)
+    fill_correlations: dict[str, _FillCorrelationFacts] = field(default_factory=dict)
     fill_tid_candidates: dict[str, set[str]] = field(default_factory=dict)
-    fill_keys_without_client_order_id: set[str] = field(default_factory=set)
     known_external_order_ids: set[str] = field(default_factory=set)
     context_external_order_ids: set[str] = field(default_factory=set)
     observations_by_key: dict[str, ExternalOrderObservation] = field(default_factory=dict)
@@ -537,12 +561,17 @@ def _record_fill(
     current = state.fills.get(fill.fill_key)
     if current is None:
         state.fills[fill.fill_key] = fill
-        if fill.client_order_id is None:
-            state.fill_keys_without_client_order_id.add(fill.fill_key)
-        return True
-    if not current.is_semantically_compatible_with(fill):
+    elif not current.is_semantically_compatible_with(fill):
         state.evidence_conflicts.add(ResolutionReasonCode.FILL_QUANTITY_CONFLICT)
         return False
+
+    correlations = state.fill_correlations.setdefault(fill.fill_key, _FillCorrelationFacts())
+    if fill.client_order_id is not None:
+        correlations.known_client_order_ids.add(fill.client_order_id)
+    if fill.external_order_id is not None:
+        correlations.known_external_order_ids.add(fill.external_order_id)
+    if fill.venue_event_at is not None:
+        correlations.known_venue_event_ats.add(fill.venue_event_at)
     return True
 
 
@@ -796,6 +825,14 @@ def _ordered_codes(values: Iterable[ResolutionReasonCode]) -> tuple[ResolutionRe
 
 
 def _assess_temporal_consistency(state: _AssessmentState) -> None:
+    """Audit acquisition history without inferring venue status chronology.
+
+    Facts with an identical ``observed_at`` form one simultaneous acquisition
+    group. They do not establish an order amongst themselves. Only a strictly
+    later group is checked against remembered cumulative quantity and terminal
+    status from earlier groups.
+    """
+
     records = sorted(
         state.order_records,
         key=lambda item: (
@@ -806,21 +843,40 @@ def _assess_temporal_consistency(state: _AssessmentState) -> None:
             item[4],
         ),
     )
-    previous: tuple[str, ExternalOrderState, float | None, float | None, str] | None = None
-    for record in records:
-        if previous is not None and _timestamp_key(previous[0]) < _timestamp_key(record[0]):
-            if (
-                previous[2] is not None
-                and record[2] is not None
-                and record[2] < previous[2] - max(1e-9, abs(previous[2]) * 1e-9)
-            ):
-                state.evidence_conflicts.add(ResolutionReasonCode.ORDER_QUANTITY_CONFLICT)
-            if previous[1].is_terminal and record[1] in {
-                ExternalOrderState.OPEN,
-                ExternalOrderState.PARTIAL_OPEN,
-            }:
-                state.evidence_conflicts.add(ResolutionReasonCode.STATUS_CONFLICT)
-        previous = record
+    maximum_cumulative: float | None = None
+    terminal_seen_earlier = False
+    index = 0
+    while index < len(records):
+        timestamp = records[index][0]
+        timestamp_key = _timestamp_key(timestamp)
+        group: list[tuple[str, ExternalOrderState, float | None, float | None, str]] = []
+        while index < len(records) and _timestamp_key(records[index][0]) == timestamp_key:
+            group.append(records[index])
+            index += 1
+
+        cumulative_values = [record[2] for record in group if record[2] is not None]
+        if maximum_cumulative is not None:
+            for cumulative in cumulative_values:
+                assert cumulative is not None
+                if cumulative < maximum_cumulative and not _same_quantity(
+                    cumulative, maximum_cumulative
+                ):
+                    state.evidence_conflicts.add(ResolutionReasonCode.ORDER_QUANTITY_CONFLICT)
+        if terminal_seen_earlier and any(
+            record[1] in {ExternalOrderState.OPEN, ExternalOrderState.PARTIAL_OPEN}
+            for record in group
+        ):
+            state.evidence_conflicts.add(ResolutionReasonCode.STATUS_CONFLICT)
+
+        if cumulative_values:
+            group_maximum = max(cumulative_values)
+            maximum_cumulative = (
+                group_maximum
+                if maximum_cumulative is None
+                else max(maximum_cumulative, group_maximum)
+            )
+        if any(record[1].is_terminal for record in group):
+            terminal_seen_earlier = True
     if len(state.terminal_states) > 1:
         state.evidence_conflicts.add(ResolutionReasonCode.STATUS_CONFLICT)
 
@@ -870,11 +926,9 @@ def assess_resolution(bundle: ResolutionEvidenceBundle) -> ResolutionAssessment:
 
     if len(state.known_external_order_ids) > 1:
         state.binding_conflicts.add(ResolutionReasonCode.BINDING_CONFLICT)
-    for fill_key in state.fill_keys_without_client_order_id:
-        fill = state.fills[fill_key]
-        if (
-            fill.external_order_id is None
-            or fill.external_order_id not in state.context_external_order_ids
+    for correlations in state.fill_correlations.values():
+        if expected.expected_client_order_id not in correlations.known_client_order_ids and not (
+            correlations.known_external_order_ids & state.context_external_order_ids
         ):
             state.binding_incomplete.add(ResolutionReasonCode.BINDING_INCOMPLETE)
 
@@ -921,7 +975,11 @@ def assess_resolution(bundle: ResolutionEvidenceBundle) -> ResolutionAssessment:
         ),
         requested_qty=expected.requested_qty,
         external_order_active=(
-            bool(state.active_states) and not state.terminal_states and not state.evidence_conflicts
+            bool(state.active_states)
+            and not state.terminal_states
+            and not state.binding_conflicts
+            and not state.binding_incomplete
+            and not state.evidence_conflicts
         ),
         terminal_state_observed=bool(state.terminal_states),
         terminal_states_observed=terminal_states,
