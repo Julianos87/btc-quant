@@ -2054,53 +2054,115 @@ class StateStore:
 
         persisted = fill if fill.persisted_at is not None else fill.with_persisted_at(utc_now())
         with self._transaction() as connection:
-            self._assert_evidence_attribution(
+            return self._append_external_fill_in_transaction(connection, persisted)
+
+    def _append_external_fill_in_transaction(
+        self,
+        connection: sqlite3.Connection,
+        fill: ExternalFill,
+    ) -> tuple[ExternalFill, bool]:
+        self._assert_evidence_attribution(
+            connection,
+            local_order_id=fill.local_order_id,
+            intent_id=fill.intent_id,
+        )
+        existing_row = connection.execute(
+            "SELECT * FROM external_fills WHERE fill_key = ?", (fill.fill_key,)
+        ).fetchone()
+        if existing_row is not None:
+            existing = self._external_fill_from_row(existing_row)
+            if not existing.is_semantically_compatible_with(fill):
+                raise ExternalFillConflict(f"Fill externe conflictuel pour {fill.fill_key}")
+            return existing, False
+        connection.execute(
+            """
+            INSERT INTO external_fills(
+                local_order_id, intent_id, venue, account_scope, instrument, side,
+                source_kind, client_order_id, external_order_id, venue_fill_id,
+                quantity, price, fee, fee_asset, venue_event_at, observed_at,
+                persisted_at, fill_key, raw_payload_hash
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                fill.local_order_id,
+                fill.intent_id,
+                fill.venue,
+                fill.account_scope,
+                fill.instrument,
+                fill.side,
+                str(fill.source_kind),
+                fill.client_order_id,
+                fill.external_order_id,
+                fill.venue_fill_id,
+                fill.quantity,
+                fill.price,
+                fill.fee,
+                fill.fee_asset,
+                fill.venue_event_at,
+                fill.observed_at,
+                fill.persisted_at,
+                fill.fill_key,
+                fill.raw_payload_hash,
+            ),
+        )
+        return fill, True
+
+    def _append_external_fill_lookup_attempt_in_transaction(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        engine: str,
+        aggregate_id: str,
+        payload: dict[str, Any],
+        event_type: str,
+    ) -> None:
+        self._insert_event(
+            connection,
+            engine,
+            event_type,
+            payload,
+            aggregate_type="external_fill_lookup",
+            aggregate_id=aggregate_id,
+        )
+
+    def persist_external_fill_lookup_evidence(
+        self,
+        *,
+        fills: Sequence[ExternalFill],
+        engine: str,
+        aggregate_id: str,
+        payload: dict[str, Any],
+        event_type: str,
+    ) -> tuple[tuple[ExternalFill, ...], tuple[bool, ...]]:
+        """Persiste atomiquement 0..N fills et une tentative de lookup."""
+
+        if self.read_only:
+            raise RuntimeError("Un StateStore read-only ne peut pas persister des fills")
+        normalized_engine = str(engine).strip()
+        normalized_aggregate_id = str(aggregate_id).strip()
+        if not normalized_engine or not normalized_aggregate_id:
+            raise ValueError("engine et aggregate_id doivent être non vides")
+        persisted_fills = tuple(
+            fill if fill.persisted_at is not None else fill.with_persisted_at(utc_now())
+            for fill in fills
+        )
+        persisted: list[ExternalFill] = []
+        created: list[bool] = []
+        with self._transaction() as connection:
+            for fill in persisted_fills:
+                persisted_fill, fill_created = self._append_external_fill_in_transaction(
+                    connection, fill
+                )
+                persisted.append(persisted_fill)
+                created.append(fill_created)
+            self._append_external_fill_lookup_attempt_in_transaction(
                 connection,
-                local_order_id=persisted.local_order_id,
-                intent_id=persisted.intent_id,
+                engine=normalized_engine,
+                aggregate_id=normalized_aggregate_id,
+                payload=payload,
+                event_type=event_type,
             )
-            existing_row = connection.execute(
-                "SELECT * FROM external_fills WHERE fill_key = ?", (persisted.fill_key,)
-            ).fetchone()
-            if existing_row is not None:
-                existing = self._external_fill_from_row(existing_row)
-                if not existing.is_semantically_compatible_with(persisted):
-                    raise ExternalFillConflict(
-                        f"Fill externe conflictuel pour {persisted.fill_key}"
-                    )
-                return existing, False
-            connection.execute(
-                """
-                INSERT INTO external_fills(
-                    local_order_id, intent_id, venue, account_scope, instrument, side,
-                    source_kind, client_order_id, external_order_id, venue_fill_id,
-                    quantity, price, fee, fee_asset, venue_event_at, observed_at,
-                    persisted_at, fill_key, raw_payload_hash
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    persisted.local_order_id,
-                    persisted.intent_id,
-                    persisted.venue,
-                    persisted.account_scope,
-                    persisted.instrument,
-                    persisted.side,
-                    str(persisted.source_kind),
-                    persisted.client_order_id,
-                    persisted.external_order_id,
-                    persisted.venue_fill_id,
-                    persisted.quantity,
-                    persisted.price,
-                    persisted.fee,
-                    persisted.fee_asset,
-                    persisted.venue_event_at,
-                    persisted.observed_at,
-                    persisted.persisted_at,
-                    persisted.fill_key,
-                    persisted.raw_payload_hash,
-                ),
-            )
-        return persisted, True
+        return tuple(persisted), tuple(created)
 
     def get_external_order_observations(
         self,

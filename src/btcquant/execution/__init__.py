@@ -11,6 +11,15 @@ from .external_evidence_reader import (
     OrderEvidenceLookup,
     OrderLookupContext,
 )
+from .external_fill_evidence_reader import (
+    CcxtExternalFillEvidenceReader,
+    ExternalFillEvidencePersistence,
+    ExternalFillEvidenceReader,
+    FillEvidenceLookup,
+    FillEvidenceLookupOutcome,
+    FillEvidencePersistenceResult,
+    FillLookupContext,
+)
 from .order_state import ExternalOrderState, FinancialTransitionType, LocalOrderState
 
 __all__ = [
@@ -18,11 +27,18 @@ __all__ = [
     "BrokerOrderResult",
     "BrokerOrderSnapshot",
     "CcxtBroker",
+    "CcxtExternalFillEvidenceReader",
     "ExecutionError",
     "ExternalOrderState",
+    "ExternalFillEvidencePersistence",
+    "ExternalFillEvidenceReader",
     "CcxtExternalEvidenceReader",
     "EvidenceLookupOutcome",
     "EvidencePersistenceResult",
+    "FillEvidenceLookup",
+    "FillEvidenceLookupOutcome",
+    "FillEvidencePersistenceResult",
+    "FillLookupContext",
     "ExternalEvidencePersistence",
     "ExternalEvidenceReader",
     "ExternalOrderEvidence",
