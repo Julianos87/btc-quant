@@ -675,9 +675,8 @@ class ExternalEvidencePersistence:
             )
         if persistence_note is not None:
             payload["persistence_note"] = persistence_note
-        if observation is not None:
-            observation, observation_created = store.append_external_order_observation(observation)
-        store.append_external_order_lookup_attempt(
+        observation, observation_created = store.persist_external_order_lookup_evidence(
+            observation=observation,
             engine=lookup.context.engine,
             aggregate_id=lookup.context.intent_id,
             payload=payload,

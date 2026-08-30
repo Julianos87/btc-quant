@@ -1424,14 +1424,31 @@ class StateStore:
         if not normalized_engine or not normalized_aggregate_id:
             raise ValueError("engine et aggregate_id doivent être non vides")
         with self._transaction() as connection:
-            self._insert_event(
+            self._append_external_order_lookup_attempt_in_transaction(
                 connection,
-                normalized_engine,
-                event_type,
-                payload,
-                aggregate_type="external_order_lookup",
+                engine=normalized_engine,
                 aggregate_id=normalized_aggregate_id,
+                payload=payload,
+                event_type=event_type,
             )
+
+    def _append_external_order_lookup_attempt_in_transaction(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        engine: str,
+        aggregate_id: str,
+        payload: dict[str, Any],
+        event_type: str,
+    ) -> None:
+        self._insert_event(
+            connection,
+            engine,
+            event_type,
+            payload,
+            aggregate_type="external_order_lookup",
+            aggregate_id=aggregate_id,
+        )
 
     @staticmethod
     def _local_state_for_legacy_status(status: str) -> LocalOrderState:
@@ -1844,53 +1861,100 @@ class StateStore:
             else observation.with_persisted_at(utc_now())
         )
         with self._transaction() as connection:
-            self._assert_evidence_attribution(
+            return self._append_external_order_observation_in_transaction(connection, persisted)
+
+    def _append_external_order_observation_in_transaction(
+        self,
+        connection: sqlite3.Connection,
+        observation: ExternalOrderObservation,
+    ) -> tuple[ExternalOrderObservation, bool]:
+        self._assert_evidence_attribution(
+            connection,
+            local_order_id=observation.local_order_id,
+            intent_id=observation.intent_id,
+        )
+        existing_row = connection.execute(
+            "SELECT * FROM external_order_observations WHERE observation_key = ?",
+            (observation.observation_key,),
+        ).fetchone()
+        if existing_row is not None:
+            existing = self._external_order_observation_from_row(existing_row)
+            if existing.semantic_content() != observation.semantic_content():
+                raise ExternalObservationConflict(
+                    f"Observation externe conflictuelle pour {observation.observation_key}"
+                )
+            return existing, False
+        connection.execute(
+            """
+            INSERT INTO external_order_observations(
+                local_order_id, intent_id, venue, account_scope, instrument, side,
+                source_kind, external_state, client_order_id, external_order_id,
+                requested_qty, cumulative_filled_qty, remaining_qty, venue_event_at,
+                observed_at, persisted_at, observation_key, raw_payload_hash
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                observation.local_order_id,
+                observation.intent_id,
+                observation.venue,
+                observation.account_scope,
+                observation.instrument,
+                observation.side,
+                str(observation.source_kind),
+                str(observation.normalized_external_status),
+                observation.client_order_id,
+                observation.external_order_id,
+                observation.requested_qty,
+                observation.cumulative_filled_qty,
+                observation.remaining_qty,
+                observation.venue_event_at,
+                observation.observed_at,
+                observation.persisted_at,
+                observation.observation_key,
+                observation.raw_payload_hash,
+            ),
+        )
+        return observation, True
+
+    def persist_external_order_lookup_evidence(
+        self,
+        *,
+        observation: ExternalOrderObservation | None,
+        engine: str,
+        aggregate_id: str,
+        payload: dict[str, Any],
+        event_type: str,
+    ) -> tuple[ExternalOrderObservation | None, bool]:
+        """Persiste atomiquement une observation éventuelle et sa tentative."""
+
+        if self.read_only:
+            raise RuntimeError("Un StateStore read-only ne peut pas persister une preuve")
+        normalized_engine = str(engine).strip()
+        normalized_aggregate_id = str(aggregate_id).strip()
+        if not normalized_engine or not normalized_aggregate_id:
+            raise ValueError("engine et aggregate_id doivent être non vides")
+        persisted = (
+            None
+            if observation is None
+            else observation
+            if observation.persisted_at is not None
+            else observation.with_persisted_at(utc_now())
+        )
+        with self._transaction() as connection:
+            persisted_observation: ExternalOrderObservation | None = None
+            observation_created = False
+            if persisted is not None:
+                persisted_observation, observation_created = (
+                    self._append_external_order_observation_in_transaction(connection, persisted)
+                )
+            self._append_external_order_lookup_attempt_in_transaction(
                 connection,
-                local_order_id=persisted.local_order_id,
-                intent_id=persisted.intent_id,
+                engine=normalized_engine,
+                aggregate_id=normalized_aggregate_id,
+                payload=payload,
+                event_type=event_type,
             )
-            existing_row = connection.execute(
-                "SELECT * FROM external_order_observations WHERE observation_key = ?",
-                (persisted.observation_key,),
-            ).fetchone()
-            if existing_row is not None:
-                existing = self._external_order_observation_from_row(existing_row)
-                if existing.semantic_content() != persisted.semantic_content():
-                    raise ExternalObservationConflict(
-                        f"Observation externe conflictuelle pour {persisted.observation_key}"
-                    )
-                return existing, False
-            connection.execute(
-                """
-                INSERT INTO external_order_observations(
-                    local_order_id, intent_id, venue, account_scope, instrument, side,
-                    source_kind, external_state, client_order_id, external_order_id,
-                    requested_qty, cumulative_filled_qty, remaining_qty, venue_event_at,
-                    observed_at, persisted_at, observation_key, raw_payload_hash
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    persisted.local_order_id,
-                    persisted.intent_id,
-                    persisted.venue,
-                    persisted.account_scope,
-                    persisted.instrument,
-                    persisted.side,
-                    str(persisted.source_kind),
-                    str(persisted.normalized_external_status),
-                    persisted.client_order_id,
-                    persisted.external_order_id,
-                    persisted.requested_qty,
-                    persisted.cumulative_filled_qty,
-                    persisted.remaining_qty,
-                    persisted.venue_event_at,
-                    persisted.observed_at,
-                    persisted.persisted_at,
-                    persisted.observation_key,
-                    persisted.raw_payload_hash,
-                ),
-            )
-        return persisted, True
+        return persisted_observation, observation_created
 
     def append_external_fill(self, fill: ExternalFill) -> tuple[ExternalFill, bool]:
         """Ajoute un fill externe une seule fois, sans application métier."""
