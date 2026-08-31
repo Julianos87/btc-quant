@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import datetime
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -38,6 +39,7 @@ class ProjectionReasonCode(StrEnum):
     BINDING_CONTEXT_CONFLICT = "BINDING_CONTEXT_CONFLICT"
     MALFORMED_LOOKUP_EVENT = "MALFORMED_LOOKUP_EVENT"
     EVENT_OUTCOME_MISMATCH = "EVENT_OUTCOME_MISMATCH"
+    EVENT_PROVENANCE_MISMATCH = "EVENT_PROVENANCE_MISMATCH"
     ORDER_PERSISTENCE_LINK_MISSING = "ORDER_PERSISTENCE_LINK_MISSING"
     ORDER_PERSISTENCE_LINK_AMBIGUOUS = "ORDER_PERSISTENCE_LINK_AMBIGUOUS"
     FILL_PERSISTENCE_LINK_MISSING = "FILL_PERSISTENCE_LINK_MISSING"
@@ -151,6 +153,19 @@ def _required_text(value: object, field: str) -> str:
     result = _text(value, field)
     assert result is not None
     return result
+
+
+def _canonical_optional_timestamp(value: object, field: str) -> str | None:
+    timestamp = _text(value, field, nullable=True)
+    if timestamp is None:
+        return None
+    try:
+        parsed = datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError(f"{field} must be ISO 8601") from error
+    if parsed.tzinfo is None:
+        raise ValueError(f"{field} must include a timezone")
+    return parsed.astimezone(datetime.UTC).isoformat()
 
 
 def _integer(value: object, field: str, *, minimum: int = 0) -> int:
@@ -286,7 +301,7 @@ def _order_evidence(payload: dict[str, Any]) -> OrderLookupEvidence | None:
             payload["remaining_qty_explicit"], "remaining_qty_explicit"
         ),
         source_kind=ExternalEvidenceSource(payload["source_kind"]),
-        venue_event_at=_text(payload["venue_event_at"], "venue_event_at", nullable=True),
+        venue_event_at=_canonical_optional_timestamp(payload["venue_event_at"], "venue_event_at"),
         observed_at=_required_text(payload["observed_at"], "observed_at"),
         raw_payload_hash=_required_text(payload["raw_payload_hash"], "raw_payload_hash"),
         correlation_complete=_boolean(payload["correlation_complete"], "correlation_complete"),
@@ -308,6 +323,7 @@ def _matches_order_observation(
         and observation.source_kind == evidence.source_kind
         and observation.normalized_external_status == evidence.normalized_state
         and observation.raw_payload_hash == evidence.raw_payload_hash
+        and observation.venue_event_at == evidence.venue_event_at
         and observation.observed_at == evidence.observed_at
         and observation.client_order_id == evidence.returned_client_order_id
         and observation.external_order_id == evidence.external_order_id
@@ -328,6 +344,8 @@ def _project_order_event(
     if payload.get("outcome") != outcome.value:
         raise RuntimeError(ProjectionReasonCode.EVENT_OUTCOME_MISMATCH)
     evidence = _order_evidence(payload)
+    if evidence is not None and evidence.source_kind != ExternalEvidenceSource.ORDER_LOOKUP:
+        raise RuntimeError(ProjectionReasonCode.EVENT_PROVENANCE_MISMATCH)
     fact = OrderLookupFact(
         binding, outcome, evidence, _text(payload.get("reason"), "reason", nullable=True)
     )
@@ -356,6 +374,8 @@ def _fill_from_hash(
         and fill.account_scope == binding.account_scope
         and fill.instrument == binding.instrument
         and fill.side == binding.side
+        and fill.external_order_id == binding.expected_external_order_id
+        and fill.source_kind == ExternalEvidenceSource.FILL_LOOKUP
     ]
     if not matches:
         raise RuntimeError(ProjectionReasonCode.FILL_PERSISTENCE_LINK_MISSING)
@@ -453,9 +473,22 @@ def project_resolution_snapshot(snapshot: ResolutionSnapshot) -> PersistedResolu
         for event in snapshot.lookup_events:
             if event.event_type not in _ORDER_EVENT_OUTCOMES | _FILL_EVENT_OUTCOMES:
                 raise ValueError("unknown lookup event type")
+            if event.event_type in _ORDER_EVENT_OUTCOMES:
+                expected_aggregate_type = "external_order_lookup"
+            else:
+                expected_aggregate_type = "external_fill_lookup"
+            if event.aggregate_type != expected_aggregate_type:
+                raise RuntimeError(ProjectionReasonCode.EVENT_PROVENANCE_MISMATCH)
             payload = _payload(event)
             venue, account_scope, instrument, cloid = _validate_local_event(event, payload, order)
+            if event.event_type in _ORDER_EVENT_OUTCOMES and cloid is None:
+                raise RuntimeError(ProjectionReasonCode.EVENT_PROVENANCE_MISMATCH)
             parsed.append((event, payload, venue, account_scope, instrument, cloid))
+    except RuntimeError as error:
+        reason = error.args[0] if error.args else ProjectionReasonCode.MALFORMED_LOOKUP_EVENT
+        if isinstance(reason, ProjectionReasonCode):
+            return _invalid(reason)
+        return _invalid(ProjectionReasonCode.MALFORMED_LOOKUP_EVENT)
     except ValueError:
         return _invalid(ProjectionReasonCode.MALFORMED_LOOKUP_EVENT)
 

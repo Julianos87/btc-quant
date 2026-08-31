@@ -374,14 +374,13 @@ def test_conflicting_global_context_is_invalid(tmp_path: Path, payload_change: d
     assert result.reasons == (ProjectionReasonCode.BINDING_CONTEXT_CONFLICT,)
 
 
-def test_missing_global_cloid_is_not_ready_and_fill_none_can_reuse_global(tmp_path: Path):
+def test_order_lookup_missing_cloid_is_invalid_and_fill_none_can_reuse_global(tmp_path: Path):
     store, order_id = new_store(tmp_path)
     no_cloid = order_payload(order_id, "NOT_FOUND", expected_client_order_id=None)
     append_order(store, no_cloid, "external_order_lookup_not_found")
-    assert (
-        project_resolution_snapshot(store.read_resolution_snapshot(order_id)).status
-        == ProjectionStatus.NOT_READY
-    )
+    projection = project_resolution_snapshot(store.read_resolution_snapshot(order_id))
+    assert projection.status == ProjectionStatus.INVALID_PERSISTED_EVIDENCE
+    assert projection.reasons == (ProjectionReasonCode.EVENT_PROVENANCE_MISMATCH,)
 
     store, order_id = new_store(tmp_path / "with-global")
     append_order(store, order_payload(order_id, "NOT_FOUND"), "external_order_lookup_not_found")
@@ -591,3 +590,154 @@ def test_partial_order_evidence_is_invalid_instead_of_defaulted(tmp_path: Path):
 
     assert result.status == ProjectionStatus.INVALID_PERSISTED_EVIDENCE
     assert result.reasons == (ProjectionReasonCode.MALFORMED_LOOKUP_EVENT,)
+
+
+@pytest.mark.parametrize(
+    ("event_type", "aggregate_type", "payload"),
+    [
+        (
+            "external_order_lookup_not_found",
+            "external_fill_lookup",
+            lambda order_id: order_payload(order_id, "NOT_FOUND"),
+        ),
+        (
+            "external_fill_lookup_no_match",
+            "external_order_lookup",
+            lambda order_id: fill_payload(order_id, "NO_MATCH"),
+        ),
+    ],
+)
+def test_lookup_event_family_must_match_aggregate_type(
+    tmp_path: Path, event_type: str, aggregate_type: str, payload
+):
+    store, order_id = new_store(tmp_path)
+    event_payload = payload(order_id)
+    with store._transaction() as connection:
+        store._insert_event(
+            connection, "trend", event_type, event_payload, aggregate_type, "intent-1"
+        )
+
+    result = project_resolution_snapshot(store.read_resolution_snapshot(order_id))
+
+    assert result.status == ProjectionStatus.INVALID_PERSISTED_EVIDENCE
+    assert result.reasons == (ProjectionReasonCode.EVENT_PROVENANCE_MISMATCH,)
+
+
+def test_order_lookup_cannot_borrow_cloid_from_fill_lookup(tmp_path: Path):
+    store, order_id = new_store(tmp_path)
+    append_order(
+        store,
+        order_payload(order_id, "NOT_FOUND", expected_client_order_id=None),
+        "external_order_lookup_not_found",
+    )
+    append_fill(store, fill_payload(order_id, "NO_MATCH"), "external_fill_lookup_no_match")
+
+    result = project_resolution_snapshot(store.read_resolution_snapshot(order_id))
+
+    assert result.status == ProjectionStatus.INVALID_PERSISTED_EVIDENCE
+    assert result.reasons == (ProjectionReasonCode.EVENT_PROVENANCE_MISMATCH,)
+
+
+def test_found_order_requires_matching_venue_event_at(tmp_path: Path):
+    store, order_id = new_store(tmp_path)
+    store.append_external_order_observation(
+        observation(order_id, venue_event_at="2026-08-30T11:58:00Z")
+    )
+    append_order(store, found_order_payload(order_id), "external_order_lookup_found")
+
+    result = project_resolution_snapshot(store.read_resolution_snapshot(order_id))
+
+    assert result.status == ProjectionStatus.INVALID_PERSISTED_EVIDENCE
+    assert result.reasons == (ProjectionReasonCode.ORDER_PERSISTENCE_LINK_MISSING,)
+
+
+def test_found_order_requires_order_lookup_source_provenance(tmp_path: Path):
+    store, order_id = new_store(tmp_path)
+    store.append_external_order_observation(
+        observation(order_id, source_kind=ExternalEvidenceSource.PRIVATE_EVENT)
+    )
+    append_order(
+        store,
+        found_order_payload(order_id, source_kind="PRIVATE_EVENT"),
+        "external_order_lookup_found",
+    )
+
+    result = project_resolution_snapshot(store.read_resolution_snapshot(order_id))
+
+    assert result.status == ProjectionStatus.INVALID_PERSISTED_EVIDENCE
+    assert result.reasons == (ProjectionReasonCode.EVENT_PROVENANCE_MISMATCH,)
+
+
+def test_found_fill_requires_event_expected_oid(tmp_path: Path):
+    store, order_id = new_store(tmp_path)
+    stored, _ = store.append_external_fill(fill(order_id, external_order_id="oid-B"))
+    append_fill(
+        store,
+        fill_payload(
+            order_id,
+            "FOUND",
+            matched=[
+                {"raw_payload_hash": stored.raw_payload_hash, "reported_trade_id_candidate": None}
+            ],
+        ),
+        "external_fill_lookup_found",
+    )
+
+    result = project_resolution_snapshot(store.read_resolution_snapshot(order_id))
+
+    assert result.status == ProjectionStatus.INVALID_PERSISTED_EVIDENCE
+    assert result.reasons == (ProjectionReasonCode.FILL_PERSISTENCE_LINK_MISSING,)
+
+
+def test_found_fill_requires_fill_lookup_source_provenance(tmp_path: Path):
+    store, order_id = new_store(tmp_path)
+    stored, _ = store.append_external_fill(
+        fill(order_id, source_kind=ExternalEvidenceSource.PRIVATE_EVENT)
+    )
+    append_fill(
+        store,
+        fill_payload(
+            order_id,
+            "FOUND",
+            matched=[
+                {"raw_payload_hash": stored.raw_payload_hash, "reported_trade_id_candidate": None}
+            ],
+        ),
+        "external_fill_lookup_found",
+    )
+
+    result = project_resolution_snapshot(store.read_resolution_snapshot(order_id))
+
+    assert result.status == ProjectionStatus.INVALID_PERSISTED_EVIDENCE
+    assert result.reasons == (ProjectionReasonCode.FILL_PERSISTENCE_LINK_MISSING,)
+
+
+def test_private_event_stays_in_bundle_without_satisfying_fill_lookup_link(tmp_path: Path):
+    store, order_id = new_store(tmp_path)
+    store.append_external_fill(
+        fill(
+            order_id,
+            key="1",
+            raw_hash="c" * 64,
+            source_kind=ExternalEvidenceSource.PRIVATE_EVENT,
+        )
+    )
+    linked, _ = store.append_external_fill(fill(order_id, key="2", raw_hash="d" * 64))
+    append_fill(
+        store,
+        fill_payload(
+            order_id,
+            "FOUND",
+            matched=[
+                {"raw_payload_hash": linked.raw_payload_hash, "reported_trade_id_candidate": None}
+            ],
+        ),
+        "external_fill_lookup_found",
+    )
+
+    result = project_resolution_snapshot(store.read_resolution_snapshot(order_id))
+
+    assert result.status == ProjectionStatus.READY
+    assert result.bundle is not None
+    assert len(result.bundle.fills) == 2
+    assert result.bundle.fill_lookups[0].fills == (linked,)
