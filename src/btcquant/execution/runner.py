@@ -20,6 +20,7 @@ import hashlib
 import json
 import logging
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -46,7 +47,8 @@ from .errors import ReconciliationRequired
 from .funding_service import FundingService
 from .instance_lock import EngineInstanceLock
 from .order_service import OrderExecutionService, SubmittedOrder
-from .order_state import FinancialTransitionType
+from .financial_application_plan import FinancialApplicationPlan
+from .order_state import FinancialTransitionType, LogicalOrderIdentity
 from .ports import ClockPort, MarketDataPort, Notifier
 from .position_accounting import PositionAccountingService
 from .protective_stops import ProtectiveStopService, StopDecision, StopDecisionKind
@@ -952,7 +954,32 @@ class LiveRunner:
         *,
         reduce_only: bool = False,
         volatility_annual: float | None = None,
+        entry_direction: int | None = None,
+        entry_stop_price: float | None = None,
     ) -> SubmittedOrder:
+        identity = LogicalOrderIdentity(
+            engine="trend",
+            slot=slot.strategy.name,
+            decision_checkpoint=decision_checkpoint,
+            transition_type=transition_type,
+            position_generation=position_generation,
+            transition_sequence=slot.financial_transition_seq,
+        )
+        application_plan = FinancialApplicationPlan(
+            identity=identity,
+            side=side,
+            requested_qty=qty,
+            reference_price=ref_price,
+            reason=reason,
+            reduce_only=reduce_only,
+            planned_effect_at=self.clock.utc_now().isoformat(),
+            pre_state_payload=self._state_payload(),
+            protection_mode=stop_protection_mode_from_broker(
+                supports_stop_orders=self.broker.supports_stop_orders
+            ),
+            entry_direction=entry_direction,
+            entry_stop_price=entry_stop_price,
+        )
         submitted = self.order_service.submit_market(
             engine="trend",
             slot=slot.strategy.name,
@@ -967,6 +994,7 @@ class LiveRunner:
             reduce_only=reduce_only,
             available_volume=available_volume,
             volatility_annual=volatility_annual,
+            application_plan=application_plan,
         )
         if not submitted.is_terminal:
             # La barre/décision est checkpointée, mais aucun fill encore actif
@@ -1124,6 +1152,7 @@ class LiveRunner:
                 trade_pnl,
                 reason,
                 qty=fill.qty,
+                exit_ts=submitted.application_plan.planned_effect_at,
             )
             if partial:
                 assert accounting.remaining_position is not None
@@ -1206,6 +1235,8 @@ class LiveRunner:
             None,
             float(row["volume"]) if pd.notna(row.get("volume")) else None,
             volatility_annual=volatility_annual,
+            entry_direction=direction,
+            entry_stop_price=stop,
         )
         fill = submitted.fill
         if fill.qty <= 0:
@@ -1215,8 +1246,8 @@ class LiveRunner:
         try:
             accounting = self.accounting_service.open_position(
                 fill,
-                entry_time=self.clock.utc_now(),
-                stop_price=stop,
+                entry_time=datetime.fromisoformat(submitted.application_plan.planned_effect_at),
+                stop_price=submitted.application_plan.entry_stop_price,
                 direction=direction,
             )
             slot.cash += accounting.cash_delta
@@ -1511,9 +1542,10 @@ class LiveRunner:
         reason: str,
         *,
         qty: float | None = None,
+        exit_ts: str | None = None,
     ) -> dict[str, Any]:
         return {
-            "exit_ts": self.clock.utc_now().isoformat(),
+            "exit_ts": exit_ts or self.clock.utc_now().isoformat(),
             "entry_ts": pos.entry_time.isoformat(),
             "strategy": slot.strategy.name,
             "direction": "LONG" if pos.direction == 1 else "SHORT",

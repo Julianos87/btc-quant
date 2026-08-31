@@ -12,6 +12,94 @@ from btcquant.execution.order_state import (
     LogicalOrderIdentity,
 )
 from btcquant.execution.state_store import StateStore
+from btcquant.execution.financial_application_plan import FinancialApplicationPlan
+
+
+def _test_application_plan(**kwargs):
+    transition = FinancialTransitionType(kwargs["transition_type"])
+    identity = LogicalOrderIdentity(
+        kwargs["engine"],
+        kwargs["slot"],
+        kwargs["decision_checkpoint"],
+        transition,
+        kwargs.get("position_generation"),
+        kwargs.get("transition_sequence", 0),
+    )
+    position = None
+    if transition in {FinancialTransitionType.EXIT, FinancialTransitionType.ADD}:
+        generation = kwargs["position_generation"]
+        entry, initial = generation.removeprefix("entry=").split("|initial_qty=")
+        direction = 1 if kwargs["side"] == "SELL" else -1
+        position = {
+            "entry_time": entry,
+            "entry_price": kwargs["reference_price"],
+            "qty": max(float(kwargs["qty"]), float(initial)),
+            "stop_price": 90.0,
+            "direction": direction,
+            "bars_held": 0,
+            "best_close": kwargs["reference_price"],
+            "initial_qty": float(initial),
+            "last_add_price": kwargs["reference_price"],
+            "pyramid_adds": 0,
+        }
+    state = {
+        "slots": {
+            kwargs["slot"]: {
+                "cash": 1000.0,
+                "position": position,
+                "stop_order_id": None,
+                "stop_order_local_id": None,
+                "stop_intent_id": None,
+                "stop_transition": None,
+                "entry_fee": 0.0,
+                "last_bar_ts": None,
+                "financial_transition_seq": kwargs.get("transition_sequence", 0),
+            }
+        },
+        "peak_equity": 1000.0,
+        "halted": False,
+        "day": None,
+        "day_start_equity": 1000.0,
+        "daily_lockout": False,
+        "reconciliation_required": False,
+        "last_funding_ts": None,
+        "stop_protection_mode": "SOFTWARE",
+    }
+    return FinancialApplicationPlan(
+        identity=identity,
+        side=kwargs["side"],
+        requested_qty=kwargs["qty"],
+        reference_price=kwargs["reference_price"],
+        reason=kwargs["reason"],
+        reduce_only=kwargs.get("reduce_only", False),
+        planned_effect_at="2026-08-31T12:00:00Z",
+        pre_state_payload=state,
+        protection_mode="SOFTWARE",
+        entry_direction=(
+            1
+            if transition == FinancialTransitionType.ENTER_LONG
+            else -1
+            if transition == FinancialTransitionType.ENTER_SHORT
+            else None
+        ),
+        entry_stop_price=(
+            90.0
+            if transition
+            in {FinancialTransitionType.ENTER_LONG, FinancialTransitionType.ENTER_SHORT}
+            else None
+        ),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _supply_durable_plan(monkeypatch):
+    original = OrderExecutionService.submit_market
+
+    def wrapped(self, **kwargs):
+        kwargs.setdefault("application_plan", _test_application_plan(**kwargs))
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(OrderExecutionService, "submit_market", wrapped)
 
 
 class StubBroker(PaperBroker):
@@ -190,6 +278,7 @@ def test_external_broker_cannot_inherit_a_client_id_dropping_fallback(tmp_path):
             decision_checkpoint="checkpoint",
             transition_type=FinancialTransitionType.EXIT,
             position_generation="entry=2026-08-01T00:00:00Z|initial_qty=1",
+            reduce_only=True,
         )
 
     order = store.read_orders("trend")[0]

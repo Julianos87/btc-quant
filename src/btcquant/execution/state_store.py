@@ -25,15 +25,22 @@ from .errors import (
     AccountingIdentityCollision,
     ExternalFillConflict,
     ExternalObservationConflict,
+    FinancialApplicationPlanConflict,
     InvalidExternalObservation,
     InvalidOrderStateTransition,
     MigrationRequiredError,
     OrderIdentityCollision,
 )
 from .external_evidence import ExternalFill, ExternalOrderObservation
+from .financial_application_plan import (
+    FinancialApplicationPlan,
+    PersistedFinancialApplicationPlan,
+    canonical_json,
+    parse_logical_order_identity,
+)
 from .order_state import ExternalOrderState, LocalOrderState, LogicalOrderIdentity
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 DEPOSIT_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}")
 
 
@@ -159,7 +166,7 @@ class StateStore:
             connection.execute("BEGIN IMMEDIATE")
             yield connection
             connection.commit()
-        except Exception:
+        except BaseException:
             connection.rollback()
             raise
         finally:
@@ -416,6 +423,11 @@ class StateStore:
             if current_version < 8:
                 self._migrate_v8(connection)
                 current_version = 8
+            if current_version < 9:
+                self._migrate_v9(connection)
+                current_version = 9
+            else:
+                self._ensure_financial_application_plan_schema(connection)
             connection.execute(
                 "UPDATE metadata SET value = ? WHERE key = 'schema_version'",
                 (str(current_version),),
@@ -881,6 +893,45 @@ class StateStore:
                 "UPDATE sqlite_sequence SET seq = ? WHERE name = 'external_fills'",
                 (sequence_row[0],),
             )
+
+    @staticmethod
+    def _ensure_financial_application_plan_schema(connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            BEGIN IMMEDIATE;
+            CREATE TABLE IF NOT EXISTS financial_application_plans (
+                local_order_id INTEGER PRIMARY KEY,
+                intent_id TEXT NOT NULL UNIQUE,
+                plan_key TEXT NOT NULL UNIQUE,
+                application_version INTEGER NOT NULL,
+                logical_order_key TEXT NOT NULL,
+                engine TEXT NOT NULL,
+                slot TEXT NOT NULL,
+                transition_type TEXT NOT NULL,
+                decision_checkpoint TEXT NOT NULL,
+                position_generation TEXT,
+                transition_sequence INTEGER NOT NULL,
+                side TEXT NOT NULL CHECK(side IN ('BUY', 'SELL')),
+                requested_qty REAL NOT NULL CHECK(requested_qty > 0),
+                reference_price REAL NOT NULL CHECK(reference_price > 0),
+                reason TEXT NOT NULL,
+                reduce_only INTEGER NOT NULL CHECK(reduce_only IN (0, 1)),
+                planned_effect_at TEXT NOT NULL,
+                entry_direction INTEGER CHECK(entry_direction IN (-1, 1) OR entry_direction IS NULL),
+                entry_stop_price REAL CHECK(entry_stop_price IS NULL OR entry_stop_price > 0),
+                pre_state_payload TEXT NOT NULL CHECK(json_valid(pre_state_payload)),
+                pre_state_sha256 TEXT NOT NULL,
+                protection_mode TEXT NOT NULL CHECK(protection_mode IN ('SOFTWARE', 'EXCHANGE')),
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(local_order_id) REFERENCES orders(id)
+            );
+            """
+        )
+
+    @classmethod
+    def _migrate_v9(cls, connection: sqlite3.Connection) -> None:
+        """Migration additive v8 vers le plan financier durable v1."""
+        cls._ensure_financial_application_plan_schema(connection)
 
     @staticmethod
     def _json(payload: Any) -> str:
@@ -1601,6 +1652,257 @@ class StateStore:
             "UNBALANCED": ExternalOrderState.UNKNOWN,
         }
         return mapping.get(status)
+
+    @staticmethod
+    def _reservation_from_row(row: sqlite3.Row, *, acquired: bool) -> OrderReservation:
+        return OrderReservation(
+            order_id=int(row["id"]),
+            intent_id=str(row["intent_id"]),
+            logical_order_key=str(row["logical_order_key"]),
+            acquired=acquired,
+            status=str(row["status"]),
+            local_state=str(row["local_state"]),
+            external_state=row["external_state"],
+            filled_qty=float(row["filled_qty"]),
+            remaining_qty=float(row["remaining_qty"]),
+        )
+
+    @staticmethod
+    def _plan_from_row(row: sqlite3.Row) -> PersistedFinancialApplicationPlan:
+        pre_state = json.loads(str(row["pre_state_payload"]))
+        identity = parse_logical_order_identity(
+            str(row["logical_order_key"]),
+            intent_id=str(row["intent_id"]),
+            engine=str(row["engine"]),
+            slot=str(row["slot"]),
+        )
+        plan = FinancialApplicationPlan(
+            identity=identity,
+            side=str(row["side"]),
+            requested_qty=float(row["requested_qty"]),
+            reference_price=float(row["reference_price"]),
+            reason=str(row["reason"]),
+            reduce_only=bool(row["reduce_only"]),
+            planned_effect_at=str(row["planned_effect_at"]),
+            pre_state_payload=pre_state,
+            protection_mode=str(row["protection_mode"]),
+            entry_direction=row["entry_direction"],
+            entry_stop_price=row["entry_stop_price"],
+            application_version=int(row["application_version"]),
+        )
+        if (
+            str(row["pre_state_sha256"]) != plan.pre_state_sha256
+            or str(row["plan_key"]) != plan.plan_key
+        ):
+            raise ValueError("FINANCIAL_APPLICATION_PLAN_CONFLICT: hash durable invalide")
+        return PersistedFinancialApplicationPlan(
+            local_order_id=int(row["local_order_id"]),
+            intent_id=str(row["intent_id"]),
+            plan=plan,
+            created_at=str(row["created_at"]),
+        )
+
+    def get_financial_application_plan(
+        self, local_order_id: int
+    ) -> PersistedFinancialApplicationPlan | None:
+        with self._read_transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM financial_application_plans WHERE local_order_id = ?",
+                (local_order_id,),
+            ).fetchone()
+        return self._plan_from_row(row) if row is not None else None
+
+    def get_financial_application_plan_by_intent(
+        self, intent_id: str
+    ) -> PersistedFinancialApplicationPlan | None:
+        with self._read_transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM financial_application_plans WHERE intent_id = ?",
+                (intent_id,),
+            ).fetchone()
+        return self._plan_from_row(row) if row is not None else None
+
+    @staticmethod
+    def _insert_financial_application_plan(
+        connection: sqlite3.Connection,
+        *,
+        order_id: int,
+        intent_id: str,
+        plan: FinancialApplicationPlan,
+        now: str,
+    ) -> None:
+        pre_state = json.loads(canonical_json(plan.pre_state_payload))
+        connection.execute(
+            """
+            INSERT INTO financial_application_plans(
+                local_order_id, intent_id, plan_key, application_version, logical_order_key,
+                engine, slot, transition_type, decision_checkpoint, position_generation,
+                transition_sequence, side, requested_qty, reference_price, reason, reduce_only,
+                planned_effect_at, entry_direction, entry_stop_price, pre_state_payload,
+                pre_state_sha256, protection_mode, created_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                order_id,
+                intent_id,
+                plan.plan_key,
+                plan.application_version,
+                plan.identity.logical_key,
+                plan.identity.engine,
+                plan.identity.slot,
+                plan.identity.transition_type.value,
+                plan.identity.decision_checkpoint,
+                plan.identity.position_generation,
+                plan.identity.transition_sequence,
+                plan.side,
+                plan.requested_qty,
+                plan.reference_price,
+                plan.reason,
+                int(plan.reduce_only),
+                plan.planned_effect_at,
+                plan.entry_direction,
+                plan.entry_stop_price,
+                canonical_json(pre_state),
+                plan.pre_state_sha256,
+                plan.protection_mode,
+                now,
+            ),
+        )
+
+    def reserve_market_order_with_application_plan(
+        self,
+        identity: LogicalOrderIdentity,
+        *,
+        plan: FinancialApplicationPlan,
+    ) -> OrderReservation:
+        """Réserve l'ordre, son plan et le checkpoint pré-application en un commit."""
+
+        if plan.identity != identity:
+            raise FinancialApplicationPlanConflict(
+                "Le plan ne correspond pas à l'identité réservée"
+            )
+        now = utc_now()
+        logical_key = identity.logical_key
+        intent_id = identity.intent_id
+        pre_state = json.loads(canonical_json(plan.pre_state_payload))
+        with self._transaction() as connection:
+            existing = connection.execute(
+                """SELECT id, intent_id, logical_order_key, status, local_state, external_state,
+                          filled_qty, remaining_qty FROM orders
+                   WHERE logical_order_key = ? OR intent_id = ? ORDER BY id LIMIT 1""",
+                (logical_key, intent_id),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    existing["logical_order_key"] != logical_key
+                    or existing["intent_id"] != intent_id
+                ):
+                    raise OrderIdentityCollision(
+                        "Collision entre l'empreinte d'intention et la clé logique complète"
+                    )
+                plan_row = connection.execute(
+                    "SELECT * FROM financial_application_plans WHERE local_order_id = ?",
+                    (existing["id"],),
+                ).fetchone()
+                if plan_row is None:
+                    raise FinancialApplicationPlanConflict("LEGACY_APPLICATION_CONTEXT_INCOMPLETE")
+                persisted = self._plan_from_row(plan_row)
+                if persisted.plan.semantic_content() != plan.semantic_content():
+                    raise FinancialApplicationPlanConflict("Le plan financier existant diffère")
+                return self._reservation_from_row(existing, acquired=False)
+            cursor = connection.execute(
+                """
+                INSERT INTO orders(
+                    engine, slot, intent_id, logical_order_key, order_type, side, requested_qty,
+                    reference_price, remaining_qty, local_state, status, reason, created_at, updated_at
+                ) VALUES(?, ?, ?, ?, 'MARKET', ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)
+                """,
+                (
+                    identity.engine,
+                    identity.slot,
+                    intent_id,
+                    logical_key,
+                    plan.side,
+                    plan.requested_qty,
+                    plan.reference_price,
+                    plan.requested_qty,
+                    LocalOrderState.INTENT_CREATED.value,
+                    plan.reason,
+                    now,
+                    now,
+                ),
+            )
+            order_id = cursor.lastrowid
+            if order_id is None:
+                raise RuntimeError("SQLite n'a pas retourné l'identifiant de l'ordre")
+            self._insert_financial_application_plan(
+                connection, order_id=int(order_id), intent_id=intent_id, plan=plan, now=now
+            )
+            connection.execute(
+                """INSERT INTO engine_state(engine, payload, updated_at) VALUES(?, ?, ?)
+                   ON CONFLICT(engine) DO UPDATE SET payload=excluded.payload, updated_at=excluded.updated_at""",
+                (identity.engine, canonical_json(pre_state), now),
+            )
+            self._sync_positions(connection, identity.engine, pre_state, now)
+            self._insert_event(
+                connection,
+                identity.engine,
+                "order_intent_reserved",
+                {
+                    "order_id": order_id,
+                    "logical_order_key": logical_key,
+                    "intent_id": intent_id,
+                    "transition_type": identity.transition_type.value,
+                    "decision_checkpoint": identity.decision_checkpoint,
+                    "position_generation": identity.position_generation,
+                    "transition_sequence": identity.transition_sequence,
+                    "side": plan.side,
+                    "requested_qty": plan.requested_qty,
+                    "reference_price": plan.reference_price,
+                    "reason": plan.reason,
+                },
+                "order",
+                str(order_id),
+                intent_id,
+            )
+            self._insert_event(
+                connection,
+                identity.engine,
+                "financial_application_plan_persisted",
+                {
+                    "order_id": order_id,
+                    "intent_id": intent_id,
+                    "plan_key": plan.plan_key,
+                    "pre_state_sha256": plan.pre_state_sha256,
+                },
+                "financial_application_plan",
+                str(order_id),
+                intent_id,
+            )
+            self._insert_event(
+                connection,
+                identity.engine,
+                "order_pre_submission_checkpoint",
+                self._state_event(
+                    pre_state,
+                    {
+                        "order_id": order_id,
+                        "intent_id": intent_id,
+                        "plan_key": plan.plan_key,
+                        "pre_state_sha256": plan.pre_state_sha256,
+                    },
+                ),
+                "order",
+                str(order_id),
+                intent_id,
+            )
+            row = connection.execute(
+                """SELECT id, intent_id, logical_order_key, status, local_state, external_state,
+                          filled_qty, remaining_qty FROM orders WHERE id = ?""",
+                (order_id,),
+            ).fetchone()
+            assert row is not None
+            return self._reservation_from_row(row, acquired=True)
 
     def reserve_market_order(
         self,

@@ -634,7 +634,7 @@ def test_crash_after_fill_before_checkpoint_is_never_auto_applied(tmp_path, monk
         runner._enter_position(slot, row, 100.0, 1, decision_checkpoint="2026-08-09T16:00:00Z")
 
     assert slot.position is not None  # mémoire du processus mourant uniquement
-    assert runner.store.load_engine_state("trend") is None
+    assert runner.store.load_engine_state("trend") is not None
     report = recover_interrupted_orders(
         StateStore(tmp_path / "btcquant.db"),
         broker,
@@ -668,7 +668,7 @@ def test_checkpoint_exception_after_fill_stops_runner_fail_closed(tmp_path, monk
     assert broker.execute_calls == 1
     assert order["external_state"] == ExternalOrderState.FILLED
     assert order["local_state"] == LocalOrderState.PENDING_RECONCILIATION
-    assert runner.store.load_engine_state("trend") is None
+    assert runner.store.load_engine_state("trend") is not None
 
 
 def test_accounting_exception_after_fill_stops_runner_fail_closed(tmp_path, monkeypatch):
@@ -694,7 +694,7 @@ def test_accounting_exception_after_fill_stops_runner_fail_closed(tmp_path, monk
     assert broker.execute_calls == 1
     assert order["external_state"] == ExternalOrderState.FILLED
     assert order["local_state"] == LocalOrderState.PENDING_RECONCILIATION
-    assert runner.store.load_engine_state("trend") is None
+    assert runner.store.load_engine_state("trend") is not None
 
 
 def test_crash_after_atomic_checkpoint_needs_no_recovery(tmp_path, monkeypatch):

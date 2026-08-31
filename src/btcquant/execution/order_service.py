@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from .broker import Broker, Fill
 from .errors import FinancialTransitionAlreadyReserved, ReconciliationRequired
+from .financial_application_plan import FinancialApplicationPlan
 from .order_state import (
     ExternalOrderState,
     FinancialTransitionType,
@@ -26,6 +27,7 @@ class SubmittedOrder:
     remaining_qty: float
     is_terminal: bool
     transition_sequence: int
+    application_plan: FinancialApplicationPlan | None = None
 
 
 class OrderExecutionService:
@@ -85,6 +87,7 @@ class OrderExecutionService:
         reduce_only: bool = False,
         available_volume: float | None = None,
         volatility_annual: float | None = None,
+        application_plan: FinancialApplicationPlan | None = None,
     ) -> SubmittedOrder:
         if not isinstance(side, str):
             raise ValueError(f"Côté d'ordre invalide : {side!r}")
@@ -92,6 +95,8 @@ class OrderExecutionService:
         if normalized_side not in {"BUY", "SELL"}:
             raise ValueError(f"Côté d'ordre invalide : {side!r}")
         normalized_transition = FinancialTransitionType(transition_type)
+        if application_plan is None:
+            raise ValueError("Un plan financier durable est obligatoire avant soumission MARKET")
         expected_entry_side = {
             FinancialTransitionType.ENTER_LONG: "BUY",
             FinancialTransitionType.ENTER_SHORT: "SELL",
@@ -111,12 +116,10 @@ class OrderExecutionService:
                 position_generation=position_generation,
                 transition_sequence=attempt_sequence,
             )
-            reservation = self.store.reserve_market_order(
-                identity,
-                side=normalized_side,
-                requested_qty=qty,
-                reason=reason,
-                reference_price=reference_price,
+            if application_plan.identity != identity:
+                raise ValueError("Le plan financier ne correspond pas à l'identité de soumission")
+            reservation = self.store.reserve_market_order_with_application_plan(
+                identity, plan=application_plan
             )
             if reservation.acquired:
                 self.store.mark_order_submitting(reservation.order_id)
@@ -201,4 +204,5 @@ class OrderExecutionService:
             remaining_qty=result.remaining_qty,
             is_terminal=result.is_terminal,
             transition_sequence=attempt_sequence,
+            application_plan=application_plan,
         )

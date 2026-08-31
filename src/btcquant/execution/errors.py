@@ -78,3 +78,11 @@ class FillInvariantViolation(ExecutionError):
 
 class ExternalFillConflict(ExecutionError):
     """Une clé de fill existante désigne un contenu immuable différent."""
+
+
+class FinancialApplicationPlanConflict(ExecutionError):
+    """Une intention moderne possède déjà un plan financier différent."""
+
+
+class LegacyApplicationContextIncomplete(ExecutionError):
+    """Un ordre historique ne possède pas le plan requis pour un replay moderne."""
