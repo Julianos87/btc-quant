@@ -14,6 +14,7 @@ import math
 import re
 import sqlite3
 from collections.abc import Iterator, Mapping, Sequence
+from types import MappingProxyType
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -47,6 +48,29 @@ class OrderReservation:
     external_state: str | None
     filled_qty: float
     remaining_qty: float
+
+
+@dataclass(frozen=True)
+class PersistedLookupEvent:
+    """Un événement de lookup brut lu dans un snapshot SQLite cohérent."""
+
+    event_id: int
+    ts: str
+    engine: str
+    event_type: str
+    aggregate_type: str
+    aggregate_id: str
+    payload: str
+
+
+@dataclass(frozen=True)
+class ResolutionSnapshot:
+    """Entrée read-only bornée pour la projection de résolution."""
+
+    order: Mapping[str, Any] | None
+    order_observations: tuple[ExternalOrderObservation, ...]
+    fills: tuple[ExternalFill, ...]
+    lookup_events: tuple[PersistedLookupEvent, ...]
 
 
 def utc_now() -> str:
@@ -136,6 +160,21 @@ class StateStore:
             yield connection
             connection.commit()
         except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    @contextmanager
+    def _read_transaction(self) -> Iterator[sqlite3.Connection]:
+        """Snapshot de lecture cohérent, sans verrou d'écriture volontaire."""
+
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN")
+            yield connection
+            connection.rollback()
+        except BaseException:
             connection.rollback()
             raise
         finally:
@@ -2163,6 +2202,68 @@ class StateStore:
                 event_type=event_type,
             )
         return tuple(persisted), tuple(created)
+
+    def read_resolution_snapshot(self, local_order_id: int) -> ResolutionSnapshot:
+        """Lit ordre, preuves et lookup events dans un unique snapshot SQLite."""
+
+        if (
+            isinstance(local_order_id, bool)
+            or not isinstance(local_order_id, int)
+            or local_order_id <= 0
+        ):
+            raise ValueError("local_order_id doit être un entier strictement positif")
+        with self._read_transaction() as connection:
+            order_row = connection.execute(
+                "SELECT * FROM orders WHERE id = ?", (local_order_id,)
+            ).fetchone()
+            if order_row is None:
+                return ResolutionSnapshot(None, (), (), ())
+            order = MappingProxyType(dict(order_row))
+            observations = tuple(
+                self._external_order_observation_from_row(row)
+                for row in connection.execute(
+                    """
+                    SELECT * FROM external_order_observations
+                    WHERE local_order_id = ?
+                    ORDER BY id
+                    """,
+                    (local_order_id,),
+                ).fetchall()
+            )
+            fills = tuple(
+                self._external_fill_from_row(row)
+                for row in connection.execute(
+                    """
+                    SELECT * FROM external_fills
+                    WHERE local_order_id = ?
+                    ORDER BY id
+                    """,
+                    (local_order_id,),
+                ).fetchall()
+            )
+            events = tuple(
+                PersistedLookupEvent(
+                    event_id=int(row["id"]),
+                    ts=str(row["ts"]),
+                    engine=str(row["engine"]),
+                    event_type=str(row["event_type"]),
+                    aggregate_type=str(row["aggregate_type"]),
+                    aggregate_id=str(row["aggregate_id"]),
+                    payload=str(row["payload"]),
+                )
+                for row in connection.execute(
+                    """
+                    SELECT id, ts, engine, event_type, aggregate_type, aggregate_id, payload
+                    FROM events
+                    WHERE engine = ?
+                      AND aggregate_id = ?
+                      AND aggregate_type IN ('external_order_lookup', 'external_fill_lookup')
+                    ORDER BY id
+                    """,
+                    (str(order["engine"]), str(order["intent_id"])),
+                ).fetchall()
+            )
+        return ResolutionSnapshot(order, observations, fills, events)
 
     def get_external_order_observations(
         self,
