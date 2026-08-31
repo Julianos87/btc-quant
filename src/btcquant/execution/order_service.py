@@ -27,7 +27,7 @@ class SubmittedOrder:
     remaining_qty: float
     is_terminal: bool
     transition_sequence: int
-    application_plan: FinancialApplicationPlan | None = None
+    application_plan: FinancialApplicationPlan
 
 
 class OrderExecutionService:

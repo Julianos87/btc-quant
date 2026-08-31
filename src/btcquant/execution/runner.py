@@ -20,7 +20,6 @@ import hashlib
 import json
 import logging
 import threading
-from datetime import datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -1118,6 +1117,7 @@ class LiveRunner:
             volatility_annual=volatility_annual,
         )
         fill = submitted.fill
+        application_plan = submitted.application_plan
         if fill.qty <= 0:
             self._complete_market_order_and_checkpoint(slot, submitted)
             # ordre non exécuté : on GARDE la position (nouvel essai au tick
@@ -1152,7 +1152,7 @@ class LiveRunner:
                 trade_pnl,
                 reason,
                 qty=fill.qty,
-                exit_ts=submitted.application_plan.planned_effect_at,
+                exit_ts=application_plan.planned_effect_at,
             )
             if partial:
                 assert accounting.remaining_position is not None
@@ -1239,6 +1239,8 @@ class LiveRunner:
             entry_stop_price=stop,
         )
         fill = submitted.fill
+        application_plan = submitted.application_plan
+        assert application_plan.entry_stop_price is not None
         if fill.qty <= 0:
             self._complete_market_order_and_checkpoint(slot, submitted)
             log.error("[%s] Entrée non exécutée", slot.strategy.name)
@@ -1246,8 +1248,8 @@ class LiveRunner:
         try:
             accounting = self.accounting_service.open_position(
                 fill,
-                entry_time=datetime.fromisoformat(submitted.application_plan.planned_effect_at),
-                stop_price=submitted.application_plan.entry_stop_price,
+                entry_time=pd.Timestamp(application_plan.planned_effect_at),
+                stop_price=application_plan.entry_stop_price,
                 direction=direction,
             )
             slot.cash += accounting.cash_delta
