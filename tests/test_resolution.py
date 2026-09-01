@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 from dataclasses import replace
 from typing import Any, cast
@@ -75,7 +76,11 @@ def fill(
         "external_order_id": OID,
         "fee": fee,
         "fee_asset": "USDC" if fee is not None else None,
-        "fill_key": "fill-" + key.zfill(64),
+        "fill_key": (
+            "fill-" + key.zfill(64)
+            if key and all(character in "0123456789abcdefABCDEF" for character in key)
+            else "fill-" + hashlib.sha256(key.encode("utf-8")).hexdigest()
+        ),
     }
     values.update(changes)
     return ExternalFill(**cast(Any, values))
@@ -523,6 +528,10 @@ def test_same_tid_candidate_with_different_quantities_uses_conservative_componen
     assert result.outcome == ResolutionOutcome.EVIDENCE_CONFLICT
     assert result.proven_filled_lower_bound == pytest.approx(0.25)
     assert ResolutionReasonCode.FILL_IDENTITY_AMBIGUITY in result.conflicts
+    assert result.financially_applicable_fill_keys == ()
+    assert result.financially_ambiguous_fill_keys == tuple(
+        sorted((fill(key="1").fill_key, fill(key="2").fill_key))
+    )
 
 
 def test_fill_lookup_none_candidate_is_accepted_and_aligned_with_its_fill():
@@ -942,3 +951,312 @@ def test_order_lookup_fact_not_found_cannot_carry_evidence():
             OrderLookupOutcome.NOT_FOUND,
             order_evidence(ExternalOrderState.OPEN),
         )
+
+
+def test_unique_fill_without_tid_is_financially_applicable():
+    result = assess(fills=(fill(key="unique"),))
+
+    assert result.financially_applicable_fill_keys == (fill(key="unique").fill_key,)
+    assert result.financially_ambiguous_fill_keys == ()
+    assert result.tid_identity_proven is False
+
+
+def test_unique_tid_candidate_does_not_block_financial_application():
+    candidate_fill = fill(key="candidate")
+    result = assess(
+        fill_lookups=(
+            FillLookupFact(
+                binding(),
+                FillLookupOutcome.FOUND,
+                fills=(candidate_fill,),
+                venue_fill_id_candidates=("tid-X",),
+                response_count=1,
+            ),
+        )
+    )
+
+    assert result.financially_applicable_fill_keys == (candidate_fill.fill_key,)
+    assert result.financially_ambiguous_fill_keys == ()
+    assert result.tid_identity_proven is False
+
+
+def test_distinct_tid_candidates_allow_each_fill_key_to_be_applicable():
+    first = fill(key="a")
+    second = fill(key="b")
+    result = assess(
+        fill_lookups=(
+            FillLookupFact(
+                binding(),
+                FillLookupOutcome.FOUND,
+                fills=(first, second),
+                venue_fill_id_candidates=("tid-A", "tid-B"),
+                response_count=2,
+            ),
+        )
+    )
+
+    assert result.financially_applicable_fill_keys == tuple(
+        sorted((first.fill_key, second.fill_key))
+    )
+    assert result.financially_ambiguous_fill_keys == ()
+    assert result.tid_identity_proven is False
+
+
+def test_shared_tid_candidate_marks_all_fill_keys_ambiguous():
+    first = fill(key="a")
+    second = fill(key="b")
+    result = assess(
+        fill_lookups=(
+            FillLookupFact(
+                binding(),
+                FillLookupOutcome.FOUND,
+                fills=(first, second),
+                venue_fill_id_candidates=("tid-X", "tid-X"),
+                response_count=2,
+            ),
+        )
+    )
+
+    assert result.financially_applicable_fill_keys == ()
+    assert result.financially_ambiguous_fill_keys == tuple(
+        sorted((first.fill_key, second.fill_key))
+    )
+    assert result.proven_filled_lower_bound == pytest.approx(0.25)
+
+
+def test_tid_ambiguity_is_transitive_across_connected_components():
+    first = fill(key="a")
+    second = fill(key="b")
+    third = fill(key="c")
+    result = assess(
+        fill_lookups=(
+            FillLookupFact(
+                binding(),
+                FillLookupOutcome.FOUND,
+                fills=(first,),
+                venue_fill_id_candidates=("tid-1",),
+                response_count=1,
+            ),
+            FillLookupFact(
+                binding(),
+                FillLookupOutcome.FOUND,
+                fills=(second,),
+                venue_fill_id_candidates=("tid-1",),
+                response_count=1,
+            ),
+            FillLookupFact(
+                binding(),
+                FillLookupOutcome.FOUND,
+                fills=(second,),
+                venue_fill_id_candidates=("tid-2",),
+                response_count=1,
+            ),
+            FillLookupFact(
+                binding(),
+                FillLookupOutcome.FOUND,
+                fills=(third,),
+                venue_fill_id_candidates=("tid-2",),
+                response_count=1,
+            ),
+        )
+    )
+
+    assert result.financially_applicable_fill_keys == ()
+    assert result.financially_ambiguous_fill_keys == tuple(
+        sorted((first.fill_key, second.fill_key, third.fill_key))
+    )
+
+
+def test_unambiguous_fill_remains_applicable_beside_ambiguous_component():
+    independent = fill(key="independent")
+    ambiguous_first = fill(key="ambiguous-a")
+    ambiguous_second = fill(key="ambiguous-b")
+    result = assess(
+        fill_lookups=(
+            FillLookupFact(
+                binding(),
+                FillLookupOutcome.FOUND,
+                fills=(independent,),
+                venue_fill_id_candidates=("tid-independent",),
+                response_count=1,
+            ),
+            FillLookupFact(
+                binding(),
+                FillLookupOutcome.FOUND,
+                fills=(ambiguous_first, ambiguous_second),
+                venue_fill_id_candidates=("tid-shared", "tid-shared"),
+                response_count=2,
+            ),
+        )
+    )
+
+    assert result.financially_applicable_fill_keys == (independent.fill_key,)
+    assert result.financially_ambiguous_fill_keys == tuple(
+        sorted((ambiguous_first.fill_key, ambiguous_second.fill_key))
+    )
+    assert result.outcome == ResolutionOutcome.EVIDENCE_CONFLICT
+
+
+def test_same_fill_key_redelivery_missing_or_known_cloid_is_order_invariant():
+    missing_cloid = fill(key="enriched", client_order_id=None)
+    known_cloid = replace(missing_cloid, client_order_id=CLOID)
+    forward = assess(
+        fill_lookups=(
+            FillLookupFact(
+                binding(),
+                FillLookupOutcome.FOUND,
+                fills=(missing_cloid,),
+                venue_fill_id_candidates=("tid-enriched",),
+                response_count=1,
+            ),
+            FillLookupFact(
+                binding(),
+                FillLookupOutcome.FOUND,
+                fills=(known_cloid,),
+                venue_fill_id_candidates=("tid-enriched",),
+                response_count=1,
+            ),
+        )
+    )
+    reverse = assess(
+        fill_lookups=(
+            FillLookupFact(
+                binding(),
+                FillLookupOutcome.FOUND,
+                fills=(known_cloid,),
+                venue_fill_id_candidates=("tid-enriched",),
+                response_count=1,
+            ),
+            FillLookupFact(
+                binding(),
+                FillLookupOutcome.FOUND,
+                fills=(missing_cloid,),
+                venue_fill_id_candidates=("tid-enriched",),
+                response_count=1,
+            ),
+        )
+    )
+
+    assert forward == reverse
+    assert forward.financially_applicable_fill_keys == (missing_cloid.fill_key,)
+    assert forward.financially_ambiguous_fill_keys == ()
+
+
+def test_same_fill_key_redelivery_with_same_tid_is_one_applicable_key():
+    original = fill(key="same")
+    redelivery = replace(original, observed_at="2026-08-30T12:01:00Z")
+    result = assess(
+        fill_lookups=(
+            FillLookupFact(
+                binding(),
+                FillLookupOutcome.FOUND,
+                fills=(original,),
+                venue_fill_id_candidates=("tid-same",),
+                response_count=1,
+            ),
+            FillLookupFact(
+                binding(),
+                FillLookupOutcome.FOUND,
+                fills=(redelivery,),
+                venue_fill_id_candidates=("tid-same",),
+                response_count=1,
+            ),
+        )
+    )
+
+    assert result.deduplicated_fill_keys == (original.fill_key,)
+    assert result.financially_applicable_fill_keys == (original.fill_key,)
+    assert result.financially_ambiguous_fill_keys == ()
+
+
+def test_same_fill_key_economic_conflict_blocks_all_financial_application():
+    first = fill(key="conflict", fee=-0.01)
+    second = fill(key="conflict", fee=-0.02)
+    result = assess(fills=(first, second))
+
+    assert result.outcome == ResolutionOutcome.EVIDENCE_CONFLICT
+    assert result.financially_applicable_fill_keys == ()
+
+
+def test_lower_bound_quantity_conflict_blocks_all_financial_application():
+    result = assess(fills=(fill(quantity=0.75, key="a"), fill(quantity=0.5, key="b")))
+
+    assert result.outcome == ResolutionOutcome.EVIDENCE_CONFLICT
+    assert result.financially_applicable_fill_keys == ()
+
+
+def test_binding_conflict_blocks_all_financial_application():
+    result = assess(fills=(fill(account_scope="other-account"),))
+
+    assert result.outcome == ResolutionOutcome.BINDING_CONFLICT
+    assert result.financially_applicable_fill_keys == ()
+
+
+def test_binding_incomplete_blocks_all_financial_application():
+    result = assess(
+        binding=binding(expected_external_order_id=None),
+        fills=(fill(client_order_id=None, external_order_id="oid-unbound"),),
+    )
+
+    assert result.outcome == ResolutionOutcome.BINDING_INCOMPLETE
+    assert result.financially_applicable_fill_keys == ()
+
+
+def test_status_conflict_does_not_remove_independently_bound_fill():
+    safe_fill = fill(key="safe")
+    result = assess(
+        order_observations=(
+            observation(ExternalOrderState.CANCELED, observed_at="2026-08-30T12:00:00Z"),
+            observation(ExternalOrderState.OPEN, observed_at="2026-08-30T12:01:00Z"),
+        ),
+        fills=(safe_fill,),
+    )
+
+    assert result.outcome == ResolutionOutcome.EVIDENCE_CONFLICT
+    assert result.financially_applicable_fill_keys == (safe_fill.fill_key,)
+
+
+def test_incomplete_fill_lookup_does_not_remove_existing_positive_fill():
+    safe_fill = fill(key="existing")
+    result = assess(
+        fills=(safe_fill,),
+        fill_lookups=(FillLookupFact(binding(), FillLookupOutcome.INCOMPLETE_RESPONSE),),
+    )
+
+    assert result.fill_completeness_proven is False
+    assert result.financially_applicable_fill_keys == (safe_fill.fill_key,)
+
+
+def test_applicable_quantity_is_never_above_lower_bound():
+    independent = fill(quantity=0.2, key="independent")
+    ambiguous_first = fill(quantity=0.3, key="ambiguous-a")
+    ambiguous_second = fill(quantity=0.5, key="ambiguous-b")
+    result = assess(
+        fill_lookups=(
+            FillLookupFact(
+                binding(),
+                FillLookupOutcome.FOUND,
+                fills=(independent,),
+                venue_fill_id_candidates=(None,),
+                response_count=1,
+            ),
+            FillLookupFact(
+                binding(),
+                FillLookupOutcome.FOUND,
+                fills=(ambiguous_first, ambiguous_second),
+                venue_fill_id_candidates=("tid-shared", "tid-shared"),
+                response_count=2,
+            ),
+        )
+    )
+
+    applicable_quantity = sum(
+        next(
+            fill_value.quantity
+            for fill_value in (independent, ambiguous_first, ambiguous_second)
+            if fill_value.fill_key == key
+        )
+        for key in result.financially_applicable_fill_keys
+    )
+    assert applicable_quantity <= result.proven_filled_lower_bound + 1e-9
+    assert result.proven_filled_lower_bound == pytest.approx(0.5)
