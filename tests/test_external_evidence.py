@@ -648,7 +648,7 @@ def test_schema_v6_to_v8_is_additive_preserves_orders_and_checks_integrity(tmp_p
         }
         foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
 
-    assert version == str(SCHEMA_VERSION) == "8"
+    assert version == str(SCHEMA_VERSION) == "9"
     assert {"external_order_observations", "external_fills"} <= tables
     assert migrated.read_order_by_intent("pre-v7-order")["id"] == order_id
     assert foreign_keys == []
@@ -782,8 +782,8 @@ def test_fresh_schema_is_v8_and_accepts_negative_fee(tmp_path):
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='external_fills'"
         ).fetchone()[0]
 
-    assert version == "8"
-    assert SCHEMA_VERSION == 8
+    assert version == "9"
+    assert SCHEMA_VERSION == 9
     assert created is True
     assert persisted.fee == -0.01
     assert "fee >= 0" not in ddl.lower()
@@ -864,7 +864,7 @@ def test_historical_v7_to_v8_preserves_rows_and_constraints(tmp_path):
 
     assert observation_created is True
     assert rows_after == rows_before
-    assert version == "8"
+    assert version == "9"
     assert "fee >= 0" not in ddl.lower()
     assert {"idx_external_fills_order_id", "idx_external_fills_venue_fill"} <= indexes
     assert unique_fill_indexes

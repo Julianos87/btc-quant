@@ -46,7 +46,8 @@ from .errors import ReconciliationRequired
 from .funding_service import FundingService
 from .instance_lock import EngineInstanceLock
 from .order_service import OrderExecutionService, SubmittedOrder
-from .order_state import FinancialTransitionType
+from .financial_application_plan import FinancialApplicationPlan, sha256_json
+from .order_state import FinancialTransitionType, LogicalOrderIdentity
 from .ports import ClockPort, MarketDataPort, Notifier
 from .position_accounting import PositionAccountingService
 from .protective_stops import ProtectiveStopService, StopDecision, StopDecisionKind
@@ -952,7 +953,48 @@ class LiveRunner:
         *,
         reduce_only: bool = False,
         volatility_annual: float | None = None,
+        entry_direction: int | None = None,
+        entry_stop_price: float | None = None,
     ) -> SubmittedOrder:
+        identity = LogicalOrderIdentity(
+            engine="trend",
+            slot=slot.strategy.name,
+            decision_checkpoint=decision_checkpoint,
+            transition_type=transition_type,
+            position_generation=position_generation,
+            transition_sequence=slot.financial_transition_seq,
+        )
+        persisted_plan = self.store.get_financial_application_plan_by_intent(identity.intent_id)
+        if persisted_plan is not None:
+            current_payload = self._state_payload()
+            durable_payload = self.store.load_engine_state("trend")
+            expected_hash = persisted_plan.plan.pre_state_sha256
+            if (
+                durable_payload is None
+                or sha256_json(durable_payload) != expected_hash
+                or sha256_json(current_payload) != expected_hash
+            ):
+                raise ReconciliationRequired(
+                    f"Ordre {identity.intent_id}: état courant divergent du "
+                    "pre-state du plan financier durable"
+                )
+            application_plan = persisted_plan.plan
+        else:
+            application_plan = FinancialApplicationPlan(
+                identity=identity,
+                side=side,
+                requested_qty=qty,
+                reference_price=ref_price,
+                reason=reason,
+                reduce_only=reduce_only,
+                planned_effect_at=self.clock.utc_now().isoformat(),
+                pre_state_payload=self._state_payload(),
+                protection_mode=stop_protection_mode_from_broker(
+                    supports_stop_orders=self.broker.supports_stop_orders
+                ),
+                entry_direction=entry_direction,
+                entry_stop_price=entry_stop_price,
+            )
         submitted = self.order_service.submit_market(
             engine="trend",
             slot=slot.strategy.name,
@@ -967,6 +1009,7 @@ class LiveRunner:
             reduce_only=reduce_only,
             available_volume=available_volume,
             volatility_annual=volatility_annual,
+            application_plan=application_plan,
         )
         if not submitted.is_terminal:
             # La barre/décision est checkpointée, mais aucun fill encore actif
@@ -1090,6 +1133,7 @@ class LiveRunner:
             volatility_annual=volatility_annual,
         )
         fill = submitted.fill
+        application_plan = submitted.application_plan
         if fill.qty <= 0:
             self._complete_market_order_and_checkpoint(slot, submitted)
             # ordre non exécuté : on GARDE la position (nouvel essai au tick
@@ -1124,6 +1168,7 @@ class LiveRunner:
                 trade_pnl,
                 reason,
                 qty=fill.qty,
+                exit_ts=application_plan.planned_effect_at,
             )
             if partial:
                 assert accounting.remaining_position is not None
@@ -1206,8 +1251,12 @@ class LiveRunner:
             None,
             float(row["volume"]) if pd.notna(row.get("volume")) else None,
             volatility_annual=volatility_annual,
+            entry_direction=direction,
+            entry_stop_price=stop,
         )
         fill = submitted.fill
+        application_plan = submitted.application_plan
+        assert application_plan.entry_stop_price is not None
         if fill.qty <= 0:
             self._complete_market_order_and_checkpoint(slot, submitted)
             log.error("[%s] Entrée non exécutée", slot.strategy.name)
@@ -1215,8 +1264,8 @@ class LiveRunner:
         try:
             accounting = self.accounting_service.open_position(
                 fill,
-                entry_time=self.clock.utc_now(),
-                stop_price=stop,
+                entry_time=pd.Timestamp(application_plan.planned_effect_at),
+                stop_price=application_plan.entry_stop_price,
                 direction=direction,
             )
             slot.cash += accounting.cash_delta
@@ -1511,9 +1560,10 @@ class LiveRunner:
         reason: str,
         *,
         qty: float | None = None,
+        exit_ts: str | None = None,
     ) -> dict[str, Any]:
         return {
-            "exit_ts": self.clock.utc_now().isoformat(),
+            "exit_ts": exit_ts or self.clock.utc_now().isoformat(),
             "entry_ts": pos.entry_time.isoformat(),
             "strategy": slot.strategy.name,
             "direction": "LONG" if pos.direction == 1 else "SHORT",

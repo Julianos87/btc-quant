@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_schema_remains_v8_after_compaction_change():
-    assert SCHEMA_VERSION == 8
+    assert SCHEMA_VERSION == 9
 
 
 def test_compact_script_keeps_lot7_recovery_fence_and_90d_window():

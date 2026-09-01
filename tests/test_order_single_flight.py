@@ -31,6 +31,95 @@ from btcquant.execution.order_state import (
 )
 from btcquant.execution.recovery import recover_interrupted_orders
 from btcquant.execution.state_store import StateStore
+from btcquant.execution.financial_application_plan import FinancialApplicationPlan
+
+
+def _test_application_plan(**kwargs):
+    transition = FinancialTransitionType(kwargs["transition_type"])
+    identity = LogicalOrderIdentity(
+        kwargs["engine"],
+        kwargs["slot"],
+        kwargs["decision_checkpoint"],
+        transition,
+        kwargs.get("position_generation"),
+        kwargs.get("transition_sequence", 0),
+    )
+    position = None
+    if transition in {FinancialTransitionType.EXIT, FinancialTransitionType.ADD}:
+        generation = kwargs["position_generation"]
+        entry, initial = generation.removeprefix("entry=").split("|initial_qty=")
+        direction = 1 if kwargs["side"] == "SELL" else -1
+        position = {
+            "entry_time": entry,
+            "entry_price": kwargs["reference_price"],
+            "qty": max(float(kwargs["qty"]), float(initial)),
+            "stop_price": 90.0,
+            "direction": direction,
+            "bars_held": 0,
+            "best_close": kwargs["reference_price"],
+            "initial_qty": float(initial),
+            "last_add_price": kwargs["reference_price"],
+            "pyramid_adds": 0,
+        }
+    state = {
+        "slots": {
+            kwargs["slot"]: {
+                "cash": 1000.0,
+                "position": position,
+                "stop_order_id": None,
+                "stop_order_local_id": None,
+                "stop_intent_id": None,
+                "stop_transition": None,
+                "entry_fee": 0.0,
+                "last_bar_ts": None,
+                "financial_transition_seq": kwargs.get("transition_sequence", 0),
+            }
+        },
+        "peak_equity": 1000.0,
+        "halted": False,
+        "day": None,
+        "day_start_equity": 1000.0,
+        "daily_lockout": False,
+        "reconciliation_required": False,
+        "last_funding_ts": None,
+        "stop_protection_mode": "SOFTWARE",
+    }
+    return FinancialApplicationPlan(
+        identity=identity,
+        side=kwargs["side"],
+        requested_qty=kwargs["qty"],
+        reference_price=kwargs["reference_price"],
+        reason=kwargs["reason"],
+        reduce_only=kwargs.get("reduce_only", False),
+        planned_effect_at="2026-08-31T12:00:00Z",
+        pre_state_payload=state,
+        protection_mode="SOFTWARE",
+        entry_direction=(
+            1
+            if transition == FinancialTransitionType.ENTER_LONG
+            else -1
+            if transition == FinancialTransitionType.ENTER_SHORT
+            else None
+        ),
+        entry_stop_price=(
+            90.0
+            if transition
+            in {FinancialTransitionType.ENTER_LONG, FinancialTransitionType.ENTER_SHORT}
+            else None
+        ),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _supply_durable_plan(monkeypatch):
+    original = OrderExecutionService.submit_market
+
+    def wrapped(self, **kwargs):
+        if "application_plan" not in kwargs:
+            kwargs["application_plan"] = _test_application_plan(**kwargs)
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(OrderExecutionService, "submit_market", wrapped)
 
 
 def _result(
@@ -100,6 +189,22 @@ class _OpenExchange:
             "price": 100.0,
             "fees": [],
         }
+
+
+def _reserve_with_plan(store: StateStore, identity: LogicalOrderIdentity):
+    plan = _test_application_plan(
+        engine=identity.engine,
+        slot=identity.slot,
+        side="BUY",
+        qty=1.0,
+        reference_price=100.0,
+        reason="entry",
+        decision_checkpoint=identity.decision_checkpoint,
+        transition_type=identity.transition_type,
+        position_generation=identity.position_generation,
+        transition_sequence=identity.transition_sequence,
+    )
+    return store.reserve_market_order_with_application_plan(identity, plan=plan)
 
 
 def _submit(service: OrderExecutionService, *, checkpoint: str = "2026-08-09T16:00:00Z"):
@@ -332,13 +437,7 @@ def _reserve_process(database: str, barrier, outcomes) -> None:
         FinancialTransitionType.ENTER_LONG,
     )
     barrier.wait()
-    reservation = store.reserve_market_order(
-        identity,
-        side="BUY",
-        requested_qty=1.0,
-        reference_price=100.0,
-        reason="entry",
-    )
+    reservation = _reserve_with_plan(store, identity)
     outcomes.put(reservation.acquired)
 
 
@@ -369,13 +468,7 @@ def test_crash_after_reservation_before_broker_reclaims_same_intention_once(tmp_
         "2026-08-09T16:00:00Z",
         FinancialTransitionType.ENTER_LONG,
     )
-    first = store.reserve_market_order(
-        identity,
-        side="BUY",
-        requested_qty=1.0,
-        reference_price=100.0,
-        reason="entry",
-    )
+    first = _reserve_with_plan(store, identity)
 
     report = recover_interrupted_orders(store, PaperBroker(), "trend", external=True)
     broker = _ResultBroker(_result(ExternalOrderState.FILLED, filled=1.0))
@@ -399,13 +492,7 @@ def test_two_restarts_cannot_both_reclaim_pre_submission_crash(tmp_path):
         "2026-08-09T16:00:00Z",
         FinancialTransitionType.ENTER_LONG,
     )
-    store.reserve_market_order(
-        identity,
-        side="BUY",
-        requested_qty=1.0,
-        reference_price=100.0,
-        reason="entry",
-    )
+    _reserve_with_plan(store, identity)
     recover_interrupted_orders(store, PaperBroker(), "trend", external=True)
     broker = _ResultBroker(_result(ExternalOrderState.FILLED, filled=1.0))
     barrier = threading.Barrier(2)
@@ -434,13 +521,7 @@ def test_paper_crash_after_submitting_reclaims_the_same_intention(tmp_path):
         "2026-08-09T16:00:00Z",
         FinancialTransitionType.ENTER_LONG,
     )
-    reserved = store.reserve_market_order(
-        identity,
-        side="BUY",
-        requested_qty=1.0,
-        reference_price=100.0,
-        reason="entry",
-    )
+    reserved = _reserve_with_plan(store, identity)
     store.mark_order_submitting(reserved.order_id)
 
     report = recover_interrupted_orders(store, PaperBroker(), "trend", external=False)
@@ -460,13 +541,7 @@ def test_reclaim_restores_remaining_quantity_for_a_new_submission(tmp_path):
         "2026-08-09T16:00:00Z",
         FinancialTransitionType.ENTER_LONG,
     )
-    reserved = store.reserve_market_order(
-        identity,
-        side="BUY",
-        requested_qty=1.0,
-        reference_price=100.0,
-        reason="entry",
-    )
+    reserved = _reserve_with_plan(store, identity)
     store.mark_order_submitting(reserved.order_id)
     recover_interrupted_orders(store, PaperBroker(), "trend", external=False)
 
