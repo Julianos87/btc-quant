@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 import pandas as pd
@@ -19,6 +20,7 @@ from btcquant.execution.financial_application_plan import (
     FinancialApplicationPlan,
     canonical_json,
     parse_logical_order_identity,
+    sha256_json,
 )
 from btcquant.execution.order_state import FinancialTransitionType, LogicalOrderIdentity
 from btcquant.execution.runner import LiveRunner, StrategySlot
@@ -54,11 +56,32 @@ def _state(slot: str = "slot", position: dict | None = None) -> dict:
 
 
 def _entry_plan(
-    *, slot: str = "slot", stop: float = 90.0, planned: str = "2026-08-31T12:00:00Z"
+    *,
+    slot: str = "slot",
+    stop: float = 90.0,
+    planned: str = "2026-08-31T12:00:00Z",
+    transition_sequence: int = 0,
+    state_transition_sequence: int | None = None,
+    state_protection_mode: str = "SOFTWARE",
+    protection_mode: str = "SOFTWARE",
+    include_state_transition_sequence: bool = True,
+    include_state_protection_mode: bool = True,
 ) -> FinancialApplicationPlan:
     identity = LogicalOrderIdentity(
-        "trend", slot, "2026-08-31T11:00:00Z", FinancialTransitionType.ENTER_LONG
+        "trend",
+        slot,
+        "2026-08-31T11:00:00Z",
+        FinancialTransitionType.ENTER_LONG,
+        transition_sequence=transition_sequence,
     )
+    payload = _state(slot)
+    payload["stop_protection_mode"] = state_protection_mode
+    if state_transition_sequence is not None:
+        payload["slots"][slot]["financial_transition_seq"] = state_transition_sequence
+    if not include_state_transition_sequence:
+        payload["slots"][slot].pop("financial_transition_seq", None)
+    if not include_state_protection_mode:
+        payload.pop("stop_protection_mode", None)
     return FinancialApplicationPlan(
         identity=identity,
         side="BUY",
@@ -67,11 +90,48 @@ def _entry_plan(
         reason="entry",
         reduce_only=False,
         planned_effect_at=planned,
-        pre_state_payload=_state(slot),
-        protection_mode="SOFTWARE",
+        pre_state_payload=payload,
+        protection_mode=protection_mode,
         entry_direction=1,
         entry_stop_price=stop,
     )
+
+
+def _rewrite_persisted_plan_payload(
+    store: StateStore, order_id: int, mutate: Callable[[dict], None]
+) -> None:
+    with sqlite3.connect(store.path) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            "SELECT * FROM financial_application_plans WHERE local_order_id = ?",
+            (order_id,),
+        ).fetchone()
+        assert row is not None
+        payload = json.loads(str(row["pre_state_payload"]))
+        mutate(payload)
+        pre_state_sha256 = sha256_json(payload)
+        plan_key = sha256_json(
+            {
+                "application_version": int(row["application_version"]),
+                "logical_order_key": str(row["logical_order_key"]),
+                "side": str(row["side"]),
+                "requested_qty": float(row["requested_qty"]),
+                "reference_price": float(row["reference_price"]),
+                "reason": str(row["reason"]),
+                "reduce_only": bool(row["reduce_only"]),
+                "planned_effect_at": str(row["planned_effect_at"]),
+                "entry_direction": row["entry_direction"],
+                "entry_stop_price": row["entry_stop_price"],
+                "pre_state_sha256": pre_state_sha256,
+                "protection_mode": str(row["protection_mode"]),
+            }
+        )
+        connection.execute(
+            "UPDATE financial_application_plans SET pre_state_payload=?, "
+            "pre_state_sha256=?, plan_key=? WHERE local_order_id=?",
+            (canonical_json(payload), pre_state_sha256, plan_key, order_id),
+        )
+        connection.commit()
 
 
 def test_atomic_reservation_persists_order_plan_checkpoint_and_events(tmp_path: Path) -> None:
@@ -570,3 +630,85 @@ def test_legacy_order_without_plan_remains_fail_closed(tmp_path: Path) -> None:
         )
     assert legacy.acquired is True
     assert broker.calls == 0
+
+
+@pytest.mark.parametrize(
+    ("state_sequence", "include_sequence"),
+    [(2, True), (None, False)],
+)
+def test_modern_plan_requires_matching_explicit_transition_sequence(
+    state_sequence: int | None, include_sequence: bool
+) -> None:
+    with pytest.raises(ValueError, match="FINANCIAL_TRANSITION_SEQUENCE_CONFLICT"):
+        _entry_plan(
+            transition_sequence=3,
+            state_transition_sequence=state_sequence,
+            include_state_transition_sequence=include_sequence,
+        )
+
+
+def test_modern_plan_accepts_matching_explicit_transition_sequence() -> None:
+    plan = _entry_plan(transition_sequence=3, state_transition_sequence=3)
+    assert plan.identity.transition_sequence == 3
+    assert plan.pre_state_payload["slots"]["slot"]["financial_transition_seq"] == 3
+
+
+@pytest.mark.parametrize(
+    ("plan_mode", "state_mode"),
+    [("SOFTWARE", "EXCHANGE"), ("EXCHANGE", "SOFTWARE")],
+)
+def test_modern_plan_requires_matching_protection_mode(plan_mode: str, state_mode: str) -> None:
+    with pytest.raises(ValueError, match="PROTECTION_MODE_CONFLICT"):
+        _entry_plan(protection_mode=plan_mode, state_protection_mode=state_mode)
+
+
+def test_modern_plan_requires_explicit_protection_mode() -> None:
+    with pytest.raises(ValueError, match="PROTECTION_MODE_CONFLICT"):
+        _entry_plan(include_state_protection_mode=False)
+
+
+def test_modern_plan_accepts_matching_protection_mode() -> None:
+    plan = _entry_plan(protection_mode="EXCHANGE", state_protection_mode="EXCHANGE")
+    assert plan.protection_mode == "EXCHANGE"
+    assert plan.pre_state_payload["stop_protection_mode"] == "EXCHANGE"
+
+
+def test_plan_read_rejects_semantically_corrupted_transition_sequence_even_with_new_hashes(
+    tmp_path: Path,
+) -> None:
+    store = StateStore(tmp_path / "state.db")
+    plan = _entry_plan(transition_sequence=3, state_transition_sequence=3)
+    reservation = store.reserve_market_order_with_application_plan(plan.identity, plan=plan)
+
+    def corrupt_sequence(payload: dict) -> None:
+        payload["slots"]["slot"]["financial_transition_seq"] = 2
+
+    _rewrite_persisted_plan_payload(store, reservation.order_id, corrupt_sequence)
+    with pytest.raises(
+        FinancialApplicationPlanConflict, match="FINANCIAL_TRANSITION_SEQUENCE_CONFLICT"
+    ):
+        store.get_financial_application_plan(reservation.order_id)
+
+
+def test_plan_read_rejects_semantically_corrupted_protection_mode_even_with_new_hashes(
+    tmp_path: Path,
+) -> None:
+    store = StateStore(tmp_path / "state.db")
+    plan = _entry_plan()
+    reservation = store.reserve_market_order_with_application_plan(plan.identity, plan=plan)
+
+    def corrupt_mode(payload: dict) -> None:
+        payload["stop_protection_mode"] = "EXCHANGE"
+
+    _rewrite_persisted_plan_payload(store, reservation.order_id, corrupt_mode)
+    with pytest.raises(FinancialApplicationPlanConflict, match="PROTECTION_MODE_CONFLICT"):
+        store.get_financial_application_plan(reservation.order_id)
+
+
+def test_legacy_state_validation_keeps_plan_fields_optional() -> None:
+    from btcquant.execution.state_contract import validate_trend_state
+
+    payload = _state()
+    payload["slots"]["slot"].pop("financial_transition_seq")
+    payload.pop("stop_protection_mode")
+    assert validate_trend_state(payload)["slots"]["slot"]["cash"] == 1000.0

@@ -144,10 +144,34 @@ def _validate_plan_position(position: Mapping[str, Any], slot: str) -> None:
             raise ValueError(f"{slot}.position.{name} invalide")
 
 
-def _validate_plan_state(payload: Mapping[str, Any], slot: str) -> None:
+def _validate_plan_state(
+    payload: Mapping[str, Any],
+    slot: str,
+    *,
+    expected_transition_sequence: int,
+    expected_protection_mode: str,
+) -> None:
     slot_payload = payload.get("slots", {}).get(slot)
     if not isinstance(slot_payload, Mapping):
         raise ValueError(f"pre_state_payload: slot {slot!r} absent")
+    transition_sequence = slot_payload.get("financial_transition_seq")
+    if (
+        isinstance(transition_sequence, bool)
+        or not isinstance(transition_sequence, int)
+        or transition_sequence != expected_transition_sequence
+    ):
+        raise ValueError(
+            "FINANCIAL_TRANSITION_SEQUENCE_CONFLICT: "
+            f"{slot}.financial_transition_seq doit être explicitement "
+            f"égal à {expected_transition_sequence}"
+        )
+    protection_mode = payload.get("stop_protection_mode")
+    if protection_mode not in {STOP_PROTECTION_SOFTWARE, STOP_PROTECTION_EXCHANGE}:
+        raise ValueError(
+            "PROTECTION_MODE_CONFLICT: stop_protection_mode doit être SOFTWARE ou EXCHANGE"
+        )
+    if protection_mode != expected_protection_mode:
+        raise ValueError("PROTECTION_MODE_CONFLICT: stop_protection_mode divergent du plan")
     _finite_number(slot_payload.get("cash"), f"{slot}.cash")
     _finite_number(slot_payload.get("entry_fee"), f"{slot}.entry_fee")
     position = slot_payload.get("position")
@@ -216,7 +240,12 @@ class FinancialApplicationPlan:
         except (TypeError, ValueError) as error:
             raise ValueError("pre_state_payload non sérialisable") from error
         validate_trend_state(payload)
-        _validate_plan_state(payload, self.identity.slot)
+        _validate_plan_state(
+            payload,
+            self.identity.slot,
+            expected_transition_sequence=self.identity.transition_sequence,
+            expected_protection_mode=self.protection_mode,
+        )
         frozen_payload = _freeze_json_value(payload)
         if not isinstance(frozen_payload, Mapping):
             raise ValueError("pre_state_payload doit être un objet JSON")
