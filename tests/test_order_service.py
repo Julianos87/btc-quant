@@ -96,7 +96,8 @@ def _supply_durable_plan(monkeypatch):
     original = OrderExecutionService.submit_market
 
     def wrapped(self, **kwargs):
-        kwargs.setdefault("application_plan", _test_application_plan(**kwargs))
+        if "application_plan" not in kwargs:
+            kwargs["application_plan"] = _test_application_plan(**kwargs)
         return original(self, **kwargs)
 
     monkeypatch.setattr(OrderExecutionService, "submit_market", wrapped)
@@ -340,3 +341,37 @@ def test_ambiguous_error_persistence_failure_stops_fail_closed(tmp_path, monkeyp
         )
 
     assert store.read_orders("trend")[0]["local_state"] == LocalOrderState.SUBMITTING
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("qty", 2.0),
+        ("side", "SELL"),
+        ("reference_price", 101.0),
+        ("reason", "different-reason"),
+        ("reduce_only", True),
+    ],
+)
+def test_submission_plan_must_match_all_broker_arguments_before_reservation(tmp_path, field, value):
+    base = {
+        "engine": "trend",
+        "slot": "slot",
+        "side": "BUY",
+        "qty": 1.0,
+        "reference_price": 100.0,
+        "reason": "entry",
+        "decision_checkpoint": "2026-08-31T11:00:00Z",
+        "transition_type": FinancialTransitionType.ENTER_LONG,
+        "reduce_only": False,
+    }
+    plan = _test_application_plan(**base)
+    broker = StubBroker(
+        BrokerOrderResult(Fill(100.0, 1.0, 0.0), ExternalOrderState.FILLED, 1.0, 0.0)
+    )
+    call = {**base, "application_plan": plan}
+    call[field] = value
+    with pytest.raises(ValueError, match="plan financier"):
+        OrderExecutionService(StateStore(tmp_path / "state.db"), broker).submit_market(**call)
+    assert broker.intent_id is None
+    assert StateStore(tmp_path / "state.db").read_orders("trend") == []

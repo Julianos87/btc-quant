@@ -382,11 +382,10 @@ class StateStore:
             row = connection.execute(
                 "SELECT value FROM metadata WHERE key = 'schema_version'"
             ).fetchone()
+            new_schema = row is None
             if row is None:
-                connection.execute(
-                    "INSERT INTO metadata(key, value) VALUES('schema_version', ?)",
-                    (str(SCHEMA_VERSION),),
-                )
+                # La métadonnée est écrite après la création du dernier objet
+                # afin qu'une panne v9 ne puisse jamais valider un schéma partiel.
                 current_version = SCHEMA_VERSION
             elif int(row["value"]) > SCHEMA_VERSION:
                 raise RuntimeError(
@@ -428,10 +427,16 @@ class StateStore:
                 current_version = 9
             else:
                 self._ensure_financial_application_plan_schema(connection)
-            connection.execute(
-                "UPDATE metadata SET value = ? WHERE key = 'schema_version'",
-                (str(current_version),),
-            )
+            if new_schema:
+                connection.execute(
+                    "INSERT INTO metadata(key, value) VALUES('schema_version', ?)",
+                    (str(current_version),),
+                )
+            else:
+                connection.execute(
+                    "UPDATE metadata SET value = ? WHERE key = 'schema_version'",
+                    (str(current_version),),
+                )
             # WAL est persistant. Il est activé hors d'une transaction sur
             # certaines versions SQLite ; l'échec est sans impact fonctionnel.
         with self._connect() as connection:
@@ -896,9 +901,8 @@ class StateStore:
 
     @staticmethod
     def _ensure_financial_application_plan_schema(connection: sqlite3.Connection) -> None:
-        connection.executescript(
+        connection.execute(
             """
-            BEGIN IMMEDIATE;
             CREATE TABLE IF NOT EXISTS financial_application_plans (
                 local_order_id INTEGER PRIMARY KEY,
                 intent_id TEXT NOT NULL UNIQUE,
@@ -924,7 +928,7 @@ class StateStore:
                 protection_mode TEXT NOT NULL CHECK(protection_mode IN ('SOFTWARE', 'EXCHANGE')),
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(local_order_id) REFERENCES orders(id)
-            );
+            )
             """
         )
 
@@ -1668,33 +1672,88 @@ class StateStore:
         )
 
     @staticmethod
-    def _plan_from_row(row: sqlite3.Row) -> PersistedFinancialApplicationPlan:
-        pre_state = json.loads(str(row["pre_state_payload"]))
-        identity = parse_logical_order_identity(
-            str(row["logical_order_key"]),
-            intent_id=str(row["intent_id"]),
-            engine=str(row["engine"]),
-            slot=str(row["slot"]),
-        )
-        plan = FinancialApplicationPlan(
-            identity=identity,
-            side=str(row["side"]),
-            requested_qty=float(row["requested_qty"]),
-            reference_price=float(row["reference_price"]),
-            reason=str(row["reason"]),
-            reduce_only=bool(row["reduce_only"]),
-            planned_effect_at=str(row["planned_effect_at"]),
-            pre_state_payload=pre_state,
-            protection_mode=str(row["protection_mode"]),
-            entry_direction=row["entry_direction"],
-            entry_stop_price=row["entry_stop_price"],
-            application_version=int(row["application_version"]),
-        )
-        if (
-            str(row["pre_state_sha256"]) != plan.pre_state_sha256
-            or str(row["plan_key"]) != plan.plan_key
-        ):
-            raise ValueError("FINANCIAL_APPLICATION_PLAN_CONFLICT: hash durable invalide")
+    def _plan_from_row(
+        row: sqlite3.Row,
+        order_row: sqlite3.Row | None,
+    ) -> PersistedFinancialApplicationPlan:
+        def conflict(detail: str) -> None:
+            raise FinancialApplicationPlanConflict(f"FINANCIAL_APPLICATION_PLAN_CONFLICT: {detail}")
+
+        if order_row is None:
+            conflict("ordre local référencé absent")
+        try:
+            if int(row["local_order_id"]) != int(order_row["id"]):
+                conflict("local_order_id diverge de orders.id")
+            for name in ("intent_id", "logical_order_key", "engine", "slot"):
+                if row[name] != order_row[name]:
+                    conflict(f"{name} diverge de orders")
+            if order_row["order_type"] != "MARKET":
+                conflict("order_type n'est pas MARKET")
+            if row["side"] != order_row["side"]:
+                conflict("side diverge de orders")
+            if not math.isclose(
+                float(row["requested_qty"]),
+                float(order_row["requested_qty"]),
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            ):
+                conflict("requested_qty diverge de orders")
+            if (
+                row["reference_price"] is None
+                or order_row["reference_price"] is None
+                or not math.isclose(
+                    float(row["reference_price"]),
+                    float(order_row["reference_price"]),
+                    rel_tol=0.0,
+                    abs_tol=1e-12,
+                )
+            ):
+                conflict("reference_price diverge de orders")
+            if row["reason"] != order_row["reason"]:
+                conflict("reason diverge de orders")
+
+            identity = parse_logical_order_identity(
+                str(order_row["logical_order_key"]),
+                intent_id=str(order_row["intent_id"]),
+                engine=str(order_row["engine"]),
+                slot=str(order_row["slot"]),
+            )
+            if (
+                row["transition_type"] != identity.transition_type.value
+                or row["decision_checkpoint"] != identity.decision_checkpoint
+                or row["position_generation"] != identity.position_generation
+                or int(row["transition_sequence"]) != identity.transition_sequence
+            ):
+                conflict("colonnes dénormalisées divergentes de logical_order_key")
+
+            pre_state = json.loads(str(row["pre_state_payload"]))
+            plan = FinancialApplicationPlan(
+                identity=identity,
+                side=str(row["side"]),
+                requested_qty=float(row["requested_qty"]),
+                reference_price=float(row["reference_price"]),
+                reason=str(row["reason"]),
+                reduce_only=bool(row["reduce_only"]),
+                planned_effect_at=str(row["planned_effect_at"]),
+                pre_state_payload=pre_state,
+                protection_mode=str(row["protection_mode"]),
+                entry_direction=row["entry_direction"],
+                entry_stop_price=row["entry_stop_price"],
+                application_version=int(row["application_version"]),
+            )
+            if str(row["reason"]) != plan.reason:
+                conflict("reason non canonique")
+            if (
+                str(row["pre_state_sha256"]) != plan.pre_state_sha256
+                or str(row["plan_key"]) != plan.plan_key
+            ):
+                conflict("hash durable invalide")
+        except FinancialApplicationPlanConflict:
+            raise
+        except (KeyError, TypeError, ValueError, OverflowError) as error:
+            raise FinancialApplicationPlanConflict(
+                f"FINANCIAL_APPLICATION_PLAN_CONFLICT: {error}"
+            ) from error
         return PersistedFinancialApplicationPlan(
             local_order_id=int(row["local_order_id"]),
             intent_id=str(row["intent_id"]),
@@ -1706,21 +1765,33 @@ class StateStore:
         self, local_order_id: int
     ) -> PersistedFinancialApplicationPlan | None:
         with self._read_transaction() as connection:
-            row = connection.execute(
+            plan_row = connection.execute(
                 "SELECT * FROM financial_application_plans WHERE local_order_id = ?",
                 (local_order_id,),
             ).fetchone()
-        return self._plan_from_row(row) if row is not None else None
+            if plan_row is None:
+                return None
+            order_row = connection.execute(
+                "SELECT * FROM orders WHERE id = ?",
+                (plan_row["local_order_id"],),
+            ).fetchone()
+            return self._plan_from_row(plan_row, order_row)
 
     def get_financial_application_plan_by_intent(
         self, intent_id: str
     ) -> PersistedFinancialApplicationPlan | None:
         with self._read_transaction() as connection:
-            row = connection.execute(
+            plan_row = connection.execute(
                 "SELECT * FROM financial_application_plans WHERE intent_id = ?",
                 (intent_id,),
             ).fetchone()
-        return self._plan_from_row(row) if row is not None else None
+            if plan_row is None:
+                return None
+            order_row = connection.execute(
+                "SELECT * FROM orders WHERE id = ?",
+                (plan_row["local_order_id"],),
+            ).fetchone()
+            return self._plan_from_row(plan_row, order_row)
 
     @staticmethod
     def _insert_financial_application_plan(
@@ -1787,8 +1858,7 @@ class StateStore:
         pre_state = json.loads(canonical_json(plan.pre_state_payload))
         with self._transaction() as connection:
             existing = connection.execute(
-                """SELECT id, intent_id, logical_order_key, status, local_state, external_state,
-                          filled_qty, remaining_qty FROM orders
+                """SELECT * FROM orders
                    WHERE logical_order_key = ? OR intent_id = ? ORDER BY id LIMIT 1""",
                 (logical_key, intent_id),
             ).fetchone()
@@ -1806,7 +1876,7 @@ class StateStore:
                 ).fetchone()
                 if plan_row is None:
                     raise FinancialApplicationPlanConflict("LEGACY_APPLICATION_CONTEXT_INCOMPLETE")
-                persisted = self._plan_from_row(plan_row)
+                persisted = self._plan_from_row(plan_row, existing)
                 if persisted.plan.semantic_content() != plan.semantic_content():
                     raise FinancialApplicationPlanConflict("Le plan financier existant diffère")
                 return self._reservation_from_row(existing, acquired=False)

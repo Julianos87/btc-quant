@@ -46,7 +46,7 @@ from .errors import ReconciliationRequired
 from .funding_service import FundingService
 from .instance_lock import EngineInstanceLock
 from .order_service import OrderExecutionService, SubmittedOrder
-from .financial_application_plan import FinancialApplicationPlan
+from .financial_application_plan import FinancialApplicationPlan, sha256_json
 from .order_state import FinancialTransitionType, LogicalOrderIdentity
 from .ports import ClockPort, MarketDataPort, Notifier
 from .position_accounting import PositionAccountingService
@@ -964,21 +964,37 @@ class LiveRunner:
             position_generation=position_generation,
             transition_sequence=slot.financial_transition_seq,
         )
-        application_plan = FinancialApplicationPlan(
-            identity=identity,
-            side=side,
-            requested_qty=qty,
-            reference_price=ref_price,
-            reason=reason,
-            reduce_only=reduce_only,
-            planned_effect_at=self.clock.utc_now().isoformat(),
-            pre_state_payload=self._state_payload(),
-            protection_mode=stop_protection_mode_from_broker(
-                supports_stop_orders=self.broker.supports_stop_orders
-            ),
-            entry_direction=entry_direction,
-            entry_stop_price=entry_stop_price,
-        )
+        persisted_plan = self.store.get_financial_application_plan_by_intent(identity.intent_id)
+        if persisted_plan is not None:
+            current_payload = self._state_payload()
+            durable_payload = self.store.load_engine_state("trend")
+            expected_hash = persisted_plan.plan.pre_state_sha256
+            if (
+                durable_payload is None
+                or sha256_json(durable_payload) != expected_hash
+                or sha256_json(current_payload) != expected_hash
+            ):
+                raise ReconciliationRequired(
+                    f"Ordre {identity.intent_id}: état courant divergent du "
+                    "pre-state du plan financier durable"
+                )
+            application_plan = persisted_plan.plan
+        else:
+            application_plan = FinancialApplicationPlan(
+                identity=identity,
+                side=side,
+                requested_qty=qty,
+                reference_price=ref_price,
+                reason=reason,
+                reduce_only=reduce_only,
+                planned_effect_at=self.clock.utc_now().isoformat(),
+                pre_state_payload=self._state_payload(),
+                protection_mode=stop_protection_mode_from_broker(
+                    supports_stop_orders=self.broker.supports_stop_orders
+                ),
+                entry_direction=entry_direction,
+                entry_stop_price=entry_stop_price,
+            )
         submitted = self.order_service.submit_market(
             engine="trend",
             slot=slot.strategy.name,

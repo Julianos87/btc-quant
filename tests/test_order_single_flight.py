@@ -115,7 +115,8 @@ def _supply_durable_plan(monkeypatch):
     original = OrderExecutionService.submit_market
 
     def wrapped(self, **kwargs):
-        kwargs.setdefault("application_plan", _test_application_plan(**kwargs))
+        if "application_plan" not in kwargs:
+            kwargs["application_plan"] = _test_application_plan(**kwargs)
         return original(self, **kwargs)
 
     monkeypatch.setattr(OrderExecutionService, "submit_market", wrapped)

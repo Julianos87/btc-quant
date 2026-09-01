@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 from .broker import Broker, Fill
 from .errors import FinancialTransitionAlreadyReserved, ReconciliationRequired
@@ -97,6 +98,44 @@ class OrderExecutionService:
         normalized_transition = FinancialTransitionType(transition_type)
         if application_plan is None:
             raise ValueError("Un plan financier durable est obligatoire avant soumission MARKET")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("reason doit être non vide")
+        normalized_reason = reason.strip()
+        if not isinstance(reduce_only, bool):
+            raise ValueError("reduce_only doit être bool")
+        try:
+            normalized_qty = float(qty)
+            normalized_reference_price = float(reference_price)
+        except (TypeError, ValueError) as error:
+            raise ValueError("qty et reference_price doivent être numériques") from error
+        if (
+            isinstance(qty, bool)
+            or not math.isfinite(normalized_qty)
+            or not math.isclose(
+                application_plan.requested_qty,
+                normalized_qty,
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+        ):
+            raise ValueError("Le plan financier ne correspond pas à la quantité soumise")
+        if (
+            isinstance(reference_price, bool)
+            or not math.isfinite(normalized_reference_price)
+            or not math.isclose(
+                application_plan.reference_price,
+                normalized_reference_price,
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+        ):
+            raise ValueError("Le plan financier ne correspond pas au prix de référence soumis")
+        if application_plan.side != normalized_side:
+            raise ValueError("Le plan financier ne correspond pas au côté soumis")
+        if application_plan.reason != normalized_reason:
+            raise ValueError("Le plan financier ne correspond pas à la raison soumise")
+        if application_plan.reduce_only != reduce_only:
+            raise ValueError("Le plan financier ne correspond pas à reduce_only")
         expected_entry_side = {
             FinancialTransitionType.ENTER_LONG: "BUY",
             FinancialTransitionType.ENTER_SHORT: "SELL",
@@ -148,11 +187,11 @@ class OrderExecutionService:
         intent_id = reservation.intent_id
         try:
             result = self.broker.execute_market(
-                normalized_side,
-                qty,
-                reference_price,
+                application_plan.side,
+                application_plan.requested_qty,
+                application_plan.reference_price,
                 client_order_id=intent_id,
-                reduce_only=reduce_only,
+                reduce_only=application_plan.reduce_only,
                 available_volume=available_volume,
                 volatility_annual=volatility_annual,
             )

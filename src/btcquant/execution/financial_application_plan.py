@@ -112,6 +112,59 @@ def position_generation_from_payload(position: Mapping[str, Any]) -> str:
     return f"entry={entry_time}|initial_qty={format(initial, '.17g')}"
 
 
+def _finite_number(value: object, label: str, *, positive: bool = False) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{label} doit être numérique")
+    number = float(value)
+    if not math.isfinite(number) or (positive and number <= 0):
+        qualifier = " strictement positif" if positive else " fini"
+        raise ValueError(f"{label} doit être{qualifier}")
+    return number
+
+
+def _validate_plan_position(position: Mapping[str, Any], slot: str) -> None:
+    """Valide les champs financiers requis par un plan ADD/EXIT."""
+
+    _finite_number(position.get("entry_price"), f"{slot}.position.entry_price", positive=True)
+    _finite_number(position.get("qty"), f"{slot}.position.qty", positive=True)
+    _finite_number(position.get("stop_price"), f"{slot}.position.stop_price", positive=True)
+    _finite_number(position.get("initial_qty"), f"{slot}.position.initial_qty", positive=True)
+    _finite_number(position.get("last_add_price"), f"{slot}.position.last_add_price", positive=True)
+    _finite_number(position.get("best_close"), f"{slot}.position.best_close")
+    entry_time = position.get("entry_time")
+    if not isinstance(entry_time, str) or not entry_time.strip():
+        raise ValueError(f"{slot}.position.entry_time invalide")
+    canonical_utc_timestamp(entry_time)
+    direction = position.get("direction")
+    if isinstance(direction, bool) or direction not in {-1, 1}:
+        raise ValueError(f"{slot}.position.direction invalide")
+    for name in ("bars_held", "pyramid_adds"):
+        value = position.get(name)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{slot}.position.{name} invalide")
+
+
+def _validate_plan_state(payload: Mapping[str, Any], slot: str) -> None:
+    slot_payload = payload.get("slots", {}).get(slot)
+    if not isinstance(slot_payload, Mapping):
+        raise ValueError(f"pre_state_payload: slot {slot!r} absent")
+    _finite_number(slot_payload.get("cash"), f"{slot}.cash")
+    _finite_number(slot_payload.get("entry_fee"), f"{slot}.entry_fee")
+    position = slot_payload.get("position")
+    if position is not None:
+        if not isinstance(position, Mapping):
+            raise ValueError(f"{slot}.position invalide")
+        _validate_plan_position(position, slot)
+
+
+def _freeze_json_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return MappingProxyType({str(key): _freeze_json_value(item) for key, item in value.items()})
+    if isinstance(value, (tuple, list)):
+        return tuple(_freeze_json_value(item) for item in value)
+    return value
+
+
 @dataclass(frozen=True)
 class FinancialApplicationPlan:
     """Plan v1 immuable associé à une unique intention MARKET Trend."""
@@ -163,8 +216,12 @@ class FinancialApplicationPlan:
         except (TypeError, ValueError) as error:
             raise ValueError("pre_state_payload non sérialisable") from error
         validate_trend_state(payload)
-        object.__setattr__(self, "pre_state_payload", MappingProxyType(payload))
-        self._validate_transition(payload)
+        _validate_plan_state(payload, self.identity.slot)
+        frozen_payload = _freeze_json_value(payload)
+        if not isinstance(frozen_payload, Mapping):
+            raise ValueError("pre_state_payload doit être un objet JSON")
+        object.__setattr__(self, "pre_state_payload", frozen_payload)
+        self._validate_transition(frozen_payload)
 
     def _validate_transition(self, payload: Mapping[str, Any]) -> None:
         position = payload["slots"].get(self.identity.slot, {}).get("position")
