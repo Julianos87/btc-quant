@@ -38,9 +38,20 @@ from .financial_application_plan import (
     canonical_json,
     parse_logical_order_identity,
 )
-from .order_state import ExternalOrderState, LocalOrderState, LogicalOrderIdentity
+from .financial_fill_application import (
+    FinancialApplicationLedgerConflict,
+    FinancialFillApplicationResult,
+    PersistedFinancialFillApplication,
+    financial_fill_application_key,
+)
+from .order_state import (
+    ExternalOrderState,
+    FinancialTransitionType,
+    LocalOrderState,
+    LogicalOrderIdentity,
+)
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 DEPOSIT_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}")
 
 
@@ -427,6 +438,11 @@ class StateStore:
                 current_version = 9
             else:
                 self._ensure_financial_application_plan_schema(connection)
+            if current_version < 10:
+                self._migrate_v10(connection)
+                current_version = 10
+            else:
+                self._ensure_financial_fill_application_schema(connection)
             if new_schema:
                 connection.execute(
                     "INSERT INTO metadata(key, value) VALUES('schema_version', ?)",
@@ -936,6 +952,78 @@ class StateStore:
     def _migrate_v9(cls, connection: sqlite3.Connection) -> None:
         """Migration additive v8 vers le plan financier durable v1."""
         cls._ensure_financial_application_plan_schema(connection)
+
+    @staticmethod
+    def _ensure_financial_fill_application_schema(connection: sqlite3.Connection) -> None:
+        """Create the v10 ledger without rebuilding prior tables."""
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS financial_fill_applications (
+                application_key TEXT PRIMARY KEY,
+                application_version INTEGER NOT NULL,
+                local_order_id INTEGER NOT NULL,
+                intent_id TEXT NOT NULL,
+                plan_key TEXT NOT NULL,
+                fill_key TEXT NOT NULL,
+                application_index INTEGER NOT NULL CHECK(application_index >= 0),
+                previous_application_key TEXT,
+                transition_type TEXT NOT NULL,
+                economic_effect_at TEXT NOT NULL,
+                state_before_sha256 TEXT NOT NULL,
+                state_after_sha256 TEXT NOT NULL,
+                result_payload TEXT NOT NULL CHECK(json_valid(result_payload)),
+                result_sha256 TEXT NOT NULL,
+                applied_at TEXT NOT NULL,
+                UNIQUE(local_order_id, fill_key, application_version),
+                UNIQUE(local_order_id, application_index),
+                FOREIGN KEY(local_order_id) REFERENCES orders(id),
+                FOREIGN KEY(plan_key) REFERENCES financial_application_plans(plan_key),
+                FOREIGN KEY(fill_key) REFERENCES external_fills(fill_key),
+                FOREIGN KEY(previous_application_key)
+                    REFERENCES financial_fill_applications(application_key)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS
+                idx_financial_fill_applications_previous
+            ON financial_fill_applications(previous_application_key)
+            WHERE previous_application_key IS NOT NULL
+            """
+        )
+        required = {
+            "application_key",
+            "application_version",
+            "local_order_id",
+            "intent_id",
+            "plan_key",
+            "fill_key",
+            "application_index",
+            "previous_application_key",
+            "transition_type",
+            "economic_effect_at",
+            "state_before_sha256",
+            "state_after_sha256",
+            "result_payload",
+            "result_sha256",
+            "applied_at",
+        }
+        columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(financial_fill_applications)"
+            ).fetchall()
+        }
+        if not required <= columns:
+            raise RuntimeError(
+                f"Incomplete v10 financial_fill_applications schema: {sorted(required - columns)}"
+            )
+
+    @classmethod
+    def _migrate_v10(cls, connection: sqlite3.Connection) -> None:
+        """Migration additive v9 to the financial application ledger."""
+        cls._ensure_financial_fill_application_schema(connection)
 
     @staticmethod
     def _json(payload: Any) -> str:
@@ -2659,6 +2747,196 @@ class StateStore:
                 (local_order_id,),
             ).fetchall()
         return [self._external_fill_from_row(row) for row in rows]
+
+    def read_financial_fill_application_chain(
+        self, local_order_id: int
+    ) -> tuple[PersistedFinancialFillApplication, ...]:
+        """Read and validate one complete financial application chain.
+
+        Orders, the referenced plan, fills and ledger rows are read inside one
+        read transaction. There is deliberately no public ledger insert method
+        in E2; this boundary only consumes durable records.
+        """
+        if (
+            isinstance(local_order_id, bool)
+            or not isinstance(local_order_id, int)
+            or local_order_id <= 0
+        ):
+            raise ValueError("local_order_id must be a positive integer")
+        with self._read_transaction() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM financial_fill_applications
+                WHERE local_order_id = ?
+                ORDER BY application_index
+                """,
+                (local_order_id,),
+            ).fetchall()
+            if not rows:
+                return ()
+            order_row = connection.execute(
+                "SELECT * FROM orders WHERE id = ?", (local_order_id,)
+            ).fetchone()
+            if order_row is None:
+                raise FinancialApplicationLedgerConflict(
+                    "FINANCIAL_APPLICATION_LEDGER_CONFLICT: local order missing"
+                )
+            plan_row = connection.execute(
+                "SELECT * FROM financial_application_plans WHERE local_order_id = ?",
+                (local_order_id,),
+            ).fetchone()
+            if plan_row is None:
+                raise FinancialApplicationLedgerConflict(
+                    "FINANCIAL_APPLICATION_LEDGER_CONFLICT: financial plan missing"
+                )
+            try:
+                persisted_plan = self._plan_from_row(plan_row, order_row)
+            except (FinancialApplicationPlanConflict, ValueError, TypeError) as error:
+                raise FinancialApplicationLedgerConflict(
+                    f"FINANCIAL_APPLICATION_LEDGER_CONFLICT: invalid plan: {error}"
+                ) from error
+
+            records: list[PersistedFinancialFillApplication] = []
+            seen_keys: set[str] = set()
+            seen_fills: set[str] = set()
+            for row in rows:
+                try:
+                    if int(row["local_order_id"]) != local_order_id:
+                        raise ValueError("local_order_id divergent")
+                    if str(row["intent_id"]) != str(order_row["intent_id"]):
+                        raise ValueError("intent_id divergent from orders")
+                    if str(row["plan_key"]) != persisted_plan.plan.plan_key:
+                        raise ValueError("plan_key divergent from durable plan")
+                    fill_row = connection.execute(
+                        "SELECT * FROM external_fills WHERE fill_key = ?",
+                        (row["fill_key"],),
+                    ).fetchone()
+                    if fill_row is None:
+                        raise ValueError("referenced fill_key missing")
+                    fill = self._external_fill_from_row(fill_row)
+                    if (
+                        fill.fill_key != str(row["fill_key"])
+                        or fill.local_order_id != local_order_id
+                        or fill.intent_id != str(order_row["intent_id"])
+                    ):
+                        raise ValueError("fill belongs to another order")
+                    if fill.venue_fill_id is None:
+                        raise ValueError("venue fill identity is unproven")
+                    if (
+                        fill.fee is None
+                        or fill.fee_asset is None
+                        or fill.fee_asset.upper() != "USDC"
+                    ):
+                        raise ValueError("financial fee is missing or unsupported")
+                    if fill.side != persisted_plan.plan.side:
+                        raise ValueError("fill side diverges from financial plan")
+                    payload = json.loads(str(row["result_payload"]))
+                    if not isinstance(payload, Mapping):
+                        raise ValueError("result_payload is not an object")
+                    result = FinancialFillApplicationResult.from_payload(
+                        payload,
+                        expected_result_sha256=str(row["result_sha256"]),
+                    )
+                    expected_key = financial_fill_application_key(
+                        application_version=int(row["application_version"]),
+                        local_order_id=local_order_id,
+                        intent_id=str(order_row["intent_id"]),
+                        plan_key=persisted_plan.plan.plan_key,
+                        fill_key=str(row["fill_key"]),
+                    )
+                    if str(row["application_key"]) != expected_key:
+                        raise ValueError("FINANCIAL_APPLICATION_KEY_CONFLICT")
+                    requested_qty = float(persisted_plan.plan.requested_qty)
+                    quantity_tolerance = max(1e-9, abs(requested_qty) * 1e-9)
+                    expected_effect_at = (
+                        fill.venue_event_at or persisted_plan.plan.planned_effect_at
+                    )
+                    if (
+                        result.application_key != str(row["application_key"])
+                        or result.application_version != int(row["application_version"])
+                        or result.application_version != persisted_plan.plan.application_version
+                        or result.local_order_id != local_order_id
+                        or result.intent_id != str(row["intent_id"])
+                        or result.plan_key != str(row["plan_key"])
+                        or result.fill_key != str(row["fill_key"])
+                        or FinancialTransitionType(result.transition_type).value
+                        != str(row["transition_type"])
+                        or result.transition_type != persisted_plan.plan.identity.transition_type
+                        or result.economic_effect_at != str(row["economic_effect_at"])
+                        or result.economic_effect_at != expected_effect_at
+                        or result.quantity <= 0
+                        or result.quantity > requested_qty + quantity_tolerance
+                        or not math.isclose(
+                            result.quantity, fill.quantity, rel_tol=0.0, abs_tol=quantity_tolerance
+                        )
+                        or not math.isclose(
+                            result.price, fill.price, rel_tol=0.0, abs_tol=quantity_tolerance
+                        )
+                        or fill.fee is None
+                        or not math.isclose(
+                            result.fee, fill.fee, rel_tol=0.0, abs_tol=quantity_tolerance
+                        )
+                        or result.fee_asset != fill.fee_asset.upper()
+                        or result.state_before_sha256 != str(row["state_before_sha256"])
+                        or result.state_after_sha256 != str(row["state_after_sha256"])
+                    ):
+                        raise ValueError("ledger row or result diverges from referenced fill/plan")
+                    if str(row["fill_key"]) in seen_fills:
+                        raise ValueError("duplicate fill in chain")
+                    if str(row["application_key"]) in seen_keys:
+                        raise ValueError("duplicate application_key in chain")
+                    seen_fills.add(str(row["fill_key"]))
+                    seen_keys.add(str(row["application_key"]))
+                    records.append(
+                        PersistedFinancialFillApplication(
+                            application_key=str(row["application_key"]),
+                            application_version=int(row["application_version"]),
+                            local_order_id=local_order_id,
+                            intent_id=str(row["intent_id"]),
+                            plan_key=str(row["plan_key"]),
+                            fill_key=str(row["fill_key"]),
+                            application_index=int(row["application_index"]),
+                            previous_application_key=row["previous_application_key"],
+                            transition_type=str(row["transition_type"]),
+                            economic_effect_at=str(row["economic_effect_at"]),
+                            state_before_sha256=str(row["state_before_sha256"]),
+                            state_after_sha256=str(row["state_after_sha256"]),
+                            result=result,
+                            applied_at=str(row["applied_at"]),
+                        )
+                    )
+                except FinancialApplicationLedgerConflict:
+                    raise
+                except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+                    raise FinancialApplicationLedgerConflict(
+                        f"FINANCIAL_APPLICATION_LEDGER_CONFLICT: {error}"
+                    ) from error
+
+            for index, record in enumerate(records):
+                if record.application_index != index:
+                    raise FinancialApplicationLedgerConflict(
+                        "FINANCIAL_APPLICATION_LEDGER_CONFLICT: non-contiguous index"
+                    )
+                if index == 0:
+                    if record.previous_application_key is not None:
+                        raise FinancialApplicationLedgerConflict(
+                            "FINANCIAL_APPLICATION_LEDGER_CONFLICT: root has a parent"
+                        )
+                    if record.state_before_sha256 != persisted_plan.plan.pre_state_sha256:
+                        raise FinancialApplicationLedgerConflict(
+                            "FINANCIAL_APPLICATION_LEDGER_CONFLICT: root pre-state diverges"
+                        )
+                else:
+                    previous = records[index - 1]
+                    if record.previous_application_key != previous.application_key:
+                        raise FinancialApplicationLedgerConflict(
+                            "FINANCIAL_APPLICATION_LEDGER_CONFLICT: previous chain diverges"
+                        )
+                    if record.state_before_sha256 != previous.state_after_sha256:
+                        raise FinancialApplicationLedgerConflict(
+                            "FINANCIAL_APPLICATION_LEDGER_CONFLICT: state_before diverges"
+                        )
+        return tuple(records)
 
     def record_submission_error(self, order_id: int, *, error: str, ambiguous: bool) -> None:
         now = utc_now()
