@@ -416,16 +416,6 @@ class FinancialFillApplicationRequest:
         object.__setattr__(self, "previously_applied_fills", fills)
 
 
-@dataclass(frozen=True)
-class _FillStep:
-    fill: ExternalFill
-    economic_effect_at: str
-    state_before: dict[str, Any]
-    state_after: dict[str, Any]
-    cash_delta: float
-    trade_payload: dict[str, Any] | None
-
-
 def _slot(payload: dict[str, Any], slot_name: str) -> dict[str, Any]:
     slots = payload.get("slots")
     if not isinstance(slots, dict) or not isinstance(slots.get(slot_name), dict):
@@ -482,147 +472,209 @@ def _ordered_fills(
     return tuple(sorted(keyed, key=lambda item: (item[1], item[0].fill_key or "")))
 
 
+def _application_effect(
+    persisted_plan: PersistedFinancialApplicationPlan,
+    fill: ExternalFill,
+) -> tuple[float, dict[str, Any] | None]:
+    """Compute one fill's direct economic effect from the original pre-state."""
+
+    plan = persisted_plan.plan
+    effect_at = _economic_effect_at(persisted_plan, fill)
+    quantity = _finite(fill.quantity, "fill.quantity", positive=True)
+    price = _finite(fill.price, "fill.price", positive=True)
+    fee = _finite(fill.fee, "fill.fee")
+    transition = plan.identity.transition_type
+    if transition in {
+        FinancialTransitionType.ENTER_LONG,
+        FinancialTransitionType.ENTER_SHORT,
+        FinancialTransitionType.ADD,
+    }:
+        return -fee, None
+    if transition != FinancialTransitionType.EXIT:
+        raise FinancialFillApplicationError("REDUCE_RUNTIME_PATH_NOT_CURRENTLY_ACTIVE")
+    pre_payload = _copy_payload(plan.pre_state_payload)
+    pre_slot = _slot(pre_payload, plan.identity.slot)
+    position = pre_slot.get("position")
+    if not isinstance(position, dict):
+        raise FinancialFillApplicationError("FINANCIAL_PRE_STATE_CONFLICT")
+    pre_qty = _finite(position.get("qty"), "position.qty", positive=True)
+    direction = position.get("direction")
+    if direction not in {-1, 1}:
+        raise FinancialFillApplicationError("FINANCIAL_PRE_STATE_CONFLICT")
+    if quantity > pre_qty + max(QUANTITY_TOLERANCE, pre_qty * 1e-9):
+        raise FinancialFillApplicationError("FINANCIAL_FILL_QUANTITY_EXCEEDS_POSITION")
+    entry_price = _finite(position.get("entry_price"), "position.entry_price", positive=True)
+    pre_entry_fee = _finite(pre_slot.get("entry_fee"), "entry_fee")
+    gross_pnl = int(direction) * quantity * (price - entry_price)
+    entry_fee_share = pre_entry_fee * (quantity / pre_qty)
+    return gross_pnl - fee, {
+        "exit_ts": effect_at,
+        "entry_ts": _canonical_timestamp(str(position["entry_time"]), "entry_time"),
+        "strategy": plan.identity.slot,
+        "direction": "LONG" if int(direction) == 1 else "SHORT",
+        "qty": quantity,
+        "entry_price": entry_price,
+        "exit_price": price,
+        "pnl": gross_pnl - fee - entry_fee_share,
+        "bars_held": int(position["bars_held"]),
+        "reason": plan.reason,
+    }
+
+
 def _apply_sequence(
     persisted_plan: PersistedFinancialApplicationPlan,
     fills: Sequence[ExternalFill],
-) -> tuple[dict[str, Any], tuple[_FillStep, ...]]:
+) -> dict[str, Any]:
+    """Recompose final state from pre-state and all fills."""
+
     plan = persisted_plan.plan
     transition = plan.identity.transition_type
     if transition == FinancialTransitionType.REDUCE:
         raise FinancialFillApplicationError("REDUCE_RUNTIME_PATH_NOT_CURRENTLY_ACTIVE")
+    ordered = _ordered_fills(persisted_plan, fills)
+    if not ordered:
+        raise FinancialFillApplicationError("au moins un fill est requis")
     payload = _copy_payload(plan.pre_state_payload)
     target_slot = _slot(payload, plan.identity.slot)
+    initial_position = target_slot.get("position")
     if transition in {FinancialTransitionType.ENTER_LONG, FinancialTransitionType.ENTER_SHORT}:
-        if target_slot.get("position") is not None or not _same_quantity(
-            float(target_slot.get("entry_fee", 0.0)), 0.0
+        if initial_position is not None or not _same_quantity(
+            _finite(target_slot.get("entry_fee"), "entry_fee"), 0.0
         ):
             raise FinancialFillApplicationError("FINANCIAL_PRE_STATE_CONFLICT")
-    elif not isinstance(target_slot.get("position"), dict):
+    elif not isinstance(initial_position, dict):
         raise FinancialFillApplicationError("FINANCIAL_PRE_STATE_CONFLICT")
 
-    ordered = _ordered_fills(persisted_plan, fills)
-    steps: list[_FillStep] = []
-    plan_fills: list[ExternalFill] = []
-    initial_position = target_slot.get("position")
-    initial_pyramid_adds = (
-        int(initial_position.get("pyramid_adds", 0)) if isinstance(initial_position, dict) else None
-    )
-    total_qty = 0.0
-    total_notional = 0.0
-    total_exit_qty = 0.0
-    for fill, effect_at in ordered:
-        before = _copy_payload(payload)
-        slot_state = _slot(payload, plan.identity.slot)
-        qty = _finite(fill.quantity, "fill.quantity", positive=True)
-        price = _finite(fill.price, "fill.price", positive=True)
-        fee = _finite(fill.fee, "fill.fee")
-        if transition in {FinancialTransitionType.ENTER_LONG, FinancialTransitionType.ENTER_SHORT}:
-            total_qty += qty
-            total_notional += qty * price
-            if total_qty > plan.requested_qty + max(QUANTITY_TOLERANCE, plan.requested_qty * 1e-9):
-                raise FinancialFillApplicationError("FINANCIAL_FILL_QUANTITY_EXCEEDS_PLAN")
-            total_fee = float(slot_state["entry_fee"]) + fee
-            vwap = total_notional / total_qty
-            entry_direction = plan.entry_direction
-            entry_stop = plan.entry_stop_price
-            if entry_direction not in {-1, 1} or entry_stop is None:
-                raise FinancialFillApplicationError("FINANCIAL_PLAN_ENTRY_CONTEXT_MISSING")
-            slot_state["cash"] = float(slot_state["cash"]) - fee
-            slot_state["entry_fee"] = total_fee
-            slot_state["position"] = {
-                "entry_time": min(
-                    _economic_effect_at(persisted_plan, prior) for prior in plan_fills + [fill]
-                ),
-                "entry_price": vwap,
-                "qty": total_qty,
-                "stop_price": float(entry_stop),
-                "direction": int(entry_direction),
-                "bars_held": 0,
-                "best_close": vwap,
-                "initial_qty": total_qty,
-                "last_add_price": vwap,
-                "pyramid_adds": 0,
-            }
-            cash_delta = -fee
-            trade = None
-            plan_fills.append(fill)
-        elif transition == FinancialTransitionType.ADD:
-            position = slot_state.get("position")
-            if not isinstance(position, dict):
-                raise FinancialFillApplicationError("FINANCIAL_PRE_STATE_CONFLICT")
-            previous_qty = _finite(position.get("qty"), "position.qty", positive=True)
-            previous_price = _finite(
-                position.get("entry_price"), "position.entry_price", positive=True
-            )
-            total_qty += qty
-            total_notional += qty * price
-            if total_qty > plan.requested_qty + max(QUANTITY_TOLERANCE, plan.requested_qty * 1e-9):
-                raise FinancialFillApplicationError("FINANCIAL_FILL_QUANTITY_EXCEEDS_PLAN")
-            new_qty = previous_qty + qty
-            position["entry_price"] = (previous_qty * previous_price + qty * price) / new_qty
-            position["qty"] = new_qty
-            slot_state["cash"] = float(slot_state["cash"]) - fee
-            slot_state["entry_fee"] = float(slot_state["entry_fee"]) + fee
-            plan_fills.append(fill)
-            plan_vwap = sum(item.quantity * item.price for item in plan_fills) / sum(
-                item.quantity for item in plan_fills
-            )
-            position["last_add_price"] = plan_vwap
-            # Multiple physical fills in one application plan are one pyramid add.
-            assert initial_pyramid_adds is not None
-            position["pyramid_adds"] = initial_pyramid_adds + 1
-            cash_delta = -fee
-            trade = None
+    quantities = [
+        _finite(fill.quantity, "fill.quantity", positive=True) for fill, _effect_at in ordered
+    ]
+    prices = [_finite(fill.price, "fill.price", positive=True) for fill, _effect_at in ordered]
+    fees = [_finite(fill.fee, "fill.fee") for fill, _effect_at in ordered]
+    total_qty = sum(quantities)
+    total_fee = sum(fees)
+    quantity_tolerance = max(QUANTITY_TOLERANCE, plan.requested_qty * 1e-9)
+    if total_qty > plan.requested_qty + quantity_tolerance:
+        raise FinancialFillApplicationError("FINANCIAL_FILL_QUANTITY_EXCEEDS_PLAN")
+
+    if transition in {FinancialTransitionType.ENTER_LONG, FinancialTransitionType.ENTER_SHORT}:
+        entry_direction = plan.entry_direction
+        entry_stop = plan.entry_stop_price
+        if entry_direction not in {-1, 1} or entry_stop is None:
+            raise FinancialFillApplicationError("FINANCIAL_PLAN_ENTRY_CONTEXT_MISSING")
+        total_notional = sum(qty * price for qty, price in zip(quantities, prices, strict=True))
+        vwap = total_notional / total_qty
+        target_slot["cash"] = float(target_slot["cash"]) - total_fee
+        target_slot["entry_fee"] = float(target_slot["entry_fee"]) + total_fee
+        target_slot["position"] = {
+            "entry_time": min(effect_at for _fill, effect_at in ordered),
+            "entry_price": vwap,
+            "qty": total_qty,
+            "stop_price": float(entry_stop),
+            "direction": int(entry_direction),
+            "bars_held": 0,
+            "best_close": vwap,
+            "initial_qty": total_qty,
+            "last_add_price": vwap,
+            "pyramid_adds": 0,
+        }
+    elif transition == FinancialTransitionType.ADD:
+        position = initial_position
+        assert isinstance(position, dict)
+        pre_qty = _finite(position.get("qty"), "position.qty", positive=True)
+        pre_price = _finite(position.get("entry_price"), "position.entry_price", positive=True)
+        pre_entry_fee = _finite(target_slot.get("entry_fee"), "entry_fee")
+        total_notional = sum(qty * price for qty, price in zip(quantities, prices, strict=True))
+        new_qty = pre_qty + total_qty
+        position["entry_price"] = (pre_qty * pre_price + total_notional) / new_qty
+        position["qty"] = new_qty
+        position["last_add_price"] = total_notional / total_qty
+        position["pyramid_adds"] = int(position["pyramid_adds"]) + 1
+        target_slot["cash"] = float(target_slot["cash"]) - total_fee
+        target_slot["entry_fee"] = pre_entry_fee + total_fee
+    elif transition == FinancialTransitionType.EXIT:
+        position = initial_position
+        assert isinstance(position, dict)
+        pre_qty = _finite(position.get("qty"), "position.qty", positive=True)
+        pre_price = _finite(position.get("entry_price"), "position.entry_price", positive=True)
+        direction = position.get("direction")
+        if direction not in {-1, 1}:
+            raise FinancialFillApplicationError("FINANCIAL_PRE_STATE_CONFLICT")
+        pre_entry_fee = _finite(target_slot.get("entry_fee"), "entry_fee")
+        if total_qty > pre_qty + max(QUANTITY_TOLERANCE, pre_qty * 1e-9):
+            raise FinancialFillApplicationError("FINANCIAL_FILL_QUANTITY_EXCEEDS_POSITION")
+        cash_delta = sum(
+            int(direction) * qty * (price - pre_price) - fee
+            for qty, price, fee in zip(quantities, prices, fees, strict=True)
+        )
+        target_slot["cash"] = float(target_slot["cash"]) + cash_delta
+        remaining_qty = pre_qty - total_qty
+        if remaining_qty <= max(QUANTITY_TOLERANCE, pre_qty * 1e-9):
+            target_slot["position"] = None
+            target_slot["entry_fee"] = 0.0
         else:
-            position = slot_state.get("position")
-            if not isinstance(position, dict):
-                raise FinancialFillApplicationError("FINANCIAL_PRE_STATE_CONFLICT")
-            current_qty = _finite(position.get("qty"), "position.qty", positive=True)
-            direction = position.get("direction")
-            if direction not in {-1, 1}:
-                raise FinancialFillApplicationError("FINANCIAL_PRE_STATE_CONFLICT")
-            total_exit_qty += qty
-            if total_exit_qty > plan.requested_qty + max(
-                QUANTITY_TOLERANCE, plan.requested_qty * 1e-9
-            ):
-                raise FinancialFillApplicationError("FINANCIAL_FILL_QUANTITY_EXCEEDS_PLAN")
-            if qty > current_qty + max(QUANTITY_TOLERANCE, current_qty * 1e-9):
-                raise FinancialFillApplicationError("FINANCIAL_FILL_QUANTITY_EXCEEDS_POSITION")
-            entry_price = _finite(
-                position.get("entry_price"), "position.entry_price", positive=True
-            )
-            entry_fee = _finite(slot_state.get("entry_fee"), "entry_fee")
-            gross_pnl = int(direction) * qty * (price - entry_price)
-            entry_fee_share = entry_fee * (qty / current_qty)
-            cash_delta = gross_pnl - fee
-            slot_state["cash"] = float(slot_state["cash"]) + cash_delta
-            remaining_qty = current_qty - qty
-            if remaining_qty <= max(QUANTITY_TOLERANCE, current_qty * 1e-9):
-                slot_state["position"] = None
-                slot_state["entry_fee"] = 0.0
-            else:
-                position["qty"] = remaining_qty
-                slot_state["entry_fee"] = entry_fee - entry_fee_share
-                slot_state["position"] = position
-            trade = {
-                "exit_ts": effect_at,
-                "entry_ts": _canonical_timestamp(str(position["entry_time"]), "entry_time"),
-                "strategy": plan.identity.slot,
-                "direction": "LONG" if int(direction) == 1 else "SHORT",
-                "qty": qty,
-                "entry_price": entry_price,
-                "exit_price": price,
-                "pnl": gross_pnl - fee - entry_fee_share,
-                "bars_held": int(position["bars_held"]),
-                "reason": plan.reason,
-            }
-        validate_trend_state(payload)
-        steps.append(_FillStep(fill, effect_at, before, _copy_payload(payload), cash_delta, trade))
-    if not steps:
-        raise FinancialFillApplicationError("au moins un fill est requis")
+            remaining_position = dict(position)
+            remaining_position["qty"] = remaining_qty
+            target_slot["position"] = remaining_position
+            target_slot["entry_fee"] = pre_entry_fee * (remaining_qty / pre_qty)
+    else:
+        raise FinancialFillApplicationError("REDUCE_RUNTIME_PATH_NOT_CURRENTLY_ACTIVE")
+
     _ensure_finite_json(payload, "state_after_payload")
     validate_trend_state(payload)
-    return payload, tuple(steps)
+    return payload
+
+
+def recompute_committed_financial_fill_application(
+    persisted_plan: PersistedFinancialApplicationPlan,
+    fills: Sequence[ExternalFill],
+    *,
+    state_before_sha256: str,
+) -> FinancialFillApplicationResult:
+    """Recompute one committed ledger result without a resolution assessment."""
+
+    if not fills:
+        raise FinancialFillApplicationError("au moins un fill est requis")
+    keys = [fill.fill_key for fill in fills]
+    if any(key is None for key in keys) or len(set(keys)) != len(keys):
+        raise FinancialFillApplicationError("FINANCIAL_APPLICATION_DUPLICATE_FILL")
+    for fill in fills:
+        _validate_fill_for_plan(persisted_plan, fill, assessment=None, new_fill=False)
+    previous_payload = (
+        _apply_sequence(persisted_plan, fills[:-1])
+        if len(fills) > 1
+        else _copy_payload(persisted_plan.plan.pre_state_payload)
+    )
+    if sha256_json(previous_payload) != state_before_sha256:
+        raise FinancialFillApplicationError("FINANCIAL_APPLICATION_STATE_CONFLICT")
+    after_payload = _apply_sequence(persisted_plan, fills)
+    current = fills[-1]
+    cash_delta, trade_payload = _application_effect(persisted_plan, current)
+    application_key = financial_fill_application_key(
+        application_version=FINANCIAL_FILL_APPLICATION_VERSION,
+        local_order_id=persisted_plan.local_order_id,
+        intent_id=persisted_plan.intent_id,
+        plan_key=persisted_plan.plan.plan_key,
+        fill_key=current.fill_key or "",
+    )
+    return FinancialFillApplicationResult(
+        application_version=FINANCIAL_FILL_APPLICATION_VERSION,
+        application_key=application_key,
+        local_order_id=persisted_plan.local_order_id,
+        intent_id=persisted_plan.intent_id,
+        plan_key=persisted_plan.plan.plan_key,
+        fill_key=current.fill_key or "",
+        transition_type=persisted_plan.plan.identity.transition_type,
+        economic_effect_at=_economic_effect_at(persisted_plan, current),
+        quantity=current.quantity,
+        price=current.price,
+        fee=current.fee if current.fee is not None else 0.0,
+        fee_asset=current.fee_asset or "",
+        state_before_sha256=state_before_sha256,
+        state_after_payload=after_payload,
+        state_after_sha256=sha256_json(after_payload),
+        cash_delta=cash_delta,
+        trade_payload=trade_payload,
+    )
 
 
 def calculate_financial_fill_application(
@@ -630,14 +682,12 @@ def calculate_financial_fill_application(
 ) -> FinancialFillApplicationResult:
     """Calculate one application without I/O or mutation.
 
-    ``current_state_payload`` is the state immediately before the new fill.
-    The state is independently recomputed from the durable plan and all prior
-    fills.  An arbitrary caller-provided hash can therefore never bypass the
-    replay check.
+    The supplied state is durable state immediately before the new fill.
+    The final state is independently recomposed from the plan and all fills.
     """
 
     if not isinstance(request, FinancialFillApplicationRequest):
-        raise TypeError("request doit être FinancialFillApplicationRequest")
+        raise TypeError("request doit etre FinancialFillApplicationRequest")
     plan = request.persisted_plan
     fill = request.fill
     _validate_fill_for_plan(plan, fill, assessment=request.assessment, new_fill=True)
@@ -648,54 +698,17 @@ def calculate_financial_fill_application(
         raise FinancialFillApplicationError("FINANCIAL_APPLICATION_DUPLICATE_FILL")
     for prior in request.previously_applied_fills:
         _validate_fill_for_plan(plan, prior, assessment=None, new_fill=False)
-    previous_ordered = _ordered_fills(plan, request.previously_applied_fills)
-    current_effect = _economic_effect_at(plan, fill)
-    if previous_ordered and (current_effect, fill.fill_key or "") < (
-        previous_ordered[-1][1],
-        previous_ordered[-1][0].fill_key or "",
-    ):
-        raise FinancialFillApplicationError("FINANCIAL_APPLICATION_OUT_OF_ORDER")
-    state_before_payload, _ = (
+    previous_payload = (
         _apply_sequence(plan, request.previously_applied_fills)
         if request.previously_applied_fills
-        else (
-            _copy_payload(plan.plan.pre_state_payload),
-            (),
-        )
+        else _copy_payload(plan.plan.pre_state_payload)
     )
-    state_before_hash = sha256_json(state_before_payload)
-    if state_before_hash != request.current_state_sha256:
+    if sha256_json(previous_payload) != request.current_state_sha256:
         raise FinancialFillApplicationError("FINANCIAL_APPLICATION_STATE_CONFLICT")
-    after_payload, steps = _apply_sequence(plan, (*request.previously_applied_fills, fill))
-    current_steps = [step for step in steps if step.fill.fill_key == fill.fill_key]
-    if len(current_steps) != 1:
-        raise FinancialFillApplicationError("FINANCIAL_APPLICATION_DUPLICATE_FILL")
-    current = current_steps[0]
-    application_key = financial_fill_application_key(
-        application_version=FINANCIAL_FILL_APPLICATION_VERSION,
-        local_order_id=plan.local_order_id,
-        intent_id=plan.intent_id,
-        plan_key=plan.plan.plan_key,
-        fill_key=fill.fill_key or "",
-    )
-    return FinancialFillApplicationResult(
-        application_version=FINANCIAL_FILL_APPLICATION_VERSION,
-        application_key=application_key,
-        local_order_id=plan.local_order_id,
-        intent_id=plan.intent_id,
-        plan_key=plan.plan.plan_key,
-        fill_key=fill.fill_key or "",
-        transition_type=plan.plan.identity.transition_type,
-        economic_effect_at=current.economic_effect_at,
-        quantity=fill.quantity,
-        price=fill.price,
-        fee=fill.fee if fill.fee is not None else 0.0,
-        fee_asset=fill.fee_asset or "",
-        state_before_sha256=sha256_json(current.state_before),
-        state_after_payload=after_payload,
-        state_after_sha256=sha256_json(after_payload),
-        cash_delta=current.cash_delta,
-        trade_payload=current.trade_payload,
+    return recompute_committed_financial_fill_application(
+        plan,
+        (*request.previously_applied_fills, fill),
+        state_before_sha256=request.current_state_sha256,
     )
 
 
@@ -719,4 +732,5 @@ __all__ = [
     "apply_financial_fill",
     "calculate_financial_fill_application",
     "financial_fill_application_key",
+    "recompute_committed_financial_fill_application",
 ]

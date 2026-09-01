@@ -9,13 +9,13 @@ import pandas as pd
 
 import pytest
 
-from btcquant.execution.broker import PaperBroker
+from btcquant.execution.broker import ExternalOrderState, Fill, PaperBroker
 from btcquant.execution.errors import (
     FinancialApplicationPlanConflict,
     MigrationRequiredError,
     ReconciliationRequired,
 )
-from btcquant.execution.order_service import OrderExecutionService
+from btcquant.execution.order_service import OrderExecutionService, SubmittedOrder
 from btcquant.execution.financial_application_plan import (
     FinancialApplicationPlan,
     canonical_json,
@@ -25,7 +25,7 @@ from btcquant.execution.financial_application_plan import (
 from btcquant.execution.order_state import FinancialTransitionType, LogicalOrderIdentity
 from btcquant.execution.runner import LiveRunner, StrategySlot
 from btcquant.risk import RiskConfig
-from btcquant.strategies.base import Strategy
+from btcquant.strategies.base import Direction, Position, Strategy
 from btcquant.execution.state_store import SCHEMA_VERSION, StateStore
 
 
@@ -95,6 +95,81 @@ def _entry_plan(
         entry_direction=1,
         entry_stop_price=stop,
     )
+
+
+def _position_plan(
+    transition: FinancialTransitionType,
+    *,
+    direction: int,
+    side: str,
+    reduce_only: bool,
+) -> FinancialApplicationPlan:
+    generation = "entry=2026-08-31T12:00:00Z|initial_qty=1"
+    identity = LogicalOrderIdentity(
+        "trend",
+        "slot",
+        "2026-09-01T11:00:00Z",
+        transition,
+        generation,
+        0,
+    )
+    position = {
+        "entry_time": "2026-08-31T12:00:00+00:00",
+        "entry_price": 100.0,
+        "qty": 1.0,
+        "stop_price": 90.0,
+        "direction": direction,
+        "bars_held": 0,
+        "best_close": 100.0,
+        "initial_qty": 1.0,
+        "last_add_price": 100.0,
+        "pyramid_adds": 0,
+    }
+    payload = _state()
+    payload["slots"]["slot"]["position"] = position
+    return FinancialApplicationPlan(
+        identity=identity,
+        side=side,
+        requested_qty=0.5,
+        reference_price=100.0,
+        reason="pyramid" if transition == FinancialTransitionType.ADD else "exit",
+        reduce_only=reduce_only,
+        planned_effect_at="2026-09-01T12:00:00Z",
+        pre_state_payload=payload,
+        protection_mode="SOFTWARE",
+    )
+
+
+@pytest.mark.parametrize(
+    ("transition", "direction", "valid_side", "invalid_side", "reduce_only"),
+    [
+        (FinancialTransitionType.ADD, 1, "BUY", "SELL", False),
+        (FinancialTransitionType.ADD, -1, "SELL", "BUY", False),
+        (FinancialTransitionType.EXIT, 1, "SELL", "BUY", True),
+        (FinancialTransitionType.EXIT, -1, "BUY", "SELL", True),
+    ],
+)
+def test_position_transition_side_contract(
+    transition: FinancialTransitionType,
+    direction: int,
+    valid_side: str,
+    invalid_side: str,
+    reduce_only: bool,
+) -> None:
+    plan = _position_plan(
+        transition,
+        direction=direction,
+        side=valid_side,
+        reduce_only=reduce_only,
+    )
+    assert plan.side == valid_side
+    with pytest.raises(ValueError, match="side incompatible"):
+        _position_plan(
+            transition,
+            direction=direction,
+            side=invalid_side,
+            reduce_only=reduce_only,
+        )
 
 
 def _rewrite_persisted_plan_payload(
@@ -529,6 +604,55 @@ def _runner_for_plan_replay(tmp_path: Path):
         clock=clock,
     )
     return runner, slot, broker, clock
+
+
+def test_runner_pyramid_builds_a_long_add_plan_with_buy_side(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner, slot, _broker, _clock = _runner_for_plan_replay(tmp_path)
+    slot.position = Position(
+        entry_time=pd.Timestamp("2026-08-31T10:00:00Z"),
+        entry_price=100.0,
+        qty=1.0,
+        stop_price=90.0,
+        direction=Direction.LONG,
+        bars_held=0,
+        best_close=100.0,
+        initial_qty=1.0,
+        last_add_price=100.0,
+        pyramid_adds=0,
+    )
+    captured: dict[str, object] = {}
+
+    def submit(**kwargs):
+        plan = kwargs["application_plan"]
+        captured["plan"] = plan
+        return SubmittedOrder(
+            fill=Fill(price=104.0, qty=0.1, fee=0.0, broker_order_id="paper-1"),
+            order_id=1,
+            intent_id=plan.identity.intent_id,
+            logical_order_key=plan.identity.logical_key,
+            status="FILLED",
+            external_state=ExternalOrderState.FILLED,
+            remaining_qty=0.0,
+            is_terminal=True,
+            transition_sequence=plan.identity.transition_sequence,
+            application_plan=plan,
+        )
+
+    monkeypatch.setattr(runner.order_service, "submit_market", submit)
+    monkeypatch.setattr(runner, "_complete_market_order_and_checkpoint", lambda *_a, **_k: None)
+    runner._pyramid_position(
+        slot,
+        pd.Series({"volume": 1_000.0, "_rvol": float("nan")}),
+        100.0,
+        0.1,
+        decision_checkpoint="2026-08-31T12:00:00Z",
+    )
+    plan = captured["plan"]
+    assert isinstance(plan, FinancialApplicationPlan)
+    assert plan.identity.transition_type == FinancialTransitionType.ADD
+    assert plan.side == "BUY"
 
 
 def test_runner_reuses_existing_plan_when_paper_reclaim_clock_advances(tmp_path: Path) -> None:

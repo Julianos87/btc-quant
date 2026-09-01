@@ -43,6 +43,7 @@ from .financial_fill_application import (
     FinancialFillApplicationResult,
     PersistedFinancialFillApplication,
     financial_fill_application_key,
+    recompute_committed_financial_fill_application,
 )
 from .order_state import (
     ExternalOrderState,
@@ -955,7 +956,15 @@ class StateStore:
 
     @staticmethod
     def _ensure_financial_fill_application_schema(connection: sqlite3.Connection) -> None:
-        """Create the v10 ledger without rebuilding prior tables."""
+        """Create or validate the v10 ledger without rebuilding prior tables."""
+
+        table_exists = (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='financial_fill_applications'"
+            ).fetchone()
+            is not None
+        )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS financial_fill_applications (
@@ -984,14 +993,16 @@ class StateStore:
             )
             """
         )
-        connection.execute(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS
-                idx_financial_fill_applications_previous
-            ON financial_fill_applications(previous_application_key)
-            WHERE previous_application_key IS NOT NULL
-            """
-        )
+        if not table_exists:
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS
+                    idx_financial_fill_applications_previous
+                ON financial_fill_applications(previous_application_key)
+                WHERE previous_application_key IS NOT NULL
+                """
+            )
+
         required = {
             "application_key",
             "application_version",
@@ -1009,16 +1020,63 @@ class StateStore:
             "result_sha256",
             "applied_at",
         }
-        columns = {
-            row["name"]
-            for row in connection.execute(
-                "PRAGMA table_info(financial_fill_applications)"
-            ).fetchall()
-        }
+        table_info = connection.execute("PRAGMA table_info(financial_fill_applications)").fetchall()
+        columns = {row["name"] for row in table_info}
         if not required <= columns:
             raise RuntimeError(
                 f"Incomplete v10 financial_fill_applications schema: {sorted(required - columns)}"
             )
+        primary_key = [row["name"] for row in table_info if int(row["pk"]) > 0]
+        if primary_key != ["application_key"]:
+            raise RuntimeError("Invalid v10 financial_fill_applications primary key")
+
+        index_rows = connection.execute("PRAGMA index_list(financial_fill_applications)").fetchall()
+        unique_signatures: set[tuple[str, ...]] = set()
+        previous_index_valid = False
+        for index in index_rows:
+            index_name = str(index["name"])
+            index_columns = tuple(
+                str(item["name"])
+                for item in connection.execute(f"PRAGMA index_info({index_name!r})").fetchall()
+                if item["name"] is not None
+            )
+            is_unique = int(index["unique"]) == 1
+            is_partial = int(index["partial"]) == 1
+            if is_unique and not is_partial:
+                unique_signatures.add(index_columns)
+            if (
+                index_name == "idx_financial_fill_applications_previous"
+                and is_unique
+                and is_partial
+                and index_columns == ("previous_application_key",)
+            ):
+                previous_index_valid = True
+        if {
+            ("local_order_id", "fill_key", "application_version"),
+            ("local_order_id", "application_index"),
+        } - unique_signatures:
+            raise RuntimeError("Invalid v10 financial_fill_applications unique constraints")
+        if not previous_index_valid:
+            raise RuntimeError("Invalid v10 financial_fill_applications previous index")
+
+        foreign_keys = {
+            (str(row["from"]), str(row["table"]), str(row["to"]))
+            for row in connection.execute(
+                "PRAGMA foreign_key_list(financial_fill_applications)"
+            ).fetchall()
+        }
+        required_foreign_keys = {
+            ("local_order_id", "orders", "id"),
+            ("plan_key", "financial_application_plans", "plan_key"),
+            ("fill_key", "external_fills", "fill_key"),
+            (
+                "previous_application_key",
+                "financial_fill_applications",
+                "application_key",
+            ),
+        }
+        if not required_foreign_keys <= foreign_keys:
+            raise RuntimeError("Invalid v10 financial_fill_applications foreign keys")
 
     @classmethod
     def _migrate_v10(cls, connection: sqlite3.Connection) -> None:
@@ -2751,12 +2809,8 @@ class StateStore:
     def read_financial_fill_application_chain(
         self, local_order_id: int
     ) -> tuple[PersistedFinancialFillApplication, ...]:
-        """Read and validate one complete financial application chain.
+        """Read and economically replay one complete financial chain."""
 
-        Orders, the referenced plan, fills and ledger rows are read inside one
-        read transaction. There is deliberately no public ledger insert method
-        in E2; this boundary only consumes durable records.
-        """
         if (
             isinstance(local_order_id, bool)
             or not isinstance(local_order_id, int)
@@ -2797,6 +2851,7 @@ class StateStore:
                 ) from error
 
             records: list[PersistedFinancialFillApplication] = []
+            committed_fills: list[ExternalFill] = []
             seen_keys: set[str] = set()
             seen_fills: set[str] = set()
             for row in rows:
@@ -2814,8 +2869,9 @@ class StateStore:
                     if fill_row is None:
                         raise ValueError("referenced fill_key missing")
                     fill = self._external_fill_from_row(fill_row)
+                    fill_key = str(row["fill_key"])
                     if (
-                        fill.fill_key != str(row["fill_key"])
+                        fill.fill_key != fill_key
                         or fill.local_order_id != local_order_id
                         or fill.intent_id != str(order_row["intent_id"])
                     ):
@@ -2830,6 +2886,11 @@ class StateStore:
                         raise ValueError("financial fee is missing or unsupported")
                     if fill.side != persisted_plan.plan.side:
                         raise ValueError("fill side diverges from financial plan")
+                    if fill_key in seen_fills:
+                        raise ValueError("duplicate fill in chain")
+                    if str(row["application_key"]) in seen_keys:
+                        raise ValueError("duplicate application_key in chain")
+
                     payload = json.loads(str(row["result_payload"]))
                     if not isinstance(payload, Mapping):
                         raise ValueError("result_payload is not an object")
@@ -2842,7 +2903,7 @@ class StateStore:
                         local_order_id=local_order_id,
                         intent_id=str(order_row["intent_id"]),
                         plan_key=persisted_plan.plan.plan_key,
-                        fill_key=str(row["fill_key"]),
+                        fill_key=fill_key,
                     )
                     if str(row["application_key"]) != expected_key:
                         raise ValueError("FINANCIAL_APPLICATION_KEY_CONFLICT")
@@ -2854,11 +2915,10 @@ class StateStore:
                     if (
                         result.application_key != str(row["application_key"])
                         or result.application_version != int(row["application_version"])
-                        or result.application_version != persisted_plan.plan.application_version
                         or result.local_order_id != local_order_id
                         or result.intent_id != str(row["intent_id"])
                         or result.plan_key != str(row["plan_key"])
-                        or result.fill_key != str(row["fill_key"])
+                        or result.fill_key != fill_key
                         or FinancialTransitionType(result.transition_type).value
                         != str(row["transition_type"])
                         or result.transition_type != persisted_plan.plan.identity.transition_type
@@ -2872,7 +2932,6 @@ class StateStore:
                         or not math.isclose(
                             result.price, fill.price, rel_tol=0.0, abs_tol=quantity_tolerance
                         )
-                        or fill.fee is None
                         or not math.isclose(
                             result.fee, fill.fee, rel_tol=0.0, abs_tol=quantity_tolerance
                         )
@@ -2881,11 +2940,23 @@ class StateStore:
                         or result.state_after_sha256 != str(row["state_after_sha256"])
                     ):
                         raise ValueError("ledger row or result diverges from referenced fill/plan")
-                    if str(row["fill_key"]) in seen_fills:
-                        raise ValueError("duplicate fill in chain")
-                    if str(row["application_key"]) in seen_keys:
-                        raise ValueError("duplicate application_key in chain")
-                    seen_fills.add(str(row["fill_key"]))
+
+                    expected_state_before = (
+                        persisted_plan.plan.pre_state_sha256
+                        if not committed_fills
+                        else records[-1].state_after_sha256
+                    )
+                    expected_result = recompute_committed_financial_fill_application(
+                        persisted_plan,
+                        (*committed_fills, fill),
+                        state_before_sha256=expected_state_before,
+                    )
+                    if result.as_payload() != expected_result.as_payload():
+                        raise ValueError(
+                            "FINANCIAL_APPLICATION_LEDGER_CONFLICT: economic replay mismatch"
+                        )
+
+                    seen_fills.add(fill_key)
                     seen_keys.add(str(row["application_key"]))
                     records.append(
                         PersistedFinancialFillApplication(
@@ -2894,7 +2965,7 @@ class StateStore:
                             local_order_id=local_order_id,
                             intent_id=str(row["intent_id"]),
                             plan_key=str(row["plan_key"]),
-                            fill_key=str(row["fill_key"]),
+                            fill_key=fill_key,
                             application_index=int(row["application_index"]),
                             previous_application_key=row["previous_application_key"],
                             transition_type=str(row["transition_type"]),
@@ -2905,6 +2976,7 @@ class StateStore:
                             applied_at=str(row["applied_at"]),
                         )
                     )
+                    committed_fills.append(fill)
                 except FinancialApplicationLedgerConflict:
                     raise
                 except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:

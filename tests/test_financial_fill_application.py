@@ -165,6 +165,43 @@ def _request(
     )
 
 
+def _insert_ledger_record(
+    store: StateStore,
+    result,
+    *,
+    application_index: int = 0,
+    previous_application_key: str | None = None,
+) -> None:
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            """
+            INSERT INTO financial_fill_applications(
+                application_key, application_version, local_order_id, intent_id,
+                plan_key, fill_key, application_index, previous_application_key,
+                transition_type, economic_effect_at, state_before_sha256,
+                state_after_sha256, result_payload, result_sha256, applied_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                result.application_key,
+                result.application_version,
+                result.local_order_id,
+                result.intent_id,
+                result.plan_key,
+                result.fill_key,
+                application_index,
+                previous_application_key,
+                result.transition_type.value,
+                result.economic_effect_at,
+                result.state_before_sha256,
+                result.state_after_sha256,
+                json.dumps(result.as_payload(), sort_keys=True, separators=(",", ":")),
+                result.result_sha256,
+                "2026-09-01T12:03:00+00:00",
+            ),
+        )
+
+
 def test_schema_v10_is_fresh_and_additive(tmp_path: Path) -> None:
     store = StateStore(tmp_path / "state.db")
     assert SCHEMA_VERSION == 10
@@ -398,7 +435,7 @@ def test_add_recomputes_weighted_price_and_increments_once(tmp_path: Path) -> No
             FinancialTransitionType.ADD,
             position=position,
             requested_qty=0.5,
-            side="SELL",
+            side="BUY",
             reason="pyramid",
         ),
     )
@@ -410,6 +447,110 @@ def test_add_recomputes_weighted_price_and_increments_once(tmp_path: Path) -> No
     assert pos["pyramid_adds"] == 3
     assert pos["last_add_price"] == 104.0
     assert result.state_after_payload["slots"]["slot"]["cash"] == 1_000.03
+
+
+@pytest.mark.parametrize(
+    ("transition", "position", "side", "requested_qty"),
+    [
+        (FinancialTransitionType.ENTER_LONG, None, "BUY", 1.0),
+        (
+            FinancialTransitionType.ADD,
+            {
+                "entry_time": "2026-08-31T12:00:00+00:00",
+                "entry_price": 100.0,
+                "qty": 1.0,
+                "stop_price": 90.0,
+                "direction": 1,
+                "bars_held": 3,
+                "best_close": 110.0,
+                "initial_qty": 1.0,
+                "last_add_price": 100.0,
+                "pyramid_adds": 0,
+            },
+            "BUY",
+            0.5,
+        ),
+        (
+            FinancialTransitionType.EXIT,
+            {
+                "entry_time": "2026-08-31T12:00:00+00:00",
+                "entry_price": 100.0,
+                "qty": 1.0,
+                "stop_price": 90.0,
+                "direction": 1,
+                "bars_held": 3,
+                "best_close": 110.0,
+                "initial_qty": 1.0,
+                "last_add_price": 100.0,
+                "pyramid_adds": 0,
+            },
+            "SELL",
+            0.5,
+        ),
+    ],
+)
+def test_late_fill_recomposition_is_arrival_order_invariant(
+    tmp_path: Path,
+    transition: FinancialTransitionType,
+    position: dict | None,
+    side: str,
+    requested_qty: float,
+) -> None:
+    store = StateStore(tmp_path / "state.db")
+    persisted = _persisted(
+        store,
+        _plan(
+            transition,
+            position=position,
+            requested_qty=requested_qty,
+            side=side,
+            reason="pyramid" if transition == FinancialTransitionType.ADD else "entry",
+            reduce_only=transition == FinancialTransitionType.EXIT,
+        ),
+    )
+    first_discovered = _fill(
+        persisted,
+        quantity=requested_qty / 2,
+        price=110.0 if transition == FinancialTransitionType.EXIT else 100.0,
+        fee=0.01,
+        event_at="2026-09-01T12:02:00Z",
+        venue_fill_id="late-a",
+    )
+    second_discovered = _fill(
+        persisted,
+        quantity=requested_qty / 2,
+        price=90.0 if transition == FinancialTransitionType.EXIT else 102.0,
+        fee=-0.02,
+        event_at="2026-09-01T12:01:00Z",
+        venue_fill_id="late-b",
+    )
+
+    first_a = calculate_financial_fill_application(_request(persisted, first_discovered))
+    final_ab = calculate_financial_fill_application(
+        _request(
+            persisted,
+            second_discovered,
+            current_state=json.loads(canonical_json(first_a.state_after_payload)),
+            previous=(first_discovered,),
+        )
+    )
+    first_b = calculate_financial_fill_application(_request(persisted, second_discovered))
+    final_ba = calculate_financial_fill_application(
+        _request(
+            persisted,
+            first_discovered,
+            current_state=json.loads(canonical_json(first_b.state_after_payload)),
+            previous=(second_discovered,),
+        )
+    )
+
+    assert final_ab.state_after_sha256 == final_ba.state_after_sha256
+    assert final_ab.state_after_payload == final_ba.state_after_payload
+    assert final_ab.cash_delta == first_b.cash_delta
+    assert final_ba.cash_delta == first_a.cash_delta
+    if transition == FinancialTransitionType.EXIT:
+        assert final_ab.trade_payload == first_b.trade_payload
+        assert final_ba.trade_payload == first_a.trade_payload
 
 
 def test_exit_applies_signed_fee_and_pro_rata_entry_fee(tmp_path: Path) -> None:
@@ -511,6 +652,124 @@ def test_result_and_persisted_record_are_immutable_and_hashed(tmp_path: Path) ->
     payload = result.as_payload()
     payload["state_after_payload"]["slots"]["slot"]["cash"] = 999.0
     assert result.state_after_payload["slots"]["slot"]["cash"] != 999.0
+
+
+@pytest.mark.parametrize("tamper", ["cash", "position_qty", "cash_delta"])
+def test_ledger_reader_replays_economics_after_coherent_state_tamper(
+    tmp_path: Path, tamper: str
+) -> None:
+    store = StateStore(tmp_path / "state.db")
+    persisted = _persisted(store, _plan())
+    fill = _fill(persisted, quantity=0.5)
+    store.append_external_fill(fill)
+    result = calculate_financial_fill_application(_request(persisted, fill))
+    _insert_ledger_record(store, result)
+
+    payload = result.as_payload()
+    if tamper == "cash":
+        state_after = payload["state_after_payload"]
+        state_after["slots"]["slot"]["cash"] += 1.0
+        payload["state_after_sha256"] = sha256_json(state_after)
+    elif tamper == "position_qty":
+        payload["state_after_payload"]["slots"]["slot"]["position"]["qty"] += 0.1
+        payload["state_after_sha256"] = sha256_json(payload["state_after_payload"])
+    else:
+        payload["cash_delta"] += 1.0
+    payload["result_sha256"] = sha256_json(
+        {key: value for key, value in payload.items() if key != "result_sha256"}
+    )
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "UPDATE financial_fill_applications SET state_after_sha256=?, "
+            "result_payload=?, result_sha256=?",
+            (
+                payload["state_after_sha256"],
+                json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                payload["result_sha256"],
+            ),
+        )
+    with pytest.raises(FinancialApplicationLedgerConflict, match="economic replay"):
+        store.read_financial_fill_application_chain(persisted.local_order_id)
+
+
+def test_ledger_reader_replays_exit_trade_economics(
+    tmp_path: Path,
+) -> None:
+    position = {
+        "entry_time": "2026-08-31T12:00:00+00:00",
+        "entry_price": 100.0,
+        "qty": 1.0,
+        "stop_price": 90.0,
+        "direction": 1,
+        "bars_held": 3,
+        "best_close": 110.0,
+        "initial_qty": 1.0,
+        "last_add_price": 100.0,
+        "pyramid_adds": 0,
+    }
+    store = StateStore(tmp_path / "state.db")
+    persisted = _persisted(
+        store,
+        _plan(
+            FinancialTransitionType.EXIT,
+            position=position,
+            requested_qty=0.5,
+            side="SELL",
+            reason="exit",
+            reduce_only=True,
+        ),
+    )
+    fill = _fill(persisted, quantity=0.5, price=110.0, fee=-0.02)
+    store.append_external_fill(fill)
+    result = calculate_financial_fill_application(_request(persisted, fill))
+    assert result.trade_payload is not None
+    _insert_ledger_record(store, result)
+    payload = result.as_payload()
+    payload["trade_payload"]["pnl"] += 1.0
+    payload["result_sha256"] = sha256_json(
+        {key: value for key, value in payload.items() if key != "result_sha256"}
+    )
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "UPDATE financial_fill_applications SET result_payload=?, result_sha256=?",
+            (
+                json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                payload["result_sha256"],
+            ),
+        )
+    with pytest.raises(FinancialApplicationLedgerConflict, match="economic replay"):
+        store.read_financial_fill_application_chain(persisted.local_order_id)
+
+
+def test_v10_schema_with_columns_but_without_constraints_is_rejected(tmp_path: Path) -> None:
+    database = tmp_path / "malformed.db"
+    StateStore(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE financial_fill_applications")
+        connection.execute(
+            """
+            CREATE TABLE financial_fill_applications(
+                application_key TEXT,
+                application_version INTEGER,
+                local_order_id INTEGER,
+                intent_id TEXT,
+                plan_key TEXT,
+                fill_key TEXT,
+                application_index INTEGER,
+                previous_application_key TEXT,
+                transition_type TEXT,
+                economic_effect_at TEXT,
+                state_before_sha256 TEXT,
+                state_after_sha256 TEXT,
+                result_payload TEXT,
+                result_sha256 TEXT,
+                applied_at TEXT
+            )
+            """
+        )
+        connection.commit()
+    with pytest.raises(RuntimeError, match="Invalid v10"):
+        StateStore(database)
 
 
 def test_ledger_reader_validates_and_returns_immutable_chain(tmp_path: Path) -> None:
