@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from .errors import (
     AccountingIdentityCollision,
@@ -1676,7 +1676,7 @@ class StateStore:
         row: sqlite3.Row,
         order_row: sqlite3.Row | None,
     ) -> PersistedFinancialApplicationPlan:
-        def conflict(detail: str) -> None:
+        def conflict(detail: str) -> NoReturn:
             raise FinancialApplicationPlanConflict(f"FINANCIAL_APPLICATION_PLAN_CONFLICT: {detail}")
 
         if order_row is None:
