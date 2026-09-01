@@ -423,6 +423,8 @@ class ResolutionAssessment:
     reasons: tuple[ResolutionReasonCode, ...] = ()
     deduplicated_fill_keys: tuple[str, ...] = ()
     tid_identity_proven: bool = False
+    financially_applicable_fill_keys: tuple[str, ...] = ()
+    financially_ambiguous_fill_keys: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "outcome", ResolutionOutcome(self.outcome))
@@ -456,6 +458,14 @@ class ResolutionAssessment:
             self, "reasons", tuple(ResolutionReasonCode(code) for code in self.reasons)
         )
         object.__setattr__(self, "deduplicated_fill_keys", tuple(self.deduplicated_fill_keys))
+        for field_name in (
+            "financially_applicable_fill_keys",
+            "financially_ambiguous_fill_keys",
+        ):
+            keys = tuple(getattr(self, field_name))
+            if any(not isinstance(key, str) or not key for key in keys):
+                raise ValueError(f"{field_name} must contain non-empty strings")
+            object.__setattr__(self, field_name, tuple(sorted(set(keys))))
 
 
 @dataclass
@@ -774,32 +784,23 @@ def _canonical_observations(
     )
 
 
-def _conservative_fill_lower_bound(state: _AssessmentState) -> float:
-    """Return a lower bound valid even if same-candidate TIDs alias fills.
-
-    TID remains only a candidate. Distinct fill keys sharing a candidate can
-    be redeliveries of one venue fill, so each connected ambiguity component
-    contributes at most the smallest observed quantity.
-    """
+def _fill_identity_ambiguity_components(
+    state: _AssessmentState,
+) -> tuple[frozenset[str], ...]:
+    """Return connected fill-key components linked by candidate TIDs."""
 
     candidate_groups: dict[str, set[str]] = {}
     for fill_key, candidates in state.fill_tid_candidates.items():
         for candidate in candidates:
             candidate_groups.setdefault(candidate, set()).add(fill_key)
-    ambiguous_groups = [group for group in candidate_groups.values() if len(group) > 1]
-    if not ambiguous_groups:
-        return sum(fill.quantity for fill in state.fills.values())
-
-    state.evidence_conflicts.add(ResolutionReasonCode.FILL_IDENTITY_AMBIGUITY)
-    state.reasons.add(ResolutionReasonCode.FILL_IDENTITY_AMBIGUITY)
     adjacency: dict[str, set[str]] = {}
-    for group in ambiguous_groups:
+    for group in candidate_groups.values():
+        if len(group) <= 1:
+            continue
         for fill_key in group:
             adjacency.setdefault(fill_key, set()).update(group - {fill_key})
-    ambiguous_keys = set(adjacency)
-    lower_bound = sum(
-        fill.quantity for fill_key, fill in state.fills.items() if fill_key not in ambiguous_keys
-    )
+
+    components: list[frozenset[str]] = []
     while adjacency:
         start = min(adjacency)
         component: set[str] = set()
@@ -812,6 +813,38 @@ def _conservative_fill_lower_bound(state: _AssessmentState) -> float:
             pending.extend(adjacency.get(current, ()))
         for fill_key in component:
             adjacency.pop(fill_key, None)
+        components.append(frozenset(component))
+    return tuple(sorted(components, key=lambda component: tuple(sorted(component))))
+
+
+def _conservative_fill_lower_bound(
+    state: _AssessmentState,
+    ambiguity_components: tuple[frozenset[str], ...] | None = None,
+) -> float:
+    """Return a lower bound valid even if same-candidate TIDs alias fills.
+
+    TID remains only a candidate. Distinct fill keys sharing a candidate can
+    be redeliveries of one venue fill, so each connected ambiguity component
+    contributes at most the smallest observed quantity.
+    """
+
+    components = (
+        _fill_identity_ambiguity_components(state)
+        if ambiguity_components is None
+        else ambiguity_components
+    )
+    if not components:
+        return sum(fill.quantity for fill in state.fills.values())
+
+    state.evidence_conflicts.add(ResolutionReasonCode.FILL_IDENTITY_AMBIGUITY)
+    state.reasons.add(ResolutionReasonCode.FILL_IDENTITY_AMBIGUITY)
+    ambiguous_keys: set[str] = set()
+    for component in components:
+        ambiguous_keys.update(component)
+    lower_bound = sum(
+        fill.quantity for fill_key, fill in state.fills.items() if fill_key not in ambiguous_keys
+    )
+    for component in components:
         lower_bound += min(state.fills[fill_key].quantity for fill_key in component)
     return lower_bound
 
@@ -942,13 +975,29 @@ def assess_resolution(bundle: ResolutionEvidenceBundle) -> ResolutionAssessment:
     _assess_temporal_consistency(state)
 
     lower_bound = 0.0
+    ambiguity_components: tuple[frozenset[str], ...] = ()
     if state.fills:
         state.reasons.add(ResolutionReasonCode.FILL_POSITIVE_EVIDENCE)
         state.reasons.add(ResolutionReasonCode.FILL_COMPLETENESS_UNPROVEN)
-        lower_bound = _conservative_fill_lower_bound(state)
+        ambiguity_components = _fill_identity_ambiguity_components(state)
+        lower_bound = _conservative_fill_lower_bound(state, ambiguity_components)
         if lower_bound > expected.requested_qty + expected.quantity_tolerance:
             state.evidence_conflicts.add(ResolutionReasonCode.FILL_QUANTITY_CONFLICT)
     state.reasons.add(ResolutionReasonCode.ZERO_EFFECT_UNPROVEN)
+    ambiguous_fill_keys: set[str] = set()
+    for component in ambiguity_components:
+        ambiguous_fill_keys.update(component)
+    if (
+        state.binding_conflicts
+        or state.binding_incomplete
+        or (ResolutionReasonCode.FILL_QUANTITY_CONFLICT in state.evidence_conflicts)
+    ):
+        applicable_fill_keys: tuple[str, ...] = ()
+    else:
+        applicable_fill_keys = tuple(
+            sorted(fill_key for fill_key in state.fills if fill_key not in ambiguous_fill_keys)
+        )
+    financially_ambiguous_fill_keys = tuple(sorted(ambiguous_fill_keys))
 
     if state.binding_conflicts:
         outcome = ResolutionOutcome.BINDING_CONFLICT
@@ -990,6 +1039,8 @@ def assess_resolution(bundle: ResolutionEvidenceBundle) -> ResolutionAssessment:
         reasons=_ordered_codes(state.reasons | state.binding_conflicts | state.binding_incomplete),
         deduplicated_fill_keys=tuple(sorted(state.fills)),
         tid_identity_proven=False,
+        financially_applicable_fill_keys=applicable_fill_keys,
+        financially_ambiguous_fill_keys=financially_ambiguous_fill_keys,
     )
 
 
