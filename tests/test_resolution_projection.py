@@ -9,12 +9,19 @@ from typing import Any, cast
 
 import pytest
 
+from btcquant.execution.broker import BrokerOrderResult, Fill
 from btcquant.execution.external_evidence import (
     ExternalEvidenceSource,
     ExternalFill,
     ExternalOrderObservation,
 )
 from btcquant.execution.order_state import ExternalOrderState
+from btcquant.execution.paper_execution_evidence import (
+    PAPER_EXECUTION_EVIDENCE_AGGREGATE_TYPE,
+    PAPER_EXECUTION_EVIDENCE_EVENT_TYPE,
+    PaperExecutionEvidenceContext,
+    build_paper_execution_evidence,
+)
 from btcquant.execution.resolution import ResolutionOutcome
 from btcquant.execution.resolution_projection import (
     ProjectionReasonCode,
@@ -741,3 +748,134 @@ def test_private_event_stays_in_bundle_without_satisfying_fill_lookup_link(tmp_p
     assert result.bundle is not None
     assert len(result.bundle.fills) == 2
     assert result.bundle.fill_lookups[0].fills == (linked,)
+
+
+def _paper_execution_evidence(
+    store: StateStore,
+    *,
+    state: ExternalOrderState = ExternalOrderState.FILLED,
+    quantity: float = 1.0,
+):
+    order_id = store.begin_order(
+        "trend", "paper-slot", "paper-intent", "MARKET", "BUY", 1.0, "entry", 100_000.0
+    )
+    evidence = build_paper_execution_evidence(
+        PaperExecutionEvidenceContext(
+            local_order_id=order_id,
+            intent_id="paper-intent",
+            engine="trend",
+            instrument="BTC/USDC:USDC",
+            side="BUY",
+        ),
+        BrokerOrderResult(
+            Fill(
+                price=100_100.0 if quantity else 0.0,
+                qty=quantity,
+                fee=50.05 if quantity else 0.0,
+            ),
+            state,
+            1.0,
+            0.0,
+        ),
+        observed_at=OBSERVED,
+    )
+    return order_id, evidence
+
+
+def test_paper_execution_evidence_projects_ready_and_exposes_the_safe_fill(tmp_path: Path):
+    store = StateStore(tmp_path / "state.db")
+    order_id, evidence = _paper_execution_evidence(store)
+    persisted = store.persist_paper_execution_evidence(evidence)
+
+    result = assess_persisted_resolution(store, order_id)
+
+    assert result.projection.status == ProjectionStatus.READY
+    assert result.projection.bundle is not None
+    assert result.projection.bundle.order_lookups == ()
+    assert result.projection.bundle.fill_lookups == ()
+    assert result.assessment is not None
+    assert result.assessment.outcome == ResolutionOutcome.EFFECT_PROVEN_INCOMPLETE
+    assert result.assessment.binding_complete is True
+    assert result.assessment.financially_applicable_fill_keys == (persisted.fill.fill_key,)
+    assert result.assessment.zero_effect_proven is False
+
+
+def test_paper_rejection_is_never_projected_as_zero_effect(tmp_path: Path):
+    store = StateStore(tmp_path / "state.db")
+    order_id, evidence = _paper_execution_evidence(
+        store, state=ExternalOrderState.REJECTED, quantity=0.0
+    )
+    store.persist_paper_execution_evidence(evidence)
+
+    result = assess_persisted_resolution(store, order_id)
+
+    assert result.projection.status == ProjectionStatus.READY
+    assert result.assessment is not None
+    assert result.assessment.outcome == ResolutionOutcome.UNRESOLVED
+    assert result.assessment.zero_effect_proven is False
+    assert result.assessment.financially_applicable_fill_keys == ()
+
+
+def test_paper_event_requires_its_exact_aggregate_provenance(tmp_path: Path):
+    store = StateStore(tmp_path / "state.db")
+    order_id, evidence = _paper_execution_evidence(store)
+    store.persist_paper_execution_evidence(evidence)
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "UPDATE events SET aggregate_type = ? WHERE event_type = ?",
+            ("external_fill_lookup", PAPER_EXECUTION_EVIDENCE_EVENT_TYPE),
+        )
+
+    result = project_resolution_snapshot(store.read_resolution_snapshot(order_id))
+
+    assert result.status == ProjectionStatus.INVALID_PERSISTED_EVIDENCE
+    assert result.reasons == (ProjectionReasonCode.EVENT_PROVENANCE_MISMATCH,)
+
+
+def test_paper_event_requires_its_durably_linked_fill(tmp_path: Path):
+    store = StateStore(tmp_path / "state.db")
+    order_id, evidence = _paper_execution_evidence(store)
+    persisted = store.persist_paper_execution_evidence(evidence)
+    assert persisted.fill is not None
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "DELETE FROM external_fills WHERE fill_key = ?", (persisted.fill.fill_key,)
+        )
+
+    result = project_resolution_snapshot(store.read_resolution_snapshot(order_id))
+
+    assert result.status == ProjectionStatus.INVALID_PERSISTED_EVIDENCE
+    assert result.reasons == (ProjectionReasonCode.PAPER_EVIDENCE_LINK_MISSING,)
+
+
+def test_paper_event_cannot_be_mixed_with_external_lookup_context(tmp_path: Path):
+    store = StateStore(tmp_path / "state.db")
+    order_id, evidence = _paper_execution_evidence(store)
+    store.persist_paper_execution_evidence(evidence)
+    with store._transaction() as connection:
+        store._insert_event(
+            connection,
+            "trend",
+            "external_order_lookup_not_found",
+            order_payload(order_id, "NOT_FOUND", intent_id="paper-intent"),
+            "external_order_lookup",
+            "paper-intent",
+        )
+
+    result = project_resolution_snapshot(store.read_resolution_snapshot(order_id))
+
+    assert result.status == ProjectionStatus.INVALID_PERSISTED_EVIDENCE
+    assert result.reasons == (ProjectionReasonCode.BINDING_CONTEXT_CONFLICT,)
+
+
+def test_normal_paper_event_uses_the_expected_aggregate_contract(tmp_path: Path):
+    store = StateStore(tmp_path / "state.db")
+    _order_id, evidence = _paper_execution_evidence(store)
+    store.persist_paper_execution_evidence(evidence)
+    with sqlite3.connect(store.path) as connection:
+        row = connection.execute(
+            "SELECT event_type, aggregate_type FROM events WHERE event_type = ?",
+            (PAPER_EXECUTION_EVIDENCE_EVENT_TYPE,),
+        ).fetchone()
+
+    assert row == (PAPER_EXECUTION_EVIDENCE_EVENT_TYPE, PAPER_EXECUTION_EVIDENCE_AGGREGATE_TYPE)

@@ -179,3 +179,24 @@ def test_paper_evidence_rejects_non_local_or_misaligned_evidence(tmp_path):
             fill=evidence.fill,
             raw_payload_hash=evidence.raw_payload_hash,
         )
+
+
+def test_paper_evidence_rejects_external_identity_or_time_claims(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    evidence = _evidence(store)
+    assert evidence.fill is not None
+
+    with pytest.raises(ValueError, match="external order identity"):
+        PaperExecutionEvidence(
+            context=evidence.context,
+            observation=evidence.observation,
+            fill=replace(evidence.fill, external_order_id="oid-A"),
+            raw_payload_hash=evidence.raw_payload_hash,
+        )
+    with pytest.raises(ValueError, match="venue event time"):
+        PaperExecutionEvidence(
+            context=evidence.context,
+            observation=replace(evidence.observation, venue_event_at=OBSERVED_AT),
+            fill=evidence.fill,
+            raw_payload_hash=evidence.raw_payload_hash,
+        )

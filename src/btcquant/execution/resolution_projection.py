@@ -5,12 +5,19 @@ from __future__ import annotations
 import json
 import math
 import datetime
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
 from .external_evidence import ExternalEvidenceSource, ExternalFill, ExternalOrderObservation
 from .order_state import ExternalOrderState
+from .paper_execution_evidence import (
+    PAPER_EVIDENCE_VERSION,
+    PAPER_EXECUTION_EVIDENCE_AGGREGATE_TYPE,
+    PAPER_EXECUTION_EVIDENCE_EVENT_TYPE,
+    PAPER_VENUE,
+)
 from .resolution import (
     ExpectedOrderBinding,
     FillLookupFact,
@@ -44,6 +51,8 @@ class ProjectionReasonCode(StrEnum):
     ORDER_PERSISTENCE_LINK_AMBIGUOUS = "ORDER_PERSISTENCE_LINK_AMBIGUOUS"
     FILL_PERSISTENCE_LINK_MISSING = "FILL_PERSISTENCE_LINK_MISSING"
     FILL_PERSISTENCE_LINK_AMBIGUOUS = "FILL_PERSISTENCE_LINK_AMBIGUOUS"
+    PAPER_EVIDENCE_LINK_MISSING = "PAPER_EVIDENCE_LINK_MISSING"
+    PAPER_EVIDENCE_LINK_AMBIGUOUS = "PAPER_EVIDENCE_LINK_AMBIGUOUS"
 
 
 @dataclass(frozen=True)
@@ -457,6 +466,156 @@ def _project_fill_event(
     )
 
 
+_PAPER_EVENT_PAYLOAD_FIELDS = frozenset(
+    {
+        "contract",
+        "local_order_id",
+        "intent_id",
+        "venue",
+        "account_scope",
+        "instrument",
+        "side",
+        "observation_key",
+        "fill_key",
+        "venue_fill_id",
+        "raw_payload_hash",
+    }
+)
+
+
+def _paper_link_reason(
+    matches: Sequence[object],
+) -> ProjectionReasonCode:
+    return (
+        ProjectionReasonCode.PAPER_EVIDENCE_LINK_MISSING
+        if not matches
+        else ProjectionReasonCode.PAPER_EVIDENCE_LINK_AMBIGUOUS
+    )
+
+
+def _project_paper_events(snapshot: ResolutionSnapshot) -> PersistedResolutionProjection:
+    """Project only durable local PAPER submission evidence.
+
+    PAPER events are a separate evidence domain, not a re-labelled venue
+    lookup.  Every event must link exactly to the immutable rows written in
+    its transaction before that evidence is passed to the pure kernel.
+    """
+
+    if snapshot.order is None:
+        return _not_ready(ProjectionReasonCode.ORDER_NOT_FOUND)
+    order = dict(snapshot.order)
+    events = tuple(snapshot.lookup_events)
+    if any(event.event_type != PAPER_EXECUTION_EVIDENCE_EVENT_TYPE for event in events):
+        return _invalid(ProjectionReasonCode.BINDING_CONTEXT_CONFLICT)
+    bindings: set[ExpectedOrderBinding] = set()
+    try:
+        for event in events:
+            if (
+                event.aggregate_type != PAPER_EXECUTION_EVIDENCE_AGGREGATE_TYPE
+                or event.aggregate_id != str(order["id"])
+                or event.engine != str(order["engine"])
+            ):
+                raise RuntimeError(ProjectionReasonCode.EVENT_PROVENANCE_MISMATCH)
+            payload = _payload(event)
+            if set(payload) != _PAPER_EVENT_PAYLOAD_FIELDS:
+                raise ValueError("paper evidence payload is malformed")
+            if _required_text(payload["contract"], "contract") != PAPER_EVIDENCE_VERSION:
+                raise RuntimeError(ProjectionReasonCode.EVENT_PROVENANCE_MISMATCH)
+            if (
+                _integer(payload["local_order_id"], "local_order_id", minimum=1) != int(order["id"])
+                or _required_text(payload["intent_id"], "intent_id") != str(order["intent_id"])
+                or _required_text(payload["side"], "side").upper() != str(order["side"]).upper()
+            ):
+                raise ValueError("paper event local binding differs from order")
+            venue = _required_text(payload["venue"], "venue")
+            account_scope = _required_text(payload["account_scope"], "account_scope")
+            instrument = _required_text(payload["instrument"], "instrument")
+            if venue != PAPER_VENUE:
+                raise RuntimeError(ProjectionReasonCode.EVENT_PROVENANCE_MISMATCH)
+            binding = _binding(
+                order,
+                venue=venue,
+                account_scope=account_scope,
+                instrument=instrument,
+                expected_client_order_id=str(order["intent_id"]),
+            )
+            observation_key = _required_text(payload["observation_key"], "observation_key")
+            raw_payload_hash = _required_text(payload["raw_payload_hash"], "raw_payload_hash")
+            observations = [
+                observation
+                for observation in snapshot.order_observations
+                if (
+                    observation.observation_key == observation_key
+                    and observation.local_order_id == binding.local_order_id
+                    and observation.intent_id == binding.intent_id
+                    and observation.venue == binding.venue
+                    and observation.account_scope == binding.account_scope
+                    and observation.instrument == binding.instrument
+                    and observation.side == binding.side
+                    and observation.source_kind == ExternalEvidenceSource.SUBMISSION_RESPONSE
+                    and observation.client_order_id == binding.expected_client_order_id
+                    and observation.external_order_id is None
+                    and observation.raw_payload_hash == raw_payload_hash
+                )
+            ]
+            if len(observations) != 1:
+                raise RuntimeError(_paper_link_reason(observations))
+            observation = observations[0]
+            fill_key = _text(payload["fill_key"], "fill_key", nullable=True)
+            venue_fill_id = _text(payload["venue_fill_id"], "venue_fill_id", nullable=True)
+            if fill_key is None:
+                if (
+                    venue_fill_id is not None
+                    or observation.cumulative_filled_qty is None
+                    or not _same_float(observation.cumulative_filled_qty, 0.0)
+                ):
+                    raise RuntimeError(ProjectionReasonCode.PAPER_EVIDENCE_LINK_MISSING)
+            else:
+                if venue_fill_id is None:
+                    raise ValueError("paper fill key requires a local fill identity")
+                fills = [
+                    fill
+                    for fill in snapshot.fills
+                    if (
+                        fill.fill_key == fill_key
+                        and fill.local_order_id == binding.local_order_id
+                        and fill.intent_id == binding.intent_id
+                        and fill.venue == binding.venue
+                        and fill.account_scope == binding.account_scope
+                        and fill.instrument == binding.instrument
+                        and fill.side == binding.side
+                        and fill.source_kind == ExternalEvidenceSource.SUBMISSION_RESPONSE
+                        and fill.client_order_id == binding.expected_client_order_id
+                        and fill.external_order_id is None
+                        and fill.venue_fill_id == venue_fill_id
+                        and fill.raw_payload_hash == raw_payload_hash
+                    )
+                ]
+                if len(fills) != 1:
+                    raise RuntimeError(_paper_link_reason(fills))
+                if not _same_float(observation.cumulative_filled_qty, fills[0].quantity):
+                    raise RuntimeError(ProjectionReasonCode.PAPER_EVIDENCE_LINK_MISSING)
+            bindings.add(binding)
+    except RuntimeError as error:
+        reason = error.args[0] if error.args else ProjectionReasonCode.MALFORMED_LOOKUP_EVENT
+        if isinstance(reason, ProjectionReasonCode):
+            return _invalid(reason)
+        return _invalid(ProjectionReasonCode.MALFORMED_LOOKUP_EVENT)
+    except (TypeError, ValueError):
+        return _invalid(ProjectionReasonCode.MALFORMED_LOOKUP_EVENT)
+    if len(bindings) != 1:
+        return _invalid(ProjectionReasonCode.BINDING_CONTEXT_CONFLICT)
+    binding = next(iter(bindings))
+    return PersistedResolutionProjection(
+        ProjectionStatus.READY,
+        bundle=ResolutionEvidenceBundle(
+            binding=binding,
+            order_observations=snapshot.order_observations,
+            fills=snapshot.fills,
+        ),
+    )
+
+
 def project_resolution_snapshot(snapshot: ResolutionSnapshot) -> PersistedResolutionProjection:
     """Project one coherent durable snapshot without performing I/O."""
 
@@ -467,6 +626,10 @@ def project_resolution_snapshot(snapshot: ResolutionSnapshot) -> PersistedResolu
         return _not_ready(ProjectionReasonCode.UNSUPPORTED_ORDER_TYPE)
     if not snapshot.lookup_events:
         return _not_ready(ProjectionReasonCode.NO_LOOKUP_CONTEXT)
+    if any(
+        event.event_type == PAPER_EXECUTION_EVIDENCE_EVENT_TYPE for event in snapshot.lookup_events
+    ):
+        return _project_paper_events(snapshot)
 
     parsed: list[tuple[PersistedLookupEvent, dict[str, Any], str, str, str, str | None]] = []
     try:

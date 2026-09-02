@@ -9,13 +9,18 @@ from threading import Barrier
 
 import pytest
 
+from btcquant.execution.broker import BrokerOrderResult, Fill
 from btcquant.execution.external_evidence import ExternalFill
 from btcquant.execution.financial_fill_application import (
     FinancialApplicationLedgerConflict,
     FinancialFillApplicationError,
 )
 from btcquant.execution.financial_application_plan import canonical_json
-from btcquant.execution.order_state import FinancialTransitionType
+from btcquant.execution.order_state import ExternalOrderState, FinancialTransitionType
+from btcquant.execution.paper_execution_evidence import (
+    PaperExecutionEvidenceContext,
+    build_paper_execution_evidence,
+)
 from btcquant.execution.state_store import StateStore
 from test_financial_fill_application import _fill, _persisted, _plan
 
@@ -1068,3 +1073,42 @@ def test_commit_result_rejects_impossible_typed_states(tmp_path: Path) -> None:
     )
     with pytest.raises(FinancialFillApplicationError, match="rejeu idempotent"):
         replace(replay, trade_inserted=True)
+
+
+def test_paper_submission_evidence_can_flow_through_the_existing_atomic_writer(
+    tmp_path: Path,
+) -> None:
+    store = StateStore(tmp_path / "state.db")
+    persisted = _persisted(store, _plan())
+    evidence = build_paper_execution_evidence(
+        PaperExecutionEvidenceContext(
+            local_order_id=persisted.local_order_id,
+            intent_id=persisted.intent_id,
+            engine="trend",
+            instrument="BTC/USDC:USDC",
+            side=persisted.plan.side,
+        ),
+        BrokerOrderResult(
+            Fill(price=110.0, qty=1.0, fee=0.02),
+            ExternalOrderState.FILLED,
+            1.0,
+            0.0,
+        ),
+        observed_at="2026-09-01T12:01:00Z",
+    )
+    persisted_evidence = store.persist_paper_execution_evidence(evidence)
+    assert persisted_evidence.fill is not None
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "UPDATE orders SET local_state = ? WHERE id = ?",
+            ("PENDING_RECONCILIATION", persisted.local_order_id),
+        )
+
+    result = store.apply_financial_fill_atomically(
+        local_order_id=persisted.local_order_id,
+        fill_key=persisted_evidence.fill.fill_key or "",
+    )
+
+    assert result.applied is True
+    assert result.trade_inserted is False
+    assert _counts(store, persisted.local_order_id) == (1, 0, 1, 1)

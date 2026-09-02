@@ -34,6 +34,8 @@ from .errors import (
 from .external_evidence import ExternalFill, ExternalOrderObservation
 from .paper_execution_evidence import (
     PAPER_EVIDENCE_VERSION,
+    PAPER_EXECUTION_EVIDENCE_AGGREGATE_TYPE,
+    PAPER_EXECUTION_EVIDENCE_EVENT_TYPE,
     PaperExecutionEvidence,
     PaperExecutionEvidencePersistenceResult,
 )
@@ -2796,7 +2798,7 @@ class StateStore:
             self._insert_event(
                 connection,
                 evidence.context.engine,
-                "PAPER_EXECUTION_EVIDENCE_PERSISTED",
+                PAPER_EXECUTION_EVIDENCE_EVENT_TYPE,
                 {
                     "contract": PAPER_EVIDENCE_VERSION,
                     "local_order_id": evidence.context.local_order_id,
@@ -2812,7 +2814,7 @@ class StateStore:
                     ),
                     "raw_payload_hash": evidence.raw_payload_hash,
                 },
-                aggregate_type="paper_execution_evidence",
+                aggregate_type=PAPER_EXECUTION_EVIDENCE_AGGREGATE_TYPE,
                 aggregate_id=str(evidence.context.local_order_id),
                 correlation_id=evidence.context.intent_id,
             )
@@ -2869,11 +2871,24 @@ class StateStore:
                 SELECT id, ts, engine, event_type, aggregate_type, aggregate_id, payload
                 FROM events
                 WHERE engine = ?
-                  AND aggregate_id = ?
-                  AND aggregate_type IN ('external_order_lookup', 'external_fill_lookup')
+                  AND (
+                    (
+                      aggregate_id = ?
+                      AND aggregate_type IN ('external_order_lookup', 'external_fill_lookup')
+                    )
+                    OR (
+                      aggregate_id = ?
+                      AND event_type = ?
+                    )
+                  )
                 ORDER BY id
                 """,
-                (str(order["engine"]), str(order["intent_id"])),
+                (
+                    str(order["engine"]),
+                    str(order["intent_id"]),
+                    str(order["id"]),
+                    PAPER_EXECUTION_EVIDENCE_EVENT_TYPE,
+                ),
             ).fetchall()
         )
         return ResolutionSnapshot(order, observations, fills, events)

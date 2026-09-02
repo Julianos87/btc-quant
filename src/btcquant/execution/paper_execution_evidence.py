@@ -20,6 +20,8 @@ from .external_evidence import ExternalEvidenceSource, ExternalFill, ExternalOrd
 PAPER_EVIDENCE_VERSION = "paper-local-execution-v1"
 PAPER_VENUE = "paper-local"
 PAPER_FEE_ASSET = "USDC"
+PAPER_EXECUTION_EVIDENCE_EVENT_TYPE = "PAPER_EXECUTION_EVIDENCE_PERSISTED"
+PAPER_EXECUTION_EVIDENCE_AGGREGATE_TYPE = "paper_execution_evidence"
 
 
 def _canonical_json(value: dict[str, Any]) -> str:
@@ -94,6 +96,8 @@ class PaperExecutionEvidence:
                 raise ValueError("paper fill must be a SUBMISSION_RESPONSE")
             if self.fill.venue_fill_id is None:
                 raise ValueError("paper fill requires a durable local fill identity")
+            if not self.fill.venue_fill_id.startswith("paper-local-fill-v1-"):
+                raise ValueError("paper fill identity must remain in the local PAPER namespace")
         for evidence in (self.observation, self.fill):
             if evidence is None:
                 continue
@@ -109,6 +113,10 @@ class PaperExecutionEvidence:
                 raise ValueError("paper evidence does not match its local binding")
             if evidence.raw_payload_hash != self.raw_payload_hash:
                 raise ValueError("paper evidence must retain the submission payload hash")
+            if evidence.external_order_id is not None:
+                raise ValueError("paper evidence cannot claim an external order identity")
+            if evidence.venue_event_at is not None:
+                raise ValueError("paper evidence cannot claim a venue event time")
 
 
 @dataclass(frozen=True)
@@ -219,6 +227,8 @@ def build_paper_execution_evidence(
 
 __all__ = [
     "PAPER_EVIDENCE_VERSION",
+    "PAPER_EXECUTION_EVIDENCE_AGGREGATE_TYPE",
+    "PAPER_EXECUTION_EVIDENCE_EVENT_TYPE",
     "PAPER_FEE_ASSET",
     "PAPER_VENUE",
     "PaperExecutionEvidence",
