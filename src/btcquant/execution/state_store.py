@@ -1050,14 +1050,22 @@ class StateStore:
                 and is_partial
                 and index_columns == ("previous_application_key",)
             ):
-                previous_index_valid = True
+                index_sql_row = connection.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='index' AND name = ?",
+                    (index_name,),
+                ).fetchone()
+                index_sql = "" if index_sql_row is None else str(index_sql_row["sql"] or "")
+                normalized_sql = " ".join(index_sql.casefold().split()).rstrip(";").rstrip()
+                previous_index_valid = normalized_sql.endswith(
+                    " where previous_application_key is not null"
+                )
         if {
             ("local_order_id", "fill_key", "application_version"),
             ("local_order_id", "application_index"),
         } - unique_signatures:
             raise RuntimeError("Invalid v10 financial_fill_applications unique constraints")
         if not previous_index_valid:
-            raise RuntimeError("Invalid v10 financial_fill_applications previous index")
+            raise RuntimeError("Invalid v10 financial_fill_applications previous index predicate")
 
         foreign_keys = {
             (str(row["from"]), str(row["table"]), str(row["to"]))

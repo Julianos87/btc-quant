@@ -235,6 +235,11 @@ def test_schema_v10_is_fresh_and_additive(tmp_path: Path) -> None:
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE name='idx_financial_fill_applications_previous'"
         ).fetchone()
+        index_sql = connection.execute(
+            "SELECT sql FROM sqlite_master "
+            "WHERE type='index' AND name='idx_financial_fill_applications_previous'"
+        ).fetchone()[0]
+        assert "WHERE previous_application_key IS NOT NULL" in index_sql
 
 
 def test_v9_to_v10_migration_requires_opt_in_and_is_idempotent(tmp_path: Path) -> None:
@@ -262,9 +267,12 @@ def test_v9_to_v10_migration_requires_opt_in_and_is_idempotent(tmp_path: Path) -
         ).fetchone()
 
 
-def test_v10_migration_failure_rolls_back_table_and_metadata(
+def test_v10_migration_baseexception_rolls_back_table_index_and_metadata(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    class InjectedPowerLoss(BaseException):
+        pass
+
     database = tmp_path / "state.db"
     StateStore(database)
     with sqlite3.connect(database) as connection:
@@ -275,14 +283,14 @@ def test_v10_migration_failure_rolls_back_table_and_metadata(
 
     def fail(connection):
         original(connection)
-        raise RuntimeError("injected v10 failure")
+        raise InjectedPowerLoss("injected v10 power loss")
 
     monkeypatch.setattr(
         StateStore,
         "_ensure_financial_fill_application_schema",
         staticmethod(fail),
     )
-    with pytest.raises(RuntimeError, match="injected v10 failure"):
+    with pytest.raises(InjectedPowerLoss, match="injected v10 power loss"):
         StateStore(database, allow_migration=True)
     with sqlite3.connect(database) as connection:
         assert (
@@ -294,6 +302,13 @@ def test_v10_migration_failure_rolls_back_table_and_metadata(
         assert (
             connection.execute(
                 "SELECT name FROM sqlite_master WHERE name='financial_fill_applications'"
+            ).fetchone()
+            is None
+        )
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='index' AND name='idx_financial_fill_applications_previous'"
             ).fetchone()
             is None
         )
@@ -769,6 +784,21 @@ def test_v10_schema_with_columns_but_without_constraints_is_rejected(tmp_path: P
         )
         connection.commit()
     with pytest.raises(RuntimeError, match="Invalid v10"):
+        StateStore(database)
+
+
+def test_v10_schema_with_wrong_previous_index_predicate_is_rejected(tmp_path: Path) -> None:
+    database = tmp_path / "wrong-predicate.db"
+    StateStore(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute("DROP INDEX idx_financial_fill_applications_previous")
+        connection.execute(
+            "CREATE UNIQUE INDEX idx_financial_fill_applications_previous "
+            "ON financial_fill_applications(previous_application_key) "
+            "WHERE previous_application_key = 'fake-parent'"
+        )
+        connection.commit()
+    with pytest.raises(RuntimeError, match="previous index predicate"):
         StateStore(database)
 
 
