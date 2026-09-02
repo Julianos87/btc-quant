@@ -2814,57 +2814,7 @@ class StateStore:
         ):
             raise ValueError("local_order_id doit être un entier strictement positif")
         with self._read_transaction() as connection:
-            order_row = connection.execute(
-                "SELECT * FROM orders WHERE id = ?", (local_order_id,)
-            ).fetchone()
-            if order_row is None:
-                return ResolutionSnapshot(None, (), (), ())
-            order = MappingProxyType(dict(order_row))
-            observations = tuple(
-                self._external_order_observation_from_row(row)
-                for row in connection.execute(
-                    """
-                    SELECT * FROM external_order_observations
-                    WHERE local_order_id = ?
-                    ORDER BY id
-                    """,
-                    (local_order_id,),
-                ).fetchall()
-            )
-            fills = tuple(
-                self._external_fill_from_row(row)
-                for row in connection.execute(
-                    """
-                    SELECT * FROM external_fills
-                    WHERE local_order_id = ?
-                    ORDER BY id
-                    """,
-                    (local_order_id,),
-                ).fetchall()
-            )
-            events = tuple(
-                PersistedLookupEvent(
-                    event_id=int(row["id"]),
-                    ts=str(row["ts"]),
-                    engine=str(row["engine"]),
-                    event_type=str(row["event_type"]),
-                    aggregate_type=str(row["aggregate_type"]),
-                    aggregate_id=str(row["aggregate_id"]),
-                    payload=str(row["payload"]),
-                )
-                for row in connection.execute(
-                    """
-                    SELECT id, ts, engine, event_type, aggregate_type, aggregate_id, payload
-                    FROM events
-                    WHERE engine = ?
-                      AND aggregate_id = ?
-                      AND aggregate_type IN ('external_order_lookup', 'external_fill_lookup')
-                    ORDER BY id
-                    """,
-                    (str(order["engine"]), str(order["intent_id"])),
-                ).fetchall()
-            )
-        return ResolutionSnapshot(order, observations, fills, events)
+            return self._read_resolution_snapshot_in_transaction(connection, local_order_id)
 
     def get_external_order_observations(
         self,
@@ -3303,8 +3253,6 @@ class StateStore:
             ).fetchone()
             if order_row is None:
                 raise FinancialFillApplicationError("FINANCIAL_ORDER_MISSING")
-            if order_row["local_state"] != LocalOrderState.PENDING_RECONCILIATION.value:
-                raise FinancialFillApplicationError("FINANCIAL_ORDER_NOT_RECONCILIATION_READY")
             plan_row = connection.execute(
                 "SELECT * FROM financial_application_plans WHERE local_order_id = ?",
                 (local_order_id,),
@@ -3335,6 +3283,22 @@ class StateStore:
             chain_fills: tuple[ExternalFill, ...] = tuple(
                 fills_by_key[record.fill_key] for record in chain
             )
+            existing = next((record for record in chain if record.fill_key == fill_key), None)
+            if existing is not None:
+                head = chain[-1]
+                return FinancialFillCommitResult(
+                    application=existing,
+                    applied=False,
+                    already_applied=True,
+                    application_index=existing.application_index,
+                    state_after_sha256=head.state_after_sha256,
+                    ledger_head_application_key=head.application_key,
+                    trade_inserted=False,
+                    event_id=None,
+                )
+
+            if order_row["local_state"] != LocalOrderState.PENDING_RECONCILIATION.value:
+                raise FinancialFillApplicationError("FINANCIAL_ORDER_NOT_RECONCILIATION_READY")
             current_payload, current_raw_payload = self._load_engine_state_in_transaction(
                 connection, persisted_plan.plan.identity.engine
             )
@@ -3349,20 +3313,6 @@ class StateStore:
                 engine=persisted_plan.plan.identity.engine,
                 payload=current_payload,
             )
-
-            existing = next((record for record in chain if record.fill_key == fill_key), None)
-            if existing is not None:
-                head = chain[-1]
-                return FinancialFillCommitResult(
-                    application=existing,
-                    applied=False,
-                    already_applied=True,
-                    application_index=existing.application_index,
-                    state_after_sha256=head.state_after_sha256,
-                    ledger_head_application_key=head.application_key,
-                    trade_inserted=False,
-                    event_id=None,
-                )
 
             assessment = self._financial_fill_assessment_in_transaction(connection, local_order_id)
             request = FinancialFillApplicationRequest(

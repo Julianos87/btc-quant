@@ -10,7 +10,10 @@ from threading import Barrier
 import pytest
 
 from btcquant.execution.external_evidence import ExternalFill
-from btcquant.execution.financial_fill_application import FinancialFillApplicationError
+from btcquant.execution.financial_fill_application import (
+    FinancialApplicationLedgerConflict,
+    FinancialFillApplicationError,
+)
 from btcquant.execution.financial_application_plan import canonical_json
 from btcquant.execution.order_state import FinancialTransitionType
 from btcquant.execution.state_store import StateStore
@@ -109,6 +112,30 @@ def _counts(store: StateStore, order_id: int) -> tuple[int, int, int, int]:
     return int(ledger), int(trades), int(events), int(positions)
 
 
+def _positions_snapshot(store: StateStore) -> tuple[tuple[object, ...], ...]:
+    columns = (
+        "engine",
+        "slot",
+        "status",
+        "cash",
+        "entry_time",
+        "entry_price",
+        "qty",
+        "stop_price",
+        "direction",
+        "bars_held",
+        "best_close",
+        "stop_order_id",
+        "entry_fee",
+        "last_bar_ts",
+    )
+    with sqlite3.connect(store.path) as connection:
+        rows = connection.execute(
+            "SELECT " + ", ".join(columns) + " FROM positions ORDER BY engine, slot"
+        ).fetchall()
+    return tuple(tuple(row) for row in rows)
+
+
 def test_enter_writer_commits_ledger_state_projection_and_audit(tmp_path: Path) -> None:
     store, persisted, fill = _prepare(tmp_path)
     before = store.read_orders("trend")[0]
@@ -191,6 +218,7 @@ def test_same_fill_replay_is_a_noop(tmp_path: Path) -> None:
 def test_writer_rolls_back_after_ledger_stage_failure(tmp_path: Path, monkeypatch) -> None:
     store, persisted, fill = _prepare(tmp_path)
     before_state = store.load_engine_state("trend")
+    before_positions = _positions_snapshot(store)
     before_counts = _counts(store, persisted.local_order_id)
 
     def fail(*args, **kwargs):
@@ -203,11 +231,13 @@ def test_writer_rolls_back_after_ledger_stage_failure(tmp_path: Path, monkeypatc
         )
     assert _counts(store, persisted.local_order_id) == before_counts
     assert store.load_engine_state("trend") == before_state
+    assert _positions_snapshot(store) == before_positions
 
 
 def test_writer_rolls_back_after_event_stage_failure(tmp_path: Path, monkeypatch) -> None:
     store, persisted, fill = _prepare(tmp_path)
     before_state = store.load_engine_state("trend")
+    before_positions = _positions_snapshot(store)
     before_counts = _counts(store, persisted.local_order_id)
 
     def fail(*args, **kwargs):
@@ -220,6 +250,7 @@ def test_writer_rolls_back_after_event_stage_failure(tmp_path: Path, monkeypatch
         )
     assert _counts(store, persisted.local_order_id) == before_counts
     assert store.load_engine_state("trend") == before_state
+    assert _positions_snapshot(store) == before_positions
 
 
 def test_writer_requires_reconciliation_state(tmp_path: Path) -> None:
@@ -309,9 +340,11 @@ def _assert_failed_write_is_invisible(
     order_id: int,
     before_state: dict,
     before_counts: tuple[int, int, int, int],
+    before_positions: tuple[tuple[object, ...], ...],
 ) -> None:
     assert _counts(store, order_id) == before_counts
     assert store.load_engine_state("trend") == before_state
+    assert _positions_snapshot(store) == before_positions
 
 
 def test_progressive_enter_is_atomic_and_recomposed(tmp_path: Path) -> None:
@@ -534,6 +567,7 @@ def test_old_fill_replay_after_later_fill_is_noop(tmp_path: Path) -> None:
 def _exercise_failure_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str) -> None:
     store, persisted, fill = _prepare(tmp_path)
     before_state = store.load_engine_state("trend")
+    before_positions = _positions_snapshot(store)
     assert before_state is not None
     before_counts = _counts(store, persisted.local_order_id)
 
@@ -560,7 +594,9 @@ def _exercise_failure_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sta
         store.apply_financial_fill_atomically(
             local_order_id=persisted.local_order_id, fill_key=fill.fill_key or ""
         )
-    _assert_failed_write_is_invisible(store, persisted.local_order_id, before_state, before_counts)
+    _assert_failed_write_is_invisible(
+        store, persisted.local_order_id, before_state, before_counts, before_positions
+    )
 
 
 @pytest.mark.parametrize(
@@ -581,6 +617,7 @@ def test_baseexception_after_event_rolls_back_everything(
 
     store, persisted, fill = _prepare(tmp_path)
     before_state = store.load_engine_state("trend")
+    before_positions = _positions_snapshot(store)
     assert before_state is not None
     before_counts = _counts(store, persisted.local_order_id)
     original_insert_event = store._insert_event
@@ -594,12 +631,15 @@ def test_baseexception_after_event_rolls_back_everything(
         store.apply_financial_fill_atomically(
             local_order_id=persisted.local_order_id, fill_key=fill.fill_key or ""
         )
-    _assert_failed_write_is_invisible(store, persisted.local_order_id, before_state, before_counts)
+    _assert_failed_write_is_invisible(
+        store, persisted.local_order_id, before_state, before_counts, before_positions
+    )
 
 
 def test_sqlite_constraint_failure_rolls_back_writer(tmp_path: Path) -> None:
     store, persisted, fill = _prepare(tmp_path)
     before_state = store.load_engine_state("trend")
+    before_positions = _positions_snapshot(store)
     assert before_state is not None
     before_counts = _counts(store, persisted.local_order_id)
     with sqlite3.connect(store.path) as connection:
@@ -617,7 +657,9 @@ def test_sqlite_constraint_failure_rolls_back_writer(tmp_path: Path) -> None:
         store.apply_financial_fill_atomically(
             local_order_id=persisted.local_order_id, fill_key=fill.fill_key or ""
         )
-    _assert_failed_write_is_invisible(store, persisted.local_order_id, before_state, before_counts)
+    _assert_failed_write_is_invisible(
+        store, persisted.local_order_id, before_state, before_counts, before_positions
+    )
 
 
 def test_writer_rejects_stale_eligibility_after_new_ambiguous_fill(
@@ -636,13 +678,16 @@ def test_writer_rejects_stale_eligibility_after_new_ambiguous_fill(
     store.append_external_fill(second)
     _append_fill_lookup(store, persisted, (second,), ("tid-A",))
     before_state = store.load_engine_state("trend")
+    before_positions = _positions_snapshot(store)
     before_counts = _counts(store, persisted.local_order_id)
 
     with pytest.raises(FinancialFillApplicationError, match="NOT_APPLICABLE"):
         store.apply_financial_fill_atomically(
             local_order_id=persisted.local_order_id, fill_key=first.fill_key or ""
         )
-    _assert_failed_write_is_invisible(store, persisted.local_order_id, before_state, before_counts)
+    _assert_failed_write_is_invisible(
+        store, persisted.local_order_id, before_state, before_counts, before_positions
+    )
 
 
 def test_writer_rejects_missing_venue_fill_id(tmp_path: Path) -> None:
@@ -690,12 +735,17 @@ def test_writer_rejects_corrupted_ledger_before_new_application(tmp_path: Path) 
             ("0" * 64,),
         )
     before_state = store.load_engine_state("trend")
+    before_positions = _positions_snapshot(store)
     before_counts = _counts(store, persisted.local_order_id)
-    with pytest.raises(Exception, match="FINANCIAL_APPLICATION_LEDGER_CONFLICT"):
+    with pytest.raises(
+        FinancialApplicationLedgerConflict, match="FINANCIAL_APPLICATION_LEDGER_CONFLICT"
+    ):
         store.apply_financial_fill_atomically(
             local_order_id=persisted.local_order_id, fill_key=second.fill_key or ""
         )
-    _assert_failed_write_is_invisible(store, persisted.local_order_id, before_state, before_counts)
+    _assert_failed_write_is_invisible(
+        store, persisted.local_order_id, before_state, before_counts, before_positions
+    )
 
 
 def test_two_writers_claim_same_fill_once(tmp_path: Path) -> None:
@@ -730,3 +780,291 @@ def test_reader_accepts_writer_chain(tmp_path: Path) -> None:
     chain = store.read_financial_fill_application_chain(persisted.local_order_id)
     assert chain[0].result == result.application.result
     assert chain[0].result.state_after_sha256 == result.state_after_sha256
+
+
+def test_historical_replay_after_order_finalization_is_a_noop(tmp_path: Path) -> None:
+    store, persisted, fill = _prepare(tmp_path)
+    first = store.apply_financial_fill_atomically(
+        local_order_id=persisted.local_order_id, fill_key=fill.fill_key or ""
+    )
+    before_counts = _counts(store, persisted.local_order_id)
+    before_state = store.load_engine_state("trend")
+    before_positions = _positions_snapshot(store)
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            'UPDATE orders SET status="FILLED", local_state="TERMINAL", external_state="FILLED" WHERE id=?',
+            (persisted.local_order_id,),
+        )
+    replay = store.apply_financial_fill_atomically(
+        local_order_id=persisted.local_order_id, fill_key=fill.fill_key or ""
+    )
+    assert replay.applied is False
+    assert replay.already_applied is True
+    assert replay.application.application_key == first.application.application_key
+    assert replay.state_after_sha256 == first.application.state_after_sha256
+    assert replay.ledger_head_application_key == first.application.application_key
+    assert _counts(store, persisted.local_order_id) == before_counts
+    assert store.load_engine_state("trend") == before_state
+    assert _positions_snapshot(store) == before_positions
+
+
+def test_historical_replay_after_global_state_advanced_is_a_noop(tmp_path: Path) -> None:
+    store, persisted, fill = _prepare(tmp_path)
+    first = store.apply_financial_fill_atomically(
+        local_order_id=persisted.local_order_id, fill_key=fill.fill_key or ""
+    )
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            'UPDATE orders SET status="FILLED", local_state="TERMINAL", external_state="FILLED" WHERE id=?',
+            (persisted.local_order_id,),
+        )
+    later_state = store.load_engine_state("trend")
+    assert later_state is not None
+    later_state["slots"]["slot"]["last_bar_ts"] = "2026-09-02T12:00:00+00:00"
+    store.save_engine_state("trend", later_state, event_type="later_strategy_checkpoint")
+    expected_state = store.load_engine_state("trend")
+    expected_positions = _positions_snapshot(store)
+    expected_counts = _counts(store, persisted.local_order_id)
+    replay = store.apply_financial_fill_atomically(
+        local_order_id=persisted.local_order_id, fill_key=fill.fill_key or ""
+    )
+    assert replay.applied is False
+    assert replay.already_applied is True
+    assert replay.state_after_sha256 == first.application.state_after_sha256
+    assert replay.ledger_head_application_key == first.application.application_key
+    assert store.load_engine_state("trend") == expected_state
+    assert _positions_snapshot(store) == expected_positions
+    assert _counts(store, persisted.local_order_id) == expected_counts
+
+
+def test_terminal_order_with_new_fill_still_rejects(tmp_path: Path) -> None:
+    store, persisted, first = _prepare(tmp_path, fill_quantity=0.4)
+    second = _distinct_fill(
+        persisted,
+        quantity=0.6,
+        price=102.0,
+        fee=-0.02,
+        event_at="2026-09-01T12:02:00Z",
+        venue_fill_id="venue-fill-2",
+        raw_hash="b" * 64,
+    )
+    store.append_external_fill(second)
+    _append_fill_lookup(store, persisted, (second,), (None,))
+    store.apply_financial_fill_atomically(
+        local_order_id=persisted.local_order_id, fill_key=first.fill_key or ""
+    )
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            'UPDATE orders SET status="FILLED", local_state="TERMINAL", external_state="FILLED" WHERE id=?',
+            (persisted.local_order_id,),
+        )
+    before_state = store.load_engine_state("trend")
+    before_positions = _positions_snapshot(store)
+    before_counts = _counts(store, persisted.local_order_id)
+    with pytest.raises(FinancialFillApplicationError, match="NOT_RECONCILIATION_READY"):
+        store.apply_financial_fill_atomically(
+            local_order_id=persisted.local_order_id, fill_key=second.fill_key or ""
+        )
+    assert store.load_engine_state("trend") == before_state
+    assert _positions_snapshot(store) == before_positions
+    assert _counts(store, persisted.local_order_id) == before_counts
+
+
+def test_corrupted_historical_ledger_blocks_idempotent_replay(tmp_path: Path) -> None:
+    store, persisted, fill = _prepare(tmp_path)
+    store.apply_financial_fill_atomically(
+        local_order_id=persisted.local_order_id, fill_key=fill.fill_key or ""
+    )
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "UPDATE financial_fill_applications SET result_sha256=? WHERE fill_key=?",
+            ("0" * 64, fill.fill_key),
+        )
+    with pytest.raises(
+        FinancialApplicationLedgerConflict, match="FINANCIAL_APPLICATION_LEDGER_CONFLICT"
+    ):
+        store.apply_financial_fill_atomically(
+            local_order_id=persisted.local_order_id, fill_key=fill.fill_key or ""
+        )
+
+
+def _exit_position() -> dict[str, object]:
+    return {
+        "entry_time": "2026-08-31T12:00:00+00:00",
+        "entry_price": 100.0,
+        "qty": 1.0,
+        "stop_price": 90.0,
+        "direction": 1,
+        "bars_held": 3,
+        "best_close": 110.0,
+        "initial_qty": 1.0,
+        "last_add_price": 100.0,
+        "pyramid_adds": 0,
+    }
+
+
+def test_actual_exit_trade_insert_then_failure_rolls_back_full_projection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, persisted, fill = _prepare(
+        tmp_path,
+        transition=FinancialTransitionType.EXIT,
+        position=_exit_position(),
+        side="SELL",
+        reason="exit",
+        reduce_only=True,
+    )
+    before_state = store.load_engine_state("trend")
+    assert before_state is not None
+    before_positions = _positions_snapshot(store)
+    before_counts = _counts(store, persisted.local_order_id)
+    real_insert = store._insert_financial_fill_trade_in_transaction
+
+    def fail_after_real_trade(connection, payload):
+        assert real_insert(connection, payload) is True
+        assert connection.execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 1
+        raise RuntimeError("after actual trade insert")
+
+    monkeypatch.setattr(store, "_insert_financial_fill_trade_in_transaction", fail_after_real_trade)
+    with pytest.raises(RuntimeError, match="after actual trade insert"):
+        store.apply_financial_fill_atomically(
+            local_order_id=persisted.local_order_id, fill_key=fill.fill_key or ""
+        )
+    _assert_failed_write_is_invisible(
+        store, persisted.local_order_id, before_state, before_counts, before_positions
+    )
+
+
+def test_baseexception_after_actual_exit_trade_rolls_back_full_projection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class InjectedPowerLoss(BaseException):
+        pass
+
+    store, persisted, fill = _prepare(
+        tmp_path,
+        transition=FinancialTransitionType.EXIT,
+        position=_exit_position(),
+        side="SELL",
+        reason="exit",
+        reduce_only=True,
+    )
+    before_state = store.load_engine_state("trend")
+    assert before_state is not None
+    before_positions = _positions_snapshot(store)
+    before_counts = _counts(store, persisted.local_order_id)
+    real_insert = store._insert_financial_fill_trade_in_transaction
+
+    def fail_after_real_trade(connection, payload):
+        assert real_insert(connection, payload) is True
+        assert connection.execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 1
+        raise InjectedPowerLoss("power loss after actual trade")
+
+    monkeypatch.setattr(store, "_insert_financial_fill_trade_in_transaction", fail_after_real_trade)
+    with pytest.raises(InjectedPowerLoss, match="power loss after actual trade"):
+        store.apply_financial_fill_atomically(
+            local_order_id=persisted.local_order_id, fill_key=fill.fill_key or ""
+        )
+    _assert_failed_write_is_invisible(
+        store, persisted.local_order_id, before_state, before_counts, before_positions
+    )
+
+
+def test_concurrent_exit_duplicate_inserts_one_trade(tmp_path: Path) -> None:
+    store, persisted, fill = _prepare(
+        tmp_path,
+        transition=FinancialTransitionType.EXIT,
+        position=_exit_position(),
+        side="SELL",
+        reason="exit",
+        reduce_only=True,
+    )
+    barrier = Barrier(2)
+    database = store.path
+    fill_key = fill.fill_key or ""
+
+    def worker() -> object:
+        contender = StateStore(database)
+        barrier.wait()
+        return contender.apply_financial_fill_atomically(
+            local_order_id=persisted.local_order_id, fill_key=fill_key
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = [
+            executor.submit(worker),
+            executor.submit(worker),
+        ]
+        outcomes = [future.result(timeout=20) for future in results]
+    assert sorted(result.applied for result in outcomes) == [False, True]
+    assert sum(result.already_applied for result in outcomes) == 1
+    assert _counts(store, persisted.local_order_id) == (1, 1, 1, 1)
+    state = store.load_engine_state("trend")
+    assert state is not None
+    assert state["slots"]["slot"]["position"] is None
+    assert len(store.read_trades()) == 1
+    assert len(store.read_financial_fill_application_chain(persisted.local_order_id)) == 1
+
+
+def test_engine_state_conflict_rejects_new_fill_without_writer_mutation(tmp_path: Path) -> None:
+    store, persisted, fill = _prepare(tmp_path)
+    changed_state = store.load_engine_state("trend")
+    assert changed_state is not None
+    changed_state["slots"]["slot"]["last_bar_ts"] = "2026-09-02T12:30:00+00:00"
+    store.save_engine_state("trend", changed_state, event_type="unrelated_state_advance")
+    before_state = store.load_engine_state("trend")
+    before_positions = _positions_snapshot(store)
+    before_counts = _counts(store, persisted.local_order_id)
+    with pytest.raises(FinancialFillApplicationError, match="FINANCIAL_APPLICATION_STATE_CONFLICT"):
+        store.apply_financial_fill_atomically(
+            local_order_id=persisted.local_order_id, fill_key=fill.fill_key or ""
+        )
+    _assert_failed_write_is_invisible(
+        store, persisted.local_order_id, before_state, before_counts, before_positions
+    )
+
+
+def test_position_projection_conflict_rejects_new_fill_without_repair(tmp_path: Path) -> None:
+    store, persisted, fill = _prepare(tmp_path)
+    with sqlite3.connect(store.path) as connection:
+        connection.execute('UPDATE positions SET cash=cash+1 WHERE engine="trend" AND slot="slot"')
+    before_state = store.load_engine_state("trend")
+    before_positions = _positions_snapshot(store)
+    before_counts = _counts(store, persisted.local_order_id)
+    with pytest.raises(
+        FinancialFillApplicationError, match="FINANCIAL_POSITION_PROJECTION_CONFLICT"
+    ):
+        store.apply_financial_fill_atomically(
+            local_order_id=persisted.local_order_id, fill_key=fill.fill_key or ""
+        )
+    _assert_failed_write_is_invisible(
+        store, persisted.local_order_id, before_state, before_counts, before_positions
+    )
+
+
+def test_resolution_snapshot_public_and_connection_scoped_reads_are_identical(
+    tmp_path: Path,
+) -> None:
+    store, persisted, _fill_value = _prepare(tmp_path)
+    public_snapshot = store.read_resolution_snapshot(persisted.local_order_id)
+    with store._read_transaction() as connection:
+        transactional_snapshot = store._read_resolution_snapshot_in_transaction(
+            connection, persisted.local_order_id
+        )
+    assert public_snapshot == transactional_snapshot
+
+
+def test_commit_result_rejects_impossible_typed_states(tmp_path: Path) -> None:
+    store, persisted, fill = _prepare(tmp_path)
+    result = store.apply_financial_fill_atomically(
+        local_order_id=persisted.local_order_id, fill_key=fill.fill_key or ""
+    )
+    with pytest.raises(FinancialFillApplicationError, match="state_after_sha256"):
+        replace(result, state_after_sha256="not-a-sha256")
+    with pytest.raises(FinancialFillApplicationError, match="sans événement"):
+        replace(result, event_id=None)
+    replay = store.apply_financial_fill_atomically(
+        local_order_id=persisted.local_order_id, fill_key=fill.fill_key or ""
+    )
+    with pytest.raises(FinancialFillApplicationError, match="rejeu idempotent"):
+        replace(replay, trade_inserted=True)

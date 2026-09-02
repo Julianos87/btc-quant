@@ -385,7 +385,12 @@ class PersistedFinancialFillApplication:
 
 @dataclass(frozen=True)
 class FinancialFillCommitResult:
-    """Résultat immuable d'une tentative d'application transactionnelle."""
+    """Résultat immuable d'une tentative d'application transactionnelle.
+
+    Pour un rejeu historique, ``state_after_sha256`` et
+    ``ledger_head_application_key`` décrivent la tête historique de cet
+    ordre, pas nécessairement l'état global courant après d'autres transitions.
+    """
 
     application: PersistedFinancialFillApplication
     applied: bool
@@ -409,8 +414,13 @@ class FinancialFillCommitResult:
             or self.application_index != self.application.application_index
         ):
             raise FinancialFillApplicationError("application_index divergent")
-        for name in ("state_after_sha256", "ledger_head_application_key"):
-            _required_text(getattr(self, name), name)
+        if (
+            not isinstance(self.state_after_sha256, str)
+            or len(self.state_after_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in self.state_after_sha256)
+        ):
+            raise FinancialFillApplicationError("state_after_sha256 invalide")
+        _required_text(self.ledger_head_application_key, "ledger_head_application_key")
         if not isinstance(self.trade_inserted, bool):
             raise FinancialFillApplicationError("trade_inserted invalide")
         if self.event_id is not None and (
@@ -419,6 +429,10 @@ class FinancialFillCommitResult:
             or self.event_id <= 0
         ):
             raise FinancialFillApplicationError("event_id invalide")
+        if self.applied and self.event_id is None:
+            raise FinancialFillApplicationError("application sans événement")
+        if self.already_applied and (self.event_id is not None or self.trade_inserted):
+            raise FinancialFillApplicationError("rejeu idempotent avec écriture")
 
 
 @dataclass(frozen=True)
