@@ -32,6 +32,11 @@ from .errors import (
     OrderIdentityCollision,
 )
 from .external_evidence import ExternalFill, ExternalOrderObservation
+from .paper_execution_evidence import (
+    PAPER_EVIDENCE_VERSION,
+    PaperExecutionEvidence,
+    PaperExecutionEvidencePersistenceResult,
+)
 from .financial_application_plan import (
     FinancialApplicationPlan,
     PersistedFinancialApplicationPlan,
@@ -2748,6 +2753,75 @@ class StateStore:
                 event_type=event_type,
             )
         return tuple(persisted), tuple(created)
+
+    def persist_paper_execution_evidence(
+        self,
+        evidence: PaperExecutionEvidence,
+    ) -> PaperExecutionEvidencePersistenceResult:
+        """Commit one local PAPER submission observation and optional fill together.
+
+        This is a deliberately separate local-domain boundary. It does not
+        project a Hyperliquid lookup result and cannot manufacture evidence for
+        an external broker. A crash before commit leaves neither evidence row
+        nor its audit event visible.
+        """
+
+        if self.read_only:
+            raise RuntimeError("Un StateStore read-only ne peut pas persister une preuve PAPER")
+        if not isinstance(evidence, PaperExecutionEvidence):
+            raise TypeError("evidence must be PaperExecutionEvidence")
+        persisted_at = utc_now()
+        observation = (
+            evidence.observation
+            if evidence.observation.persisted_at is not None
+            else evidence.observation.with_persisted_at(persisted_at)
+        )
+        fill = (
+            None
+            if evidence.fill is None
+            else evidence.fill
+            if evidence.fill.persisted_at is not None
+            else evidence.fill.with_persisted_at(persisted_at)
+        )
+        with self._transaction() as connection:
+            persisted_observation, observation_created = (
+                self._append_external_order_observation_in_transaction(connection, observation)
+            )
+            persisted_fill: ExternalFill | None = None
+            fill_created = False
+            if fill is not None:
+                persisted_fill, fill_created = self._append_external_fill_in_transaction(
+                    connection, fill
+                )
+            self._insert_event(
+                connection,
+                evidence.context.engine,
+                "PAPER_EXECUTION_EVIDENCE_PERSISTED",
+                {
+                    "contract": PAPER_EVIDENCE_VERSION,
+                    "local_order_id": evidence.context.local_order_id,
+                    "intent_id": evidence.context.intent_id,
+                    "venue": evidence.observation.venue,
+                    "account_scope": evidence.observation.account_scope,
+                    "instrument": evidence.observation.instrument,
+                    "side": evidence.observation.side,
+                    "observation_key": persisted_observation.observation_key,
+                    "fill_key": None if persisted_fill is None else persisted_fill.fill_key,
+                    "venue_fill_id": (
+                        None if persisted_fill is None else persisted_fill.venue_fill_id
+                    ),
+                    "raw_payload_hash": evidence.raw_payload_hash,
+                },
+                aggregate_type="paper_execution_evidence",
+                aggregate_id=str(evidence.context.local_order_id),
+                correlation_id=evidence.context.intent_id,
+            )
+        return PaperExecutionEvidencePersistenceResult(
+            observation=persisted_observation,
+            observation_created=observation_created,
+            fill=persisted_fill,
+            fill_created=fill_created,
+        )
 
     def _read_resolution_snapshot_in_transaction(
         self, connection: sqlite3.Connection, local_order_id: int
