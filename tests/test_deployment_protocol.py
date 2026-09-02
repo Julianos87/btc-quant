@@ -233,7 +233,7 @@ def test_database_newer_than_code_is_rejected(tmp_path):
     database = tmp_path / "newer.db"
     StateStore(database)
     with sqlite3.connect(database) as connection:
-        connection.execute("UPDATE metadata SET value='10' WHERE key='schema_version'")
+        connection.execute("UPDATE metadata SET value='11' WHERE key='schema_version'")
         connection.commit()
     with pytest.raises(RuntimeError, match="plus récente"):
         StateStore(database)
@@ -537,6 +537,9 @@ def _make_realistic_v4_fixture(path: Path) -> None:
     with sqlite3.connect(path) as connection:
         connection.execute("DROP INDEX idx_orders_logical_order_key")
         connection.execute("DROP INDEX idx_orders_status")
+        # A real v4 database cannot contain the v9/v10 financial tables.
+        connection.execute("DROP TABLE financial_fill_applications")
+        connection.execute("DROP TABLE financial_application_plans")
         connection.execute("ALTER TABLE orders RENAME TO orders_v6")
         connection.execute(V4_ORDERS_SQL)
         connection.execute(

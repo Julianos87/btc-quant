@@ -273,19 +273,29 @@ class FinancialApplicationPlan:
             ):
                 raise ValueError("ENTER_SHORT plan invalide")
             self._validate_entry_stop()
-        elif transition in {FinancialTransitionType.EXIT, FinancialTransitionType.ADD}:
+        elif transition == FinancialTransitionType.EXIT:
             if not isinstance(position, Mapping):
-                raise ValueError(f"{transition.value} exige une position préexistante")
+                raise ValueError("EXIT exige une position préexistante")
             if position_generation_from_payload(position) != self.identity.position_generation:
                 raise ValueError("position_generation ne correspond pas au pre-state")
             direction = position.get("direction")
             expected_side = "SELL" if direction == 1 else "BUY" if direction == -1 else None
             if expected_side is None or self.side != expected_side:
                 raise ValueError("side incompatible avec la position préexistante")
-            if transition == FinancialTransitionType.EXIT:
-                if not self.reduce_only or self.requested_qty > float(position["qty"]) + 1e-12:
-                    raise ValueError("EXIT plan invalide")
-            elif self.reduce_only:
+            if not self.reduce_only or self.requested_qty > float(position["qty"]) + 1e-12:
+                raise ValueError("EXIT plan invalide")
+            if self.entry_direction is not None or self.entry_stop_price is not None:
+                raise ValueError("contexte ENTRY interdit hors ENTRY")
+        elif transition == FinancialTransitionType.ADD:
+            if not isinstance(position, Mapping):
+                raise ValueError("ADD exige une position préexistante")
+            if position_generation_from_payload(position) != self.identity.position_generation:
+                raise ValueError("position_generation ne correspond pas au pre-state")
+            direction = position.get("direction")
+            expected_side = "BUY" if direction == 1 else "SELL" if direction == -1 else None
+            if expected_side is None or self.side != expected_side:
+                raise ValueError("side incompatible avec la position préexistante")
+            if self.reduce_only:
                 raise ValueError("ADD ne peut pas être reduce_only")
             if self.entry_direction is not None or self.entry_stop_price is not None:
                 raise ValueError("contexte ENTRY interdit hors ENTRY")
