@@ -384,6 +384,58 @@ class PersistedFinancialFillApplication:
 
 
 @dataclass(frozen=True)
+class FinancialFillCommitResult:
+    """Résultat immuable d'une tentative d'application transactionnelle.
+
+    Pour un rejeu historique, ``state_after_sha256`` et
+    ``ledger_head_application_key`` décrivent la tête historique de cet
+    ordre, pas nécessairement l'état global courant après d'autres transitions.
+    """
+
+    application: PersistedFinancialFillApplication
+    applied: bool
+    already_applied: bool
+    application_index: int
+    state_after_sha256: str
+    ledger_head_application_key: str
+    trade_inserted: bool
+    event_id: int | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.application, PersistedFinancialFillApplication):
+            raise FinancialFillApplicationError("application invalide")
+        if not isinstance(self.applied, bool) or not isinstance(self.already_applied, bool):
+            raise FinancialFillApplicationError("flags d'application invalides")
+        if self.applied == self.already_applied:
+            raise FinancialFillApplicationError("état d'application ambigu")
+        if (
+            isinstance(self.application_index, bool)
+            or not isinstance(self.application_index, int)
+            or self.application_index != self.application.application_index
+        ):
+            raise FinancialFillApplicationError("application_index divergent")
+        if (
+            not isinstance(self.state_after_sha256, str)
+            or len(self.state_after_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in self.state_after_sha256)
+        ):
+            raise FinancialFillApplicationError("state_after_sha256 invalide")
+        _required_text(self.ledger_head_application_key, "ledger_head_application_key")
+        if not isinstance(self.trade_inserted, bool):
+            raise FinancialFillApplicationError("trade_inserted invalide")
+        if self.event_id is not None and (
+            isinstance(self.event_id, bool)
+            or not isinstance(self.event_id, int)
+            or self.event_id <= 0
+        ):
+            raise FinancialFillApplicationError("event_id invalide")
+        if self.applied and self.event_id is None:
+            raise FinancialFillApplicationError("application sans événement")
+        if self.already_applied and (self.event_id is not None or self.trade_inserted):
+            raise FinancialFillApplicationError("rejeu idempotent avec écriture")
+
+
+@dataclass(frozen=True)
 class FinancialFillApplicationRequest:
     """Entrée complète et immuable du calcul pur."""
 
@@ -726,6 +778,7 @@ __all__ = [
     "FINANCIAL_FILL_APPLICATION_VERSION",
     "FinancialApplicationLedgerConflict",
     "FinancialFillApplicationError",
+    "FinancialFillCommitResult",
     "FinancialFillApplicationRequest",
     "FinancialFillApplicationResult",
     "PersistedFinancialFillApplication",
