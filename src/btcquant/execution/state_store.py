@@ -37,11 +37,16 @@ from .financial_application_plan import (
     PersistedFinancialApplicationPlan,
     canonical_json,
     parse_logical_order_identity,
+    sha256_json,
 )
 from .financial_fill_application import (
     FinancialApplicationLedgerConflict,
+    FinancialFillApplicationError,
+    FinancialFillApplicationRequest,
+    FinancialFillCommitResult,
     FinancialFillApplicationResult,
     PersistedFinancialFillApplication,
+    calculate_financial_fill_application,
     financial_fill_application_key,
     recompute_committed_financial_fill_application,
 )
@@ -198,6 +203,18 @@ class StateStore:
             raise
         finally:
             connection.close()
+
+    @contextmanager
+    def _read_connection(
+        self, connection: sqlite3.Connection | None
+    ) -> Iterator[sqlite3.Connection]:
+        """Use an existing transaction when a caller already owns one."""
+
+        if connection is not None:
+            yield connection
+            return
+        with self._read_transaction() as owned_connection:
+            yield owned_connection
 
     def _initialize(self) -> None:
         existing_version, has_schema = self._existing_schema()
@@ -1729,8 +1746,9 @@ class StateStore:
         aggregate_type: str | None = None,
         aggregate_id: str | None = None,
         correlation_id: str | None = None,
-    ) -> None:
-        connection.execute(
+        ts: str | None = None,
+    ) -> int:
+        cursor = connection.execute(
             """
             INSERT INTO events(
                 ts, engine, event_type, aggregate_type, aggregate_id,
@@ -1738,7 +1756,7 @@ class StateStore:
             ) VALUES(?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                utc_now(),
+                ts or utc_now(),
                 engine,
                 event_type,
                 aggregate_type,
@@ -1747,6 +1765,8 @@ class StateStore:
                 correlation_id,
             ),
         )
+        assert cursor.lastrowid is not None
+        return int(cursor.lastrowid)
 
     def append_external_order_lookup_attempt(
         self,
@@ -2729,6 +2749,61 @@ class StateStore:
             )
         return tuple(persisted), tuple(created)
 
+    def _read_resolution_snapshot_in_transaction(
+        self, connection: sqlite3.Connection, local_order_id: int
+    ) -> ResolutionSnapshot:
+        order_row = connection.execute(
+            "SELECT * FROM orders WHERE id = ?", (local_order_id,)
+        ).fetchone()
+        if order_row is None:
+            return ResolutionSnapshot(None, (), (), ())
+        order = MappingProxyType(dict(order_row))
+        observations = tuple(
+            self._external_order_observation_from_row(row)
+            for row in connection.execute(
+                """
+                SELECT * FROM external_order_observations
+                WHERE local_order_id = ?
+                ORDER BY id
+                """,
+                (local_order_id,),
+            ).fetchall()
+        )
+        fills = tuple(
+            self._external_fill_from_row(row)
+            for row in connection.execute(
+                """
+                SELECT * FROM external_fills
+                WHERE local_order_id = ?
+                ORDER BY id
+                """,
+                (local_order_id,),
+            ).fetchall()
+        )
+        events = tuple(
+            PersistedLookupEvent(
+                event_id=int(row["id"]),
+                ts=str(row["ts"]),
+                engine=str(row["engine"]),
+                event_type=str(row["event_type"]),
+                aggregate_type=str(row["aggregate_type"]),
+                aggregate_id=str(row["aggregate_id"]),
+                payload=str(row["payload"]),
+            )
+            for row in connection.execute(
+                """
+                SELECT id, ts, engine, event_type, aggregate_type, aggregate_id, payload
+                FROM events
+                WHERE engine = ?
+                  AND aggregate_id = ?
+                  AND aggregate_type IN ('external_order_lookup', 'external_fill_lookup')
+                ORDER BY id
+                """,
+                (str(order["engine"]), str(order["intent_id"])),
+            ).fetchall()
+        )
+        return ResolutionSnapshot(order, observations, fills, events)
+
     def read_resolution_snapshot(self, local_order_id: int) -> ResolutionSnapshot:
         """Lit ordre, preuves et lookup events dans un unique snapshot SQLite."""
 
@@ -2815,7 +2890,10 @@ class StateStore:
         return [self._external_fill_from_row(row) for row in rows]
 
     def read_financial_fill_application_chain(
-        self, local_order_id: int
+        self,
+        local_order_id: int,
+        *,
+        _connection: sqlite3.Connection | None = None,
     ) -> tuple[PersistedFinancialFillApplication, ...]:
         """Read and economically replay one complete financial chain."""
 
@@ -2825,7 +2903,7 @@ class StateStore:
             or local_order_id <= 0
         ):
             raise ValueError("local_order_id must be a positive integer")
-        with self._read_transaction() as connection:
+        with self._read_connection(_connection) as connection:
             rows = connection.execute(
                 """
                 SELECT * FROM financial_fill_applications
@@ -3017,6 +3095,354 @@ class StateStore:
                             "FINANCIAL_APPLICATION_LEDGER_CONFLICT: state_before diverges"
                         )
         return tuple(records)
+
+    def _read_financial_fill_application_chain_in_transaction(
+        self, connection: sqlite3.Connection, local_order_id: int
+    ) -> tuple[PersistedFinancialFillApplication, ...]:
+        return self.read_financial_fill_application_chain(local_order_id, _connection=connection)
+
+    @staticmethod
+    def _load_engine_state_in_transaction(
+        connection: sqlite3.Connection, engine: str
+    ) -> tuple[dict[str, Any], str]:
+        row = connection.execute(
+            "SELECT payload FROM engine_state WHERE engine = ?", (engine,)
+        ).fetchone()
+        if row is None:
+            raise FinancialFillApplicationError("FINANCIAL_ENGINE_STATE_MISSING")
+        raw_payload = str(row["payload"])
+        try:
+            payload = json.loads(raw_payload)
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise FinancialFillApplicationError("FINANCIAL_ENGINE_STATE_INVALID") from error
+        if not isinstance(payload, dict):
+            raise FinancialFillApplicationError("FINANCIAL_ENGINE_STATE_INVALID")
+        return payload, raw_payload
+
+    @staticmethod
+    def _assert_positions_projection_in_transaction(
+        connection: sqlite3.Connection,
+        *,
+        engine: str,
+        payload: Mapping[str, Any],
+    ) -> None:
+        if engine != "trend":
+            raise FinancialFillApplicationError("FINANCIAL_ENGINE_UNSUPPORTED")
+        slots = payload.get("slots")
+        if not isinstance(slots, Mapping):
+            raise FinancialFillApplicationError("FINANCIAL_POSITION_PROJECTION_CONFLICT")
+        rows = connection.execute(
+            "SELECT * FROM positions WHERE engine = ? ORDER BY slot", (engine,)
+        ).fetchall()
+        if {str(row["slot"]) for row in rows} != {str(slot) for slot in slots}:
+            raise FinancialFillApplicationError("FINANCIAL_POSITION_PROJECTION_CONFLICT")
+        numeric_fields = {
+            "cash",
+            "entry_price",
+            "qty",
+            "stop_price",
+            "direction",
+            "bars_held",
+            "best_close",
+            "entry_fee",
+        }
+        for row in rows:
+            slot_name = str(row["slot"])
+            slot_state = slots.get(slot_name)
+            if not isinstance(slot_state, Mapping):
+                raise FinancialFillApplicationError("FINANCIAL_POSITION_PROJECTION_CONFLICT")
+            position = slot_state.get("position")
+            if position is not None and not isinstance(position, Mapping):
+                raise FinancialFillApplicationError("FINANCIAL_POSITION_PROJECTION_CONFLICT")
+            expected: dict[str, Any] = {
+                "status": "OPEN" if position is not None else "FLAT",
+                "cash": slot_state.get("cash"),
+                "entry_time": position.get("entry_time") if position else None,
+                "entry_price": position.get("entry_price") if position else None,
+                "qty": position.get("qty", 0.0) if position else 0.0,
+                "stop_price": position.get("stop_price") if position else None,
+                "direction": position.get("direction") if position else None,
+                "bars_held": position.get("bars_held", 0) if position else 0,
+                "best_close": position.get("best_close") if position else None,
+                "stop_order_id": slot_state.get("stop_order_id"),
+                "entry_fee": slot_state.get("entry_fee", 0.0),
+                "last_bar_ts": slot_state.get("last_bar_ts"),
+            }
+            for field_name, expected_value in expected.items():
+                actual_value = row[field_name]
+                if field_name in numeric_fields:
+                    if expected_value is None:
+                        matches = actual_value is None
+                    else:
+                        matches = actual_value is not None and math.isclose(
+                            float(actual_value), float(expected_value), rel_tol=0.0, abs_tol=1e-12
+                        )
+                else:
+                    matches = actual_value == expected_value
+                if not matches:
+                    raise FinancialFillApplicationError("FINANCIAL_POSITION_PROJECTION_CONFLICT")
+
+    def _financial_fill_assessment_in_transaction(
+        self, connection: sqlite3.Connection, local_order_id: int
+    ) -> Any:
+        from .resolution import assess_resolution
+        from .resolution_projection import project_resolution_snapshot
+
+        snapshot = self._read_resolution_snapshot_in_transaction(connection, local_order_id)
+        projection = project_resolution_snapshot(snapshot)
+        if projection.bundle is None:
+            raise FinancialFillApplicationError("FINANCIAL_FILL_ELIGIBILITY_CHANGED")
+        try:
+            return assess_resolution(projection.bundle)
+        except (TypeError, ValueError, KeyError) as error:
+            raise FinancialFillApplicationError("FINANCIAL_FILL_ELIGIBILITY_CHANGED") from error
+
+    @staticmethod
+    def _insert_financial_fill_application_in_transaction(
+        connection: sqlite3.Connection,
+        record: PersistedFinancialFillApplication,
+    ) -> None:
+        cursor = connection.execute(
+            """
+            INSERT INTO financial_fill_applications(
+                application_key, application_version, local_order_id, intent_id,
+                plan_key, fill_key, application_index, previous_application_key,
+                transition_type, economic_effect_at, state_before_sha256,
+                state_after_sha256, result_payload, result_sha256, applied_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record.application_key,
+                record.application_version,
+                record.local_order_id,
+                record.intent_id,
+                record.plan_key,
+                record.fill_key,
+                record.application_index,
+                record.previous_application_key,
+                FinancialTransitionType(record.transition_type).value,
+                record.economic_effect_at,
+                record.state_before_sha256,
+                record.state_after_sha256,
+                canonical_json(record.result.as_payload()),
+                record.result.result_sha256,
+                record.applied_at,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise FinancialFillApplicationError("FINANCIAL_APPLICATION_LEDGER_INSERT_FAILED")
+
+    @staticmethod
+    def _update_engine_state_cas_in_transaction(
+        connection: sqlite3.Connection,
+        *,
+        engine: str,
+        expected_raw_payload: str,
+        state_after_payload: Mapping[str, Any],
+        applied_at: str,
+    ) -> None:
+        cursor = connection.execute(
+            """
+            UPDATE engine_state SET payload = ?, updated_at = ?
+            WHERE engine = ? AND payload = ?
+            """,
+            (canonical_json(state_after_payload), applied_at, engine, expected_raw_payload),
+        )
+        if cursor.rowcount != 1:
+            raise FinancialFillApplicationError("FINANCIAL_APPLICATION_STATE_CONFLICT")
+
+    @staticmethod
+    def _insert_financial_fill_trade_in_transaction(
+        connection: sqlite3.Connection,
+        trade_payload: Mapping[str, Any] | None,
+    ) -> bool:
+        if trade_payload is None:
+            return False
+        connection.execute(
+            """
+            INSERT INTO trades(
+                exit_ts, entry_ts, strategy, direction, qty, entry_price,
+                exit_price, pnl, bars_held, reason
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                trade_payload["exit_ts"],
+                trade_payload["entry_ts"],
+                trade_payload["strategy"],
+                trade_payload["direction"],
+                trade_payload["qty"],
+                trade_payload["entry_price"],
+                trade_payload["exit_price"],
+                trade_payload["pnl"],
+                trade_payload["bars_held"],
+                trade_payload["reason"],
+            ),
+        )
+        return True
+
+    def apply_financial_fill_atomically(
+        self, *, local_order_id: int, fill_key: str
+    ) -> FinancialFillCommitResult:
+        """Atomically claim one qualified external fill financially."""
+
+        if self.read_only:
+            raise RuntimeError("Un StateStore read-only ne peut pas appliquer un fill")
+        if (
+            isinstance(local_order_id, bool)
+            or not isinstance(local_order_id, int)
+            or local_order_id <= 0
+        ):
+            raise ValueError("local_order_id must be a positive integer")
+        if not isinstance(fill_key, str) or not fill_key.strip():
+            raise ValueError("fill_key must be a non-empty string")
+        fill_key = fill_key.strip()
+
+        with self._transaction() as connection:
+            order_row = connection.execute(
+                "SELECT * FROM orders WHERE id = ?", (local_order_id,)
+            ).fetchone()
+            if order_row is None:
+                raise FinancialFillApplicationError("FINANCIAL_ORDER_MISSING")
+            if order_row["local_state"] != LocalOrderState.PENDING_RECONCILIATION.value:
+                raise FinancialFillApplicationError("FINANCIAL_ORDER_NOT_RECONCILIATION_READY")
+            plan_row = connection.execute(
+                "SELECT * FROM financial_application_plans WHERE local_order_id = ?",
+                (local_order_id,),
+            ).fetchone()
+            if plan_row is None:
+                raise FinancialFillApplicationError("LEGACY_APPLICATION_CONTEXT_INCOMPLETE")
+            try:
+                persisted_plan = self._plan_from_row(plan_row, order_row)
+            except (FinancialApplicationPlanConflict, ValueError, TypeError) as error:
+                raise FinancialFillApplicationError(
+                    "FINANCIAL_APPLICATION_PLAN_CONFLICT"
+                ) from error
+
+            fill_rows = connection.execute(
+                "SELECT * FROM external_fills WHERE local_order_id = ? ORDER BY id",
+                (local_order_id,),
+            ).fetchall()
+            fills_by_key = {
+                str(row["fill_key"]): self._external_fill_from_row(row) for row in fill_rows
+            }
+            fill = fills_by_key.get(fill_key)
+            if fill is None:
+                raise FinancialFillApplicationError("FINANCIAL_FILL_NOT_FOUND")
+
+            chain = self._read_financial_fill_application_chain_in_transaction(
+                connection, local_order_id
+            )
+            chain_fills: tuple[ExternalFill, ...] = tuple(
+                fills_by_key[record.fill_key] for record in chain
+            )
+            current_payload, current_raw_payload = self._load_engine_state_in_transaction(
+                connection, persisted_plan.plan.identity.engine
+            )
+            current_state_sha256 = sha256_json(current_payload)
+            expected_state_before = (
+                persisted_plan.plan.pre_state_sha256 if not chain else chain[-1].state_after_sha256
+            )
+            if current_state_sha256 != expected_state_before:
+                raise FinancialFillApplicationError("FINANCIAL_APPLICATION_STATE_CONFLICT")
+            self._assert_positions_projection_in_transaction(
+                connection,
+                engine=persisted_plan.plan.identity.engine,
+                payload=current_payload,
+            )
+
+            existing = next((record for record in chain if record.fill_key == fill_key), None)
+            if existing is not None:
+                head = chain[-1]
+                return FinancialFillCommitResult(
+                    application=existing,
+                    applied=False,
+                    already_applied=True,
+                    application_index=existing.application_index,
+                    state_after_sha256=head.state_after_sha256,
+                    ledger_head_application_key=head.application_key,
+                    trade_inserted=False,
+                    event_id=None,
+                )
+
+            assessment = self._financial_fill_assessment_in_transaction(connection, local_order_id)
+            request = FinancialFillApplicationRequest(
+                persisted_plan=persisted_plan,
+                fill=fill,
+                assessment=assessment,
+                current_state_payload=current_payload,
+                current_state_sha256=current_state_sha256,
+                previously_applied_fills=chain_fills,
+            )
+            result = calculate_financial_fill_application(request)
+            applied_at = utc_now()
+            record = PersistedFinancialFillApplication(
+                application_key=result.application_key,
+                application_version=result.application_version,
+                local_order_id=result.local_order_id,
+                intent_id=result.intent_id,
+                plan_key=result.plan_key,
+                fill_key=result.fill_key,
+                application_index=(chain[-1].application_index + 1) if chain else 0,
+                previous_application_key=chain[-1].application_key if chain else None,
+                transition_type=result.transition_type,
+                economic_effect_at=result.economic_effect_at,
+                state_before_sha256=result.state_before_sha256,
+                state_after_sha256=result.state_after_sha256,
+                result=result,
+                applied_at=applied_at,
+            )
+            self._insert_financial_fill_application_in_transaction(connection, record)
+            self._update_engine_state_cas_in_transaction(
+                connection,
+                engine=persisted_plan.plan.identity.engine,
+                expected_raw_payload=current_raw_payload,
+                state_after_payload=result.state_after_payload,
+                applied_at=applied_at,
+            )
+            self._sync_positions(
+                connection,
+                persisted_plan.plan.identity.engine,
+                result.state_after_payload,
+                applied_at,
+            )
+            trade_inserted = self._insert_financial_fill_trade_in_transaction(
+                connection, result.trade_payload
+            )
+            event_id = self._insert_event(
+                connection,
+                persisted_plan.plan.identity.engine,
+                "FINANCIAL_FILL_APPLIED",
+                {
+                    "application_key": record.application_key,
+                    "application_index": record.application_index,
+                    "plan_key": record.plan_key,
+                    "fill_key": record.fill_key,
+                    "venue_fill_id": fill.venue_fill_id,
+                    "transition_type": FinancialTransitionType(record.transition_type).value,
+                    "quantity": record.result.quantity,
+                    "price": record.result.price,
+                    "fee": record.result.fee,
+                    "fee_asset": record.result.fee_asset,
+                    "economic_effect_at": record.economic_effect_at,
+                    "state_before_sha256": record.state_before_sha256,
+                    "state_after_sha256": record.state_after_sha256,
+                    "trade_inserted": trade_inserted,
+                },
+                aggregate_type="order",
+                aggregate_id=str(local_order_id),
+                correlation_id=record.application_key,
+                ts=applied_at,
+            )
+            return FinancialFillCommitResult(
+                application=record,
+                applied=True,
+                already_applied=False,
+                application_index=record.application_index,
+                state_after_sha256=record.state_after_sha256,
+                ledger_head_application_key=record.application_key,
+                trade_inserted=trade_inserted,
+                event_id=event_id,
+            )
 
     def record_submission_error(self, order_id: int, *, error: str, ambiguous: bool) -> None:
         now = utc_now()
