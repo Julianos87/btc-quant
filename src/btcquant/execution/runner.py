@@ -204,6 +204,11 @@ class LiveRunner:
                 "réconciliation manuelle requise, démarrage interdit"
             )
         self.store.resolve_incident("execution:trend:recovery_blocked")
+        if recovery.finalized_order_ids:
+            # Recovery may have committed finalization after the initial
+            # constructor load. Refresh memory from that durable state before
+            # any strategy decision can be evaluated.
+            self._load_state()
 
     # ── persistance ──────────────────────────────────────────────────────────
     def _load_state(self) -> None:

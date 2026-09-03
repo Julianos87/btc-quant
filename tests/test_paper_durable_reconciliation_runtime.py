@@ -180,16 +180,11 @@ def test_crash_after_e3_commit_before_memory_refresh_never_recovers_as_zero_effe
         runner._reconcile_paper_submission(submitted)
 
     assert _count(runner.store, "financial_fill_applications") == 1
-    report = recover_interrupted_orders(
-        runner.store,
-        PaperBroker(),
-        "trend",
-        external=False,
-    )
-    assert report.manual_order_ids == [submitted.order_id]
-    assert report.recovered_order_ids == []
-    assert runner.store.read_orders("trend")[0]["status"] == "PENDING"
-    assert _count(runner.store, "financial_fill_applications") == 1
+    restarted, restarted_slot = _runner(tmp_path)
+    assert restarted.store.read_orders("trend")[0]["status"] == "FILLED"
+    assert _count(restarted.store, "financial_fill_applications") == 1
+    assert restarted_slot.position is not None
+    assert restarted_slot.financial_transition_seq == 1
 
 
 def test_finalization_rolls_back_order_state_and_checkpoint_on_event_failure(
@@ -288,10 +283,11 @@ def test_paper_recovery_applies_durable_evidence_through_the_same_coordinator(
         external=False,
     )
 
-    assert report.manual_order_ids == [submitted.order_id]
+    assert report.manual_order_ids == []
     assert report.recovered_order_ids == []
+    assert report.finalized_order_ids == [submitted.order_id]
     assert _count(runner.store, "financial_fill_applications") == 1
-    assert runner.store.read_orders("trend")[0]["status"] == "PENDING"
+    assert runner.store.read_orders("trend")[0]["status"] == "FILLED"
 
 
 def test_paper_add_uses_the_durable_coordinator_instead_of_memory_accounting(
@@ -325,3 +321,49 @@ def test_paper_add_uses_the_durable_coordinator_instead_of_memory_accounting(
     assert slot.position.qty > 1.0
     assert slot.position.pyramid_adds == 1
     assert _count(runner.store, "financial_fill_applications") == 1
+
+
+def test_paper_lifecycle_restarts_without_duplicate_financial_effects(tmp_path: Path) -> None:
+    runner, slot = _runner(tmp_path)
+    row = pd.Series({"_rvol": float("nan"), "volume": 1_000.0})
+
+    runner._enter_position(
+        slot,
+        row,
+        100.0,
+        1,
+        decision_checkpoint="2026-09-03T12:00:00Z",
+    )
+    runner, slot = _runner(tmp_path)
+    assert slot.position is not None
+    assert slot.financial_transition_seq == 1
+
+    runner._pyramid_position(
+        slot,
+        row,
+        110.0,
+        0.1,
+        decision_checkpoint="2026-09-03T13:00:00Z",
+    )
+    runner, slot = _runner(tmp_path)
+    assert slot.position is not None
+    assert slot.position.qty == pytest.approx(1.1)
+    assert slot.position.pyramid_adds == 1
+    assert slot.financial_transition_seq == 2
+
+    runner._exit_position(
+        slot,
+        120.0,
+        "exit",
+        decision_checkpoint="2026-09-03T14:00:00Z",
+    )
+    runner, slot = _runner(tmp_path)
+    assert slot.position is None
+    assert slot.entry_fee == 0.0
+    assert slot.financial_transition_seq == 3
+    assert runner.store.unresolved_orders("trend") == []
+    assert _count(runner.store, "external_order_observations") == 3
+    assert _count(runner.store, "external_fills") == 3
+    assert _count(runner.store, "financial_fill_applications") == 3
+    assert _count(runner.store, "trades") == 1
+    assert _count(runner.store, "events") >= 3

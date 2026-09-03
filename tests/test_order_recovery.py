@@ -276,9 +276,11 @@ def test_paper_intent_is_safely_aborted_after_restart(tmp_path):
         external=False,
     )
 
-    assert report.can_start
-    assert report.recovered_order_ids == [order_id]
-    assert store.read_orders("trend")[0]["status"] == "RECOVERED_ABORTED"
+    assert not report.can_start
+    assert report.recovered_order_ids == []
+    assert report.manual_order_ids == [order_id]
+    assert report.lookup_errors[order_id] == "LEGACY_APPLICATION_CONTEXT_INCOMPLETE"
+    assert store.read_orders("trend")[0]["status"] == "PENDING"
 
 
 def test_external_intent_created_is_recovered_without_lookup(tmp_path):
