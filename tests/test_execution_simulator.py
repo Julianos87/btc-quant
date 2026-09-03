@@ -232,7 +232,8 @@ def test_runner_passes_bar_volume_to_paper_execution(tmp_path, monkeypatch):
     assert slot.position is not None
     assert slot.position.qty == pytest.approx(2.0)
     orders = runner.store.read_orders("trend")
-    assert orders[0]["status"] == FillStatus.PARTIAL
+    assert orders[0]["status"] == "PENDING"
+    assert orders[0]["local_state"] == "PENDING_RECONCILIATION"
     assert orders[0]["reference_price"] == pytest.approx(105.0)
 
 

@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 
 from .broker import Broker
 from .order_state import ExternalOrderState, LocalOrderState
+from .reconciliation_coordinator import OrderReconciliationCoordinator, ReconciliationStatus
+from .resolution_projection import ProjectionStatus
 from .state_store import StateStore
 
 log = logging.getLogger(__name__)
@@ -48,8 +50,9 @@ def recover_interrupted_orders(
 ) -> RecoveryReport:
     """Récupère ce qui peut l'être sans jamais inventer un état de position.
 
-    Paper n'a aucun effet externe durable : une intention interrompue peut être
-    abandonnée. Pour un broker externe, toute soumission potentiellement initiée
+    Paper sans preuve individuelle durable peut être abandonné après interruption.
+    Dès qu'une preuve PAPER a été persistée, le même coordinateur et E3 sont
+    rejoués avant toute décision de reprise. Pour un broker externe, toute soumission potentiellement initiée
     reste UNBALANCED ou PENDING_RECONCILIATION jusqu'à réconciliation explicite;
     le seul abandon automatique est prouvé localement avant soumission.
     """
@@ -80,6 +83,25 @@ def recover_interrupted_orders(
             continue
 
         if not external:
+            reconciliation = OrderReconciliationCoordinator(store).reconcile(order_id)
+            projection = reconciliation.after.projection
+            has_durable_fill = (
+                projection.status == ProjectionStatus.READY
+                and projection.bundle is not None
+                and bool(projection.bundle.fills)
+            )
+            if (
+                has_durable_fill
+                or reconciliation.status == ReconciliationStatus.APPLICATION_BLOCKED
+                or projection.status == ProjectionStatus.INVALID_PERSISTED_EVIDENCE
+            ):
+                # A local PAPER fill can already have been committed by E3
+                # before a process crash. It must never be converted to the
+                # legacy zero-effect recovery state: finalization is a later,
+                # explicit contract. The coordinator is deliberately the
+                # same one used by the normal runtime path.
+                report.manual_order_ids.append(order_id)
+                continue
             recovered = store.recover_local_market_order(
                 order_id,
                 error="Ordre paper interrompu : aucun effet externe durable",

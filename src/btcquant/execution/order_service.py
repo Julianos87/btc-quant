@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 
-from .broker import Broker, Fill
+from .broker import Broker, BrokerOrderResult, Fill
 from .errors import FinancialTransitionAlreadyReserved, ReconciliationRequired
 from .financial_application_plan import FinancialApplicationPlan
 from .order_state import (
@@ -29,6 +29,10 @@ class SubmittedOrder:
     is_terminal: bool
     transition_sequence: int
     application_plan: FinancialApplicationPlan
+    #: Réponse broker brute normalisée, conservée uniquement pour permettre
+    #: au chemin PAPER de la transformer en preuve durable. Elle ne constitue
+    #: jamais une autorité comptable en mémoire.
+    broker_result: BrokerOrderResult | None = None
 
 
 class OrderExecutionService:
@@ -244,4 +248,5 @@ class OrderExecutionService:
             is_terminal=result.is_terminal,
             transition_sequence=attempt_sequence,
             application_plan=application_plan,
+            broker_result=result,
         )
