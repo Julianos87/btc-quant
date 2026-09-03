@@ -1089,15 +1089,14 @@ class LiveRunner:
             raise
 
     def _reconcile_paper_submission(self, submitted: SubmittedOrder) -> ReconciliationResult:
-        """Durably apply one local PAPER execution, then stop before finalization.
+        """Persist, apply, refresh, and finalize one local PAPER execution.
 
-        ``SubmittedOrder.broker_result`` is only converted to immutable local
-        evidence. E3 is the sole financial writer; the in-memory slot is
-        refreshed exclusively from its committed engine state. Order
-        finalization is deliberately outside this phase, so every completed
-        PAPER reconciliation remains ``PENDING_RECONCILIATION``. The caller
-        returns without direct accounting or finalization; restart remains
-        fail-closed until the separate finalization contract exists.
+        SubmittedOrder.broker_result is converted to immutable local
+        evidence. E3 remains the sole financial writer; the in-memory slot is
+        refreshed exclusively from its committed engine state. A separate
+        atomic PAPER finalization transaction then closes a positive terminal
+        order, while zero-effect and external retry decisions remain outside
+        this path.
         """
 
         if self.broker.external_execution:

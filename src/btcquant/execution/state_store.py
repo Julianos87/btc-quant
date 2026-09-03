@@ -62,6 +62,13 @@ from .paper_order_finalization import (
     PaperFinalizationStatus,
     decide_paper_finalization,
 )
+from .paper_zero_effect import (
+    PAPER_ZERO_EFFECT_AGGREGATE_TYPE,
+    PAPER_ZERO_EFFECT_EVENT_TYPE,
+    PAPER_ZERO_EFFECT_EVIDENCE_VERSION,
+    PaperZeroEffectStatus,
+    decide_paper_zero_effect,
+)
 from .order_state import (
     ExternalOrderState,
     FinancialTransitionType,
@@ -2801,6 +2808,14 @@ class StateStore:
                 persisted_fill, fill_created = self._append_external_fill_in_transaction(
                     connection, fill
                 )
+            zero_effect = decide_paper_zero_effect(
+                external_execution=False,
+                evidence_persisted=True,
+                external_state=persisted_observation.normalized_external_status,
+                filled_qty=persisted_observation.cumulative_filled_qty,
+                remaining_qty=evidence.reported_remaining_qty,
+                individual_fill_present=persisted_fill is not None,
+            )
             self._insert_event(
                 connection,
                 evidence.context.engine,
@@ -2824,6 +2839,28 @@ class StateStore:
                 aggregate_id=str(evidence.context.local_order_id),
                 correlation_id=evidence.context.intent_id,
             )
+            if zero_effect.status == PaperZeroEffectStatus.PROVEN:
+                self._insert_event(
+                    connection,
+                    evidence.context.engine,
+                    PAPER_ZERO_EFFECT_EVENT_TYPE,
+                    {
+                        "contract": PAPER_ZERO_EFFECT_EVIDENCE_VERSION,
+                        "local_order_id": evidence.context.local_order_id,
+                        "intent_id": evidence.context.intent_id,
+                        "observation_key": persisted_observation.observation_key,
+                        "raw_payload_hash": evidence.raw_payload_hash,
+                        "external_state": ExternalOrderState(
+                            persisted_observation.normalized_external_status
+                        ).value,
+                        "filled_qty": persisted_observation.cumulative_filled_qty,
+                        "remaining_qty": evidence.reported_remaining_qty,
+                        "reason": zero_effect.reason,
+                    },
+                    aggregate_type=PAPER_ZERO_EFFECT_AGGREGATE_TYPE,
+                    aggregate_id=str(evidence.context.local_order_id),
+                    correlation_id=evidence.context.intent_id,
+                )
         return PaperExecutionEvidencePersistenceResult(
             observation=persisted_observation,
             observation_created=observation_created,

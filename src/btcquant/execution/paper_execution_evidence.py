@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -81,6 +82,7 @@ class PaperExecutionEvidence:
     observation: ExternalOrderObservation
     fill: ExternalFill | None
     raw_payload_hash: str
+    reported_remaining_qty: float | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.context, PaperExecutionEvidenceContext):
@@ -89,6 +91,12 @@ class PaperExecutionEvidence:
             raise ValueError("observation must be ExternalOrderObservation")
         if self.fill is not None and not isinstance(self.fill, ExternalFill):
             raise ValueError("fill must be ExternalFill or None")
+        if self.reported_remaining_qty is not None and (
+            isinstance(self.reported_remaining_qty, bool)
+            or not math.isfinite(self.reported_remaining_qty)
+            or self.reported_remaining_qty < 0.0
+        ):
+            raise ValueError("reported_remaining_qty must be finite and non-negative")
         if self.observation.source_kind != ExternalEvidenceSource.SUBMISSION_RESPONSE:
             raise ValueError("paper observation must be a SUBMISSION_RESPONSE")
         if self.fill is not None:
@@ -222,6 +230,7 @@ def build_paper_execution_evidence(
         observation=observation,
         fill=paper_fill,
         raw_payload_hash=raw_payload_hash,
+        reported_remaining_qty=result.remaining_qty,
     )
 
 
