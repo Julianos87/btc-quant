@@ -451,18 +451,19 @@ def test_paper_runner_recovers_interrupted_order_as_aborted(tmp_path):
         "entry",
     )
 
-    LiveRunner(
-        [StrategySlot(StaticStrategy(), 1.0, 1_000.0)],
-        PaperBroker(),
-        _risk(),
-        "binance",
-        "BTC/USDT",
-        database,
-    )
+    with pytest.raises(RuntimeError, match=r"Ordre\(s\) indéterminé"):
+        LiveRunner(
+            [StrategySlot(StaticStrategy(), 1.0, 1_000.0)],
+            PaperBroker(),
+            _risk(),
+            "binance",
+            "BTC/USDT",
+            database,
+        )
 
     order = store.read_orders("trend")[0]
-    assert order["status"] == "RECOVERED_ABORTED"
-    assert store.pending_orders("trend") == []
+    assert order["status"] == "PENDING"
+    assert store.pending_orders("trend") == [order]
 
 
 def test_external_runner_refuses_pending_order_after_crash(tmp_path):

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from .broker import Broker
 from .order_state import ExternalOrderState, LocalOrderState
+from .paper_order_finalization import PaperFinalizationStatus
 from .reconciliation_coordinator import OrderReconciliationCoordinator, ReconciliationStatus
 from .resolution_projection import ProjectionStatus
 from .state_store import StateStore
@@ -33,6 +34,7 @@ def _external_state(value: object) -> ExternalOrderState:
 @dataclass
 class RecoveryReport:
     recovered_order_ids: list[int] = field(default_factory=list)
+    finalized_order_ids: list[int] = field(default_factory=list)
     manual_order_ids: list[int] = field(default_factory=list)
     lookup_errors: dict[int, str] = field(default_factory=dict)
 
@@ -83,6 +85,19 @@ def recover_interrupted_orders(
             continue
 
         if not external:
+            try:
+                application_plan = store.get_financial_application_plan(order_id)
+            except Exception as error:
+                report.manual_order_ids.append(order_id)
+                report.lookup_errors[order_id] = f"{type(error).__name__}: {error}"
+                continue
+            if application_plan is None:
+                # A legacy PAPER order has no durable financial context. It
+                # may not be retrofitted during startup recovery; manual
+                # reconciliation is safer than inventing a pre-state.
+                report.manual_order_ids.append(order_id)
+                report.lookup_errors[order_id] = "LEGACY_APPLICATION_CONTEXT_INCOMPLETE"
+                continue
             reconciliation = OrderReconciliationCoordinator(store).reconcile(order_id)
             projection = reconciliation.after.projection
             has_durable_fill = (
@@ -90,16 +105,38 @@ def recover_interrupted_orders(
                 and projection.bundle is not None
                 and bool(projection.bundle.fills)
             )
+            if reconciliation.status in {
+                ReconciliationStatus.APPLIED,
+                ReconciliationStatus.ALREADY_APPLIED,
+            }:
+                # Startup recovery uses the same coordinator as normal PAPER
+                # execution. Once E3 has committed, the separate finalization
+                # transaction is safe to replay from durable evidence and
+                # durable engine state; memory is refreshed by the next runner
+                # construction.
+                try:
+                    finalization = store.finalize_paper_order_atomically(order_id)
+                except Exception as error:
+                    report.manual_order_ids.append(order_id)
+                    report.lookup_errors[order_id] = f"{type(error).__name__}: {error}"
+                    continue
+                if finalization.status in {
+                    PaperFinalizationStatus.FINALIZABLE,
+                    PaperFinalizationStatus.ALREADY_FINALIZED,
+                }:
+                    report.finalized_order_ids.append(order_id)
+                    continue
+                report.manual_order_ids.append(order_id)
+                continue
             if (
                 has_durable_fill
                 or reconciliation.status == ReconciliationStatus.APPLICATION_BLOCKED
                 or projection.status == ProjectionStatus.INVALID_PERSISTED_EVIDENCE
             ):
-                # A local PAPER fill can already have been committed by E3
-                # before a process crash. It must never be converted to the
-                # legacy zero-effect recovery state: finalization is a later,
-                # explicit contract. The coordinator is deliberately the
-                # same one used by the normal runtime path.
+                # A local PAPER fill or an invalid application state can never
+                # be converted to the legacy zero-effect recovery state.
+                # Startup remains blocked until the durable evidence is
+                # reconciled explicitly.
                 report.manual_order_ids.append(order_id)
                 continue
             recovered = store.recover_local_market_order(
