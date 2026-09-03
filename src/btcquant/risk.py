@@ -73,9 +73,9 @@ def position_size(
         return 0.0
     raw_stop_distance = direction * (entry_price - stop_price)
     # Une même distance construite par ``entry ± distance`` peut différer de
-    # quelques ULP entre long et short. Normaliser à 12 chiffres significatifs
+    # quelques ULP entre long et short. Normaliser à 11 chiffres significatifs
     # (bien au-delà des précisions exchange) évite un biais de sizing par côté.
-    stop_distance = float(f"{raw_stop_distance:.12g}")
+    stop_distance = float(f"{raw_stop_distance:.11g}")
     if stop_distance <= 0:
         return 0.0
 
