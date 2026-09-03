@@ -11,10 +11,10 @@ from .financial_application_plan import FinancialApplicationPlan
 from .order_state import (
     ExternalOrderState,
     FinancialTransitionType,
-    LocalOrderState,
     LogicalOrderIdentity,
 )
 from .state_store import OrderReservation, StateStore
+from .safe_retry import decide_safe_retry
 
 
 @dataclass(frozen=True)
@@ -62,19 +62,18 @@ class OrderExecutionService:
 
     @staticmethod
     def _can_start_next_attempt(reservation: OrderReservation) -> bool:
-        """Une tentative suivante exige la preuve que la précédente est finie sans effet."""
+        """Legacy hook retained, but never authorizes retry by aggregates alone."""
 
-        return (
-            reservation.local_state == LocalOrderState.TERMINAL.value
-            and reservation.external_state
-            in {
-                ExternalOrderState.CANCELED.value,
-                ExternalOrderState.REJECTED.value,
-                ExternalOrderState.EXPIRED.value,
-            }
-            and reservation.filled_qty <= 1e-12
-            and reservation.remaining_qty <= 1e-12
-        )
+        return decide_safe_retry(
+            external_execution=True,
+            local_state=reservation.local_state,
+            external_state=reservation.external_state,
+            status=reservation.status,
+            filled_qty=reservation.filled_qty,
+            remaining_qty=reservation.remaining_qty,
+            zero_effect_proven=False,
+            proof_source=None,
+        ).allowed
 
     def submit_market(
         self,
