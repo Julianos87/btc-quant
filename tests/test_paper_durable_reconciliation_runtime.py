@@ -125,8 +125,14 @@ def test_paper_entry_uses_evidence_coordinator_e3_and_durable_memory_refresh(
     assert _count(runner.store, "external_fills") == 1
     assert _count(runner.store, "financial_fill_applications") == 1
     order = runner.store.read_orders("trend")[0]
-    assert order["local_state"] == "PENDING_RECONCILIATION"
-    assert order["status"] == "PENDING"
+    assert order["local_state"] == "TERMINAL"
+    assert order["status"] == "FILLED"
+    with sqlite3.connect(runner.store.path) as connection:
+        finalized = connection.execute(
+            "SELECT COUNT(*) FROM events WHERE event_type = ?",
+            ("PAPER_ORDER_FINALIZED",),
+        ).fetchone()
+    assert finalized == (1,)
     assert runner.store.load_engine_state("trend") == runner._state_payload()
 
 
@@ -184,6 +190,76 @@ def test_crash_after_e3_commit_before_memory_refresh_never_recovers_as_zero_effe
     assert report.recovered_order_ids == []
     assert runner.store.read_orders("trend")[0]["status"] == "PENDING"
     assert _count(runner.store, "financial_fill_applications") == 1
+
+
+def test_finalization_rolls_back_order_state_and_checkpoint_on_event_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner, slot = _runner(tmp_path)
+    submitted = _entry_submission(runner, slot)
+    original_insert_event = runner.store._insert_event
+
+    def fail_finalization_event(connection, engine, event_type, *args, **kwargs):
+        if event_type == "PAPER_ORDER_FINALIZED":
+            raise RuntimeError("finalization event failure")
+        return original_insert_event(connection, engine, event_type, *args, **kwargs)
+
+    monkeypatch.setattr(runner.store, "_insert_event", fail_finalization_event)
+    with pytest.raises(RuntimeError, match="finalization event failure"):
+        runner._reconcile_paper_submission(submitted)
+
+    order = runner.store.read_orders("trend")[0]
+    assert order["local_state"] == "PENDING_RECONCILIATION"
+    assert order["status"] == "PENDING"
+    assert _count(runner.store, "financial_fill_applications") == 1
+    with sqlite3.connect(runner.store.path) as connection:
+        finalized = connection.execute(
+            "SELECT COUNT(*) FROM events WHERE event_type = ?",
+            ("PAPER_ORDER_FINALIZED",),
+        ).fetchone()
+    assert finalized == (0,)
+    payload = runner.store.load_engine_state("trend")
+    assert payload is not None
+    assert payload["slots"]["paper-runtime"]["financial_transition_seq"] == 0
+
+
+def test_finalization_commit_then_memory_crash_is_idempotent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner, slot = _runner(tmp_path)
+    submitted = _entry_submission(runner, slot)
+    original_finalize = runner.store.finalize_paper_order_atomically
+
+    def finalize_then_crash(order_id: int):
+        original_finalize(order_id)
+        raise PowerLoss("after durable PAPER finalization")
+
+    monkeypatch.setattr(runner.store, "finalize_paper_order_atomically", finalize_then_crash)
+    with pytest.raises(PowerLoss, match="after durable PAPER finalization"):
+        runner._reconcile_paper_submission(submitted)
+
+    order = runner.store.read_orders("trend")[0]
+    assert order["local_state"] == "TERMINAL"
+    assert order["status"] == "FILLED"
+    assert _count(runner.store, "financial_fill_applications") == 1
+    with sqlite3.connect(runner.store.path) as connection:
+        finalized = connection.execute(
+            "SELECT COUNT(*) FROM events WHERE event_type = ?",
+            ("PAPER_ORDER_FINALIZED",),
+        ).fetchone()
+    assert finalized == (1,)
+
+    restarted, _ = _runner(tmp_path)
+    assert restarted.store.read_orders("trend")[0]["local_state"] == "TERMINAL"
+    decision = restarted.store.finalize_paper_order_atomically(submitted.order_id)
+    assert decision.status.value == "ALREADY_FINALIZED"
+    assert _count(restarted.store, "financial_fill_applications") == 1
+    with sqlite3.connect(restarted.store.path) as connection:
+        finalized = connection.execute(
+            "SELECT COUNT(*) FROM events WHERE event_type = ?",
+            ("PAPER_ORDER_FINALIZED",),
+        ).fetchone()
+    assert finalized == (1,)
 
 
 def test_paper_recovery_applies_durable_evidence_through_the_same_coordinator(

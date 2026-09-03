@@ -1131,6 +1131,8 @@ class LiveRunner:
             # The durable E3 state is the accounting authority. In
             # particular, an EXIT must clear an obsolete in-memory Position.
             self._load_state()
+            self.store.finalize_paper_order_atomically(submitted.order_id)
+            self._load_state()
         return reconciliation
 
     @staticmethod

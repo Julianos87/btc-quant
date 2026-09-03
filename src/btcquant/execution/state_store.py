@@ -31,7 +31,7 @@ from .errors import (
     MigrationRequiredError,
     OrderIdentityCollision,
 )
-from .external_evidence import ExternalFill, ExternalOrderObservation
+from .external_evidence import ExternalEvidenceSource, ExternalFill, ExternalOrderObservation
 from .paper_execution_evidence import (
     PAPER_EVIDENCE_VERSION,
     PAPER_EXECUTION_EVIDENCE_AGGREGATE_TYPE,
@@ -57,12 +57,18 @@ from .financial_fill_application import (
     financial_fill_application_key,
     recompute_committed_financial_fill_application,
 )
+from .paper_order_finalization import (
+    PaperFinalizationDecision,
+    PaperFinalizationStatus,
+    decide_paper_finalization,
+)
 from .order_state import (
     ExternalOrderState,
     FinancialTransitionType,
     LocalOrderState,
     LogicalOrderIdentity,
 )
+from .state_contract import validate_trend_state
 
 SCHEMA_VERSION = 10
 DEPOSIT_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}")
@@ -2824,6 +2830,223 @@ class StateStore:
             fill=persisted_fill,
             fill_created=fill_created,
         )
+
+    def finalize_paper_order_atomically(self, local_order_id: int) -> PaperFinalizationDecision:
+        """Finalize one positive PAPER order after durable fill application.
+
+        This is a separate local-domain transaction from E3. It never
+        interprets an external exchange status or an absence of evidence as a
+        zero-effect result. The order, next financial sequence, durable
+        position projection and finalization event commit together.
+        """
+
+        if self.read_only:
+            raise RuntimeError("Un StateStore read-only ne peut pas finaliser un ordre PAPER")
+        if (
+            isinstance(local_order_id, bool)
+            or not isinstance(local_order_id, int)
+            or local_order_id <= 0
+        ):
+            raise ValueError("local_order_id must be a positive integer")
+
+        with self._transaction() as connection:
+            order = connection.execute(
+                "SELECT * FROM orders WHERE id = ?", (local_order_id,)
+            ).fetchone()
+            if order is None:
+                raise FinancialFillApplicationError("FINANCIAL_ORDER_MISSING")
+
+            finalization_events = connection.execute(
+                """
+                SELECT id FROM events
+                WHERE engine = ? AND event_type = 'PAPER_ORDER_FINALIZED'
+                  AND aggregate_type = 'order' AND aggregate_id = ?
+                ORDER BY id
+                """,
+                (order["engine"], str(local_order_id)),
+            ).fetchall()
+            if order["local_state"] == LocalOrderState.TERMINAL.value:
+                if len(finalization_events) != 1:
+                    raise FinancialFillApplicationError("PAPER_FINALIZATION_EVENT_CONFLICT")
+                return PaperFinalizationDecision(
+                    PaperFinalizationStatus.ALREADY_FINALIZED,
+                    "PAPER_ORDER_ALREADY_TERMINAL",
+                )
+            if order["local_state"] != LocalOrderState.PENDING_RECONCILIATION.value:
+                raise FinancialFillApplicationError("PAPER_ORDER_NOT_RECONCILIATION_READY")
+            if finalization_events:
+                raise FinancialFillApplicationError("PAPER_FINALIZATION_EVENT_CONFLICT")
+
+            plan_row = connection.execute(
+                "SELECT * FROM financial_application_plans WHERE local_order_id = ?",
+                (local_order_id,),
+            ).fetchone()
+            if plan_row is None:
+                raise FinancialFillApplicationError("LEGACY_APPLICATION_CONTEXT_INCOMPLETE")
+            try:
+                persisted_plan = self._plan_from_row(plan_row, order)
+            except (FinancialApplicationPlanConflict, ValueError, TypeError) as error:
+                raise FinancialFillApplicationError(
+                    "FINANCIAL_APPLICATION_PLAN_CONFLICT"
+                ) from error
+
+            snapshot = self._read_resolution_snapshot_in_transaction(connection, local_order_id)
+            paper_events = tuple(
+                event
+                for event in snapshot.lookup_events
+                if event.event_type == PAPER_EXECUTION_EVIDENCE_EVENT_TYPE
+            )
+            if not paper_events or len(paper_events) != len(snapshot.lookup_events):
+                raise FinancialFillApplicationError("PAPER_EVIDENCE_REQUIRED")
+
+            from .resolution import assess_resolution
+            from .resolution_projection import ProjectionStatus, project_resolution_snapshot
+
+            projection = project_resolution_snapshot(snapshot)
+            if projection.status != ProjectionStatus.READY or projection.bundle is None:
+                raise FinancialFillApplicationError("PAPER_EVIDENCE_NOT_READY")
+            assessment = assess_resolution(projection.bundle)
+            if not assessment.binding_complete or assessment.conflicts:
+                raise FinancialFillApplicationError("PAPER_EVIDENCE_CONFLICT")
+
+            paper_fills = tuple(projection.bundle.fills)
+            if any(
+                fill.source_kind != ExternalEvidenceSource.SUBMISSION_RESPONSE
+                or fill.venue != "paper-local"
+                or fill.venue_fill_id is None
+                or not fill.venue_fill_id.startswith("paper-local-fill-v1-")
+                for fill in paper_fills
+            ):
+                raise FinancialFillApplicationError("PAPER_EVIDENCE_PROVENANCE_CONFLICT")
+            paper_fill_keys = tuple(
+                sorted(fill.fill_key for fill in paper_fills if fill.fill_key is not None)
+            )
+            observations = tuple(projection.bundle.order_observations)
+            if not observations or any(
+                observation.source_kind != ExternalEvidenceSource.SUBMISSION_RESPONSE
+                or observation.venue != "paper-local"
+                for observation in observations
+            ):
+                raise FinancialFillApplicationError("PAPER_EVIDENCE_PROVENANCE_CONFLICT")
+            try:
+                paper_state = ExternalOrderState(order["external_state"])
+            except ValueError as error:
+                raise FinancialFillApplicationError("PAPER_TERMINAL_STATE_MISSING") from error
+            if paper_state not in {
+                ExternalOrderState.FILLED,
+                ExternalOrderState.PARTIAL_TERMINAL,
+            }:
+                raise FinancialFillApplicationError("PAPER_POSITIVE_TERMINAL_EVIDENCE_REQUIRED")
+            if any(
+                ExternalOrderState(observation.normalized_external_status) != paper_state
+                for observation in observations
+            ):
+                raise FinancialFillApplicationError("PAPER_TERMINAL_STATE_CONFLICT")
+
+            chain = self._read_financial_fill_application_chain_in_transaction(
+                connection, local_order_id
+            )
+            applied_fill_keys = tuple(sorted(record.fill_key for record in chain))
+            current_payload, current_raw_payload = self._load_engine_state_in_transaction(
+                connection, persisted_plan.plan.identity.engine
+            )
+            current_state_sha256 = sha256_json(current_payload)
+            expected_state_sha256 = (
+                persisted_plan.plan.pre_state_sha256 if not chain else chain[-1].state_after_sha256
+            )
+            if current_state_sha256 != expected_state_sha256:
+                raise FinancialFillApplicationError("FINANCIAL_APPLICATION_STATE_CONFLICT")
+            self._assert_positions_projection_in_transaction(
+                connection,
+                engine=persisted_plan.plan.identity.engine,
+                payload=current_payload,
+            )
+            slot_payload = current_payload["slots"][persisted_plan.plan.identity.slot]
+            decision = decide_paper_finalization(
+                local_state=order["local_state"],
+                external_state=paper_state,
+                paper_evidence_present=True,
+                paper_fill_keys=paper_fill_keys,
+                financially_applicable_fill_keys=assessment.financially_applicable_fill_keys,
+                financially_ambiguous_fill_keys=assessment.financially_ambiguous_fill_keys,
+                applied_fill_keys=applied_fill_keys,
+                binding_complete=assessment.binding_complete,
+                evidence_conflicts=assessment.conflicts,
+                current_transition_sequence=int(slot_payload.get("financial_transition_seq", 0)),
+                expected_transition_sequence=persisted_plan.plan.identity.transition_sequence,
+            )
+            if decision.status != PaperFinalizationStatus.FINALIZABLE:
+                raise FinancialFillApplicationError(decision.reason)
+
+            quantity_tolerance = max(1e-9, float(order["requested_qty"]) * 1e-9)
+            applied_quantity = sum(record.result.quantity for record in chain)
+            if (
+                not math.isclose(
+                    applied_quantity,
+                    float(order["filled_qty"]),
+                    rel_tol=0.0,
+                    abs_tol=quantity_tolerance,
+                )
+                or float(order["remaining_qty"]) > quantity_tolerance
+            ):
+                raise FinancialFillApplicationError("PAPER_ORDER_QUANTITY_CONFLICT")
+
+            finalized_payload = json.loads(canonical_json(current_payload))
+            finalized_slot = finalized_payload["slots"][persisted_plan.plan.identity.slot]
+            finalized_slot["financial_transition_seq"] = (
+                persisted_plan.plan.identity.transition_sequence + 1
+            )
+            validate_trend_state(finalized_payload)
+            final_state_sha256 = sha256_json(finalized_payload)
+            finalized_at = utc_now()
+            self._update_engine_state_cas_in_transaction(
+                connection,
+                engine=persisted_plan.plan.identity.engine,
+                expected_raw_payload=current_raw_payload,
+                state_after_payload=finalized_payload,
+                applied_at=finalized_at,
+            )
+            self._sync_positions(
+                connection,
+                persisted_plan.plan.identity.engine,
+                finalized_payload,
+                finalized_at,
+            )
+            final_status = "FILLED" if paper_state == ExternalOrderState.FILLED else "PARTIAL"
+            cursor = connection.execute(
+                """
+                UPDATE orders SET status=?, local_state='TERMINAL', updated_at=?
+                WHERE id=? AND local_state='PENDING_RECONCILIATION'
+                """,
+                (final_status, finalized_at, local_order_id),
+            )
+            if cursor.rowcount != 1:
+                raise FinancialFillApplicationError("PAPER_FINALIZATION_STATE_CONFLICT")
+            self._insert_event(
+                connection,
+                str(order["engine"]),
+                "PAPER_ORDER_FINALIZED",
+                {
+                    "order_id": local_order_id,
+                    "intent_id": str(order["intent_id"]),
+                    "plan_key": persisted_plan.plan.plan_key,
+                    "status": final_status,
+                    "external_state": paper_state.value,
+                    "applied_fill_keys": list(applied_fill_keys),
+                    "state_before_sha256": current_state_sha256,
+                    "state_after_sha256": final_state_sha256,
+                    "transition_sequence_before": (
+                        persisted_plan.plan.identity.transition_sequence
+                    ),
+                    "transition_sequence_after": (
+                        persisted_plan.plan.identity.transition_sequence + 1
+                    ),
+                },
+                "order",
+                str(local_order_id),
+                str(order["intent_id"]),
+            )
+            return decision
 
     def _read_resolution_snapshot_in_transaction(
         self, connection: sqlite3.Connection, local_order_id: int
