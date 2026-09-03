@@ -68,3 +68,15 @@ def test_long_and_short_sizing_are_symmetric(equity, entry, distance):
     short_qty = position_size(equity, entry, entry + distance, None, config, direction=-1)
 
     assert math.isclose(long_qty, short_qty, rel_tol=1e-14)
+
+
+def test_position_size_normalizes_asymmetric_float_stop_construction():
+    """A large distance can lose a different ULP on either side of entry."""
+    config = RiskConfig(initial_capital=1.0, vol_target_annual=None, max_leverage=3.0)
+    entry = 48_577.282698966796
+    distance = 999_999.3461135001
+
+    long_qty = position_size(1.0, entry, entry - distance, None, config, direction=1)
+    short_qty = position_size(1.0, entry, entry + distance, None, config, direction=-1)
+
+    assert math.isclose(long_qty, short_qty, rel_tol=1e-14)
