@@ -642,6 +642,7 @@ def test_runner_pyramid_builds_a_long_add_plan_with_buy_side(
 
     monkeypatch.setattr(runner.order_service, "submit_market", submit)
     monkeypatch.setattr(runner, "_complete_market_order_and_checkpoint", lambda *_a, **_k: None)
+    monkeypatch.setattr(runner, "_reconcile_paper_submission", lambda *_a, **_k: None)
     runner._pyramid_position(
         slot,
         pd.Series({"volume": 1_000.0, "_rvol": float("nan")}),

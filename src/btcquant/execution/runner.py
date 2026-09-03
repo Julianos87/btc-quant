@@ -46,6 +46,15 @@ from .errors import ReconciliationRequired
 from .funding_service import FundingService
 from .instance_lock import EngineInstanceLock
 from .order_service import OrderExecutionService, SubmittedOrder
+from .paper_execution_evidence import (
+    PaperExecutionEvidenceContext,
+    build_paper_execution_evidence,
+)
+from .reconciliation_coordinator import (
+    OrderReconciliationCoordinator,
+    ReconciliationResult,
+    ReconciliationStatus,
+)
 from .financial_application_plan import FinancialApplicationPlan, sha256_json
 from .order_state import FinancialTransitionType, LogicalOrderIdentity
 from .ports import ClockPort, MarketDataPort, Notifier
@@ -154,6 +163,7 @@ class LiveRunner:
         self.risk_service = risk_service or PortfolioRiskService(self.risk)
         self.order_service = order_service or OrderExecutionService(self.store, self.broker)
         self.accounting_service = accounting_service or PositionAccountingService()
+        self.reconciliation_coordinator = OrderReconciliationCoordinator(self.store)
         self.peak_equity = sum(s.cash for s in slots)
         self.halted = False
         self.day: str | None = None
@@ -216,7 +226,9 @@ class LiveRunner:
             last_bar_ts = s.get("last_bar_ts")
             slot.last_bar_ts = pd.Timestamp(last_bar_ts) if last_bar_ts else None
             p = s.get("position")
-            if p is not None:
+            if p is None:
+                slot.position = None
+            else:
                 slot.position = Position(
                     entry_time=pd.Timestamp(p["entry_time"]),
                     entry_price=p["entry_price"],
@@ -260,7 +272,7 @@ class LiveRunner:
             pos: PositionState | None = None
             if slot.position:
                 pos = {
-                    "entry_time": str(slot.position.entry_time),
+                    "entry_time": slot.position.entry_time.isoformat(),
                     "entry_price": slot.position.entry_price,
                     "qty": slot.position.qty,
                     "stop_price": slot.position.stop_price,
@@ -279,7 +291,9 @@ class LiveRunner:
                 "stop_intent_id": slot.stop_intent_id,
                 "stop_transition": slot.stop_transition,
                 "entry_fee": slot.entry_fee,
-                "last_bar_ts": str(slot.last_bar_ts) if slot.last_bar_ts is not None else None,
+                "last_bar_ts": slot.last_bar_ts.isoformat()
+                if slot.last_bar_ts is not None
+                else None,
                 "financial_transition_seq": slot.financial_transition_seq,
             }
             raw["slots"][slot.strategy.name] = slot_state
@@ -1074,6 +1088,51 @@ class LiveRunner:
             slot.financial_transition_seq = previous_sequence
             raise
 
+    def _reconcile_paper_submission(self, submitted: SubmittedOrder) -> ReconciliationResult:
+        """Durably apply one local PAPER execution, then stop before finalization.
+
+        ``SubmittedOrder.broker_result`` is only converted to immutable local
+        evidence. E3 is the sole financial writer; the in-memory slot is
+        refreshed exclusively from its committed engine state. Order
+        finalization is deliberately outside this phase, so every completed
+        PAPER reconciliation remains ``PENDING_RECONCILIATION``. The caller
+        returns without direct accounting or finalization; restart remains
+        fail-closed until the separate finalization contract exists.
+        """
+
+        if self.broker.external_execution:
+            raise AssertionError("paper reconciliation cannot process an external broker")
+        result = submitted.broker_result
+        if result is None:
+            raise ReconciliationRequired(
+                f"Ordre PAPER {submitted.order_id}: réponse broker typée absente; "
+                "réconciliation requise"
+            )
+        evidence = build_paper_execution_evidence(
+            PaperExecutionEvidenceContext(
+                local_order_id=submitted.order_id,
+                intent_id=submitted.intent_id,
+                engine="trend",
+                instrument=self.symbol,
+                side=submitted.application_plan.side,
+            ),
+            result,
+            observed_at=self.clock.utc_now().isoformat(),
+        )
+        reconciliation = self.reconciliation_coordinator.reconcile(
+            submitted.order_id,
+            paper_evidence=evidence,
+        )
+        status = ReconciliationStatus(reconciliation.status)
+        if status in {
+            ReconciliationStatus.APPLIED,
+            ReconciliationStatus.ALREADY_APPLIED,
+        }:
+            # The durable E3 state is the accounting authority. In
+            # particular, an EXIT must clear an obsolete in-memory Position.
+            self._load_state()
+        return reconciliation
+
     @staticmethod
     def _position_generation(position: Position) -> str:
         return (
@@ -1132,6 +1191,9 @@ class LiveRunner:
             reduce_only=True,
             volatility_annual=volatility_annual,
         )
+        if not self.broker.external_execution:
+            self._reconcile_paper_submission(submitted)
+            return
         fill = submitted.fill
         application_plan = submitted.application_plan
         if fill.qty <= 0:
@@ -1254,6 +1316,9 @@ class LiveRunner:
             entry_direction=direction,
             entry_stop_price=stop,
         )
+        if not self.broker.external_execution:
+            self._reconcile_paper_submission(submitted)
+            return
         fill = submitted.fill
         application_plan = submitted.application_plan
         assert application_plan.entry_stop_price is not None
@@ -1344,6 +1409,9 @@ class LiveRunner:
             float(row["volume"]) if pd.notna(row.get("volume")) else None,
             volatility_annual=(float(rvol) if pd.notna(rvol) else None),
         )
+        if not self.broker.external_execution:
+            self._reconcile_paper_submission(submitted)
+            return
         fill = submitted.fill
         try:
             if fill.qty > 0:
