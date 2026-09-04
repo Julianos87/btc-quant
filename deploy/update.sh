@@ -19,6 +19,7 @@ MIGRATION_ATTEMPTED=false
 MIGRATION_COMPLETED=false
 TARGET_WRITES_STARTED=false
 MIGRATION_BACKUP=""
+TARGET_SCHEMA_VERSION=""
 
 WRITER_UNITS=(
   btcquant-carry.service btcquant-trend.service btcquant-dashboard.service
@@ -146,8 +147,8 @@ import sys
 from btcquant.deployment import restore_sqlite_database
 
 result = restore_sqlite_database(sys.argv[1], sys.argv[2])
-assert result["integrity_check"] == "ok" and int(result["schema_version"]) < 6, result
-' "${MIGRATION_BACKUP}" "${ROOT}/state/btcquant.db"
+assert result["integrity_check"] == "ok" and int(result["schema_version"]) < int(sys.argv[3]), result
+' "${MIGRATION_BACKUP}" "${ROOT}/state/btcquant.db" "${TARGET_SCHEMA_VERSION}"
   "${TARGET}/venv/bin/python" -c '
 import sys
 from btcquant.deployment import atomic_switch_release
@@ -316,19 +317,28 @@ from btcquant.deployment import inspect_sqlite
 
 print(inspect_sqlite(sys.argv[1]).metadata_schema_version or "UNKNOWN")
 ' "${ROOT}/state/btcquant.db")"
+TARGET_SCHEMA_VERSION="$(${TARGET}/venv/bin/python -c '
+from btcquant.execution.state_store import SCHEMA_VERSION
+
+print(SCHEMA_VERSION)
+')"
+if ! [[ "${TARGET_SCHEMA_VERSION}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Refus: version de schéma cible invalide (${TARGET_SCHEMA_VERSION})." >&2
+  exit 1
+fi
 if [ "${APP_SCHEMA}" = UNKNOWN ]; then
   echo "Refus: app_schema_version inconnue." >&2
   exit 1
 fi
-if [ "${APP_SCHEMA}" -gt 6 ]; then
+if [ "${APP_SCHEMA}" -gt "${TARGET_SCHEMA_VERSION}" ]; then
   echo "Refus: app_schema_version plus récente que le code cible." >&2
   exit 1
 fi
-if ! ${MIGRATION_MODE} && [ "${APP_SCHEMA}" -lt 6 ]; then
+if ! ${MIGRATION_MODE} && [ "${APP_SCHEMA}" -lt "${TARGET_SCHEMA_VERSION}" ]; then
   echo "CODE_DEPLOY_REFUSED: migration explicite requise (app_schema_version=${APP_SCHEMA})." >&2
   exit 3
 fi
-if ${MIGRATION_MODE} && [ "${APP_SCHEMA}" -eq 6 ]; then
+if ${MIGRATION_MODE} && [ "${APP_SCHEMA}" -eq "${TARGET_SCHEMA_VERSION}" ]; then
   echo "MIGRATION_DEPLOY_REFUSED: la base est déjà au schéma cible; utiliser le chemin code-only." >&2
   exit 3
 fi

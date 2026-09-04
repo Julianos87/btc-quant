@@ -36,6 +36,15 @@ if [ "${AVAILABLE_KB:-0}" -lt 1048576 ]; then
 fi
 
 if [ -f "${ROOT}/state/btcquant.db" ]; then
+  TARGET_SCHEMA_VERSION="$(${CURRENT}/venv/bin/python -c '
+from btcquant.execution.state_store import SCHEMA_VERSION
+
+print(SCHEMA_VERSION)
+')"
+  if ! [[ "${TARGET_SCHEMA_VERSION}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Version de schéma cible invalide : ${TARGET_SCHEMA_VERSION}." >&2
+    exit 1
+  fi
   DB_REPORT="$(
     "${CURRENT}/venv/bin/python" -c \
       "import sqlite3; c=sqlite3.connect('file:${ROOT}/state/btcquant.db?mode=ro', uri=True); integrity=c.execute('PRAGMA integrity_check').fetchone()[0]; row=c.execute(\"SELECT value FROM metadata WHERE key='schema_version'\").fetchone(); print(integrity, row[0] if row else 'UNKNOWN')"
@@ -46,11 +55,11 @@ if [ -f "${ROOT}/state/btcquant.db" ]; then
     echo "SQLite integrity_check a échoué : ${RESULT}" >&2
     exit 1
   fi
-  if [ "${APP_SCHEMA_VERSION}" != "6" ]; then
-    if [ "${BTCQUANT_MIGRATION_PENDING:-false}" = true ] && [ "${APP_SCHEMA_VERSION}" -lt 6 ] 2>/dev/null; then
-      echo "Preflight hôte : migration explicite encore requise (app_schema_version=${APP_SCHEMA_VERSION}, cible=6)."
+  if [ "${APP_SCHEMA_VERSION}" != "${TARGET_SCHEMA_VERSION}" ]; then
+    if [ "${BTCQUANT_MIGRATION_PENDING:-false}" = true ] && [ "${APP_SCHEMA_VERSION}" -lt "${TARGET_SCHEMA_VERSION}" ] 2>/dev/null; then
+      echo "Preflight hôte : migration explicite encore requise (app_schema_version=${APP_SCHEMA_VERSION}, cible=${TARGET_SCHEMA_VERSION})."
     else
-      echo "Migration explicite requise avant démarrage (app_schema_version=${APP_SCHEMA_VERSION}, cible=6)." >&2
+      echo "Migration explicite requise avant démarrage (app_schema_version=${APP_SCHEMA_VERSION}, cible=${TARGET_SCHEMA_VERSION})." >&2
       exit 1
     fi
   fi

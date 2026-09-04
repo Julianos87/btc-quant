@@ -444,6 +444,16 @@ def _hash_if_file(path: Path) -> str | None:
     return sha256_file(path) if path.is_file() else None
 
 
+def _current_application_schema_version() -> int:
+    """Return the schema contract implemented by this release."""
+
+    # Keep this import lazy: the migration entrypoint imports this module while
+    # the execution package has not necessarily finished loading yet.
+    from .execution.state_store import SCHEMA_VERSION
+
+    return SCHEMA_VERSION
+
+
 def build_release_manifest(
     release: str | Path,
     *,
@@ -453,12 +463,20 @@ def build_release_manifest(
     python_version: str,
     uv_version: str,
     release_created_at: str | None = None,
-    schema_version_required: int = 6,
+    schema_version_required: int | None = None,
 ) -> dict[str, object]:
     """Construit un manifeste sans lire de secret ni inclure de fichier secret."""
 
     release_path = Path(release)
     validate_full_sha(git_sha)
+    expected_schema_version = _current_application_schema_version()
+    if schema_version_required is None:
+        schema_version_required = expected_schema_version
+    elif schema_version_required != expected_schema_version:
+        raise DeploymentProtocolError(
+            "Le manifeste doit cibler le schéma implémenté par la release "
+            f"(v{expected_schema_version})."
+        )
     if not release_path.is_dir():
         raise DeploymentProtocolError(f"Release absente: {release_path}")
     forbidden = [
@@ -525,8 +543,12 @@ def validate_release_manifest(release: str | Path, expected_sha: str) -> dict[st
         raise DeploymentProtocolError("Le manifeste doit être un objet JSON.")
     if manifest.get("git_sha") != expected_sha:
         raise DeploymentProtocolError("Le SHA du manifeste ne correspond pas à la release.")
-    if manifest.get("schema_version_required") != 6:
-        raise DeploymentProtocolError("Le manifeste ne requiert pas le schéma attendu v6.")
+    expected_schema_version = _current_application_schema_version()
+    if manifest.get("schema_version_required") != expected_schema_version:
+        raise DeploymentProtocolError(
+            "Le manifeste ne requiert pas le schéma implémenté par la release "
+            f"(v{expected_schema_version})."
+        )
     for path in release_path.rglob("*"):
         if path.is_file() and (path.name == ".env" or path.suffix in {".db", ".sqlite", ".key"}):
             raise DeploymentProtocolError(

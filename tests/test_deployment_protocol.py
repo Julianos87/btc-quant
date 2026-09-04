@@ -112,6 +112,7 @@ def test_manifest_is_complete_and_secret_free(tmp_path):
 
     write_release_manifest(release, manifest)
     assert validate_release_manifest(release, "a" * 40)["git_sha"] == "a" * 40
+    assert manifest["schema_version_required"] == SCHEMA_VERSION
     assert "secret" not in json.dumps(manifest).lower()
     (release / "uv.lock").write_text("tampered\n", encoding="utf-8")
     with pytest.raises(DeploymentProtocolError, match="Hash de provenance"):
@@ -291,6 +292,12 @@ def test_deployment_scripts_expose_fail_closed_guards():
     assert "for transient in" in validate
     assert "--confirm-migration" in migrate
     assert "Migration explicite requise" in preflight
+    assert "TARGET_SCHEMA_VERSION" in preflight
+    assert "cible=6" not in preflight
+    assert "TARGET_SCHEMA_VERSION" in update
+    assert "< 6" not in update
+    assert "> 6" not in update
+    assert "== 6" not in update
     assert "BTCQUANT_MIGRATION_PENDING" in preflight
     assert "MIGRATION_REFUSED" in migrate
     assert "BASH_SOURCE[0]" in migrate
