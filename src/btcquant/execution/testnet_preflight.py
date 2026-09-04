@@ -85,13 +85,18 @@ def _gate_summary(
         passed = bool(selected) and all(item.passed for item in selected)
         if reason is not None:
             passed = False
+        selected_reason = next(
+            (item.reason for item in selected if item.reason is not None),
+            None,
+        )
+        gate_reason = reason or selected_reason
         summary.append(
             {
                 "name": name,
                 "status": "PASS" if passed else "FAIL",
                 "required": required,
                 "checks": [item.key for item in selected],
-                **({"reason": reason} if reason is not None else {}),
+                **({"reason": gate_reason} if gate_reason is not None else {}),
             }
         )
 
@@ -142,9 +147,8 @@ def _gate_summary(
     add("BACKUP", ("encrypted_backup",), required="encrypted backup")
     add(
         "MAINNET_LOCK",
-        (),
-        required="explicit mainnet exclusion",
-        reason="MAINNET_LOCK_NOT_EXPLICITLY_VALIDATED",
+        ("mainnet_endpoint_lock", "testnet_unit_definition"),
+        required="explicit testnet endpoint and mainnet exclusion",
     )
     return summary
 
@@ -215,6 +219,7 @@ def _testnet_config_check(config_path: Path, root: Path) -> tuple[bool, str]:
         and execution["mode"] == "testnet"
         and execution["testnet"] is True
         and execution["live_exchange"] == "hyperliquid"
+        and execution["api_url"] == "https://api.hyperliquid-testnet.xyz"
         and state_path.resolve() != paper_path.resolve()
         and state_path.resolve().parent == (root / "state").resolve()
     )
@@ -311,7 +316,15 @@ def evaluate_testnet_preflight(
         "external_zero_effect": EXTERNAL_ZERO_EFFECT_PROVEN,
     }
     for key, passed in external_gates.items():
-        checks.append(_check(key, passed, "proven" if passed else "not_proven", "proven"))
+        checks.append(
+            _check(
+                key,
+                passed,
+                "proven" if passed else "not_proven",
+                "proven",
+                key.upper() + "_NOT_PROVEN" if not passed else None,
+            )
+        )
         if not passed:
             reasons.append(key.upper() + "_NOT_PROVEN")
     checks.append(
@@ -334,6 +347,15 @@ def evaluate_testnet_preflight(
             config_ok,
             config_value,
             "dedicated testnet DB and Hyperliquid testnet",
+        )
+    )
+    checks.append(
+        _check(
+            "mainnet_endpoint_lock",
+            config_ok,
+            config_value,
+            "explicit Hyperliquid testnet API endpoint",
+            "MAINNET_ENDPOINT_LOCK_INVALID" if not config_ok else None,
         )
     )
 
@@ -369,9 +391,15 @@ def evaluate_testnet_preflight(
     )
 
     secret_ok, secret_value = _secret_format(root_path / ".env")
+    if not secret_ok:
+        reasons.append("TESTNET_SECRET_PROVISIONING_REQUIRED")
     checks.append(
         _check(
-            "secret_format", secret_ok, secret_value, "present and valid without printing values"
+            "secret_format",
+            secret_ok,
+            secret_value,
+            "present and valid without printing values",
+            "TESTNET_SECRET_PROVISIONING_REQUIRED" if not secret_ok else None,
         )
     )
 

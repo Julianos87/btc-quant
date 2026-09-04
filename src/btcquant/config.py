@@ -17,6 +17,9 @@ from .strategies import STRATEGY_REGISTRY, Strategy
 TIMEFRAMES = {"1h", "2h", "4h", "6h", "12h", "1d"}
 MARKETS = {"spot", "perp"}
 
+HYPERLIQUID_MAINNET_API_URL = "https://api.hyperliquid.xyz"
+HYPERLIQUID_TESTNET_API_URL = "https://api.hyperliquid-testnet.xyz"
+
 
 @dataclass(frozen=True)
 class PortfolioConfig:
@@ -86,6 +89,10 @@ def _validate_execution_profile(environment: str, execution: dict[str, Any]) -> 
             raise ValueError("Safety Baseline : le mode testnet exige execution.testnet: true")
         if execution.get("live_exchange") != "hyperliquid":
             raise ValueError("Safety Baseline : seul le testnet Hyperliquid est autorisé")
+        if execution.get("api_url") != HYPERLIQUID_TESTNET_API_URL:
+            raise ValueError(
+                "Safety Baseline : le testnet Hyperliquid exige son endpoint API testnet explicite"
+            )
         live_symbol = execution.get("live_symbol")
         if not isinstance(live_symbol, str) or not live_symbol.endswith(":USDC"):
             raise ValueError("Le testnet Hyperliquid exige un perpétuel coté en USDC")

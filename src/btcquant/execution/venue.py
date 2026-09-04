@@ -21,7 +21,20 @@ import time
 import ccxt
 import pandas as pd
 
+from ..config import HYPERLIQUID_TESTNET_API_URL
 from .resilience import RetryPolicy
+
+
+def _assert_hyperliquid_testnet_endpoint(exchange: object) -> None:
+    urls = getattr(exchange, "urls", None)
+    api = urls.get("api") if isinstance(urls, dict) else None
+    public = api.get("public") if isinstance(api, dict) else None
+    private = api.get("private") if isinstance(api, dict) else None
+    if public != HYPERLIQUID_TESTNET_API_URL or private != HYPERLIQUID_TESTNET_API_URL:
+        raise RuntimeError(
+            "Safety Baseline : endpoint Hyperliquid testnet absent ou remplacé par mainnet"
+        )
+
 
 NETWORK_ERRORS = (ccxt.NetworkError, ccxt.ExchangeNotAvailable, ccxt.RequestTimeout)
 FUNDING_HISTORY_PAGE_LIMIT = 1000
@@ -38,6 +51,7 @@ class Venue:
             if exchange_id != "hyperliquid":
                 raise ValueError("Seul le sandbox Hyperliquid est pris en charge par Venue")
             self.exchange.set_sandbox_mode(True)
+            _assert_hyperliquid_testnet_endpoint(self.exchange)
         self._retry = RetryPolicy()
         if self.is_hourly_funding:
             self.funding_exchange = self.exchange

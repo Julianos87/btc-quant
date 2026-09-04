@@ -8,7 +8,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-from btcquant.config import carry_policy_from_config, load_config, portfolio_from_config
+from btcquant.config import (
+    HYPERLIQUID_TESTNET_API_URL,
+    carry_policy_from_config,
+    load_config,
+    portfolio_from_config,
+)
 from btcquant.risk import RiskConfig
 from btcquant.strategies.trend_ls import TrendLS
 
@@ -64,6 +69,7 @@ def test_hyperliquid_testnet_config_is_valid_and_isolated():
     assert config["execution"]["mode"] == "testnet"
     assert config["environment"] == "testnet"
     assert config["execution"]["live_exchange"] == "hyperliquid"
+    assert config["execution"]["api_url"] == HYPERLIQUID_TESTNET_API_URL
     assert config["execution"]["state_file"] == "state/btcquant-testnet.db"
 
 
@@ -212,3 +218,11 @@ def test_disabled_strategy_params_are_not_enforced(tmp_path):
     }
 
     load_config(_write(tmp_path, config))
+
+
+def test_hyperliquid_testnet_rejects_mainnet_api_url(tmp_path):
+    config = deepcopy(load_config(ROOT / "environments" / "testnet" / "config.yaml"))
+    config["execution"]["api_url"] = "https://api.hyperliquid.xyz"
+
+    with pytest.raises(ValueError, match="endpoint API testnet"):
+        load_config(_write(tmp_path, config))

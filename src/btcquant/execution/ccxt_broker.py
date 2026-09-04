@@ -31,6 +31,7 @@ from .order_state import ExternalOrderState
 from .resilience import RetryPolicy
 from .safety import require_live_execution_enabled
 from .units import decimal_notional, decimal_value, exchange_float
+from .venue import _assert_hyperliquid_testnet_endpoint
 
 log = logging.getLogger(__name__)
 
@@ -101,6 +102,8 @@ class CcxtBroker(Broker):
         )
         if testnet:
             self.exchange.set_sandbox_mode(True)
+            if exchange_id == "hyperliquid":
+                _assert_hyperliquid_testnet_endpoint(self.exchange)
             log.warning("Broker en mode SANDBOX/TESTNET (%s)", market)
         self.symbol = symbol
         self._retry = RetryPolicy()

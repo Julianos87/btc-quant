@@ -119,13 +119,13 @@
   "quantitative_source_closure": {
     "version": "hyperliquid-scoped-source-v1",
     "files": {
-      "environments/testnet/config.yaml": "6d80033c225bcb08cf63572538d701eff3926d9497d380f3125708640c5e31a6",
+      "environments/testnet/config.yaml": "46dd7d30fbad2abbae6516b7dfb849fcec7eca3203de03c66b008d0f4f026427",
       "pyproject.toml": "fe8c501df54b3d7c70d27cc41fe16ae0a1904ad920907e2dbf941f38d0cdf261",
       "src/btcquant/backtest/engine.py": "424c203ef3b87df3d8f2a133c7b4ac56f79868d783af4094c29053609060b5ad",
       "src/btcquant/backtest/metrics.py": "8f4226eeafde2201de96abe3c328093a4e9d43b50ea5d4aad61b222363335ad6",
       "src/btcquant/data.py": "b4757bd221edc27e04cc6beaf48ba70703d1dd772c60b2590063a4f7d7145774",
       "src/btcquant/data_integrity.py": "f7b85fa0a7591a4a64e5e708eb579221c6bd8538420ede0bb18c1f30b9ebcc0c",
-      "src/btcquant/execution/venue.py": "0d318b660fec0609a8c8e154d8017967a8a080eb6dba513029d169b54330e9bf",
+      "src/btcquant/execution/venue.py": "291feffa8d0043b81377b2775639634f8d359b7ab6bfdf793e5ab20cc503e714",
       "src/btcquant/hyperliquid_baseline.py": "9a2e7d546091fbf15786967e7ae4cb251afae559b7232214b70150f52c9318dd",
       "src/btcquant/indicators.py": "af9f48d76359d2384f955b6e31579241dbcc2a63527537a7087d90c8ffa65eae",
       "src/btcquant/strategies/base.py": "510e2f4ac12c6e30724dee0b7326c5a3f93095d1cefe1e3001d0bfbea3f3c53a",
@@ -137,7 +137,7 @@
   "config_provenance": {
     "testnet_config": {
       "path": "environments/testnet/config.yaml",
-      "sha256": "6d80033c225bcb08cf63572538d701eff3926d9497d380f3125708640c5e31a6"
+      "sha256": "46dd7d30fbad2abbae6516b7dfb849fcec7eca3203de03c66b008d0f4f026427"
     },
     "pyproject": {
       "path": "pyproject.toml",
