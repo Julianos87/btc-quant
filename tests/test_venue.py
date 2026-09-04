@@ -116,7 +116,12 @@ def test_testnet_switches_hyperliquid_public_api_to_sandbox(monkeypatch):
 
     class FakeHyperliquid:
         def __init__(self, _config):
-            pass
+            self.urls = {
+                "api": {
+                    "public": "https://api.hyperliquid-testnet.xyz",
+                    "private": "https://api.hyperliquid-testnet.xyz",
+                }
+            }
 
         def set_sandbox_mode(self, enabled):
             switched.append(enabled)

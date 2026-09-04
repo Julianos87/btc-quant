@@ -18,6 +18,12 @@ class FakeHyperliquid:
     def __init__(self, config):
         type(self).last_config = config
         type(self).calls = []
+        self.urls = {
+            "api": {
+                "public": "https://api.hyperliquid-testnet.xyz",
+                "private": "https://api.hyperliquid-testnet.xyz",
+            }
+        }
 
     def set_sandbox_mode(self, enabled):
         type(self).calls.append(("sandbox", enabled))
@@ -89,3 +95,25 @@ def test_testnet_deployment_is_opt_in_hardened_and_mainnet_free():
     assert "restart_selected_engines" in update
     assert "btcquant-hyperliquid-testnet" in update
     assert "mainnet" not in service.lower()
+
+
+def test_hyperliquid_rejects_mainnet_endpoint_after_sandbox(monkeypatch):
+    _open_safety(monkeypatch)
+    monkeypatch.setenv("HYPERLIQUID_WALLET_ADDRESS", "0x" + "1" * 40)
+    monkeypatch.setenv("HYPERLIQUID_PRIVATE_KEY", "0x" + "2" * 64)
+
+    class MainnetHyperliquid(FakeHyperliquid):
+        def __init__(self, config):
+            super().__init__(config)
+            self.urls["api"] = {
+                "public": "https://api.hyperliquid.xyz",
+                "private": "https://api.hyperliquid.xyz",
+            }
+
+    monkeypatch.setattr(
+        "btcquant.execution.ccxt_broker.ccxt.hyperliquid",
+        MainnetHyperliquid,
+    )
+
+    with pytest.raises(RuntimeError, match="endpoint Hyperliquid testnet"):
+        CcxtBroker("hyperliquid", "BTC/USDC:USDC", testnet=True, market="perp")

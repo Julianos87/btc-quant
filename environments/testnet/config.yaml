@@ -47,4 +47,5 @@ execution:
   qualification_state_file: state/btcquant.db
   poll_buffer_seconds: 20
   live_exchange: hyperliquid
+  api_url: "https://api.hyperliquid-testnet.xyz"
   live_symbol: "BTC/USDC:USDC"

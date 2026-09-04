@@ -13,6 +13,7 @@ def test_preflight_is_fail_closed_and_read_only(tmp_path) -> None:
     assert report["activation_performed"] is False
     assert report["authenticated_exchange_call"] is False
     assert "EXTERNAL_FILL_IDENTITY_NOT_PROVEN" in report["reason_codes"]
+    assert "TESTNET_SECRET_PROVISIONING_REQUIRED" in report["reason_codes"]
     assert not (tmp_path / "state").exists()
 
 
@@ -82,6 +83,7 @@ def test_preflight_exposes_independent_fail_closed_gate_summary(tmp_path) -> Non
         "MAINNET_LOCK",
     }
     assert gates["EXTERNAL_IDENTITY"]["status"] == "FAIL"
+    assert gates["EXTERNAL_IDENTITY"]["reason"] == "EXTERNAL_FILL_IDENTITY_NOT_PROVEN"
     assert gates["ORDER_EVIDENCE"]["reason"] == "ORDER_EVIDENCE_NOT_PROVEN"
     assert gates["STATUS_CHRONOLOGY"]["reason"] == "STATUS_CHRONOLOGY_NOT_PROVEN"
     assert gates["SERVICE_STATE"]["reason"] == "SERVICE_STATE_NOT_INSPECTED"
