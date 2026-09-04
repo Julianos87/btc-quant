@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from btcquant.execution.testnet_preflight import evaluate_testnet_preflight
 
 
@@ -35,3 +37,24 @@ def test_preflight_does_not_echo_secret_values(tmp_path) -> None:
     )
     for value in secret_values.values():
         assert value not in rendered
+
+
+def test_preflight_reads_canonical_release_manifest_tree(tmp_path) -> None:
+    current = tmp_path / "current"
+    current.mkdir()
+    expected_sha = "a" * 40
+    expected_tree = "b" * 40
+    (current / "release-manifest.json").write_text(
+        json.dumps({"git_sha": expected_sha, "git_tree": expected_tree}),
+        encoding="utf-8",
+    )
+
+    report = evaluate_testnet_preflight(
+        tmp_path,
+        expected_git_sha=expected_sha,
+        expected_tree=expected_tree,
+    )
+
+    checks = {item["key"]: item for item in report["checks"]}
+    assert checks["qualified_code_sha"]["passed"] is True
+    assert checks["qualified_code_tree"]["passed"] is True
