@@ -593,5 +593,5 @@ def test_fill_persistence_does_not_mutate_financial_tables(tmp_path: Path):
             connection.execute(
                 "SELECT value FROM metadata WHERE key = 'schema_version'"
             ).fetchone()[0]
-            == "10"
+            == "11"
         )

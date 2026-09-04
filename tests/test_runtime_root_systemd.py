@@ -239,4 +239,4 @@ def test_effective_environment_from_source_units_contains_runtime_root() -> None
 
 
 def test_schema_version_is_unchanged() -> None:
-    assert SCHEMA_VERSION == 10
+    assert SCHEMA_VERSION == 11

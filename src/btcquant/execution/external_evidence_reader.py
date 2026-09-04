@@ -40,6 +40,8 @@ _HASH_FIELDS = (
     "price",
     "timestamp",
     "lastTradeTimestamp",
+    "lastUpdateTimestamp",
+    "statusTimestamp",
     "datetime",
     "fee",
     "fees",
@@ -145,6 +147,29 @@ def _venue_timestamp(order: Mapping[str, Any]) -> str | None:
     if isinstance(value, str):
         return _canonical_timestamp(value, "venue_event_at")
     raise ValueError("timestamp doit être une date ISO ou un timestamp milliseconde")
+
+
+def _status_event_timestamp(order: Mapping[str, Any]) -> str | None:
+    """Extract the venue status transition timestamp without placement fallback."""
+
+    value: object = order.get("lastUpdateTimestamp")
+    if value is None:
+        value = order.get("statusTimestamp")
+    if value is None:
+        info = order.get("info")
+        if isinstance(info, Mapping):
+            value = info.get("statusTimestamp")
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("statusTimestamp doit être une date ISO ou un timestamp milliseconde")
+    if isinstance(value, (int, float)):
+        if not math.isfinite(float(value)):
+            raise ValueError("statusTimestamp doit être fini")
+        return datetime.fromtimestamp(float(value) / 1000.0, UTC).isoformat()
+    if isinstance(value, str):
+        return _canonical_timestamp(value, "status_event_at")
+    raise ValueError("statusTimestamp doit être une date ISO ou un timestamp milliseconde")
 
 
 def _returned_client_order_id(order: Mapping[str, Any]) -> str | None:
@@ -320,6 +345,7 @@ class ExternalOrderEvidence:
     remaining_qty_explicit: bool
     source_kind: ExternalEvidenceSource
     venue_event_at: str | None
+    status_event_at: str | None
     observed_at: str
     raw_payload_hash: str
     correlation_complete: bool
@@ -371,6 +397,12 @@ class ExternalOrderEvidence:
         if self.venue_event_at is not None:
             object.__setattr__(
                 self, "venue_event_at", _canonical_timestamp(self.venue_event_at, "venue_event_at")
+            )
+        if self.status_event_at is not None:
+            object.__setattr__(
+                self,
+                "status_event_at",
+                _canonical_timestamp(self.status_event_at, "status_event_at"),
             )
         object.__setattr__(
             self, "observed_at", _canonical_timestamp(self.observed_at, "observed_at")
@@ -518,6 +550,7 @@ class CcxtExternalEvidenceReader:
                 remaining_qty_explicit=remaining_explicit,
                 source_kind=ExternalEvidenceSource.ORDER_LOOKUP,
                 venue_event_at=_venue_timestamp(order),
+                status_event_at=_status_event_timestamp(order),
                 observed_at=observed,
                 raw_payload_hash=_payload_hash(
                     order,
@@ -621,6 +654,7 @@ class ExternalEvidencePersistence:
                         client_order_id=evidence.returned_client_order_id,
                         external_order_id=evidence.external_order_id,
                         venue_event_at=evidence.venue_event_at,
+                        status_event_at=evidence.status_event_at,
                         observed_at=evidence.observed_at,
                         raw_payload_hash=evidence.raw_payload_hash,
                     )
@@ -666,6 +700,7 @@ class ExternalEvidencePersistence:
                     "remaining_qty_explicit": evidence.remaining_qty_explicit,
                     "source_kind": evidence.source_kind.value,
                     "venue_event_at": evidence.venue_event_at,
+                    "status_event_at": evidence.status_event_at,
                     "observed_at": evidence.observed_at,
                     "raw_payload_hash": evidence.raw_payload_hash,
                     "correlation_complete": evidence.correlation_complete,

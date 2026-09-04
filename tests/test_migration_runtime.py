@@ -216,7 +216,7 @@ def test_old_current_without_migrate_module_target_migrates_schema4(tmp_path: Pa
     assert "OLD_CURRENT_PYTHON" not in result.stderr
     assert not (old / "old-python.invoked").exists()
     assert inspect_sqlite(database).metadata_schema_version == SCHEMA_VERSION
-    assert SCHEMA_VERSION == 10
+    assert SCHEMA_VERSION == 11
     proof = json.loads((tmp_path / "runtime-proof.json").read_text(encoding="utf-8"))
     assert Path(proof["executable"]).resolve() == (target / "venv" / "bin" / "python").resolve()
     assert str(target / "venv") in proof["executable"]

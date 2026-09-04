@@ -77,7 +77,7 @@ from .order_state import (
 )
 from .state_contract import validate_trend_state
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 DEPOSIT_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}")
 
 
@@ -467,7 +467,9 @@ class StateStore:
                 self._migrate_v7(connection)
                 current_version = 7
             else:
-                self._ensure_external_evidence_schema(connection)
+                self._ensure_external_evidence_schema(
+                    connection, require_status_event_at=current_version >= 11
+                )
             if current_version < 8:
                 self._migrate_v8(connection)
                 current_version = 8
@@ -481,6 +483,9 @@ class StateStore:
                 current_version = 10
             else:
                 self._ensure_financial_fill_application_schema(connection)
+            if current_version < 11:
+                self._migrate_v11(connection)
+                current_version = 11
             if new_schema:
                 connection.execute(
                     "INSERT INTO metadata(key, value) VALUES('schema_version', ?)",
@@ -722,7 +727,9 @@ class StateStore:
         cls._ensure_funding_accounting_schema(connection)
 
     @staticmethod
-    def _ensure_external_evidence_schema(connection: sqlite3.Connection) -> None:
+    def _ensure_external_evidence_schema(
+        connection: sqlite3.Connection, *, require_status_event_at: bool = False
+    ) -> None:
         """Crée les preuves externes sans modifier les ordres existants."""
         connection.executescript(
             """
@@ -751,6 +758,7 @@ class StateStore:
                 ),
                 remaining_qty REAL CHECK(remaining_qty IS NULL OR remaining_qty >= 0),
                 venue_event_at TEXT,
+                status_event_at TEXT,
                 observed_at TEXT NOT NULL,
                 persisted_at TEXT NOT NULL,
                 observation_key TEXT NOT NULL UNIQUE,
@@ -837,6 +845,8 @@ class StateStore:
             "fill_key",
             "raw_payload_hash",
         }
+        if require_status_event_at:
+            required_observation.add("status_event_at")
         observed_columns = {
             row["name"]
             for row in connection.execute(
@@ -990,6 +1000,28 @@ class StateStore:
     def _migrate_v9(cls, connection: sqlite3.Connection) -> None:
         """Migration additive v8 vers le plan financier durable v1."""
         cls._ensure_financial_application_plan_schema(connection)
+
+    @classmethod
+    def _migrate_v11(cls, connection: sqlite3.Connection) -> None:
+        """Add the venue status transition timestamp to schema v11."""
+        columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(external_order_observations)"
+            ).fetchall()
+        }
+        if "status_event_at" not in columns:
+            connection.execute(
+                "ALTER TABLE external_order_observations ADD COLUMN status_event_at TEXT"
+            )
+        columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(external_order_observations)"
+            ).fetchall()
+        }
+        if "status_event_at" not in columns:
+            raise RuntimeError("Migration v11 incomplete: status_event_at absent")
 
     @staticmethod
     def _ensure_financial_fill_application_schema(connection: sqlite3.Connection) -> None:
@@ -2498,6 +2530,7 @@ class StateStore:
             client_order_id=row["client_order_id"],
             external_order_id=row["external_order_id"],
             venue_event_at=row["venue_event_at"],
+            status_event_at=row["status_event_at"],
             observed_at=str(row["observed_at"]),
             persisted_at=str(row["persisted_at"]),
             observation_key=str(row["observation_key"]),
@@ -2587,9 +2620,9 @@ class StateStore:
             INSERT INTO external_order_observations(
                 local_order_id, intent_id, venue, account_scope, instrument, side,
                 source_kind, external_state, client_order_id, external_order_id,
-                requested_qty, cumulative_filled_qty, remaining_qty, venue_event_at,
+                requested_qty, cumulative_filled_qty, remaining_qty, venue_event_at, status_event_at,
                 observed_at, persisted_at, observation_key, raw_payload_hash
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 observation.local_order_id,
@@ -2606,6 +2639,7 @@ class StateStore:
                 observation.cumulative_filled_qty,
                 observation.remaining_qty,
                 observation.venue_event_at,
+                observation.status_event_at,
                 observation.observed_at,
                 observation.persisted_at,
                 observation.observation_key,

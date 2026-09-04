@@ -234,7 +234,7 @@ def test_database_newer_than_code_is_rejected(tmp_path):
     database = tmp_path / "newer.db"
     StateStore(database)
     with sqlite3.connect(database) as connection:
-        connection.execute("UPDATE metadata SET value='11' WHERE key='schema_version'")
+        connection.execute("UPDATE metadata SET value='12' WHERE key='schema_version'")
         connection.commit()
     with pytest.raises(RuntimeError, match="plus récente"):
         StateStore(database)
