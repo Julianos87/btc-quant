@@ -49,7 +49,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "preflight-testnet":
-        report = evaluate_testnet_preflight(ROOT)
+        report = evaluate_testnet_preflight(ROOT, inspect_systemd=True)
         if args.json:
             print(json.dumps(report, ensure_ascii=True, indent=2))
         else:

@@ -64,6 +64,91 @@ def _check(
     return PreflightCheck(key, passed, str(value), required, reason)
 
 
+def _gate_summary(
+    checks: list[PreflightCheck],
+    *,
+    inspect_systemd: bool,
+) -> list[dict[str, Any]]:
+    """Project detailed checks into independently named activation gates."""
+
+    by_key = {item.key: item for item in checks}
+    summary: list[dict[str, Any]] = []
+
+    def add(
+        name: str,
+        keys: tuple[str, ...],
+        *,
+        required: str,
+        reason: str | None = None,
+    ) -> None:
+        selected = [by_key[key] for key in keys if key in by_key]
+        passed = bool(selected) and all(item.passed for item in selected)
+        if reason is not None:
+            passed = False
+        summary.append(
+            {
+                "name": name,
+                "status": "PASS" if passed else "FAIL",
+                "required": required,
+                "checks": [item.key for item in selected],
+                **({"reason": reason} if reason is not None else {}),
+            }
+        )
+
+    add("CODE", ("qualified_code_sha", "qualified_code_tree"), required="qualified code")
+    add(
+        "PAPER",
+        ("paper_schema", "paper_integrity", "paper_qualification"),
+        required="schema, integrity, and durable qualification",
+    )
+    add("EXTERNAL_IDENTITY", ("external_fill_identity",), required="proven")
+    add(
+        "ORDER_EVIDENCE",
+        (),
+        required="qualified external order evidence",
+        reason="ORDER_EVIDENCE_NOT_PROVEN",
+    )
+    add(
+        "STATUS_CHRONOLOGY",
+        (),
+        required="qualified external status chronology",
+        reason="STATUS_CHRONOLOGY_NOT_PROVEN",
+    )
+    add(
+        "FINANCIAL_APPLICATION",
+        ("external_financial_application",),
+        required="proven",
+    )
+    add("FINALIZATION", ("external_finalization",), required="proven")
+    add("ZERO_EFFECT", ("external_zero_effect",), required="proven")
+    add("SAFE_RETRY", ("external_automatic_retry",), required="disabled")
+    add(
+        "TESTNET_DB",
+        ("testnet_schema", "testnet_integrity", "testnet_recovery_state"),
+        required="valid isolated DB with clean recovery state",
+    )
+    add(
+        "TESTNET_CONFIG",
+        ("testnet_config_isolation", "testnet_unit_definition"),
+        required="testnet-only isolated configuration",
+    )
+    add("TESTNET_SECRET", ("secret_format",), required="validated without echoing values")
+    add(
+        "SERVICE_STATE",
+        ("testnet_service_active", "testnet_service_enabled"),
+        required="inactive and disabled",
+        reason=None if inspect_systemd else "SERVICE_STATE_NOT_INSPECTED",
+    )
+    add("BACKUP", ("encrypted_backup",), required="encrypted backup")
+    add(
+        "MAINNET_LOCK",
+        (),
+        required="explicit mainnet exclusion",
+        reason="MAINNET_LOCK_NOT_EXPLICITLY_VALIDATED",
+    )
+    return summary
+
+
 def _read_json(path: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
@@ -328,6 +413,7 @@ def evaluate_testnet_preflight(
         "ready": passed,
         "root": str(root_path),
         "checks": [item.to_dict() for item in checks],
+        "gate_summary": _gate_summary(checks, inspect_systemd=inspect_systemd),
         "reason_codes": sorted(set(reasons)),
         "activation_performed": False,
         "authenticated_exchange_call": False,
