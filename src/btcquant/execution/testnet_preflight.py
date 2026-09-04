@@ -165,7 +165,7 @@ def evaluate_testnet_preflight(
     try:
         manifest = _read_json(manifest_path)
         git_sha = manifest.get("git_sha")
-        tree = manifest.get("tree")
+        tree = manifest.get("git_tree")
         checks.append(
             _check(
                 "qualified_code_sha",
