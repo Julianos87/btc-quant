@@ -58,3 +58,31 @@ def test_preflight_reads_canonical_release_manifest_tree(tmp_path) -> None:
     checks = {item["key"]: item for item in report["checks"]}
     assert checks["qualified_code_sha"]["passed"] is True
     assert checks["qualified_code_tree"]["passed"] is True
+
+
+def test_preflight_exposes_independent_fail_closed_gate_summary(tmp_path) -> None:
+    report = evaluate_testnet_preflight(tmp_path)
+
+    gates = {item["name"]: item for item in report["gate_summary"]}
+    assert set(gates) == {
+        "CODE",
+        "PAPER",
+        "EXTERNAL_IDENTITY",
+        "ORDER_EVIDENCE",
+        "STATUS_CHRONOLOGY",
+        "FINANCIAL_APPLICATION",
+        "FINALIZATION",
+        "ZERO_EFFECT",
+        "SAFE_RETRY",
+        "TESTNET_DB",
+        "TESTNET_CONFIG",
+        "TESTNET_SECRET",
+        "SERVICE_STATE",
+        "BACKUP",
+        "MAINNET_LOCK",
+    }
+    assert gates["EXTERNAL_IDENTITY"]["status"] == "FAIL"
+    assert gates["ORDER_EVIDENCE"]["reason"] == "ORDER_EVIDENCE_NOT_PROVEN"
+    assert gates["STATUS_CHRONOLOGY"]["reason"] == "STATUS_CHRONOLOGY_NOT_PROVEN"
+    assert gates["SERVICE_STATE"]["reason"] == "SERVICE_STATE_NOT_INSPECTED"
+    assert report["activation_performed"] is False
