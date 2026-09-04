@@ -361,6 +361,9 @@ migration_abort_on_error() {
 }
 
 if ${MIGRATION_MODE}; then
+  # migrate.sh performs the final quiescence proof; stop all writers first so
+  # the wrapper and the migration entrypoint share the same safety boundary.
+  stop_all_writer_processes
   MIGRATION_ATTEMPTED=true
   MIGRATION_BACKUP="${ROOT}/backups/pre-migration-${TARGET_SHA}.db"
   trap migration_abort_on_error ERR

@@ -1245,3 +1245,11 @@ def test_validate_release_isolates_and_cleans_validation_artifacts(tmp_path):
         for path in release.rglob("*")
         if path.is_file()
     } == before
+
+
+def test_update_quiesces_writers_before_migration():
+    update = Path("deploy/update.sh").read_text(encoding="utf-8")
+    migration_mode = update.index("if ${MIGRATION_MODE}; then")
+    stop = update.index("stop_all_writer_processes", migration_mode)
+    migration = update.index('bash "${TARGET}/deploy/migrate.sh"')
+    assert stop < migration
