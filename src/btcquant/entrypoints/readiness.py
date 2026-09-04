@@ -16,6 +16,7 @@ from btcquant.execution.readiness import (
     testnet_p1_policy,
 )
 from btcquant.execution.state_store import StateStore
+from btcquant.execution.testnet_preflight import evaluate_testnet_preflight
 
 ROOT = Path(os.environ.get("BTCQUANT_ROOT", Path.cwd())).resolve()
 
@@ -34,7 +35,9 @@ def _print_report(report: dict) -> None:
 def main() -> None:
     enable_utf8_output()
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("start", "status", "finalize", "cancel"))
+    parser.add_argument(
+        "command", choices=("start", "status", "finalize", "cancel", "preflight-testnet")
+    )
     parser.add_argument("--database", default="state/btcquant.db")
     parser.add_argument(
         "--profile",
@@ -44,6 +47,19 @@ def main() -> None:
     )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
+
+    if args.command == "preflight-testnet":
+        report = evaluate_testnet_preflight(ROOT)
+        if args.json:
+            print(json.dumps(report, ensure_ascii=True, indent=2))
+        else:
+            print(f"Testnet preflight : {report['status']}")
+            for check in report["checks"]:
+                marker = "PASS" if check["passed"] else "FAIL"
+                print(f"  [{marker}] {check['key']}: {check['value']} ({check['required']})")
+            if report["reason_codes"]:
+                print("  Reasons: " + ", ".join(report["reason_codes"]))
+        raise SystemExit(0 if report["status"] == "PASS" else 2)
 
     store = StateStore(ROOT / args.database)
     if args.command == "start":
