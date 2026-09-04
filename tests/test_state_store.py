@@ -312,7 +312,7 @@ def test_schema_v1_is_migrated_with_execution_observability(tmp_path):
         "external_state",
         "remaining_qty",
     } <= columns
-    assert version == "10"
+    assert version == "11"
     assert store.read_deposits() == []
     assert store.read_incidents() == []
 
@@ -347,7 +347,7 @@ def test_existing_legacy_database_requires_explicit_migration(tmp_path):
             connection.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()[
                 0
             ]
-            == "10"
+            == "11"
         )
 
 
@@ -433,7 +433,7 @@ def test_schema_v4_migration_is_idempotent_and_never_invents_market_terminality(
             )
         connection.rollback()
 
-    assert version == "10"
+    assert version == "11"
     assert indexes["idx_orders_logical_order_key"][2] == 1
     assert indexes["idx_orders_logical_order_key"][4] == 1
     assert store.integrity_check()
@@ -541,7 +541,7 @@ def test_v5_to_v6_funding_ledger_migration_is_additive_and_idempotent(tmp_path):
         }
         columns = {row[1] for row in connection.execute("PRAGMA table_info(funding_ledger)")}
 
-    assert version == "10"
+    assert version == "11"
     assert "funding_ledger" in tables
     assert {
         "event_key",

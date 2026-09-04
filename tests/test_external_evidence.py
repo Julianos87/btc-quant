@@ -648,7 +648,7 @@ def test_schema_v6_to_v8_is_additive_preserves_orders_and_checks_integrity(tmp_p
         }
         foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
 
-    assert version == str(SCHEMA_VERSION) == "10"
+    assert version == str(SCHEMA_VERSION) == "11"
     assert {"external_order_observations", "external_fills"} <= tables
     assert migrated.read_order_by_intent("pre-v7-order")["id"] == order_id
     assert foreign_keys == []
@@ -782,8 +782,8 @@ def test_fresh_schema_is_v8_and_accepts_negative_fee(tmp_path):
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='external_fills'"
         ).fetchone()[0]
 
-    assert version == "10"
-    assert SCHEMA_VERSION == 10
+    assert version == "11"
+    assert SCHEMA_VERSION == 11
     assert created is True
     assert persisted.fee == -0.01
     assert "fee >= 0" not in ddl.lower()
@@ -864,7 +864,7 @@ def test_historical_v7_to_v8_preserves_rows_and_constraints(tmp_path):
 
     assert observation_created is True
     assert rows_after == rows_before
-    assert version == "10"
+    assert version == "11"
     assert "fee >= 0" not in ddl.lower()
     assert {"idx_external_fills_order_id", "idx_external_fills_venue_fill"} <= indexes
     assert unique_fill_indexes
@@ -931,3 +931,95 @@ def test_schema_v7_migration_failure_rolls_back_rebuild(tmp_path, monkeypatch):
     assert rows_after == rows_before
     assert "fee >= 0" in ddl.lower()
     assert replacement_count == 0
+
+
+def test_fresh_schema_v11_contains_status_event_at(tmp_path):
+    database = tmp_path / "fresh-v11.db"
+    StateStore(database)
+    with sqlite3.connect(database) as connection:
+        version = connection.execute(
+            "SELECT value FROM metadata WHERE key='schema_version'"
+        ).fetchone()[0]
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(external_order_observations)")
+        }
+    assert version == str(SCHEMA_VERSION) == "11"
+    assert "status_event_at" in columns
+
+
+def _downgrade_observations_to_v10(database):
+    with sqlite3.connect(database) as connection:
+        connection.execute("ALTER TABLE external_order_observations DROP COLUMN status_event_at")
+        connection.execute("UPDATE metadata SET value='10' WHERE key='schema_version'")
+        connection.commit()
+
+
+def test_v10_to_v11_migration_preserves_observations_and_adds_status_timestamp(tmp_path):
+    database = tmp_path / "v10-to-v11.db"
+    store = StateStore(database)
+    order_id = _order(store, "v10-to-v11")
+    original, created = store.append_external_order_observation(
+        _observation(order_id, intent_id="v10-to-v11")
+    )
+    assert created is True
+    _downgrade_observations_to_v10(database)
+
+    with pytest.raises(MigrationRequiredError):
+        StateStore(database)
+
+    migrated = StateStore(database, allow_migration=True)
+    historical = migrated.get_external_order_observations(order_id)
+    assert historical == [original]
+    assert historical[0].status_event_at is None
+
+    current, current_created = migrated.append_external_order_observation(
+        _observation(
+            order_id,
+            intent_id="v10-to-v11",
+            status_event_at="2026-08-26T12:00:01Z",
+            raw_payload_hash=RAW_B,
+        )
+    )
+    assert current_created is True
+    assert current.status_event_at == "2026-08-26T12:00:01+00:00"
+    with sqlite3.connect(database) as connection:
+        assert (
+            connection.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()[
+                0
+            ]
+            == "11"
+        )
+
+
+def test_v11_migration_baseexception_rolls_back_status_column_and_metadata(tmp_path, monkeypatch):
+    class InjectedPowerLoss(BaseException):
+        pass
+
+    database = tmp_path / "v11-failure.db"
+    store = StateStore(database)
+    order_id = _order(store, "v11-failure")
+    original_observation, created = store.append_external_order_observation(
+        _observation(order_id, intent_id="v11-failure")
+    )
+    assert created is True
+    _downgrade_observations_to_v10(database)
+    original_migration = StateStore._migrate_v11
+
+    def fail_after_alter(cls, connection):
+        original_migration(connection)
+        raise InjectedPowerLoss("injected v11 power loss")
+
+    monkeypatch.setattr(StateStore, "_migrate_v11", classmethod(fail_after_alter))
+    with pytest.raises(InjectedPowerLoss, match="injected v11 power loss"):
+        StateStore(database, allow_migration=True)
+
+    with sqlite3.connect(database) as connection:
+        version = connection.execute(
+            "SELECT value FROM metadata WHERE key='schema_version'"
+        ).fetchone()[0]
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(external_order_observations)")
+        }
+    assert version == "10"
+    assert "status_event_at" not in columns
+    assert original_observation.status_event_at is None

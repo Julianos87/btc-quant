@@ -526,3 +526,50 @@ def test_persistence_does_not_mutate_orders_positions_or_fills(tmp_path: Path):
         assert connection.execute(
             "SELECT value FROM metadata WHERE key = 'schema_version'"
         ).fetchone()[0] == str(SCHEMA_VERSION)
+
+
+def test_status_event_timestamp_uses_last_update_without_reusing_placement_time():
+    _, result = read(order(lastUpdateTimestamp=1788004860000))
+    assert result.outcome == EvidenceLookupOutcome.FOUND
+    assert result.evidence is not None
+    assert result.evidence.venue_event_at == "2026-08-29T12:00:00+00:00"
+    assert result.evidence.status_event_at == "2026-08-29T12:01:00+00:00"
+    assert result.evidence.status_event_at != result.evidence.venue_event_at
+
+
+def test_status_event_timestamp_accepts_info_status_timestamp():
+    _, result = read(order(info={"status": "marginCanceled", "statusTimestamp": 1788004860000}))
+    assert result.outcome == EvidenceLookupOutcome.FOUND
+    assert result.evidence is not None
+    assert result.evidence.status_event_at == "2026-08-29T12:01:00+00:00"
+
+
+def test_missing_status_event_timestamp_does_not_fallback_to_venue_timestamp():
+    _, result = read()
+    assert result.outcome == EvidenceLookupOutcome.FOUND
+    assert result.evidence is not None
+    assert result.evidence.status_event_at is None
+    assert result.evidence.venue_event_at == "2026-08-29T12:00:00+00:00"
+
+
+@pytest.mark.parametrize(
+    "status_timestamp",
+    [float("nan"), float("inf"), "2026-08-29T12:01:00"],
+)
+def test_invalid_status_event_timestamp_is_not_accepted(status_timestamp):
+    _, result = read(order(lastUpdateTimestamp=status_timestamp))
+    assert result.outcome == EvidenceLookupOutcome.INVALID_RESPONSE
+    assert result.evidence is None
+
+
+def test_status_event_timestamp_persists_and_round_trips(tmp_path: Path):
+    store = StateStore(tmp_path / "state.db")
+    order_id = store.begin_order("trend", "slot", "intent-reader", "MARKET", "BUY", 1.0, "entry")
+    lookup = CcxtExternalEvidenceReader(
+        FakeExchange(order(lastUpdateTimestamp=1788004860000))
+    ).lookup_order(context(local_order_id=order_id), observed_at=OBSERVED)
+    persisted = ExternalEvidencePersistence.persist(store, lookup)
+    assert persisted.observation is not None
+    assert persisted.observation.status_event_at == "2026-08-29T12:01:00+00:00"
+    payload = json.loads(store.read_events("trend")[-1]["payload"])
+    assert payload["status_event_at"] == "2026-08-29T12:01:00+00:00"

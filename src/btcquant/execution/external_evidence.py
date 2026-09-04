@@ -127,6 +127,7 @@ class ExternalOrderObservation:
     client_order_id: str | None = None
     external_order_id: str | None = None
     venue_event_at: str | None = None
+    status_event_at: str | None = None
     observation_key: str | None = None
     persisted_at: str | None = None
 
@@ -191,6 +192,11 @@ class ExternalOrderObservation:
         )
         object.__setattr__(
             self,
+            "status_event_at",
+            _canonical_timestamp(self.status_event_at, field="status_event_at", required=False),
+        )
+        object.__setattr__(
+            self,
             "observed_at",
             _canonical_timestamp(self.observed_at, field="observed_at", required=True),
         )
@@ -227,6 +233,7 @@ class ExternalOrderObservation:
                 "normalized_external_status": ExternalOrderState(
                     self.normalized_external_status
                 ).value,
+                "status_event_at": self.status_event_at,
                 "remaining_qty": self.remaining_qty,
                 "requested_qty": self.requested_qty,
                 "side": self.side,
@@ -251,6 +258,7 @@ class ExternalOrderObservation:
             "side": self.side,
             "source_kind": ExternalEvidenceSource(self.source_kind).value,
             "normalized_external_status": ExternalOrderState(self.normalized_external_status).value,
+            "status_event_at": self.status_event_at,
             "client_order_id": self.client_order_id,
             "external_order_id": self.external_order_id,
             "requested_qty": self.requested_qty,
