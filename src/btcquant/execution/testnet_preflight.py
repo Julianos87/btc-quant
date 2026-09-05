@@ -13,11 +13,13 @@ import re
 import sqlite3
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from ..config import load_config
-from .readiness import require_passed_qualification
+from .external_capability_profile import hyperliquid_testnet_trend_ioc_v1
+from .readiness import paper_maturity_status, require_passed_qualification
 from .state_store import SCHEMA_VERSION, StateStore
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -69,87 +71,78 @@ def _gate_summary(
     *,
     inspect_systemd: bool,
 ) -> list[dict[str, Any]]:
-    """Project detailed checks into independently named activation gates."""
+    """Project checks into separate technical and activation gates."""
 
     by_key = {item.key: item for item in checks}
     summary: list[dict[str, Any]] = []
 
-    def add(
-        name: str,
-        keys: tuple[str, ...],
-        *,
-        required: str,
-        reason: str | None = None,
-    ) -> None:
+    def add(name: str, keys: tuple[str, ...], *, required: str) -> None:
         selected = [by_key[key] for key in keys if key in by_key]
         passed = bool(selected) and all(item.passed for item in selected)
-        if reason is not None:
-            passed = False
-        selected_reason = next(
-            (item.reason for item in selected if item.reason is not None),
-            None,
-        )
-        gate_reason = reason or selected_reason
+        reason = next((item.reason for item in selected if item.reason), None)
         summary.append(
             {
                 "name": name,
                 "status": "PASS" if passed else "FAIL",
                 "required": required,
                 "checks": [item.key for item in selected],
-                **({"reason": gate_reason} if gate_reason is not None else {}),
+                **({"reason": reason} if reason else {}),
             }
         )
 
     add("CODE", ("qualified_code_sha", "qualified_code_tree"), required="qualified code")
     add(
-        "PAPER",
-        ("paper_schema", "paper_integrity", "paper_qualification"),
-        required="schema, integrity, and durable qualification",
-    )
-    add("EXTERNAL_IDENTITY", ("external_fill_identity",), required="proven")
-    add(
-        "ORDER_EVIDENCE",
-        (),
-        required="qualified external order evidence",
-        reason="ORDER_EVIDENCE_NOT_PROVEN",
+        "PAPER_HEALTH",
+        ("paper_schema", "paper_integrity", "paper_health"),
+        required="healthy PAPER",
     )
     add(
-        "STATUS_CHRONOLOGY",
-        (),
-        required="qualified external status chronology",
-        reason="STATUS_CHRONOLOGY_NOT_PROVEN",
+        "PAPER_TECHNICAL_QUALIFICATION",
+        ("paper_technical_qualification",),
+        required="durable technical qualification",
     )
     add(
-        "FINANCIAL_APPLICATION",
-        ("external_financial_application",),
-        required="proven",
+        "EXTERNAL_CAPABILITY_PROFILE",
+        ("external_capability_profile",),
+        required="qualified profile",
     )
-    add("FINALIZATION", ("external_finalization",), required="proven")
-    add("ZERO_EFFECT", ("external_zero_effect",), required="proven")
+    add("SUBMISSION_COMMITMENT", ("submission_commitment",), required="durable submission evidence")
+    add("ORDER_EVIDENCE", ("order_evidence",), required="read-only order evidence")
+    add("FILL_EVIDENCE", ("fill_evidence",), required="read-only fill evidence")
+    add("COORDINATOR", ("coordinator",), required="external settlement coordinator")
+    add("STATUS_TIMESTAMP", ("status_timestamp",), required="persisted venue status timestamp")
+    add("SETTLEMENT_COMPLETENESS", ("settlement_completeness",), required="qualified completeness")
+    add(
+        "SETTLEMENT_PERSISTENCE",
+        ("settlement_persistence",),
+        required="durable settlement persistence",
+    )
+    add(
+        "SETTLEMENT_APPLICATION",
+        ("settlement_application",),
+        required="atomic settlement application",
+    )
+    add("EXTERNAL_FINALIZATION", ("external_finalization",), required="atomic finalization")
+    add("STARTUP_RECOVERY", ("startup_recovery",), required="settlement-aware startup recovery")
+    add("STOP_RECOVERY", ("stop_recovery",), required="protective stop recovery")
     add("SAFE_RETRY", ("external_automatic_retry",), required="disabled")
     add(
         "TESTNET_DB",
         ("testnet_schema", "testnet_integrity", "testnet_recovery_state"),
-        required="valid isolated DB with clean recovery state",
+        required="isolated clean DB",
     )
-    add(
-        "TESTNET_CONFIG",
-        ("testnet_config_isolation", "testnet_unit_definition"),
-        required="testnet-only isolated configuration",
-    )
-    add("TESTNET_SECRET", ("secret_format",), required="validated without echoing values")
+    add("TESTNET_ENDPOINT", ("testnet_config_isolation",), required="testnet-only endpoint")
+    add("MAINNET_LOCK", ("mainnet_endpoint_lock",), required="explicit mainnet exclusion")
+    add("BACKUP", ("encrypted_backup",), required="encrypted backup")
+    add("SERVICE_DEFINITION", ("testnet_unit_definition",), required="gated testnet service")
     add(
         "SERVICE_STATE",
         ("testnet_service_active", "testnet_service_enabled"),
         required="inactive and disabled",
-        reason=None if inspect_systemd else "SERVICE_STATE_NOT_INSPECTED",
     )
-    add("BACKUP", ("encrypted_backup",), required="encrypted backup")
-    add(
-        "MAINNET_LOCK",
-        ("mainnet_endpoint_lock", "testnet_unit_definition"),
-        required="explicit testnet endpoint and mainnet exclusion",
-    )
+    add("PAPER_MATURITY", ("paper_maturity",), required="independent PAPER maturity")
+    add("TESTNET_SECRET", ("secret_format",), required="validated secret format")
+    add("ACTIVATION_MARKER", ("activation_marker",), required="explicit activation approval")
     return summary
 
 
@@ -237,7 +230,151 @@ def _testnet_order_state(path: Path) -> tuple[bool, str]:
     return not unresolved and not critical, f"orders={len(unresolved)},critical={len(critical)}"
 
 
-def evaluate_testnet_preflight(
+def _paper_health(path: Path) -> tuple[bool, str]:
+    if not path.exists():
+        return False, "database_missing"
+    try:
+        store = StateStore(path, initialize=False, read_only=True)
+        unresolved = store.unresolved_orders("trend")
+        critical = [
+            item
+            for item in store.read_incidents(open_only=True)
+            if item.get("severity") == "CRITICAL"
+        ]
+        healthy = store.integrity_check() and not unresolved and not critical
+        return healthy, f"unresolved={len(unresolved)},critical={len(critical)}"
+    except (FileNotFoundError, sqlite3.Error, ValueError):
+        return False, "database_unavailable"
+
+
+def _technical_qualification(
+    path: Path,
+    *,
+    expected_git_sha: str | None,
+    expected_tree: str | None,
+) -> tuple[bool, str, str | None]:
+    if not path.exists():
+        return False, "missing", "PAPER_TECHNICAL_QUALIFICATION_MISSING"
+    try:
+        payload = StateStore(
+            path, initialize=False, read_only=True
+        ).latest_paper_technical_qualification()
+    except (FileNotFoundError, sqlite3.Error, ValueError):
+        return False, "unavailable", "PAPER_TECHNICAL_QUALIFICATION_UNAVAILABLE"
+    if payload is None:
+        return False, "missing", "PAPER_TECHNICAL_QUALIFICATION_MISSING"
+    if payload.get("status") != "PAPER_TECHNICAL_QUALIFIED":
+        return False, "invalid_status", "PAPER_TECHNICAL_QUALIFICATION_INVALID"
+    if payload.get("schema_version") != SCHEMA_VERSION:
+        return False, "schema_mismatch", "PAPER_TECHNICAL_SCHEMA_MISMATCH"
+    for key, expected in (("release_sha", expected_git_sha), ("release_tree", expected_tree)):
+        value = payload.get(key)
+        if not isinstance(value, str) or not _SHA_RE.fullmatch(value):
+            return False, f"{key}_invalid", "PAPER_TECHNICAL_RELEASE_INVALID"
+        if expected is not None and value != expected:
+            return False, f"{key}_mismatch", "PAPER_TECHNICAL_RELEASE_MISMATCH"
+    try:
+        qualified_at = datetime.fromisoformat(str(payload["qualified_at"]).replace("Z", "+00:00"))
+    except (KeyError, TypeError, ValueError):
+        return False, "timestamp_invalid", "PAPER_TECHNICAL_TIMESTAMP_INVALID"
+    if qualified_at.tzinfo is None:
+        return False, "timestamp_naive", "PAPER_TECHNICAL_TIMESTAMP_INVALID"
+    evidence_names = (
+        "full_test_results",
+        "staging_run",
+        "migration",
+        "rollback_rehearsal",
+        "production_health",
+        "backup_verification",
+    )
+    if any(
+        not isinstance(payload.get(name), dict) or payload[name].get("status") != "PASS"
+        for name in evidence_names
+    ):
+        return False, "evidence_incomplete", "PAPER_TECHNICAL_EVIDENCE_INCOMPLETE"
+    return True, "PAPER_TECHNICAL_QUALIFIED", None
+
+
+def _runtime_capability_checks() -> dict[str, tuple[bool, str | None]]:
+    """Check passive qualified boundaries without invoking any of them."""
+
+    from .external_evidence import ExternalOrderObservation
+    from .external_evidence_reader import CcxtExternalEvidenceReader, ExternalEvidencePersistence
+    from .external_fill_evidence_reader import (
+        CcxtExternalFillEvidenceReader,
+        ExternalFillEvidencePersistence,
+    )
+    from .external_settlement_acquisition import (
+        CcxtExternalSettlementAcquirer,
+        ExternalSettlementEvidenceAcquirer,
+    )
+    from .external_settlement_coordinator import ExternalSettlementCoordinator
+    from .external_settlement_finalization import ExternalSettlementFinalizer
+    from .external_settlement_recovery import ExternalSettlementStartupRecovery
+
+    checks: dict[str, tuple[bool, str | None]] = {
+        "submission_commitment": (
+            callable(getattr(StateStore, "append_external_submission_response", None))
+            and callable(getattr(StateStore, "read_external_submission_responses", None)),
+            "SUBMISSION_COMMITMENT_BOUNDARY_NOT_AVAILABLE",
+        ),
+        "order_evidence": (
+            callable(CcxtExternalEvidenceReader)
+            and callable(ExternalEvidencePersistence)
+            and callable(getattr(StateStore, "persist_external_order_lookup_evidence", None)),
+            "ORDER_EVIDENCE_BOUNDARY_NOT_AVAILABLE",
+        ),
+        "status_timestamp": (
+            "status_event_at" in ExternalOrderObservation.__dataclass_fields__,
+            "STATUS_TIMESTAMP_NOT_PERSISTED",
+        ),
+        "settlement_completeness": (
+            callable(CcxtExternalSettlementAcquirer)
+            and callable(ExternalSettlementEvidenceAcquirer)
+            and callable(getattr(CcxtExternalSettlementAcquirer, "acquire", None)),
+            "SETTLEMENT_COMPLETENESS_BOUNDARY_NOT_AVAILABLE",
+        ),
+        "settlement_persistence": (
+            callable(getattr(StateStore, "persist_external_order_settlement", None)),
+            "SETTLEMENT_PERSISTENCE_NOT_AVAILABLE",
+        ),
+        "settlement_application": (
+            callable(getattr(StateStore, "apply_external_settlement_atomically", None)),
+            "SETTLEMENT_APPLICATION_NOT_AVAILABLE",
+        ),
+        "external_finalization": (
+            callable(ExternalSettlementFinalizer)
+            and callable(getattr(StateStore, "finalize_external_order_atomically", None)),
+            "EXTERNAL_FINALIZATION_NOT_AVAILABLE",
+        ),
+        "startup_recovery": (
+            callable(ExternalSettlementStartupRecovery)
+            and callable(getattr(ExternalSettlementStartupRecovery, "recover", None)),
+            "STARTUP_RECOVERY_NOT_AVAILABLE",
+        ),
+        "fill_evidence": (
+            callable(CcxtExternalFillEvidenceReader) and callable(ExternalFillEvidencePersistence),
+            "FILL_EVIDENCE_BOUNDARY_NOT_AVAILABLE",
+        ),
+        "coordinator": (
+            callable(ExternalSettlementCoordinator),
+            "EXTERNAL_COORDINATOR_NOT_AVAILABLE",
+        ),
+        "stop_recovery": (False, "STOP_RECOVERY_NOT_INSPECTED"),
+    }
+    try:
+        from .runner import LiveRunner
+
+        checks["stop_recovery"] = (
+            callable(getattr(LiveRunner, "_recover_protective_stop_transitions", None)),
+            "STOP_RECOVERY_NOT_AVAILABLE",
+        )
+    except (ImportError, AttributeError):
+        pass
+    return checks
+
+
+def _legacy_evaluate_testnet_preflight(
     root: str | Path = "/opt/btcquant",
     *,
     expected_git_sha: str | None = None,
@@ -448,4 +585,324 @@ def evaluate_testnet_preflight(
     }
 
 
-__all__ = ["PreflightCheck", "evaluate_testnet_preflight"]
+def evaluate_testnet_preflight(
+    root: str | Path = "/opt/btcquant",
+    *,
+    expected_git_sha: str | None = None,
+    expected_tree: str | None = None,
+    inspect_systemd: bool = False,
+) -> dict[str, Any]:
+    """Return architecture-aware, read-only preflight V3.
+
+    Technical readiness describes qualified software and isolated state.  It
+    intentionally does not require a private key, a 90-day PAPER campaign, or
+    an activation marker.  Activation readiness retains those operational
+    gates and must remain false until an explicit later approval.
+    """
+
+    root_path = Path(root).resolve()
+    current = root_path / "current"
+    checks: list[PreflightCheck] = []
+    technical_reasons: list[str] = []
+    activation_blockers: list[str] = []
+
+    def add_check(
+        key: str,
+        passed: bool,
+        value: object,
+        required: str,
+        reason: str | None = None,
+        *,
+        technical: bool = True,
+    ) -> None:
+        checks.append(_check(key, passed, value, required, reason))
+        if not passed and reason:
+            (technical_reasons if technical else activation_blockers).append(reason)
+
+    manifest_path = current / "release-manifest.json"
+    manifest_sha: str | None = None
+    manifest_tree: str | None = None
+    try:
+        manifest = _read_json(manifest_path)
+        manifest_sha = manifest.get("git_sha")
+        manifest_tree = manifest.get("git_tree")
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        pass
+    add_check(
+        "qualified_code_sha",
+        bool(isinstance(manifest_sha, str) and _SHA_RE.fullmatch(manifest_sha))
+        and (expected_git_sha is None or manifest_sha == expected_git_sha),
+        manifest_sha or "missing",
+        expected_git_sha or "40 lowercase hexadecimal characters",
+        "QUALIFIED_CODE_SHA_MISMATCH",
+    )
+    add_check(
+        "qualified_code_tree",
+        bool(isinstance(manifest_tree, str) and _SHA_RE.fullmatch(manifest_tree))
+        and (expected_tree is None or manifest_tree == expected_tree),
+        manifest_tree or "missing",
+        expected_tree or "40 lowercase hexadecimal characters",
+        "QUALIFIED_CODE_TREE_MISMATCH",
+    )
+
+    paper_db = root_path / "state" / "btcquant.db"
+    try:
+        paper_schema, paper_integrity = _schema_and_integrity(paper_db)
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        paper_schema, paper_integrity = None, False
+    add_check(
+        "paper_schema",
+        paper_schema == SCHEMA_VERSION,
+        paper_schema or "missing",
+        str(SCHEMA_VERSION),
+    )
+    add_check("paper_integrity", paper_integrity, "ok" if paper_integrity else "failed", "ok")
+    paper_health, paper_health_value = _paper_health(paper_db)
+    add_check(
+        "paper_health",
+        paper_health,
+        paper_health_value,
+        "no unresolved PAPER order or critical incident",
+        "PAPER_HEALTH_NOT_PASSING" if not paper_health else None,
+    )
+    qualification_ok, qualification_value, qualification_reason = _technical_qualification(
+        paper_db,
+        expected_git_sha=expected_git_sha or manifest_sha,
+        expected_tree=expected_tree or manifest_tree,
+    )
+    add_check(
+        "paper_technical_qualification",
+        qualification_ok,
+        qualification_value,
+        "durable PAPER technical qualification",
+        qualification_reason,
+    )
+    try:
+        maturity = paper_maturity_status(StateStore(paper_db, initialize=False, read_only=True))
+    except (FileNotFoundError, RuntimeError, ValueError, sqlite3.Error):
+        maturity = {
+            "kind": "PAPER_MATURITY_STATUS",
+            "status": "NOT_STARTED",
+            "qualified": False,
+            "campaign_id": None,
+        }
+    maturity_ok = bool(maturity.get("qualified"))
+    add_check(
+        "paper_maturity",
+        maturity_ok,
+        maturity.get("status", "NOT_STARTED"),
+        "independent PAPER maturity",
+        "PAPER_MATURITY_IN_PROGRESS" if not maturity_ok else None,
+        technical=False,
+    )
+
+    profile = hyperliquid_testnet_trend_ioc_v1()
+    profile_ok = profile.technical_contract_passed and profile.protective_stop_qualified
+    add_check(
+        "external_capability_profile",
+        profile_ok,
+        profile.name,
+        "HYPERLIQUID_TESTNET_TREND_IOC_V1",
+        "EXTERNAL_CAPABILITY_PROFILE_INVALID" if not profile_ok else None,
+    )
+    for key, (passed, reason) in _runtime_capability_checks().items():
+        add_check(
+            key,
+            passed,
+            "available" if passed else "unavailable",
+            "qualified passive boundary",
+            reason,
+        )
+    add_check(
+        "external_automatic_retry",
+        not EXTERNAL_AUTOMATIC_RETRY_ENABLED,
+        "disabled" if not EXTERNAL_AUTOMATIC_RETRY_ENABLED else "enabled",
+        "disabled",
+    )
+
+    try:
+        config_ok, config_value = _testnet_config_check(
+            current / "environments" / "testnet" / "config.yaml",
+            root_path,
+        )
+    except (OSError, KeyError, TypeError, ValueError):
+        config_ok, config_value = False, "invalid_or_missing"
+    add_check(
+        "testnet_config_isolation",
+        config_ok,
+        config_value,
+        "dedicated testnet DB and Hyperliquid testnet",
+        "TESTNET_CONFIG_ISOLATION_INVALID" if not config_ok else None,
+    )
+    add_check(
+        "mainnet_endpoint_lock",
+        config_ok,
+        config_value,
+        "explicit Hyperliquid testnet API endpoint",
+        "MAINNET_ENDPOINT_LOCK_INVALID" if not config_ok else None,
+    )
+
+    testnet_db = root_path / "state" / "btcquant-testnet.db"
+    try:
+        testnet_schema, testnet_integrity = _schema_and_integrity(testnet_db)
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        testnet_schema, testnet_integrity = None, False
+    add_check(
+        "testnet_schema",
+        testnet_db.exists() and testnet_schema == SCHEMA_VERSION,
+        testnet_schema or "missing",
+        str(SCHEMA_VERSION),
+        "TESTNET_SCHEMA_INVALID"
+        if not testnet_db.exists() or testnet_schema != SCHEMA_VERSION
+        else None,
+    )
+    add_check(
+        "testnet_integrity",
+        testnet_db.exists() and testnet_integrity,
+        "ok" if testnet_integrity else "missing_or_failed",
+        "ok",
+        "TESTNET_DATABASE_INVALID" if not testnet_db.exists() or not testnet_integrity else None,
+    )
+    try:
+        order_state_ok, order_state_value = _testnet_order_state(testnet_db)
+    except (FileNotFoundError, sqlite3.Error, ValueError):
+        order_state_ok, order_state_value = False, "unavailable"
+    add_check(
+        "testnet_recovery_state",
+        order_state_ok,
+        order_state_value,
+        "no unresolved orders or critical incidents",
+        "TESTNET_RECOVERY_STATE_INVALID" if not order_state_ok else None,
+    )
+
+    secret_ok, secret_value = _secret_format(root_path / ".env")
+    add_check(
+        "secret_format",
+        secret_ok,
+        secret_value,
+        "present and valid without printing values",
+        "TESTNET_SECRET_PROVISIONING_REQUIRED" if not secret_ok else None,
+        technical=False,
+    )
+
+    unit_path = current / "deploy" / "btcquant-hyperliquid-testnet.service"
+    try:
+        unit = unit_path.read_text(encoding="utf-8")
+        unit_ok = (
+            "ConditionPathExists=/opt/btcquant/state/HYPERLIQUID_TESTNET_APPROVED" in unit
+            and "Environment=BTCQUANT_ENABLE_TESTNET=I_ACCEPT_TESTNET_ORDERS" in unit
+            and "btcquant-trend.service" in unit
+            and "mainnet" not in unit.lower()
+        )
+        unit_value = "static_gate_present" if unit_ok else "static_gate_invalid"
+    except OSError:
+        unit_ok, unit_value = False, "missing"
+    add_check(
+        "testnet_unit_definition",
+        unit_ok,
+        unit_value,
+        "explicit approval and testnet-only unit",
+        "TESTNET_UNIT_DEFINITION_INVALID" if not unit_ok else None,
+    )
+
+    if inspect_systemd:
+        active = _systemd_state("btcquant-hyperliquid-testnet.service", "is-active")
+        enabled = _systemd_state("btcquant-hyperliquid-testnet.service", "is-enabled")
+    else:
+        active, enabled = "not_inspected", "not_inspected"
+    add_check(
+        "testnet_service_active",
+        active == "inactive",
+        active,
+        "inactive",
+        "SERVICE_STATE_NOT_INSPECTED" if not inspect_systemd else "TESTNET_SERVICE_ACTIVE",
+    )
+    add_check(
+        "testnet_service_enabled",
+        enabled == "disabled",
+        enabled,
+        "disabled",
+        "SERVICE_STATE_NOT_INSPECTED" if not inspect_systemd else "TESTNET_SERVICE_ENABLED",
+    )
+
+    backups = sorted((root_path / "backups").glob("*.tar.gz.enc"))
+    add_check(
+        "encrypted_backup",
+        bool(backups),
+        len(backups),
+        "at least one encrypted backup",
+        "ENCRYPTED_BACKUP_MISSING" if not backups else None,
+    )
+    marker = root_path / "state" / "HYPERLIQUID_TESTNET_APPROVED"
+    add_check(
+        "activation_marker",
+        marker.is_file(),
+        "present" if marker.is_file() else "absent",
+        "explicit approval marker",
+        "ACTIVATION_MARKER_ABSENT" if not marker.is_file() else None,
+        technical=False,
+    )
+
+    technical_keys = (
+        "qualified_code_sha",
+        "qualified_code_tree",
+        "paper_schema",
+        "paper_integrity",
+        "paper_health",
+        "paper_technical_qualification",
+        "external_capability_profile",
+        "submission_commitment",
+        "order_evidence",
+        "fill_evidence",
+        "coordinator",
+        "status_timestamp",
+        "settlement_completeness",
+        "settlement_persistence",
+        "settlement_application",
+        "external_finalization",
+        "startup_recovery",
+        "stop_recovery",
+        "external_automatic_retry",
+        "testnet_config_isolation",
+        "mainnet_endpoint_lock",
+        "testnet_schema",
+        "testnet_integrity",
+        "testnet_recovery_state",
+        "testnet_unit_definition",
+        "testnet_service_active",
+        "testnet_service_enabled",
+        "encrypted_backup",
+    )
+    checks_by_key = {item.key: item for item in checks}
+    technical_ready = all(checks_by_key[key].passed for key in technical_keys)
+    if not maturity_ok:
+        activation_blockers.append("PAPER_MATURITY_IN_PROGRESS")
+    if not secret_ok:
+        activation_blockers.append("TESTNET_SECRET_PROVISIONING_REQUIRED")
+    if not marker.is_file():
+        activation_blockers.append("ACTIVATION_MARKER_ABSENT")
+    activation_ready = technical_ready and not activation_blockers
+    historical_gates = {
+        "TID_CANDIDATE_NOT_FULLY_PROVEN": not EXTERNAL_FILL_IDENTITY_PROVEN,
+        "ZERO_FILL_PROOF_NOT_YET_SUFFICIENTLY_ESTABLISHED": not EXTERNAL_ZERO_EFFECT_PROVEN,
+    }
+    return {
+        "status": "PASS" if activation_ready else "FAIL",
+        "ready": activation_ready,
+        "technical_ready": technical_ready,
+        "activation_ready": activation_ready,
+        "root": str(root_path),
+        "capability_profile": profile.to_dict(),
+        "maturity": maturity,
+        "checks": [item.to_dict() for item in checks],
+        "gate_summary": _gate_summary(checks, inspect_systemd=inspect_systemd),
+        "reason_codes": sorted(set(technical_reasons + activation_blockers)),
+        "technical_reason_codes": sorted(set(technical_reasons)),
+        "activation_blockers": sorted(set(activation_blockers)),
+        "historical_gates": historical_gates,
+        "activation_performed": False,
+        "authenticated_exchange_call": False,
+    }
+
+
+__all__ = ["PreflightCheck", "evaluate_testnet_preflight", "paper_maturity_status"]

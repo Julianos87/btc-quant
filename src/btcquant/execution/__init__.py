@@ -50,6 +50,11 @@ from .external_settlement_recovery import (
     ExternalSettlementStartupRecovery,
     ExternalSettlementStartupRecoveryReport,
 )
+from .external_capability_profile import (
+    ExternalAccountingMode,
+    ExternalCapabilityProfile,
+    hyperliquid_testnet_trend_ioc_v1,
+)
 
 from .order_state import ExternalOrderState, FinancialTransitionType, LocalOrderState
 
@@ -98,4 +103,7 @@ __all__ = [
     "ExternalSettlementFinalizer",
     "ExternalSettlementStartupRecovery",
     "ExternalSettlementStartupRecoveryReport",
+    "ExternalAccountingMode",
+    "ExternalCapabilityProfile",
+    "hyperliquid_testnet_trend_ioc_v1",
 ]

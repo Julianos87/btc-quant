@@ -285,6 +285,88 @@ def testnet_p1_policy() -> ReadinessPolicy:
     )
 
 
+def paper_maturity_status(
+    store: StateStore,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Return observed PAPER maturity without mutating state or predicting.
+
+    Technical qualification is deliberately not folded into this report.  A
+    deployment can therefore be technically sound while the independent
+    observation campaign is still below its policy thresholds.
+    """
+
+    current = now or datetime.now(UTC)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=UTC)
+    campaign = store.active_qualification_campaign() or store.latest_passed_qualification()
+    if campaign is None:
+        policy = ReadinessPolicy()
+        return {
+            "kind": "PAPER_MATURITY_STATUS",
+            "status": "NOT_STARTED",
+            "qualified": False,
+            "campaign_id": None,
+            "observation_age_days": 0.0,
+            "required_observation_days": policy.min_observation_days,
+            "time_criterion_met": False,
+            "earliest_time_criterion": None,
+            "terminal_orders": 0,
+            "required_terminal_orders": policy.min_terminal_orders,
+            "trend_terminal_orders": 0,
+            "required_trend_terminal_orders": policy.min_terminal_orders_per_engine,
+            "closed_trades": 0,
+            "required_closed_trades": policy.min_closed_trades,
+        }
+
+    policy = ReadinessPolicy(**campaign["policy"])
+    started = _parse_datetime(campaign["started_at"])
+    required_engines = set(policy.required_engines)
+    orders = [
+        item
+        for item in store.read_orders()
+        if item.get("engine") in required_engines
+        and _parse_datetime(item["created_at"]) >= started
+        and item.get("order_type") != "STOP"
+        and item.get("status") in TERMINAL_STATUSES
+    ]
+    trades = [item for item in store.read_trades() if _parse_datetime(item["exit_ts"]) >= started]
+    observation_age_days = max(0.0, (current - started).total_seconds() / 86400)
+    earliest = started + timedelta(days=policy.min_observation_days)
+    time_met = observation_age_days >= policy.min_observation_days
+    terminal_count = len(orders)
+    trend_count = sum(item.get("engine") == "trend" for item in orders)
+    counters_met = (
+        time_met
+        and terminal_count >= policy.min_terminal_orders
+        and all(
+            sum(item.get("engine") == engine for item in orders)
+            >= policy.min_terminal_orders_per_engine
+            for engine in required_engines
+        )
+        and len(trades) >= policy.min_closed_trades
+    )
+    qualified = campaign.get("status") == "PASSED" and counters_met
+    return {
+        "kind": "PAPER_MATURITY_STATUS",
+        "status": "PAPER_MATURITY_QUALIFIED" if qualified else "PAPER_MATURITY_IN_PROGRESS",
+        "qualified": qualified,
+        "campaign_id": int(campaign["id"]),
+        "campaign_status": campaign.get("status"),
+        "observation_age_days": round(observation_age_days, 6),
+        "required_observation_days": policy.min_observation_days,
+        "time_criterion_met": time_met,
+        "earliest_time_criterion": earliest.astimezone(UTC).isoformat(),
+        "terminal_orders": terminal_count,
+        "required_terminal_orders": policy.min_terminal_orders,
+        "trend_terminal_orders": trend_count,
+        "required_trend_terminal_orders": policy.min_terminal_orders_per_engine,
+        "closed_trades": len(trades),
+        "required_closed_trades": policy.min_closed_trades,
+    }
+
+
 @dataclass(frozen=True)
 class ReadinessCheck:
     key: str
