@@ -57,6 +57,8 @@ class CcxtBroker(Broker):
         )
         self.market_kind = market
         self.exchange_id = exchange_id
+        self.environment = "testnet" if testnet else "mainnet"
+        self.submission_is_ioc = exchange_id == "hyperliquid"
         if exchange_id == "hyperliquid":
             if market != "perp":
                 raise ValueError("Le broker Hyperliquid qualifié ne prend en charge que les perps")
@@ -77,6 +79,7 @@ class CcxtBroker(Broker):
                 "walletAddress": wallet_address,
                 "privateKey": private_key,
             }
+            self.account_scope = wallet_address
         else:
             api_key = os.environ.get("BINANCE_API_KEY")
             api_secret = os.environ.get("BINANCE_API_SECRET")
@@ -86,6 +89,9 @@ class CcxtBroker(Broker):
                     "dans l'environnement (jamais dans config.yaml)."
                 )
             credentials = {"apiKey": api_key, "secret": api_secret}
+            self.account_scope = os.environ.get(
+                "BTCQUANT_EXTERNAL_ACCOUNT_SCOPE", f"{exchange_id}-default"
+            )
             if market == "perp":
                 # binanceusdm = futures perpétuels USDT-M
                 klass = ccxt.binanceusdm if exchange_id == "binance" else getattr(ccxt, exchange_id)
@@ -236,6 +242,7 @@ class CcxtBroker(Broker):
             status=status,
             requested_qty=requested_qty,
             remaining_qty=remaining,
+            raw_response=order,
         )
 
     @staticmethod
@@ -254,6 +261,9 @@ class CcxtBroker(Broker):
         # Modifier leur représentation empêcherait de retrouver un ordre déjà
         # accepté avant la migration.
         return f"btq-{digest[:28]}"
+
+    def venue_client_order_id(self, intent_id: str) -> str:
+        return self._external_client_order_id(intent_id, getattr(self, "exchange_id", "binance"))
 
     def _market_order(
         self,

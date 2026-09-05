@@ -4,16 +4,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+from collections.abc import Mapping
+from typing import Any
 
 from .broker import Broker, BrokerOrderResult, Fill
 from .errors import FinancialTransitionAlreadyReserved, ReconciliationRequired
+from .external_submission_commitment import build_submission_response
 from .financial_application_plan import FinancialApplicationPlan
 from .order_state import (
     ExternalOrderState,
     FinancialTransitionType,
     LogicalOrderIdentity,
 )
-from .state_store import OrderReservation, StateStore
+from .state_store import OrderReservation, StateStore, utc_now
 from .safe_retry import decide_safe_retry
 
 
@@ -74,6 +77,50 @@ class OrderExecutionService:
             zero_effect_proven=False,
             proof_source=None,
         ).allowed
+
+    def _persist_external_submission_response(
+        self,
+        *,
+        order_id: int,
+        intent_id: str,
+        engine: str,
+        side: str,
+        raw_payload: Mapping[str, Any] | None,
+        structured_error: str | None = None,
+    ) -> None:
+        """Persist the broker response before exposing legacy order state.
+
+        This is deliberately limited to the external path.  The response is
+        durable evidence, not an authorization to retry or to apply finances.
+        """
+
+        if not self.broker.external_execution:
+            return
+        venue = str(getattr(self.broker, "exchange_id", "unknown"))
+        environment = str(getattr(self.broker, "environment", "unknown"))
+        account_scope = str(getattr(self.broker, "account_scope", "unknown"))
+        instrument = str(getattr(self.broker, "symbol", "unknown"))
+        client_order_id = self.broker.venue_client_order_id(intent_id)
+        try:
+            response = build_submission_response(
+                local_order_id=order_id,
+                intent_id=intent_id,
+                venue=venue,
+                environment=environment,
+                account_scope=account_scope,
+                instrument=instrument,
+                side=side,
+                client_order_id=client_order_id,
+                raw_payload=raw_payload,
+                response_acquired_at=utc_now(),
+                ioc_expected=bool(getattr(self.broker, "submission_is_ioc", False)),
+                structured_error=structured_error,
+            )
+            self.store.append_external_submission_response(response, engine=engine)
+        except Exception as error:
+            raise ReconciliationRequired(
+                f"Ordre {order_id}: réponse de soumission externe non durable; arrêt fail-closed"
+            ) from error
 
     def submit_market(
         self,
@@ -201,6 +248,14 @@ class OrderExecutionService:
         except Exception as error:
             ambiguous = self.broker.external_execution
             suffix = " (résultat externe ambigu, réconciliation requise)" if ambiguous else ""
+            self._persist_external_submission_response(
+                order_id=order_id,
+                intent_id=intent_id,
+                engine=engine,
+                side=normalized_side,
+                raw_payload=None,
+                structured_error=f"{type(error).__name__}: {error}",
+            )
             try:
                 self.store.record_submission_error(
                     order_id,
@@ -219,6 +274,13 @@ class OrderExecutionService:
                 ) from error
             raise
         fill = result.fill
+        self._persist_external_submission_response(
+            order_id=order_id,
+            intent_id=intent_id,
+            engine=engine,
+            side=normalized_side,
+            raw_payload=result.raw_response,
+        )
         try:
             self.store.record_order_observation(
                 order_id,

@@ -10,7 +10,9 @@ from __future__ import annotations
 import logging
 import math
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from ..domain.execution import (
     ExecutionConfig,
@@ -40,6 +42,10 @@ class BrokerOrderResult:
     status: ExternalOrderState
     requested_qty: float
     remaining_qty: float
+
+    #: CCXT response conservée sans interprétation pour la preuve de
+    #: soumission. Les brokers PAPER n'en ont normalement pas besoin.
+    raw_response: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "status", ExternalOrderState(self.status))
@@ -132,6 +138,11 @@ class Broker(ABC):
     supports_stop_orders: bool = False
     supports_order_lookup: bool = False
     supports_position_reconciliation: bool = False
+
+    def venue_client_order_id(self, intent_id: str) -> str:
+        """Return the venue-facing client id for one durable local intent."""
+
+        return intent_id
 
     @abstractmethod
     def market_buy(self, qty: float, ref_price: float) -> BrokerOrderResult: ...
