@@ -122,6 +122,21 @@ class OrderExecutionService:
                 f"Ordre {order_id}: réponse de soumission externe non durable; arrêt fail-closed"
             ) from error
 
+    def _last_external_submission_response(self) -> Mapping[str, Any] | None:
+        """Read the exact response captured by a broker before it raised.
+
+        A structured exchange rejection may be raised by CCXT rather than
+        returned as a broker result. Brokers that support this evidence
+        boundary expose a read-only accessor; absent evidence remains
+        ambiguous and is persisted as such.
+        """
+
+        accessor = getattr(self.broker, "last_submission_response", None)
+        if not callable(accessor):
+            return None
+        response = accessor()
+        return response if isinstance(response, Mapping) else None
+
     def submit_market(
         self,
         *,
@@ -253,7 +268,7 @@ class OrderExecutionService:
                 intent_id=intent_id,
                 engine=engine,
                 side=normalized_side,
-                raw_payload=None,
+                raw_payload=self._last_external_submission_response(),
                 structured_error=f"{type(error).__name__}: {error}",
             )
             try:

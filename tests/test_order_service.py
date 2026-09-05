@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from btcquant.execution.broker import Broker, BrokerOrderResult, Fill, PaperBroker
@@ -434,3 +436,56 @@ def test_external_submission_response_is_durable_before_legacy_observation(tmp_p
     assert len(response_rows) == 1
     assert response_rows[0].commitment is not None
     assert response_rows[0].commitment.external_order_id == "9001"
+
+
+def test_structured_external_ioc_error_is_persisted_when_broker_raises(tmp_path):
+    class StructuredErrorBroker(StubBroker):
+        def __init__(self):
+            super().__init__(TimeoutError("IocCancel"))
+            self.external_execution = True
+            self.exchange_id = "hyperliquid"
+            self.environment = "testnet"
+            self.account_scope = "0x" + "1" * 40
+            self.symbol = "BTC/USDC:USDC"
+            self.submission_is_ioc = True
+            self.exchange = SimpleNamespace(
+                last_json_response={
+                    "status": "ok",
+                    "response": {
+                        "type": "order",
+                        "data": {
+                            "statuses": [
+                                {
+                                    "error": (
+                                        "Order could not immediately match against any "
+                                        "resting orders."
+                                    )
+                                }
+                            ]
+                        },
+                    },
+                }
+            )
+
+        def last_submission_response(self):
+            return {"status": "rejected", "info": self.exchange.last_json_response}
+
+    store = StateStore(tmp_path / "state.db")
+    broker = StructuredErrorBroker()
+
+    with pytest.raises(ReconciliationRequired, match="résultat externe ambigu"):
+        OrderExecutionService(store, broker).submit_market(
+            engine="trend",
+            slot="external",
+            side="BUY",
+            qty=1.0,
+            reference_price=100000.0,
+            reason="entry",
+            decision_checkpoint="ioc-error-checkpoint",
+            transition_type=FinancialTransitionType.ENTER_LONG,
+        )
+
+    responses = store.read_external_submission_responses()
+    assert len(responses) == 1
+    assert responses[0].outcome == ExternalSubmissionOutcome.DETERMINISTIC_IOC_NO_MATCH
+    assert responses[0].raw_payload["info"]["response"]["type"] == "order"
