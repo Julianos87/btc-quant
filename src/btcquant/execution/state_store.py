@@ -5964,10 +5964,7 @@ class StateStore:
             "backup_verification": backup_verification,
         }
         for evidence_name, evidence_value in evidence.items():
-            if (
-                not isinstance(evidence_value, Mapping)
-                or evidence_value.get("status") != "PASS"
-            ):
+            if not isinstance(evidence_value, Mapping) or evidence_value.get("status") != "PASS":
                 raise ValueError(f"{evidence_name} must be a structured PASS record")
         timestamp = qualified_at or utc_now()
         try:
