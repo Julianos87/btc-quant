@@ -93,7 +93,7 @@ from .order_state import (
 )
 from .state_contract import validate_trend_state
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 DEPOSIT_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}")
 
 
@@ -511,6 +511,11 @@ class StateStore:
                 current_version = 13
             else:
                 self._ensure_financial_settlement_application_schema(connection)
+
+            if current_version < 14:
+                self._migrate_v14(connection)
+                current_version = 14
+            self._ensure_external_order_settlement_schema(connection)
 
             if new_schema:
                 connection.execute(
@@ -1071,7 +1076,7 @@ class StateStore:
                     'FILLED', 'PARTIAL_TERMINAL', 'CANCELED', 'REJECTED', 'EXPIRED'
                 )),
                 terminal_status_event_at TEXT NOT NULL,
-                completeness_version INTEGER NOT NULL CHECK(completeness_version = 1),
+                completeness_version INTEGER NOT NULL CHECK(completeness_version IN (1, 2)),
                 completeness_payload TEXT NOT NULL CHECK(json_valid(completeness_payload)),
                 raw_fill_count INTEGER NOT NULL CHECK(raw_fill_count >= 0),
                 fill_multiset_sha256 TEXT NOT NULL,
@@ -1162,6 +1167,131 @@ class StateStore:
         """Migration additive v12 to the atomic external settlement ledger."""
 
         cls._ensure_financial_settlement_application_schema(connection)
+
+    @classmethod
+    def _migrate_v14(cls, connection: sqlite3.Connection) -> None:
+        """Rebuild settlement tables so completeness v2 is SQLite-enforced.
+
+        SQLite cannot alter a CHECK constraint in place.  The settlement
+        application table is rebuilt alongside its parent so its foreign key
+        continues to point at the new table, including when historical
+        applications already exist.  The caller owns the outer transaction.
+        """
+
+        old_parent = "external_order_settlements_v13"
+        old_child = "financial_settlement_applications_v13"
+        for table in (old_parent, old_child):
+            if (
+                connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+                ).fetchone()
+                is not None
+            ):
+                raise RuntimeError(f"Incomplete v14 migration residue: {table}")
+
+        parent_exists = (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='external_order_settlements'"
+            ).fetchone()
+            is not None
+        )
+        if not parent_exists:
+            cls._ensure_external_order_settlement_schema(connection)
+            return
+
+        child_exists = (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='financial_settlement_applications'"
+            ).fetchone()
+            is not None
+        )
+        parent_count = int(
+            connection.execute("SELECT COUNT(*) FROM external_order_settlements").fetchone()[0]
+        )
+        child_count = (
+            int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM financial_settlement_applications"
+                ).fetchone()[0]
+            )
+            if child_exists
+            else 0
+        )
+        connection.execute("DROP INDEX IF EXISTS idx_financial_settlement_applications_order_id")
+        connection.execute("DROP INDEX IF EXISTS idx_external_order_settlements_order_id")
+
+        if child_exists:
+            connection.execute(
+                "ALTER TABLE financial_settlement_applications RENAME TO " + old_child
+            )
+        connection.execute("ALTER TABLE external_order_settlements RENAME TO " + old_parent)
+
+        cls._ensure_external_order_settlement_schema(connection)
+        cls._ensure_financial_settlement_application_schema(connection)
+
+        settlement_columns = (
+            "settlement_key",
+            "settlement_version",
+            "local_order_id",
+            "intent_id",
+            "venue",
+            "environment",
+            "account_scope",
+            "instrument",
+            "side",
+            "client_order_id",
+            "external_order_id",
+            "terminal_status",
+            "terminal_status_event_at",
+            "completeness_version",
+            "completeness_payload",
+            "raw_fill_count",
+            "fill_multiset_sha256",
+            "settlement_payload",
+            "observed_at",
+            "persisted_at",
+        )
+        columns_sql = ", ".join(settlement_columns)
+        connection.execute(
+            f"INSERT INTO external_order_settlements({columns_sql}) "
+            f"SELECT {columns_sql} FROM {old_parent}"
+        )
+        if child_exists:
+            child_columns = (
+                "application_key",
+                "application_version",
+                "settlement_key",
+                "local_order_id",
+                "intent_id",
+                "plan_key",
+                "state_before_sha256",
+                "state_after_sha256",
+                "result_payload",
+                "result_sha256",
+                "applied_at",
+            )
+            child_columns_sql = ", ".join(child_columns)
+            connection.execute(
+                f"INSERT INTO financial_settlement_applications({child_columns_sql}) "
+                f"SELECT {child_columns_sql} FROM {old_child}"
+            )
+
+        copied_parent_count = int(
+            connection.execute("SELECT COUNT(*) FROM external_order_settlements").fetchone()[0]
+        )
+        copied_child_count = int(
+            connection.execute("SELECT COUNT(*) FROM financial_settlement_applications").fetchone()[
+                0
+            ]
+        )
+        if copied_parent_count != parent_count or copied_child_count != child_count:
+            raise RuntimeError("v14 settlement migration row-count mismatch")
+
+        if child_exists:
+            connection.execute("DROP TABLE " + old_child)
+        connection.execute("DROP TABLE " + old_parent)
 
     @staticmethod
     def _ensure_financial_settlement_application_schema(

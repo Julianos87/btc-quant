@@ -313,7 +313,7 @@ def test_v12_persists_terminal_settlement_and_journals_each_invocation(
         observed_at="2026-09-05T12:04:00+00:00",
     )
 
-    assert SCHEMA_VERSION == 13
+    assert SCHEMA_VERSION == 14
     assert first == settlement
     assert second == settlement
     assert first_created is True
@@ -371,7 +371,7 @@ def test_v11_to_v12_migration_is_explicit_and_preserves_old_tables(tmp_path) -> 
             connection.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()[
                 0
             ]
-            == "13"
+            == "14"
         )
         assert (
             connection.execute(
@@ -382,7 +382,224 @@ def test_v11_to_v12_migration_is_explicit_and_preserves_old_tables(tmp_path) -> 
         )
 
 
+def _rewrite_settlement_tables_to_v13(path) -> None:
+    """Build an actual v13 settlement schema around existing rows."""
+    with sqlite3.connect(path) as connection:
+        connection.execute("PRAGMA foreign_keys=OFF")
+        connection.execute("DROP INDEX IF EXISTS idx_financial_settlement_applications_order_id")
+        connection.execute("DROP INDEX IF EXISTS idx_external_order_settlements_order_id")
+        connection.execute(
+            "ALTER TABLE financial_settlement_applications "
+            "RENAME TO financial_settlement_applications_v13_source"
+        )
+        connection.execute(
+            "ALTER TABLE external_order_settlements RENAME TO external_order_settlements_v13_source"
+        )
+        connection.execute(
+            """
+            CREATE TABLE external_order_settlements (
+                settlement_key TEXT PRIMARY KEY,
+                settlement_version INTEGER NOT NULL CHECK(settlement_version = 1),
+                local_order_id INTEGER NOT NULL,
+                intent_id TEXT NOT NULL,
+                venue TEXT NOT NULL,
+                environment TEXT NOT NULL,
+                account_scope TEXT NOT NULL,
+                instrument TEXT NOT NULL,
+                side TEXT NOT NULL CHECK(side IN ('BUY', 'SELL')),
+                client_order_id TEXT NOT NULL,
+                external_order_id TEXT NOT NULL,
+                terminal_status TEXT NOT NULL CHECK(terminal_status IN (
+                    'FILLED', 'PARTIAL_TERMINAL', 'CANCELED', 'REJECTED', 'EXPIRED'
+                )),
+                terminal_status_event_at TEXT NOT NULL,
+                completeness_version INTEGER NOT NULL CHECK(completeness_version = 1),
+                completeness_payload TEXT NOT NULL CHECK(json_valid(completeness_payload)),
+                raw_fill_count INTEGER NOT NULL CHECK(raw_fill_count >= 0),
+                fill_multiset_sha256 TEXT NOT NULL,
+                settlement_payload TEXT NOT NULL CHECK(json_valid(settlement_payload)),
+                observed_at TEXT NOT NULL,
+                persisted_at TEXT NOT NULL,
+                FOREIGN KEY(local_order_id) REFERENCES orders(id)
+            )
+            """
+        )
+        settlement_columns = (
+            "settlement_key",
+            "settlement_version",
+            "local_order_id",
+            "intent_id",
+            "venue",
+            "environment",
+            "account_scope",
+            "instrument",
+            "side",
+            "client_order_id",
+            "external_order_id",
+            "terminal_status",
+            "terminal_status_event_at",
+            "completeness_version",
+            "completeness_payload",
+            "raw_fill_count",
+            "fill_multiset_sha256",
+            "settlement_payload",
+            "observed_at",
+            "persisted_at",
+        )
+        columns_sql = ", ".join(settlement_columns)
+        connection.execute(
+            f"INSERT INTO external_order_settlements({columns_sql}) "
+            f"SELECT {columns_sql} FROM external_order_settlements_v13_source"
+        )
+        connection.execute(
+            """
+            CREATE INDEX idx_external_order_settlements_order_id
+                ON external_order_settlements(local_order_id, persisted_at, settlement_key)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE financial_settlement_applications (
+                application_key TEXT PRIMARY KEY,
+                application_version INTEGER NOT NULL CHECK(application_version = 1),
+                settlement_key TEXT NOT NULL,
+                local_order_id INTEGER NOT NULL,
+                intent_id TEXT NOT NULL,
+                plan_key TEXT NOT NULL,
+                state_before_sha256 TEXT NOT NULL,
+                state_after_sha256 TEXT NOT NULL,
+                result_payload TEXT NOT NULL CHECK(json_valid(result_payload)),
+                result_sha256 TEXT NOT NULL,
+                applied_at TEXT NOT NULL,
+                UNIQUE(local_order_id, plan_key, application_version),
+                UNIQUE(local_order_id, settlement_key, application_version),
+                FOREIGN KEY(local_order_id) REFERENCES orders(id),
+                FOREIGN KEY(settlement_key) REFERENCES external_order_settlements(settlement_key),
+                FOREIGN KEY(plan_key) REFERENCES financial_application_plans(plan_key)
+            )
+            """
+        )
+        child_columns = (
+            "application_key",
+            "application_version",
+            "settlement_key",
+            "local_order_id",
+            "intent_id",
+            "plan_key",
+            "state_before_sha256",
+            "state_after_sha256",
+            "result_payload",
+            "result_sha256",
+            "applied_at",
+        )
+        child_columns_sql = ", ".join(child_columns)
+        connection.execute(
+            f"INSERT INTO financial_settlement_applications({child_columns_sql}) "
+            f"SELECT {child_columns_sql} FROM financial_settlement_applications_v13_source"
+        )
+        connection.execute(
+            """
+            CREATE INDEX idx_financial_settlement_applications_order_id
+                ON financial_settlement_applications(local_order_id, applied_at, application_key)
+            """
+        )
+        connection.execute("DROP TABLE financial_settlement_applications_v13_source")
+        connection.execute("DROP TABLE external_order_settlements_v13_source")
+        connection.execute("UPDATE metadata SET value='13' WHERE key='schema_version'")
+        connection.commit()
+
+
+def test_v13_to_v14_migration_preserves_real_settlement_and_application_rows(tmp_path) -> None:
+    path = tmp_path / "state.db"
+    store, plan, settlement = _prepare_settlement_application_store(tmp_path)
+    store.apply_external_settlement_atomically(
+        local_order_id=plan.local_order_id,
+        settlement_key=settlement.settlement_key,
+    )
+    _rewrite_settlement_tables_to_v13(path)
+
+    with pytest.raises(MigrationRequiredError):
+        StateStore(path)
+    migrated = StateStore(path, allow_migration=True)
+    assert migrated.get_external_order_settlements(plan.local_order_id) == [settlement]
+    applications = migrated.get_financial_settlement_applications(plan.local_order_id)
+    assert len(applications) == 1
+    assert applications[0].settlement_key == settlement.settlement_key
+    with sqlite3.connect(path) as connection:
+        assert (
+            connection.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()[
+                0
+            ]
+            == "14"
+        )
+
+        ddl = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='external_order_settlements'"
+        ).fetchone()[0]
+        assert "completeness_version IN (1, 2)" in ddl
+        assert (
+            connection.execute("SELECT COUNT(*) FROM external_order_settlements").fetchone()[0] == 1
+        )
+        assert (
+            connection.execute("SELECT COUNT(*) FROM financial_settlement_applications").fetchone()[
+                0
+            ]
+            == 1
+        )
+
+
+def test_v13_to_v14_migration_baseexception_rolls_back_real_tables(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "state.db"
+    store, plan, settlement = _prepare_settlement_application_store(tmp_path)
+    store.apply_external_settlement_atomically(
+        local_order_id=plan.local_order_id,
+        settlement_key=settlement.settlement_key,
+    )
+    _rewrite_settlement_tables_to_v13(path)
+
+    class SimulatedPowerLoss(BaseException):
+        pass
+
+    original = StateStore._migrate_v14.__func__
+
+    def fail_after_migration(cls, connection):
+        original(cls, connection)
+        raise SimulatedPowerLoss()
+
+    monkeypatch.setattr(StateStore, "_migrate_v14", classmethod(fail_after_migration))
+    with pytest.raises(SimulatedPowerLoss):
+        StateStore(path, allow_migration=True)
+    with sqlite3.connect(path) as connection:
+        assert (
+            connection.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()[
+                0
+            ]
+            == "13"
+        )
+        ddl = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='external_order_settlements'"
+        ).fetchone()[0]
+        assert "completeness_version = 1" in ddl
+        assert (
+            connection.execute("SELECT COUNT(*) FROM external_order_settlements").fetchone()[0] == 1
+        )
+        assert (
+            connection.execute("SELECT COUNT(*) FROM financial_settlement_applications").fetchone()[
+                0
+            ]
+            == 1
+        )
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name='external_order_settlements_v13_source'"
+            ).fetchone()
+            is None
+        )
+
+
 def test_v12_migration_baseexception_rolls_back_table_and_metadata(tmp_path, monkeypatch) -> None:
+
     path = tmp_path / "state.db"
     StateStore(path)
     with sqlite3.connect(path) as connection:
