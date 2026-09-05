@@ -14,6 +14,7 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from types import MappingProxyType
 from typing import Any, cast
 
@@ -22,6 +23,7 @@ from .financial_application_plan import (
     canonical_json,
     sha256_json,
 )
+from .external_submission_commitment import AuthoritativeSubmissionFillCommitment
 from .order_state import ExternalOrderState, FinancialTransitionType
 from .state_contract import validate_trend_state
 
@@ -29,6 +31,7 @@ from .state_contract import validate_trend_state
 SETTLEMENT_VERSION = 1
 FINANCIAL_SETTLEMENT_APPLICATION_VERSION = 1
 SETTLEMENT_COMPLETENESS_VERSION = 1
+SETTLEMENT_COMPLETENESS_COMMITMENT_VERSION = 2
 SETTLEMENT_RESPONSE_LIMIT = 2_000
 SETTLEMENT_RETENTION_LIMIT = 10_000
 SETTLEMENT_FEE_ASSET = "USDC"
@@ -225,6 +228,7 @@ class SettlementCompletenessProof:
     response_limit: int = SETTLEMENT_RESPONSE_LIMIT
     retention_limit: int = SETTLEMENT_RETENTION_LIMIT
     completeness_version: int = SETTLEMENT_COMPLETENESS_VERSION
+    submission_commitment: AuthoritativeSubmissionFillCommitment | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -280,7 +284,10 @@ class SettlementCompletenessProof:
             raise FinancialSettlementError("response_limit doit être 2000")
         if self.retention_limit != SETTLEMENT_RETENTION_LIMIT:
             raise FinancialSettlementError("retention_limit doit être 10000")
-        if self.completeness_version != SETTLEMENT_COMPLETENESS_VERSION:
+        if self.completeness_version not in {
+            SETTLEMENT_COMPLETENESS_VERSION,
+            SETTLEMENT_COMPLETENESS_COMMITMENT_VERSION,
+        }:
             raise FinancialSettlementError("completeness_version inconnue")
         if not isinstance(self.aggregate_by_time, bool):
             raise FinancialSettlementError("aggregate_by_time doit être bool")
@@ -289,6 +296,34 @@ class SettlementCompletenessProof:
                 self,
                 "retention_oldest_event_at",
                 _timestamp(self.retention_oldest_event_at, "retention_oldest_event_at"),
+            )
+        if self.submission_commitment is not None:
+            if not isinstance(self.submission_commitment, AuthoritativeSubmissionFillCommitment):
+                raise FinancialSettlementError("submission_commitment invalide")
+            commitment_fields = (
+                "local_order_id",
+                "intent_id",
+                "venue",
+                "environment",
+                "account_scope",
+                "instrument",
+                "side",
+                "client_order_id",
+                "external_order_id",
+            )
+            if any(
+                getattr(self.submission_commitment, name) != getattr(self, name)
+                for name in commitment_fields
+            ):
+                raise FinancialSettlementError("SETTLEMENT_COMMITMENT_BINDING_CONFLICT")
+        if self.completeness_version == SETTLEMENT_COMPLETENESS_COMMITMENT_VERSION:
+            if self.submission_commitment is None:
+                raise FinancialSettlementError(
+                    "COMMITMENT_COMPLETENESS_REQUIRES_SUBMISSION_COMMITMENT"
+                )
+        elif self.submission_commitment is not None:
+            raise FinancialSettlementError(
+                "SUBMISSION_COMMITMENT_REQUIRES_COMMITMENT_COMPLETENESS_VERSION"
             )
 
     @property
@@ -313,6 +348,10 @@ class SettlementCompletenessProof:
             and not self.response_limit_reached
             and self.malformed_entry_count == 0
             and self.retention_witness_present
+            and (
+                self.completeness_version == SETTLEMENT_COMPLETENESS_VERSION
+                or self.submission_commitment is not None
+            )
         )
 
     def incomplete_reasons(self) -> tuple[str, ...]:
@@ -325,6 +364,11 @@ class SettlementCompletenessProof:
             reasons.append("MALFORMED_FILL_ENTRY")
         if not self.retention_witness_present:
             reasons.append("RETENTION_COVERAGE_WITNESS_MISSING")
+        if (
+            self.completeness_version == SETTLEMENT_COMPLETENESS_COMMITMENT_VERSION
+            and self.submission_commitment is None
+        ):
+            reasons.append("SUBMISSION_FILL_COMMITMENT_MISSING")
         return tuple(reasons)
 
 
@@ -424,6 +468,22 @@ class ExternalOrderSettlement:
             ):
                 raise FinancialSettlementError("SETTLEMENT_FILL_BINDING_CONFLICT")
         ordered = tuple(sorted(rows, key=lambda row: canonical_json(row.canonical_content())))
+        commitment = self.completeness.submission_commitment
+        if commitment is not None:
+            try:
+                committed_qty = Decimal(commitment.total_filled_qty)
+                committed_avg = Decimal(commitment.average_price)
+                total_qty_decimal = sum((Decimal(str(row.quantity)) for row in rows), Decimal(0))
+                total_notional_decimal = sum(
+                    (Decimal(str(row.quantity)) * Decimal(str(row.price)) for row in rows),
+                    Decimal(0),
+                )
+                if total_qty_decimal != committed_qty:
+                    raise FinancialSettlementError("SETTLEMENT_COMMITMENT_QUANTITY_CONFLICT")
+                if not rows or total_notional_decimal / total_qty_decimal != committed_avg:
+                    raise FinancialSettlementError("SETTLEMENT_COMMITMENT_VWAP_CONFLICT")
+            except (InvalidOperation, ZeroDivisionError) as error:
+                raise FinancialSettlementError("SETTLEMENT_COMMITMENT_DECIMAL_CONFLICT") from error
         object.__setattr__(self, "canonical_fill_multiset", ordered)
         object.__setattr__(self, "fills", ordered)
         object.__setattr__(self, "raw_fill_count", len(ordered))
@@ -512,6 +572,11 @@ class ExternalOrderSettlement:
                 "response_limit": completeness.response_limit,
                 "retention_limit": completeness.retention_limit,
                 "completeness_version": completeness.completeness_version,
+                "submission_commitment": (
+                    completeness.submission_commitment.to_payload()
+                    if completeness.submission_commitment is not None
+                    else None
+                ),
             },
             "fills": [row.canonical_content() for row in self.canonical_fill_multiset],
         }
@@ -528,6 +593,32 @@ class ExternalOrderSettlement:
             raise FinancialSettlementError("settlement completeness absente")
         if not isinstance(fills_payload, (list, tuple)):
             raise FinancialSettlementError("settlement fills invalides")
+        commitment_payload = completeness_payload.get("submission_commitment")
+        submission_commitment = None
+        if commitment_payload is not None:
+            if not isinstance(commitment_payload, Mapping):
+                raise FinancialSettlementError("submission_commitment invalide")
+            try:
+                submission_commitment = AuthoritativeSubmissionFillCommitment(
+                    local_order_id=commitment_payload["local_order_id"],
+                    intent_id=commitment_payload["intent_id"],
+                    venue=commitment_payload["venue"],
+                    environment=commitment_payload["environment"],
+                    account_scope=commitment_payload["account_scope"],
+                    instrument=commitment_payload["instrument"],
+                    side=commitment_payload["side"],
+                    client_order_id=commitment_payload["client_order_id"],
+                    external_order_id=commitment_payload["external_order_id"],
+                    total_filled_qty=commitment_payload["total_filled_qty"],
+                    average_price=commitment_payload["average_price"],
+                    response_acquired_at=commitment_payload["response_acquired_at"],
+                    raw_response_hash=commitment_payload["raw_response_hash"],
+                    response_type=commitment_payload.get("response_type", "filled"),
+                )
+            except (KeyError, TypeError, ValueError) as error:
+                raise FinancialSettlementError("submission_commitment invalide") from error
+        completeness_payload = dict(completeness_payload)
+        completeness_payload["submission_commitment"] = submission_commitment
         try:
             completeness = SettlementCompletenessProof(**dict(completeness_payload))
             fills = tuple(
