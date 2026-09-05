@@ -26,6 +26,7 @@ SUBMISSION_RESPONSE_AGGREGATE_TYPE = "external_submission_response"
 class ExternalSubmissionOutcome(StrEnum):
     FILLED_COMMITMENT = "FILLED_COMMITMENT"
     RESTING_ACCEPTED = "RESTING_ACCEPTED"
+    DETERMINISTIC_IOC_NO_MATCH = "DETERMINISTIC_IOC_NO_MATCH"
     DETERMINISTIC_ORDER_ERROR = "DETERMINISTIC_ORDER_ERROR"
     AMBIGUOUS_TRANSPORT_FAILURE = "AMBIGUOUS_TRANSPORT_FAILURE"
     INVALID_RESPONSE = "INVALID_RESPONSE"
@@ -35,6 +36,12 @@ class ExternalSubmissionOutcome(StrEnum):
 
 class SubmissionCommitmentError(ValueError):
     """Invalid or contradictory external submission evidence."""
+
+
+# Hyperliquid's Exchange endpoint documents this exact error for an IOC that
+# could not immediately match any resting order.  Keep the admission rule
+# deliberately exact: unknown or similarly worded errors remain ambiguous.
+IOC_NO_MATCH_ERROR = "Order could not immediately match against any resting orders."
 
 
 def _text(value: object, field: str) -> str:
@@ -460,6 +467,56 @@ def _filled_status_payload(raw_payload: Mapping[str, Any]) -> Mapping[str, Any] 
     return filled if isinstance(filled, Mapping) else None
 
 
+def _ioc_no_match_status(raw_payload: Mapping[str, Any]) -> str | None:
+    """Return the exact structured Hyperliquid IOC no-match error, if any.
+
+    The exchange response is expected at the same strict CCXT info path used
+    for filled commitments.  Requiring one status object with exactly one
+    ``error`` field prevents a positive or mixed response from being treated
+    as a zero-effect proof.
+    """
+
+    info = raw_payload.get("info")
+    if not isinstance(info, Mapping):
+        return None
+    response = info.get("response")
+    if not isinstance(response, Mapping):
+        return None
+    data = response.get("data")
+    if not isinstance(data, Mapping):
+        return None
+    statuses = data.get("statuses")
+    if not isinstance(statuses, list) or len(statuses) != 1:
+        return None
+    status = statuses[0]
+    if not isinstance(status, Mapping) or set(status) != {"error"}:
+        return None
+    error = status.get("error")
+    return error if error == IOC_NO_MATCH_ERROR else None
+
+
+def _ioc_no_match_error(raw_payload: Mapping[str, Any]) -> str | None:
+    """Return the exact IOC error even when another fact makes it conflicting."""
+
+    info = raw_payload.get("info")
+    if not isinstance(info, Mapping):
+        return None
+    response = info.get("response")
+    if not isinstance(response, Mapping):
+        return None
+    data = response.get("data")
+    if not isinstance(data, Mapping):
+        return None
+    statuses = data.get("statuses")
+    if not isinstance(statuses, list) or len(statuses) != 1:
+        return None
+    status = statuses[0]
+    if not isinstance(status, Mapping):
+        return None
+    error = status.get("error")
+    return error if error == IOC_NO_MATCH_ERROR else None
+
+
 def build_submission_response(
     *,
     local_order_id: int,
@@ -487,10 +544,18 @@ def build_submission_response(
     )
     status = str(payload.get("status") or "").strip().lower()
     filled = _filled_status_payload(payload)
+    ioc_no_match_error = _ioc_no_match_error(payload)
+    ioc_no_match_status = _ioc_no_match_status(payload)
     commitment: AuthoritativeSubmissionFillCommitment | None = None
     outcome: ExternalSubmissionOutcome
     error_text = structured_error
-    if status in {"closed", "filled"} and filled is not None:
+    if ioc_no_match_error is not None and filled is not None:
+        outcome = ExternalSubmissionOutcome.CONFLICTING_RESPONSE
+        error_text = "IOC_NO_MATCH_CONFLICTS_WITH_FILLED_RESPONSE"
+    elif ioc_expected and ioc_no_match_status is not None:
+        outcome = ExternalSubmissionOutcome.DETERMINISTIC_IOC_NO_MATCH
+        error_text = ioc_no_match_error
+    elif status in {"closed", "filled"} and filled is not None:
         oid = filled.get("oid")
         total = filled.get("totalSz")
         average = filled.get("avgPx")
@@ -551,6 +616,7 @@ def build_submission_response(
             if outcome
             in {
                 ExternalSubmissionOutcome.FILLED_COMMITMENT,
+                ExternalSubmissionOutcome.DETERMINISTIC_IOC_NO_MATCH,
                 ExternalSubmissionOutcome.DETERMINISTIC_ORDER_ERROR,
             }
             else outcome.value
@@ -562,6 +628,7 @@ __all__ = [
     "AuthoritativeSubmissionFillCommitment",
     "ExternalSubmissionOutcome",
     "ExternalSubmissionResponse",
+    "IOC_NO_MATCH_ERROR",
     "SUBMISSION_RESPONSE_AGGREGATE_TYPE",
     "SUBMISSION_RESPONSE_CONTRACT_VERSION",
     "SUBMISSION_RESPONSE_EVENT_TYPE",
