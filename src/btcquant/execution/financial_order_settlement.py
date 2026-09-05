@@ -203,8 +203,9 @@ class SettlementCompletenessProof:
     """Positive proof that one bounded terminal settlement is complete.
 
     The proof is intentionally constructed by the acquisition layer.  A plain
-    response count is not enough: the retention witness must show that the
-    target window is inside the available recent history horizon.
+    response count is not enough.  Legacy completeness requires a retention
+    witness; commitment-backed completeness instead binds the exact raw fill
+    multiset to the authoritative submission aggregate.
     """
 
     local_order_id: int
@@ -339,6 +340,12 @@ class SettlementCompletenessProof:
         )
 
     @property
+    def retention_witness_required(self) -> bool:
+        """Whether this completeness version still needs a history witness."""
+
+        return self.completeness_version == SETTLEMENT_COMPLETENESS_VERSION
+
+    @property
     def is_complete(self) -> bool:
         return (
             ExternalOrderState(self.terminal_status).is_terminal
@@ -347,7 +354,7 @@ class SettlementCompletenessProof:
             and self.response_count < self.response_limit
             and not self.response_limit_reached
             and self.malformed_entry_count == 0
-            and self.retention_witness_present
+            and (not self.retention_witness_required or self.retention_witness_present)
             and (
                 self.completeness_version == SETTLEMENT_COMPLETENESS_VERSION
                 or self.submission_commitment is not None
@@ -362,7 +369,7 @@ class SettlementCompletenessProof:
             reasons.append("SETTLEMENT_RESPONSE_LIMIT_REACHED")
         if self.malformed_entry_count:
             reasons.append("MALFORMED_FILL_ENTRY")
-        if not self.retention_witness_present:
+        if self.retention_witness_required and not self.retention_witness_present:
             reasons.append("RETENTION_COVERAGE_WITNESS_MISSING")
         if (
             self.completeness_version == SETTLEMENT_COMPLETENESS_COMMITMENT_VERSION

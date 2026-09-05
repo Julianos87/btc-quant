@@ -282,10 +282,11 @@ def test_fill_source_must_be_fill_lookup():
     assert result.blocking_reason == "fill provenance is not FILL_LOOKUP"
 
 
-def test_missing_retention_witness_remains_fail_closed():
+def test_commitment_backed_completeness_does_not_require_retention_witness():
     result, _, _ = acquire(context(with_witness=False, stability=1), [lookup([fill()])])
-    assert result.settlement is None
-    assert result.blocking_reason == "RETENTION_COVERAGE_WITNESS_MISSING"
+    assert result.settlement is not None
+    assert result.settlement.completeness.is_complete
+    assert not result.settlement.completeness.retention_witness_present
 
 
 def test_non_terminal_order_does_not_acquire_fills():

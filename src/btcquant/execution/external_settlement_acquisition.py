@@ -420,13 +420,6 @@ class CcxtExternalSettlementAcquirer:
         try:
             rows = _rows_from_lookup(selected_lookup, context, evidence.external_order_id)
             witness = context.retention_witness
-            if witness is None:
-                return ExternalSettlementAcquisitionResult(
-                    context,
-                    order_lookup,
-                    tuple(fill_lookups),
-                    blocking_reason="RETENTION_COVERAGE_WITNESS_MISSING",
-                )
             proof = SettlementCompletenessProof(
                 local_order_id=context.local_order_id,
                 intent_id=context.intent_id,
@@ -444,8 +437,8 @@ class CcxtExternalSettlementAcquirer:
                 response_count=selected_lookup.response_count,
                 aggregate_by_time=False,
                 malformed_entry_count=0,
-                retention_response_count=witness.response_count,
-                retention_oldest_event_at=witness.oldest_event_at,
+                retention_response_count=witness.response_count if witness is not None else 0,
+                retention_oldest_event_at=witness.oldest_event_at if witness is not None else None,
                 completeness_version=SETTLEMENT_COMPLETENESS_COMMITMENT_VERSION,
                 submission_commitment=context.submission_commitment,
             )
