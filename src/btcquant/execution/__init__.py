@@ -36,6 +36,11 @@ from .external_settlement_acquisition import (
     ExternalSettlementEvidenceAcquirer,
     SettlementRetentionWitness,
 )
+from .external_settlement_coordinator import (
+    ExternalSettlementCoordinator,
+    ExternalSettlementReconciliationResult,
+    ExternalSettlementReconciliationStatus,
+)
 from .order_state import ExternalOrderState, FinancialTransitionType, LocalOrderState
 
 __all__ = [
@@ -75,4 +80,7 @@ __all__ = [
     "PaperBroker",
     "ReconciliationRequired",
     "SettlementRetentionWitness",
+    "ExternalSettlementCoordinator",
+    "ExternalSettlementReconciliationResult",
+    "ExternalSettlementReconciliationStatus",
 ]
