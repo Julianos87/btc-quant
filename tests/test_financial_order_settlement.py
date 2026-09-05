@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
+from btcquant.execution.errors import MigrationRequiredError
 from btcquant.execution.financial_application_plan import (
     FinancialApplicationPlan,
     PersistedFinancialApplicationPlan,
@@ -14,6 +17,7 @@ from btcquant.execution.financial_order_settlement import (
     calculate_financial_order_settlement,
 )
 from btcquant.execution.order_state import FinancialTransitionType, LogicalOrderIdentity
+from btcquant.execution.state_store import SCHEMA_VERSION, StateStore
 
 
 def _state(position: dict | None = None, entry_fee: float = 0.0) -> dict:
@@ -266,3 +270,152 @@ def test_exit_original_entry_fee_share_and_replay_are_order_invariant() -> None:
     assert one.state_after_sha256 == two.state_after_sha256
     assert one.trade_payload == two.trade_payload
     assert one.trade_payload["pnl"] == pytest.approx(-2.19)
+
+
+def _seed_order_for_settlement(store: StateStore, settlement: ExternalOrderSettlement) -> None:
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            """
+            INSERT INTO orders(
+                id, engine, slot, intent_id, logical_order_key, order_type, side,
+                requested_qty, reference_price, status, reason, created_at, updated_at
+            ) VALUES(?, 'trend', 'slot', ?, 'settlement-test', 'MARKET', ?, ?,
+                      100.0, 'PENDING', 'entry', '2026-09-05T12:00:00+00:00',
+                      '2026-09-05T12:00:00+00:00')
+            """,
+            (
+                settlement.local_order_id,
+                settlement.intent_id,
+                settlement.side,
+                1.0,
+            ),
+        )
+
+
+def test_v12_persists_terminal_settlement_and_journals_each_invocation(
+    tmp_path,
+) -> None:
+    store = StateStore(tmp_path / "state.db")
+    settlement = _settlement(
+        _plan(FinancialTransitionType.ENTER_LONG, side="BUY", direction=1), (_fill(),)
+    )
+    _seed_order_for_settlement(store, settlement)
+
+    first, first_created = store.persist_external_order_settlement(
+        settlement,
+        engine="trend",
+        observed_at="2026-09-05T12:03:00Z",
+    )
+    second, second_created = store.persist_external_order_settlement(
+        settlement,
+        engine="trend",
+        observed_at="2026-09-05T12:04:00+00:00",
+    )
+
+    assert SCHEMA_VERSION == 12
+    assert first == settlement
+    assert second == settlement
+    assert first_created is True
+    assert second_created is False
+    with sqlite3.connect(store.path) as connection:
+        assert (
+            connection.execute("SELECT COUNT(*) FROM external_order_settlements").fetchone()[0] == 1
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM events WHERE event_type = "
+                "'external_order_settlement_persisted'"
+            ).fetchone()[0]
+            == 2
+        )
+    assert store.get_external_order_settlements(7) == [settlement]
+
+
+def test_v12_settlement_and_event_rollback_together(tmp_path, monkeypatch) -> None:
+    store = StateStore(tmp_path / "state.db")
+    settlement = _settlement(
+        _plan(FinancialTransitionType.ENTER_LONG, side="BUY", direction=1), (_fill(),)
+    )
+    _seed_order_for_settlement(store, settlement)
+
+    class SimulatedPowerLoss(BaseException):
+        pass
+
+    def fail_after_settlement(*args, **kwargs):
+        raise SimulatedPowerLoss()
+
+    monkeypatch.setattr(store, "_insert_event", fail_after_settlement)
+    with pytest.raises(SimulatedPowerLoss):
+        store.persist_external_order_settlement(settlement, engine="trend")
+
+    with sqlite3.connect(store.path) as connection:
+        assert (
+            connection.execute("SELECT COUNT(*) FROM external_order_settlements").fetchone()[0] == 0
+        )
+        assert connection.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
+
+
+def test_v11_to_v12_migration_is_explicit_and_preserves_old_tables(tmp_path) -> None:
+    path = tmp_path / "state.db"
+    StateStore(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute("DROP TABLE external_order_settlements")
+        connection.execute("UPDATE metadata SET value='11' WHERE key='schema_version'")
+    with pytest.raises(MigrationRequiredError):
+        StateStore(path)
+    migrated = StateStore(path, allow_migration=True)
+    assert migrated.get_external_order_settlements(7) == []
+    with sqlite3.connect(path) as connection:
+        assert (
+            connection.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()[
+                0
+            ]
+            == "12"
+        )
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name='external_order_settlements'"
+            ).fetchone()
+            is not None
+        )
+
+
+def test_v12_migration_baseexception_rolls_back_table_and_metadata(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "state.db"
+    StateStore(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute("DROP TABLE external_order_settlements")
+        connection.execute("UPDATE metadata SET value='11' WHERE key='schema_version'")
+
+    class SimulatedPowerLoss(BaseException):
+        pass
+
+    original = StateStore._ensure_external_order_settlement_schema
+
+    def fail_after_schema_creation(connection):
+        original(connection)
+        raise SimulatedPowerLoss()
+
+    monkeypatch.setattr(
+        StateStore,
+        "_ensure_external_order_settlement_schema",
+        staticmethod(fail_after_schema_creation),
+    )
+    with pytest.raises(SimulatedPowerLoss):
+        StateStore(path, allow_migration=True)
+
+    with sqlite3.connect(path) as connection:
+        assert (
+            connection.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()[
+                0
+            ]
+            == "11"
+        )
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name='external_order_settlements'"
+            ).fetchone()
+            is None
+        )

@@ -648,7 +648,7 @@ def test_schema_v6_to_v8_is_additive_preserves_orders_and_checks_integrity(tmp_p
         }
         foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
 
-    assert version == str(SCHEMA_VERSION) == "11"
+    assert version == str(SCHEMA_VERSION) == "12"
     assert {"external_order_observations", "external_fills"} <= tables
     assert migrated.read_order_by_intent("pre-v7-order")["id"] == order_id
     assert foreign_keys == []
@@ -782,8 +782,8 @@ def test_fresh_schema_is_v8_and_accepts_negative_fee(tmp_path):
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='external_fills'"
         ).fetchone()[0]
 
-    assert version == "11"
-    assert SCHEMA_VERSION == 11
+    assert version == "12"
+    assert SCHEMA_VERSION == 12
     assert created is True
     assert persisted.fee == -0.01
     assert "fee >= 0" not in ddl.lower()
@@ -864,7 +864,7 @@ def test_historical_v7_to_v8_preserves_rows_and_constraints(tmp_path):
 
     assert observation_created is True
     assert rows_after == rows_before
-    assert version == "11"
+    assert version == "12"
     assert "fee >= 0" not in ddl.lower()
     assert {"idx_external_fills_order_id", "idx_external_fills_venue_fill"} <= indexes
     assert unique_fill_indexes
@@ -943,7 +943,7 @@ def test_fresh_schema_v11_contains_status_event_at(tmp_path):
         columns = {
             row[1] for row in connection.execute("PRAGMA table_info(external_order_observations)")
         }
-    assert version == str(SCHEMA_VERSION) == "11"
+    assert version == str(SCHEMA_VERSION) == "12"
     assert "status_event_at" in columns
 
 
@@ -987,7 +987,7 @@ def test_v10_to_v11_migration_preserves_observations_and_adds_status_timestamp(t
             connection.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()[
                 0
             ]
-            == "11"
+            == "12"
         )
 
 

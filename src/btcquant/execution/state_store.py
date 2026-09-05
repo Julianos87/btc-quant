@@ -57,6 +57,10 @@ from .financial_fill_application import (
     financial_fill_application_key,
     recompute_committed_financial_fill_application,
 )
+from .financial_order_settlement import (
+    ExternalOrderSettlement,
+    FinancialSettlementError,
+)
 from .paper_order_finalization import (
     PaperFinalizationDecision,
     PaperFinalizationStatus,
@@ -77,7 +81,7 @@ from .order_state import (
 )
 from .state_contract import validate_trend_state
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 DEPOSIT_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}")
 
 
@@ -486,6 +490,11 @@ class StateStore:
             if current_version < 11:
                 self._migrate_v11(connection)
                 current_version = 11
+            if current_version < 12:
+                self._migrate_v12(connection)
+                current_version = 12
+            self._ensure_external_order_settlement_schema(connection)
+
             if new_schema:
                 connection.execute(
                     "INSERT INTO metadata(key, value) VALUES('schema_version', ?)",
@@ -1022,6 +1031,114 @@ class StateStore:
         }
         if "status_event_at" not in columns:
             raise RuntimeError("Migration v11 incomplete: status_event_at absent")
+
+    @staticmethod
+    def _ensure_external_order_settlement_schema(connection: sqlite3.Connection) -> None:
+        """Create and validate the v12 terminal settlement evidence table."""
+
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS external_order_settlements (
+                settlement_key TEXT PRIMARY KEY,
+                settlement_version INTEGER NOT NULL CHECK(settlement_version = 1),
+                local_order_id INTEGER NOT NULL,
+                intent_id TEXT NOT NULL,
+                venue TEXT NOT NULL,
+                environment TEXT NOT NULL,
+                account_scope TEXT NOT NULL,
+                instrument TEXT NOT NULL,
+                side TEXT NOT NULL CHECK(side IN ('BUY', 'SELL')),
+                client_order_id TEXT NOT NULL,
+                external_order_id TEXT NOT NULL,
+                terminal_status TEXT NOT NULL CHECK(terminal_status IN (
+                    'FILLED', 'PARTIAL_TERMINAL', 'CANCELED', 'REJECTED', 'EXPIRED'
+                )),
+                terminal_status_event_at TEXT NOT NULL,
+                completeness_version INTEGER NOT NULL CHECK(completeness_version = 1),
+                completeness_payload TEXT NOT NULL CHECK(json_valid(completeness_payload)),
+                raw_fill_count INTEGER NOT NULL CHECK(raw_fill_count >= 0),
+                fill_multiset_sha256 TEXT NOT NULL,
+                settlement_payload TEXT NOT NULL CHECK(json_valid(settlement_payload)),
+                observed_at TEXT NOT NULL,
+                persisted_at TEXT NOT NULL,
+                FOREIGN KEY(local_order_id) REFERENCES orders(id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_external_order_settlements_order_id
+                ON external_order_settlements(local_order_id, persisted_at, settlement_key)
+            """
+        )
+        required = {
+            "settlement_key",
+            "settlement_version",
+            "local_order_id",
+            "intent_id",
+            "venue",
+            "environment",
+            "account_scope",
+            "instrument",
+            "side",
+            "client_order_id",
+            "external_order_id",
+            "terminal_status",
+            "terminal_status_event_at",
+            "completeness_version",
+            "completeness_payload",
+            "raw_fill_count",
+            "fill_multiset_sha256",
+            "settlement_payload",
+            "observed_at",
+            "persisted_at",
+        }
+        table_info = connection.execute("PRAGMA table_info(external_order_settlements)").fetchall()
+        columns = {str(row["name"]) for row in table_info}
+        if not required <= columns:
+            raise RuntimeError(
+                f"Incomplete v12 external_order_settlements schema: {sorted(required - columns)}"
+            )
+        primary_key = [str(row["name"]) for row in table_info if int(row["pk"]) > 0]
+        if primary_key != ["settlement_key"]:
+            raise RuntimeError("Invalid v12 external_order_settlements primary key")
+        indexes = connection.execute("PRAGMA index_list(external_order_settlements)").fetchall()
+        order_index_valid = False
+        for index in indexes:
+            if str(index["name"]) != "idx_external_order_settlements_order_id":
+                continue
+            index_columns = tuple(
+                str(item["name"])
+                for item in connection.execute(
+                    f"PRAGMA index_info({str(index['name'])!r})"
+                ).fetchall()
+                if item["name"] is not None
+            )
+            order_index_valid = (
+                index_columns
+                == (
+                    "local_order_id",
+                    "persisted_at",
+                    "settlement_key",
+                )
+                and int(index["unique"]) == 0
+            )
+        if not order_index_valid:
+            raise RuntimeError("Invalid v12 external_order_settlements order index")
+        foreign_keys = {
+            (str(row["from"]), str(row["table"]), str(row["to"]))
+            for row in connection.execute(
+                "PRAGMA foreign_key_list(external_order_settlements)"
+            ).fetchall()
+        }
+        if ("local_order_id", "orders", "id") not in foreign_keys:
+            raise RuntimeError("Invalid v12 external_order_settlements foreign key")
+
+    @classmethod
+    def _migrate_v12(cls, connection: sqlite3.Connection) -> None:
+        """Migration additive v11 to durable terminal settlement evidence v12."""
+
+        cls._ensure_external_order_settlement_schema(connection)
 
     @staticmethod
     def _ensure_financial_fill_application_schema(connection: sqlite3.Connection) -> None:
@@ -2803,6 +2920,117 @@ class StateStore:
             )
         return tuple(persisted), tuple(created)
 
+    def persist_external_order_settlement(
+        self,
+        settlement: ExternalOrderSettlement,
+        *,
+        engine: str,
+        observed_at: str | None = None,
+    ) -> tuple[ExternalOrderSettlement, bool]:
+        """Atomically append one terminal settlement and its audit event.
+
+        The writer is intentionally passive.  It never submits, cancels, or
+        applies a fill; it only records an already acquired settlement proof.
+        Replaying the same settlement key is idempotent while still producing
+        an event for the new persistence invocation.
+        """
+
+        if self.read_only:
+            raise RuntimeError("Un StateStore read-only ne peut pas persister un settlement")
+        if not isinstance(settlement, ExternalOrderSettlement):
+            raise TypeError("settlement must be ExternalOrderSettlement")
+        normalized_engine = str(engine).strip()
+        if not normalized_engine:
+            raise ValueError("engine doit être non vide")
+        persisted_at = utc_now()
+        normalized_observed_at = persisted_at if observed_at is None else str(observed_at).strip()
+        if not normalized_observed_at:
+            raise ValueError("observed_at doit être non vide")
+        try:
+            parsed_observed_at = datetime.fromisoformat(
+                normalized_observed_at[:-1] + "+00:00"
+                if normalized_observed_at.endswith(("Z", "z"))
+                else normalized_observed_at
+            )
+        except ValueError as error:
+            raise ValueError("observed_at doit être ISO 8601 avec fuseau") from error
+        if parsed_observed_at.tzinfo is None:
+            raise ValueError("observed_at doit contenir un fuseau explicite")
+        normalized_observed_at = parsed_observed_at.astimezone(UTC).isoformat()
+        payload = settlement.to_persistence_payload()
+        payload_json = canonical_json(payload)
+        completeness_json = canonical_json(payload["completeness"])
+        created = False
+        with self._transaction() as connection:
+            existing = connection.execute(
+                "SELECT settlement_payload FROM external_order_settlements "
+                "WHERE settlement_key = ?",
+                (settlement.settlement_key,),
+            ).fetchone()
+            if existing is not None:
+                try:
+                    existing_payload = json.loads(str(existing["settlement_payload"]))
+                except json.JSONDecodeError as error:
+                    raise FinancialSettlementError(
+                        "EXTERNAL_ORDER_SETTLEMENT_CORRUPT_PAYLOAD"
+                    ) from error
+                if canonical_json(existing_payload) != payload_json:
+                    raise FinancialSettlementError("EXTERNAL_ORDER_SETTLEMENT_KEY_CONFLICT")
+            else:
+                connection.execute(
+                    """
+                    INSERT INTO external_order_settlements(
+                        settlement_key, settlement_version, local_order_id, intent_id,
+                        venue, environment, account_scope, instrument, side,
+                        client_order_id, external_order_id, terminal_status,
+                        terminal_status_event_at, completeness_version,
+                        completeness_payload, raw_fill_count, fill_multiset_sha256,
+                        settlement_payload, observed_at, persisted_at
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        settlement.settlement_key,
+                        settlement.version,
+                        settlement.local_order_id,
+                        settlement.intent_id,
+                        settlement.venue,
+                        settlement.environment,
+                        settlement.account_scope,
+                        settlement.instrument,
+                        settlement.side,
+                        settlement.client_order_id,
+                        settlement.external_order_id,
+                        ExternalOrderState(settlement.terminal_status).value,
+                        settlement.terminal_status_event_at,
+                        settlement.completeness.completeness_version,
+                        completeness_json,
+                        settlement.raw_fill_count,
+                        settlement.fill_multiset_sha256,
+                        payload_json,
+                        normalized_observed_at,
+                        persisted_at,
+                    ),
+                )
+                created = True
+            self._insert_event(
+                connection,
+                normalized_engine,
+                "external_order_settlement_persisted",
+                {
+                    "contract": settlement.version,
+                    "local_order_id": settlement.local_order_id,
+                    "intent_id": settlement.intent_id,
+                    "settlement_key": settlement.settlement_key,
+                    "fill_multiset_sha256": settlement.fill_multiset_sha256,
+                    "raw_fill_count": settlement.raw_fill_count,
+                    "deduplicated": not created,
+                },
+                aggregate_type="external_order_settlement",
+                aggregate_id=settlement.settlement_key,
+                correlation_id=settlement.intent_id,
+            )
+        return settlement, created
+
     def persist_paper_execution_evidence(
         self,
         evidence: PaperExecutionEvidence,
@@ -3221,6 +3449,47 @@ class StateStore:
                 (local_order_id,),
             ).fetchall()
         return [self._external_fill_from_row(row) for row in rows]
+
+    def get_external_order_settlements(
+        self,
+        local_order_id: int,
+    ) -> list[ExternalOrderSettlement]:
+        """Read immutable terminal settlements and validate their envelope."""
+
+        if (
+            isinstance(local_order_id, bool)
+            or not isinstance(local_order_id, int)
+            or local_order_id <= 0
+        ):
+            raise ValueError("local_order_id doit être un entier strictement positif")
+        with self._read_transaction() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM external_order_settlements
+                WHERE local_order_id = ?
+                ORDER BY persisted_at, settlement_key
+                """,
+                (local_order_id,),
+            ).fetchall()
+        settlements: list[ExternalOrderSettlement] = []
+        for row in rows:
+            try:
+                payload = json.loads(str(row["settlement_payload"]))
+                if not isinstance(payload, Mapping):
+                    raise FinancialSettlementError("settlement payload non objet")
+                settlement = ExternalOrderSettlement.from_persistence_payload(payload)
+                if (
+                    settlement.settlement_key != str(row["settlement_key"])
+                    or settlement.local_order_id != int(row["local_order_id"])
+                    or settlement.intent_id != str(row["intent_id"])
+                    or settlement.fill_multiset_sha256 != str(row["fill_multiset_sha256"])
+                    or settlement.raw_fill_count != int(row["raw_fill_count"])
+                ):
+                    raise FinancialSettlementError("EXTERNAL_ORDER_SETTLEMENT_ENVELOPE_CONFLICT")
+            except (json.JSONDecodeError, TypeError, ValueError) as error:
+                raise FinancialSettlementError("EXTERNAL_ORDER_SETTLEMENT_CORRUPT") from error
+            settlements.append(settlement)
+        return settlements
 
     def read_financial_fill_application_chain(
         self,
