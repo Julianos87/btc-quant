@@ -28,6 +28,14 @@ from .external_fill_evidence_reader import (
     FillEvidencePersistenceResult,
     FillLookupContext,
 )
+from .external_settlement_acquisition import (
+    CcxtExternalSettlementAcquirer,
+    ExternalSettlementAcquisitionContext,
+    ExternalSettlementAcquisitionError,
+    ExternalSettlementAcquisitionResult,
+    ExternalSettlementEvidenceAcquirer,
+    SettlementRetentionWitness,
+)
 from .order_state import ExternalOrderState, FinancialTransitionType, LocalOrderState
 
 __all__ = [
@@ -41,6 +49,11 @@ __all__ = [
     "BrokerOrderSnapshot",
     "CcxtBroker",
     "CcxtExternalFillEvidenceReader",
+    "CcxtExternalSettlementAcquirer",
+    "ExternalSettlementAcquisitionContext",
+    "ExternalSettlementAcquisitionError",
+    "ExternalSettlementAcquisitionResult",
+    "ExternalSettlementEvidenceAcquirer",
     "ExecutionError",
     "ExternalOrderState",
     "ExternalFillEvidencePersistence",
@@ -61,4 +74,5 @@ __all__ = [
     "OrderLookupContext",
     "PaperBroker",
     "ReconciliationRequired",
+    "SettlementRetentionWitness",
 ]
