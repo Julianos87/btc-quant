@@ -22,7 +22,9 @@ import logging
 import os
 import re
 import time
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import ccxt
 
@@ -106,6 +108,12 @@ class CcxtBroker(Broker):
                 "options": {"defaultSlippage": 0.01},
             }
         )
+        # CCXT raises on structured Hyperliquid order errors before returning
+        # from create_order. Retain the parsed JSON response so the caller
+        # can persist the exact response instead of reducing it to a generic
+        # transport failure. The value is cleared immediately before each
+        # submission and is never used as a retry signal.
+        self.exchange.enableLastJsonResponse = True
         if testnet:
             self.exchange.set_sandbox_mode(True)
             if exchange_id == "hyperliquid":
@@ -281,6 +289,7 @@ class CcxtBroker(Broker):
             raise ValueError(
                 "Un ordre market externe exige un client_order_id réservé par OrderExecutionService"
             )
+        self.exchange.last_json_response = None
         local_intent = client_order_id
         external_client_id = self._external_client_order_id(local_intent, exchange_id)
         client_key = "clientOrderId" if exchange_id == "hyperliquid" else "newClientOrderId"
@@ -304,6 +313,27 @@ class CcxtBroker(Broker):
             fill.fee,
         )
         return result
+
+    def last_submission_response(self) -> Mapping[str, Any] | None:
+        """Return the JSON response captured for the latest submission.
+
+        CCXT exposes structured Hyperliquid rejection responses through its
+        exception path. This accessor is deliberately read-only and returns
+        no stale response after _market_order clears the capture before a new
+        submission.
+        """
+
+        response = getattr(self.exchange, "last_json_response", None)
+        if not isinstance(response, Mapping):
+            return None
+        if isinstance(response.get("info"), Mapping):
+            return response
+        if isinstance(response.get("response"), Mapping):
+            # CCXT's last_json_response is the raw venue envelope for an
+            # error, while the submission contract expects the raw venue
+            # response under the unified order's info field.
+            return {"status": "rejected", "info": dict(response)}
+        return None
 
     # ── interface Broker ─────────────────────────────────────────────────────
     def market_buy(self, qty: float, ref_price: float) -> BrokerOrderResult:
