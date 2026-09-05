@@ -59,7 +59,13 @@ from .financial_fill_application import (
 )
 from .financial_order_settlement import (
     ExternalOrderSettlement,
+    FinancialSettlementCommitResult,
     FinancialSettlementError,
+    FINANCIAL_SETTLEMENT_APPLICATION_VERSION,
+    FinancialSettlementResult,
+    PersistedFinancialSettlementApplication,
+    calculate_financial_order_settlement,
+    financial_settlement_application_key,
 )
 from .paper_order_finalization import (
     PaperFinalizationDecision,
@@ -81,7 +87,7 @@ from .order_state import (
 )
 from .state_contract import validate_trend_state
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 DEPOSIT_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}")
 
 
@@ -494,6 +500,11 @@ class StateStore:
                 self._migrate_v12(connection)
                 current_version = 12
             self._ensure_external_order_settlement_schema(connection)
+            if current_version < 13:
+                self._migrate_v13(connection)
+                current_version = 13
+            else:
+                self._ensure_financial_settlement_application_schema(connection)
 
             if new_schema:
                 connection.execute(
@@ -1139,6 +1150,124 @@ class StateStore:
         """Migration additive v11 to durable terminal settlement evidence v12."""
 
         cls._ensure_external_order_settlement_schema(connection)
+
+    @classmethod
+    def _migrate_v13(cls, connection: sqlite3.Connection) -> None:
+        """Migration additive v12 to the atomic external settlement ledger."""
+
+        cls._ensure_financial_settlement_application_schema(connection)
+
+    @staticmethod
+    def _ensure_financial_settlement_application_schema(
+        connection: sqlite3.Connection,
+    ) -> None:
+        """Create and validate the v13 external settlement application ledger."""
+
+        table_exists = (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='financial_settlement_applications'"
+            ).fetchone()
+            is not None
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS financial_settlement_applications (
+                application_key TEXT PRIMARY KEY,
+                application_version INTEGER NOT NULL CHECK(application_version = 1),
+                settlement_key TEXT NOT NULL,
+                local_order_id INTEGER NOT NULL,
+                intent_id TEXT NOT NULL,
+                plan_key TEXT NOT NULL,
+                state_before_sha256 TEXT NOT NULL,
+                state_after_sha256 TEXT NOT NULL,
+                result_payload TEXT NOT NULL CHECK(json_valid(result_payload)),
+                result_sha256 TEXT NOT NULL,
+                applied_at TEXT NOT NULL,
+                UNIQUE(local_order_id, plan_key, application_version),
+                UNIQUE(local_order_id, settlement_key, application_version),
+                FOREIGN KEY(local_order_id) REFERENCES orders(id),
+                FOREIGN KEY(settlement_key) REFERENCES external_order_settlements(settlement_key),
+                FOREIGN KEY(plan_key) REFERENCES financial_application_plans(plan_key)
+            )
+            """
+        )
+        if not table_exists:
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_financial_settlement_applications_order_id
+                    ON financial_settlement_applications(local_order_id, applied_at, application_key)
+                """
+            )
+
+        required = {
+            "application_key",
+            "application_version",
+            "settlement_key",
+            "local_order_id",
+            "intent_id",
+            "plan_key",
+            "state_before_sha256",
+            "state_after_sha256",
+            "result_payload",
+            "result_sha256",
+            "applied_at",
+        }
+        table_info = connection.execute(
+            "PRAGMA table_info(financial_settlement_applications)"
+        ).fetchall()
+        columns = {str(row["name"]) for row in table_info}
+        if not required <= columns:
+            raise RuntimeError(
+                "Incomplete v13 financial_settlement_applications schema: "
+                f"{sorted(required - columns)}"
+            )
+        primary_key = [str(row["name"]) for row in table_info if int(row["pk"]) > 0]
+        if primary_key != ["application_key"]:
+            raise RuntimeError("Invalid v13 financial_settlement_applications primary key")
+
+        index_rows = connection.execute(
+            "PRAGMA index_list(financial_settlement_applications)"
+        ).fetchall()
+        unique_signatures: set[tuple[str, ...]] = set()
+        order_index_valid = False
+        for index in index_rows:
+            index_name = str(index["name"])
+            index_columns = tuple(
+                str(item["name"])
+                for item in connection.execute(f"PRAGMA index_info({index_name!r})").fetchall()
+                if item["name"] is not None
+            )
+            if int(index["unique"]) == 1 and int(index["partial"]) == 0:
+                unique_signatures.add(index_columns)
+            if (
+                index_name == "idx_financial_settlement_applications_order_id"
+                and int(index["unique"]) == 0
+                and int(index["partial"]) == 0
+                and index_columns == ("local_order_id", "applied_at", "application_key")
+            ):
+                order_index_valid = True
+        if {
+            ("local_order_id", "plan_key", "application_version"),
+            ("local_order_id", "settlement_key", "application_version"),
+        } - unique_signatures:
+            raise RuntimeError("Invalid v13 financial settlement unique constraints")
+        if not order_index_valid:
+            raise RuntimeError("Invalid v13 financial settlement order index")
+
+        foreign_keys = {
+            (str(row["from"]), str(row["table"]), str(row["to"]))
+            for row in connection.execute(
+                "PRAGMA foreign_key_list(financial_settlement_applications)"
+            ).fetchall()
+        }
+        required_foreign_keys = {
+            ("local_order_id", "orders", "id"),
+            ("settlement_key", "external_order_settlements", "settlement_key"),
+            ("plan_key", "financial_application_plans", "plan_key"),
+        }
+        if not required_foreign_keys <= foreign_keys:
+            raise RuntimeError("Invalid v13 financial settlement foreign keys")
 
     @staticmethod
     def _ensure_financial_fill_application_schema(connection: sqlite3.Connection) -> None:
@@ -3490,6 +3619,361 @@ class StateStore:
                 raise FinancialSettlementError("EXTERNAL_ORDER_SETTLEMENT_CORRUPT") from error
             settlements.append(settlement)
         return settlements
+
+    @staticmethod
+    def _external_order_settlement_from_row(
+        row: sqlite3.Row,
+    ) -> ExternalOrderSettlement:
+        try:
+            payload = json.loads(str(row["settlement_payload"]))
+            if not isinstance(payload, Mapping):
+                raise FinancialSettlementError("settlement payload non objet")
+            settlement = ExternalOrderSettlement.from_persistence_payload(payload)
+            if (
+                settlement.settlement_key != str(row["settlement_key"])
+                or settlement.version != int(row["settlement_version"])
+                or settlement.local_order_id != int(row["local_order_id"])
+                or settlement.intent_id != str(row["intent_id"])
+                or settlement.venue != str(row["venue"])
+                or settlement.environment != str(row["environment"])
+                or settlement.account_scope != str(row["account_scope"])
+                or settlement.instrument != str(row["instrument"])
+                or settlement.side != str(row["side"])
+                or settlement.client_order_id != str(row["client_order_id"])
+                or settlement.external_order_id != str(row["external_order_id"])
+                or ExternalOrderState(settlement.terminal_status).value
+                != str(row["terminal_status"])
+                or settlement.terminal_status_event_at != str(row["terminal_status_event_at"])
+                or settlement.completeness.completeness_version != int(row["completeness_version"])
+                or settlement.fill_multiset_sha256 != str(row["fill_multiset_sha256"])
+                or settlement.raw_fill_count != int(row["raw_fill_count"])
+            ):
+                raise FinancialSettlementError("EXTERNAL_ORDER_SETTLEMENT_ENVELOPE_CONFLICT")
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+            raise FinancialSettlementError("EXTERNAL_ORDER_SETTLEMENT_CORRUPT") from error
+        return settlement
+
+    @staticmethod
+    def _financial_settlement_application_from_row(
+        row: sqlite3.Row,
+    ) -> PersistedFinancialSettlementApplication:
+        try:
+            payload = json.loads(str(row["result_payload"]))
+            if not isinstance(payload, Mapping):
+                raise FinancialSettlementError("settlement result payload non objet")
+            result = FinancialSettlementResult.from_persistence_payload(
+                payload,
+                expected_result_sha256=str(row["result_sha256"]),
+            )
+            return PersistedFinancialSettlementApplication(
+                application_key=str(row["application_key"]),
+                application_version=int(row["application_version"]),
+                settlement_key=str(row["settlement_key"]),
+                local_order_id=int(row["local_order_id"]),
+                intent_id=str(row["intent_id"]),
+                plan_key=str(row["plan_key"]),
+                state_before_sha256=str(row["state_before_sha256"]),
+                state_after_sha256=str(row["state_after_sha256"]),
+                result=result,
+                applied_at=str(row["applied_at"]),
+            )
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+            raise FinancialSettlementError("FINANCIAL_SETTLEMENT_APPLICATION_CORRUPT") from error
+
+    def _read_financial_settlement_applications_in_transaction(
+        self,
+        connection: sqlite3.Connection,
+        local_order_id: int,
+    ) -> tuple[PersistedFinancialSettlementApplication, ...]:
+        rows = connection.execute(
+            """
+            SELECT * FROM financial_settlement_applications
+            WHERE local_order_id = ?
+            ORDER BY applied_at, application_key
+            """,
+            (local_order_id,),
+        ).fetchall()
+        if not rows:
+            return ()
+        order_row = connection.execute(
+            "SELECT * FROM orders WHERE id = ?", (local_order_id,)
+        ).fetchone()
+        if order_row is None:
+            raise FinancialSettlementError("FINANCIAL_ORDER_MISSING")
+        plan_row = connection.execute(
+            "SELECT * FROM financial_application_plans WHERE local_order_id = ?",
+            (local_order_id,),
+        ).fetchone()
+        if plan_row is None:
+            raise FinancialSettlementError("LEGACY_APPLICATION_CONTEXT_INCOMPLETE")
+        try:
+            persisted_plan = self._plan_from_row(plan_row, order_row)
+        except (FinancialApplicationPlanConflict, TypeError, ValueError) as error:
+            raise FinancialSettlementError("FINANCIAL_APPLICATION_PLAN_CONFLICT") from error
+
+        records: list[PersistedFinancialSettlementApplication] = []
+        for row in rows:
+            try:
+                record = self._financial_settlement_application_from_row(row)
+                if (
+                    record.local_order_id != local_order_id
+                    or record.intent_id != str(order_row["intent_id"])
+                    or record.plan_key != persisted_plan.plan.plan_key
+                ):
+                    raise FinancialSettlementError("FINANCIAL_SETTLEMENT_APPLICATION_CONFLICT")
+                settlement_row = connection.execute(
+                    "SELECT * FROM external_order_settlements WHERE settlement_key = ?",
+                    (record.settlement_key,),
+                ).fetchone()
+                if settlement_row is None:
+                    raise FinancialSettlementError("EXTERNAL_ORDER_SETTLEMENT_MISSING")
+                settlement = self._external_order_settlement_from_row(settlement_row)
+                expected_result = calculate_financial_order_settlement(settlement, persisted_plan)
+                if canonical_json(record.result.to_persistence_payload()) != canonical_json(
+                    expected_result.to_persistence_payload()
+                ):
+                    raise FinancialSettlementError(
+                        "FINANCIAL_SETTLEMENT_APPLICATION_REPLAY_CONFLICT"
+                    )
+                records.append(record)
+            except FinancialSettlementError:
+                raise
+            except (KeyError, TypeError, ValueError) as error:
+                raise FinancialSettlementError(
+                    "FINANCIAL_SETTLEMENT_APPLICATION_CORRUPT"
+                ) from error
+        return tuple(records)
+
+    def get_financial_settlement_applications(
+        self,
+        local_order_id: int,
+    ) -> tuple[PersistedFinancialSettlementApplication, ...]:
+        """Read settlement applications and replay their pure economics."""
+
+        if (
+            isinstance(local_order_id, bool)
+            or not isinstance(local_order_id, int)
+            or local_order_id <= 0
+        ):
+            raise ValueError("local_order_id must be a positive integer")
+        with self._read_transaction() as connection:
+            return self._read_financial_settlement_applications_in_transaction(
+                connection, local_order_id
+            )
+
+    def read_financial_settlement_application_chain(
+        self,
+        local_order_id: int,
+        *,
+        _connection: sqlite3.Connection | None = None,
+    ) -> tuple[PersistedFinancialSettlementApplication, ...]:
+        """Compatibility name for the validated settlement application reader."""
+
+        if (
+            isinstance(local_order_id, bool)
+            or not isinstance(local_order_id, int)
+            or local_order_id <= 0
+        ):
+            raise ValueError("local_order_id must be a positive integer")
+        with self._read_connection(_connection) as connection:
+            return self._read_financial_settlement_applications_in_transaction(
+                connection, local_order_id
+            )
+
+    @staticmethod
+    def _insert_financial_settlement_application_in_transaction(
+        connection: sqlite3.Connection,
+        record: PersistedFinancialSettlementApplication,
+    ) -> None:
+        cursor = connection.execute(
+            """
+            INSERT INTO financial_settlement_applications(
+                application_key, application_version, settlement_key, local_order_id,
+                intent_id, plan_key, state_before_sha256, state_after_sha256,
+                result_payload, result_sha256, applied_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record.application_key,
+                record.application_version,
+                record.settlement_key,
+                record.local_order_id,
+                record.intent_id,
+                record.plan_key,
+                record.state_before_sha256,
+                record.state_after_sha256,
+                canonical_json(record.result.to_persistence_payload()),
+                record.result.result_sha256,
+                record.applied_at,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise FinancialSettlementError("FINANCIAL_SETTLEMENT_APPLICATION_INSERT_FAILED")
+
+    def apply_external_settlement_atomically(
+        self,
+        *,
+        local_order_id: int,
+        settlement_key: str,
+    ) -> FinancialSettlementCommitResult:
+        """Apply one complete terminal settlement in one durable transaction.
+
+        This is a dormant primitive for the future orchestration layer.  It
+        does not acquire evidence, finalize the order, authorize retry, or
+        wire any runtime reader.  A repeated settlement is a no-op only after
+        its persisted application has been fully revalidated.
+        """
+
+        if self.read_only:
+            raise RuntimeError("Un StateStore read-only ne peut pas appliquer un settlement")
+        if (
+            isinstance(local_order_id, bool)
+            or not isinstance(local_order_id, int)
+            or local_order_id <= 0
+        ):
+            raise ValueError("local_order_id must be a positive integer")
+        if not isinstance(settlement_key, str) or not settlement_key.strip():
+            raise ValueError("settlement_key must be a non-empty string")
+        settlement_key = settlement_key.strip()
+
+        with self._transaction() as connection:
+            order_row = connection.execute(
+                "SELECT * FROM orders WHERE id = ?", (local_order_id,)
+            ).fetchone()
+            if order_row is None:
+                raise FinancialSettlementError("FINANCIAL_ORDER_MISSING")
+            plan_row = connection.execute(
+                "SELECT * FROM financial_application_plans WHERE local_order_id = ?",
+                (local_order_id,),
+            ).fetchone()
+            if plan_row is None:
+                raise FinancialSettlementError("LEGACY_APPLICATION_CONTEXT_INCOMPLETE")
+            try:
+                persisted_plan = self._plan_from_row(plan_row, order_row)
+            except (FinancialApplicationPlanConflict, TypeError, ValueError) as error:
+                raise FinancialSettlementError("FINANCIAL_APPLICATION_PLAN_CONFLICT") from error
+            settlement_row = connection.execute(
+                "SELECT * FROM external_order_settlements WHERE settlement_key = ?",
+                (settlement_key,),
+            ).fetchone()
+            if settlement_row is None:
+                raise FinancialSettlementError("EXTERNAL_ORDER_SETTLEMENT_MISSING")
+            settlement = self._external_order_settlement_from_row(settlement_row)
+            if settlement.local_order_id != local_order_id:
+                raise FinancialSettlementError("SETTLEMENT_ORDER_BINDING_CONFLICT")
+
+            existing_rows = connection.execute(
+                """
+                SELECT * FROM financial_settlement_applications
+                WHERE local_order_id = ? AND plan_key = ?
+                ORDER BY applied_at, application_key
+                """,
+                (local_order_id, persisted_plan.plan.plan_key),
+            ).fetchall()
+            if existing_rows:
+                if len(existing_rows) != 1:
+                    raise FinancialSettlementError("FINANCIAL_SETTLEMENT_APPLICATION_CONFLICT")
+                existing = self._financial_settlement_application_from_row(existing_rows[0])
+                if existing.settlement_key != settlement_key:
+                    raise FinancialSettlementError("FINANCIAL_SETTLEMENT_APPLICATION_CONFLICT")
+                expected_result = calculate_financial_order_settlement(settlement, persisted_plan)
+                if canonical_json(existing.result.to_persistence_payload()) != canonical_json(
+                    expected_result.to_persistence_payload()
+                ):
+                    raise FinancialSettlementError(
+                        "FINANCIAL_SETTLEMENT_APPLICATION_REPLAY_CONFLICT"
+                    )
+                return FinancialSettlementCommitResult(
+                    application=existing,
+                    applied=False,
+                    already_applied=True,
+                    trade_inserted=False,
+                    event_id=None,
+                )
+
+            if order_row["local_state"] != LocalOrderState.PENDING_RECONCILIATION.value:
+                raise FinancialSettlementError("FINANCIAL_ORDER_NOT_RECONCILIATION_READY")
+            current_payload, current_raw_payload = self._load_engine_state_in_transaction(
+                connection, persisted_plan.plan.identity.engine
+            )
+            current_state_sha256 = sha256_json(current_payload)
+            if current_state_sha256 != persisted_plan.plan.pre_state_sha256:
+                raise FinancialSettlementError("FINANCIAL_APPLICATION_STATE_CONFLICT")
+            self._assert_positions_projection_in_transaction(
+                connection,
+                engine=persisted_plan.plan.identity.engine,
+                payload=current_payload,
+            )
+            result = calculate_financial_order_settlement(settlement, persisted_plan)
+            if result.state_before_sha256 != current_state_sha256:
+                raise FinancialSettlementError("FINANCIAL_APPLICATION_STATE_CONFLICT")
+            applied_at = utc_now()
+            record = PersistedFinancialSettlementApplication(
+                application_key=financial_settlement_application_key(
+                    application_version=FINANCIAL_SETTLEMENT_APPLICATION_VERSION,
+                    local_order_id=local_order_id,
+                    intent_id=persisted_plan.intent_id,
+                    plan_key=persisted_plan.plan.plan_key,
+                    settlement_key=settlement_key,
+                ),
+                application_version=FINANCIAL_SETTLEMENT_APPLICATION_VERSION,
+                settlement_key=settlement_key,
+                local_order_id=local_order_id,
+                intent_id=persisted_plan.intent_id,
+                plan_key=persisted_plan.plan.plan_key,
+                state_before_sha256=result.state_before_sha256,
+                state_after_sha256=result.state_after_sha256,
+                result=result,
+                applied_at=applied_at,
+            )
+            self._insert_financial_settlement_application_in_transaction(connection, record)
+            self._update_engine_state_cas_in_transaction(
+                connection,
+                engine=persisted_plan.plan.identity.engine,
+                expected_raw_payload=current_raw_payload,
+                state_after_payload=result.state_after_payload,
+                applied_at=applied_at,
+            )
+            self._sync_positions(
+                connection,
+                persisted_plan.plan.identity.engine,
+                result.state_after_payload,
+                applied_at,
+            )
+            trade_inserted = self._insert_financial_fill_trade_in_transaction(
+                connection, result.trade_payload
+            )
+            event_id = self._insert_event(
+                connection,
+                persisted_plan.plan.identity.engine,
+                "EXTERNAL_ORDER_SETTLEMENT_APPLIED",
+                {
+                    "application_key": record.application_key,
+                    "application_version": record.application_version,
+                    "settlement_key": settlement_key,
+                    "plan_key": record.plan_key,
+                    "quantity": result.quantity,
+                    "total_notional": result.total_notional,
+                    "total_fee": result.total_fee,
+                    "fee_asset": result.fee_asset,
+                    "terminal_status": ExternalOrderState(settlement.terminal_status).value,
+                    "raw_fill_count": settlement.raw_fill_count,
+                    "state_before_sha256": result.state_before_sha256,
+                    "state_after_sha256": result.state_after_sha256,
+                    "trade_inserted": trade_inserted,
+                },
+                aggregate_type="order",
+                aggregate_id=str(local_order_id),
+                correlation_id=record.application_key,
+                ts=applied_at,
+            )
+            return FinancialSettlementCommitResult(
+                application=record,
+                applied=True,
+                already_applied=False,
+                trade_inserted=trade_inserted,
+                event_id=event_id,
+            )
 
     def read_financial_fill_application_chain(
         self,

@@ -27,6 +27,7 @@ from .state_contract import validate_trend_state
 
 
 SETTLEMENT_VERSION = 1
+FINANCIAL_SETTLEMENT_APPLICATION_VERSION = 1
 SETTLEMENT_COMPLETENESS_VERSION = 1
 SETTLEMENT_RESPONSE_LIMIT = 2_000
 SETTLEMENT_RETENTION_LIMIT = 10_000
@@ -84,6 +85,14 @@ def _freeze(value: object) -> object:
         return MappingProxyType({str(key): _freeze(item) for key, item in value.items()})
     if isinstance(value, (list, tuple)):
         return tuple(_freeze(item) for item in value)
+    return value
+
+
+def _plain(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {str(key): _plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(item) for item in value]
     return value
 
 
@@ -574,6 +583,7 @@ class FinancialSettlementResult:
     cash_delta: float
     trade_payload: Mapping[str, Any] | None = None
     zero_effect: bool = False
+    result_sha256: str = field(init=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "settlement_key", _text(self.settlement_key, "settlement_key"))
@@ -611,6 +621,182 @@ class FinancialSettlementResult:
             object.__setattr__(self, "trade_payload", _freeze(_copy_payload(self.trade_payload)))
         if not isinstance(self.zero_effect, bool):
             raise FinancialSettlementError("zero_effect doit être bool")
+        object.__setattr__(self, "result_sha256", _sha256(self.result_content()))
+
+    def result_content(self) -> dict[str, Any]:
+        """Return every semantic result field used by the application ledger."""
+
+        return {
+            "cash_delta": self.cash_delta,
+            "economic_effect_at": self.economic_effect_at,
+            "fee_asset": self.fee_asset,
+            "intent_id": self.intent_id,
+            "local_order_id": self.local_order_id,
+            "plan_key": self.plan_key,
+            "quantity": self.quantity,
+            "settlement_key": self.settlement_key,
+            "state_after_payload": _plain(self.state_after_payload),
+            "state_after_sha256": self.state_after_sha256,
+            "state_before_sha256": self.state_before_sha256,
+            "total_fee": self.total_fee,
+            "total_notional": self.total_notional,
+            "transition_type": FinancialTransitionType(self.transition_type).value,
+            "version": self.version,
+            "zero_effect": self.zero_effect,
+            "trade_payload": _plain(self.trade_payload) if self.trade_payload is not None else None,
+        }
+
+    def to_persistence_payload(self) -> dict[str, Any]:
+        payload = self.result_content()
+        payload["result_sha256"] = self.result_sha256
+        return payload
+
+    @classmethod
+    def from_persistence_payload(
+        cls,
+        payload: Mapping[str, Any],
+        *,
+        expected_result_sha256: str | None = None,
+    ) -> FinancialSettlementResult:
+        if not isinstance(payload, Mapping):
+            raise FinancialSettlementError("settlement result payload non objet")
+        stored_hash = payload.get("result_sha256")
+        result = cls(
+            settlement_key=cast(str, payload.get("settlement_key")),
+            version=cast(int, payload.get("version")),
+            local_order_id=cast(int, payload.get("local_order_id")),
+            intent_id=cast(str, payload.get("intent_id")),
+            plan_key=cast(str, payload.get("plan_key")),
+            transition_type=cast(str, payload.get("transition_type")),
+            quantity=cast(float, payload.get("quantity")),
+            total_notional=cast(float, payload.get("total_notional")),
+            total_fee=cast(float, payload.get("total_fee")),
+            fee_asset=cast(str, payload.get("fee_asset")),
+            economic_effect_at=cast(str, payload.get("economic_effect_at")),
+            state_before_sha256=cast(str, payload.get("state_before_sha256")),
+            state_after_payload=cast(Mapping[str, Any], payload.get("state_after_payload")),
+            state_after_sha256=cast(str, payload.get("state_after_sha256")),
+            cash_delta=cast(float, payload.get("cash_delta")),
+            trade_payload=cast(Mapping[str, Any] | None, payload.get("trade_payload")),
+            zero_effect=cast(bool, payload.get("zero_effect")),
+        )
+        if not isinstance(stored_hash, str) or stored_hash != result.result_sha256:
+            raise FinancialSettlementError("FINANCIAL_SETTLEMENT_RESULT_HASH_CONFLICT")
+        if expected_result_sha256 is not None and expected_result_sha256 != result.result_sha256:
+            raise FinancialSettlementError("FINANCIAL_SETTLEMENT_RESULT_HASH_CONFLICT")
+        return result
+
+
+def financial_settlement_application_key(
+    *,
+    application_version: int,
+    local_order_id: int,
+    intent_id: str,
+    plan_key: str,
+    settlement_key: str,
+) -> str:
+    """Return the stable identity of one settlement application claim."""
+
+    return "settleapp-" + _sha256(
+        {
+            "application_version": application_version,
+            "intent_id": intent_id,
+            "local_order_id": local_order_id,
+            "plan_key": plan_key,
+            "settlement_key": settlement_key,
+        }
+    )
+
+
+@dataclass(frozen=True)
+class PersistedFinancialSettlementApplication:
+    """One immutable durable claim that a settlement was applied."""
+
+    application_key: str
+    application_version: int
+    settlement_key: str
+    local_order_id: int
+    intent_id: str
+    plan_key: str
+    state_before_sha256: str
+    state_after_sha256: str
+    result: FinancialSettlementResult
+    applied_at: str
+
+    def __post_init__(self) -> None:
+        for name in (
+            "application_key",
+            "settlement_key",
+            "intent_id",
+            "plan_key",
+            "state_before_sha256",
+            "state_after_sha256",
+        ):
+            object.__setattr__(self, name, _text(getattr(self, name), name))
+        if (
+            isinstance(self.application_version, bool)
+            or not isinstance(self.application_version, int)
+            or self.application_version != FINANCIAL_SETTLEMENT_APPLICATION_VERSION
+        ):
+            raise FinancialSettlementError("application_version de settlement inconnue")
+        if (
+            isinstance(self.local_order_id, bool)
+            or not isinstance(self.local_order_id, int)
+            or self.local_order_id <= 0
+        ):
+            raise FinancialSettlementError("local_order_id invalide")
+        object.__setattr__(self, "applied_at", _timestamp(self.applied_at, "applied_at"))
+        if not isinstance(self.result, FinancialSettlementResult):
+            raise FinancialSettlementError("settlement result invalide")
+        if (
+            self.result.settlement_key != self.settlement_key
+            or self.result.local_order_id != self.local_order_id
+            or self.result.intent_id != self.intent_id
+            or self.result.plan_key != self.plan_key
+            or self.result.state_before_sha256 != self.state_before_sha256
+            or self.result.state_after_sha256 != self.state_after_sha256
+        ):
+            raise FinancialSettlementError("EXTERNAL_SETTLEMENT_APPLICATION_CONFLICT")
+        expected_key = financial_settlement_application_key(
+            application_version=self.application_version,
+            local_order_id=self.local_order_id,
+            intent_id=self.intent_id,
+            plan_key=self.plan_key,
+            settlement_key=self.settlement_key,
+        )
+        if self.application_key != expected_key:
+            raise FinancialSettlementError("EXTERNAL_SETTLEMENT_APPLICATION_KEY_CONFLICT")
+
+
+@dataclass(frozen=True)
+class FinancialSettlementCommitResult:
+    """Result of one atomic settlement application attempt."""
+
+    application: PersistedFinancialSettlementApplication
+    applied: bool
+    already_applied: bool
+    trade_inserted: bool
+    event_id: int | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.application, PersistedFinancialSettlementApplication):
+            raise FinancialSettlementError("settlement application invalide")
+        if not isinstance(self.applied, bool) or not isinstance(self.already_applied, bool):
+            raise FinancialSettlementError("flags d'application invalides")
+        if self.applied == self.already_applied:
+            raise FinancialSettlementError("état d'application ambigu")
+        if not isinstance(self.trade_inserted, bool):
+            raise FinancialSettlementError("trade_inserted invalide")
+        if self.event_id is not None and (
+            isinstance(self.event_id, bool)
+            or not isinstance(self.event_id, int)
+            or self.event_id <= 0
+        ):
+            raise FinancialSettlementError("event_id invalide")
+        if self.applied and self.event_id is None:
+            raise FinancialSettlementError("settlement application sans événement")
+        if self.already_applied and (self.event_id is not None or self.trade_inserted):
+            raise FinancialSettlementError("rejeu settlement avec écriture")
 
 
 def _position(slot: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -766,8 +952,10 @@ def calculate_financial_order_settlement(
 __all__ = [
     "ExternalOrderSettlement",
     "ExternalSettlementFillRow",
+    "FinancialSettlementCommitResult",
     "FinancialSettlementError",
     "FinancialSettlementResult",
+    "FINANCIAL_SETTLEMENT_APPLICATION_VERSION",
     "SETTLEMENT_COMPLETENESS_VERSION",
     "SETTLEMENT_FEE_ASSET",
     "SETTLEMENT_RESPONSE_LIMIT",
@@ -775,4 +963,6 @@ __all__ = [
     "SETTLEMENT_VERSION",
     "SettlementCompletenessProof",
     "calculate_financial_order_settlement",
+    "financial_settlement_application_key",
+    "PersistedFinancialSettlementApplication",
 ]

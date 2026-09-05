@@ -410,7 +410,7 @@ def test_legacy_checkpoint_without_protection_mode_still_validates() -> None:
 
 
 def test_schema_version_is_unchanged() -> None:
-    assert SCHEMA_VERSION == 12
+    assert SCHEMA_VERSION == 13
 
 
 def _seed_open_runner(tmp_path: Path, *, last_bar: str | None = "2026-08-21 00:00:00+00:00"):

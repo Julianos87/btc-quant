@@ -234,7 +234,7 @@ def test_database_newer_than_code_is_rejected(tmp_path):
     database = tmp_path / "newer.db"
     StateStore(database)
     with sqlite3.connect(database) as connection:
-        connection.execute("UPDATE metadata SET value='13' WHERE key='schema_version'")
+        connection.execute("UPDATE metadata SET value='14' WHERE key='schema_version'")
         connection.commit()
     with pytest.raises(RuntimeError, match="plus récente"):
         StateStore(database)
@@ -548,6 +548,7 @@ def _make_realistic_v4_fixture(path: Path) -> None:
         connection.execute("DROP TABLE financial_fill_applications")
         connection.execute("DROP TABLE financial_application_plans")
         connection.execute("DROP TABLE external_order_settlements")
+        connection.execute("DROP TABLE financial_settlement_applications")
         connection.execute("ALTER TABLE orders RENAME TO orders_v6")
         connection.execute(V4_ORDERS_SQL)
         connection.execute(
