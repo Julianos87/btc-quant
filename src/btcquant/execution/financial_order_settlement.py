@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
 from .financial_application_plan import (
     PersistedFinancialApplicationPlan,
@@ -461,6 +461,96 @@ class ExternalOrderSettlement:
                 }
             ),
         )
+
+    def to_persistence_payload(self) -> dict[str, Any]:
+        """Return the complete immutable evidence payload for SQLite storage."""
+
+        completeness = self.completeness
+        return {
+            "version": self.version,
+            "local_order_id": self.local_order_id,
+            "intent_id": self.intent_id,
+            "venue": self.venue,
+            "environment": self.environment,
+            "account_scope": self.account_scope,
+            "instrument": self.instrument,
+            "side": self.side,
+            "client_order_id": self.client_order_id,
+            "external_order_id": self.external_order_id,
+            "terminal_status": ExternalOrderState(self.terminal_status).value,
+            "terminal_status_event_at": self.terminal_status_event_at,
+            "settlement_key": self.settlement_key,
+            "fill_multiset_sha256": self.fill_multiset_sha256,
+            "completeness": {
+                "local_order_id": completeness.local_order_id,
+                "intent_id": completeness.intent_id,
+                "venue": completeness.venue,
+                "environment": completeness.environment,
+                "account_scope": completeness.account_scope,
+                "instrument": completeness.instrument,
+                "side": completeness.side,
+                "client_order_id": completeness.client_order_id,
+                "external_order_id": completeness.external_order_id,
+                "terminal_status": ExternalOrderState(completeness.terminal_status).value,
+                "terminal_status_event_at": completeness.terminal_status_event_at,
+                "window_start": completeness.window_start,
+                "window_end": completeness.window_end,
+                "response_count": completeness.response_count,
+                "aggregate_by_time": completeness.aggregate_by_time,
+                "malformed_entry_count": completeness.malformed_entry_count,
+                "retention_response_count": completeness.retention_response_count,
+                "retention_oldest_event_at": completeness.retention_oldest_event_at,
+                "response_limit": completeness.response_limit,
+                "retention_limit": completeness.retention_limit,
+                "completeness_version": completeness.completeness_version,
+            },
+            "fills": [row.canonical_content() for row in self.canonical_fill_multiset],
+        }
+
+    @classmethod
+    def from_persistence_payload(cls, payload: Mapping[str, Any]) -> ExternalOrderSettlement:
+        """Rebuild a settlement and re-run every contract validator."""
+
+        if not isinstance(payload, Mapping):
+            raise FinancialSettlementError("settlement payload doit être un objet")
+        completeness_payload = payload.get("completeness")
+        fills_payload = payload.get("fills")
+        if not isinstance(completeness_payload, Mapping):
+            raise FinancialSettlementError("settlement completeness absente")
+        if not isinstance(fills_payload, (list, tuple)):
+            raise FinancialSettlementError("settlement fills invalides")
+        try:
+            completeness = SettlementCompletenessProof(**dict(completeness_payload))
+            fills = tuple(
+                ExternalSettlementFillRow(**dict(fill))
+                for fill in fills_payload
+                if isinstance(fill, Mapping)
+            )
+        except (TypeError, ValueError) as error:
+            raise FinancialSettlementError("settlement payload invalide") from error
+        if len(fills) != len(fills_payload):
+            raise FinancialSettlementError("settlement fill entry invalide")
+        settlement = cls(
+            local_order_id=cast(int, payload.get("local_order_id")),
+            intent_id=cast(str, payload.get("intent_id")),
+            venue=cast(str, payload.get("venue")),
+            environment=cast(str, payload.get("environment")),
+            account_scope=cast(str, payload.get("account_scope")),
+            instrument=cast(str, payload.get("instrument")),
+            side=cast(str, payload.get("side")),
+            client_order_id=cast(str, payload.get("client_order_id")),
+            external_order_id=cast(str, payload.get("external_order_id")),
+            terminal_status=cast(str, payload.get("terminal_status")),
+            terminal_status_event_at=cast(str, payload.get("terminal_status_event_at")),
+            completeness=completeness,
+            fills=fills,
+            version=cast(int, payload.get("version")),
+        )
+        if payload.get("settlement_key") != settlement.settlement_key:
+            raise FinancialSettlementError("settlement_key conflict")
+        if payload.get("fill_multiset_sha256") != settlement.fill_multiset_sha256:
+            raise FinancialSettlementError("fill_multiset_sha256 conflict")
+        return settlement
 
 
 @dataclass(frozen=True)
