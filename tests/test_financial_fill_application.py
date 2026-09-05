@@ -204,13 +204,13 @@ def _insert_ledger_record(
 
 def test_schema_v10_is_fresh_and_additive(tmp_path: Path) -> None:
     store = StateStore(tmp_path / "state.db")
-    assert SCHEMA_VERSION == 12
+    assert SCHEMA_VERSION == 13
     with sqlite3.connect(store.path) as connection:
         assert (
             connection.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()[
                 0
             ]
-            == "12"
+            == "13"
         )
         columns = [
             row[1] for row in connection.execute("PRAGMA table_info(financial_fill_applications)")
@@ -260,7 +260,7 @@ def test_v9_to_v10_migration_requires_opt_in_and_is_idempotent(tmp_path: Path) -
             connection.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()[
                 0
             ]
-            == "12"
+            == "13"
         )
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE name='financial_fill_applications'"

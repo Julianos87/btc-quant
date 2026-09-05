@@ -305,13 +305,13 @@ def test_schema_v8_requires_explicit_migration_and_v9_is_readable(tmp_path: Path
     with pytest.raises(MigrationRequiredError):
         StateStore(database)
     StateStore(database, allow_migration=True)
-    assert SCHEMA_VERSION == 12
+    assert SCHEMA_VERSION == 13
     with sqlite3.connect(database) as connection:
         assert (
             connection.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()[
                 0
             ]
-            == "12"
+            == "13"
         )
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE name='financial_application_plans'"

@@ -203,6 +203,7 @@ def test_fill_multiset_and_settlement_key_are_permutation_stable() -> None:
 def test_enter_recomposes_vwap_and_signed_fee() -> None:
     plan = _plan(FinancialTransitionType.ENTER_LONG, side="BUY", direction=1)
     first = _fill(quantity=0.4, price=100.0, fee=-0.01)
+
     second = _fill(
         quantity=0.6, price=110.0, fee=0.02, at="2026-09-05T12:02:00Z", raw_hash="b" * 64
     )
@@ -312,7 +313,7 @@ def test_v12_persists_terminal_settlement_and_journals_each_invocation(
         observed_at="2026-09-05T12:04:00+00:00",
     )
 
-    assert SCHEMA_VERSION == 12
+    assert SCHEMA_VERSION == 13
     assert first == settlement
     assert second == settlement
     assert first_created is True
@@ -370,7 +371,7 @@ def test_v11_to_v12_migration_is_explicit_and_preserves_old_tables(tmp_path) -> 
             connection.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()[
                 0
             ]
-            == "12"
+            == "13"
         )
         assert (
             connection.execute(
@@ -419,3 +420,221 @@ def test_v12_migration_baseexception_rolls_back_table_and_metadata(tmp_path, mon
             ).fetchone()
             is None
         )
+
+
+def _stored_plan_for_application() -> PersistedFinancialApplicationPlan:
+    source = _plan(FinancialTransitionType.ENTER_LONG, side="BUY", direction=1)
+    return PersistedFinancialApplicationPlan(
+        local_order_id=1,
+        intent_id=source.intent_id,
+        plan=source.plan,
+        created_at=source.created_at,
+    )
+
+
+def _prepare_settlement_application_store(
+    tmp_path,
+) -> tuple[StateStore, PersistedFinancialApplicationPlan, ExternalOrderSettlement]:
+    store = StateStore(tmp_path / "state.db")
+    plan = _stored_plan_for_application()
+    reservation = store.reserve_market_order_with_application_plan(
+        plan.plan.identity,
+        plan=plan.plan,
+    )
+    assert reservation.order_id == plan.local_order_id
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "UPDATE orders SET local_state='PENDING_RECONCILIATION' WHERE id=?",
+            (plan.local_order_id,),
+        )
+    settlement = _settlement(plan, (_fill(raw_hash="c" * 64),))
+    store.persist_external_order_settlement(
+        settlement,
+        engine="trend",
+        observed_at="2026-09-05T12:03:00Z",
+    )
+    return store, plan, settlement
+
+
+def test_v13_atomic_settlement_application_is_idempotent(tmp_path) -> None:
+    store, plan, settlement = _prepare_settlement_application_store(tmp_path)
+
+    first = store.apply_external_settlement_atomically(
+        local_order_id=plan.local_order_id,
+        settlement_key=settlement.settlement_key,
+    )
+    second = store.apply_external_settlement_atomically(
+        local_order_id=plan.local_order_id,
+        settlement_key=settlement.settlement_key,
+    )
+
+    assert first.applied is True
+    assert first.already_applied is False
+    assert first.event_id is not None
+    assert first.trade_inserted is False
+    assert second.applied is False
+    assert second.already_applied is True
+    assert second.event_id is None
+    assert second.application == first.application
+    assert len(store.get_financial_settlement_applications(plan.local_order_id)) == 1
+    state = store.load_engine_state("trend")
+    assert state["slots"]["slot"]["cash"] == pytest.approx(1000.0 - settlement.total_fee)
+    with sqlite3.connect(store.path) as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM events WHERE event_type='EXTERNAL_ORDER_SETTLEMENT_APPLIED'"
+            ).fetchone()[0]
+            == 1
+        )
+
+
+def test_v13_atomic_settlement_application_rolls_back_on_baseexception(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    store, plan, settlement = _prepare_settlement_application_store(tmp_path)
+    before_state = store.load_engine_state("trend")
+    with sqlite3.connect(store.path) as connection:
+        before_positions = connection.execute(
+            "SELECT engine, slot, status, cash, qty FROM positions ORDER BY engine, slot"
+        ).fetchall()
+        before_events = connection.execute(
+            "SELECT COUNT(*) FROM events WHERE event_type='EXTERNAL_ORDER_SETTLEMENT_APPLIED'"
+        ).fetchone()[0]
+
+    class SimulatedPowerLoss(BaseException):
+        pass
+
+    def fail_before_commit(*args, **kwargs):
+        raise SimulatedPowerLoss()
+
+    monkeypatch.setattr(store, "_insert_event", fail_before_commit)
+    with pytest.raises(SimulatedPowerLoss):
+        store.apply_external_settlement_atomically(
+            local_order_id=plan.local_order_id,
+            settlement_key=settlement.settlement_key,
+        )
+
+    assert store.load_engine_state("trend") == before_state
+    with sqlite3.connect(store.path) as connection:
+        assert (
+            connection.execute("SELECT COUNT(*) FROM financial_settlement_applications").fetchone()[
+                0
+            ]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM events WHERE event_type='EXTERNAL_ORDER_SETTLEMENT_APPLIED'"
+            ).fetchone()[0]
+            == before_events
+        )
+        assert (
+            connection.execute(
+                "SELECT engine, slot, status, cash, qty FROM positions ORDER BY engine, slot"
+            ).fetchall()
+            == before_positions
+        )
+
+
+def test_v13_settlement_application_conflict_does_not_apply_second_settlement(
+    tmp_path,
+) -> None:
+    store, plan, first_settlement = _prepare_settlement_application_store(tmp_path)
+    second_settlement = _settlement(
+        plan,
+        (_fill(quantity=0.5, price=101.0, raw_hash="d" * 64),),
+    )
+    store.persist_external_order_settlement(
+        second_settlement,
+        engine="trend",
+        observed_at="2026-09-05T12:04:00Z",
+    )
+    store.apply_external_settlement_atomically(
+        local_order_id=plan.local_order_id,
+        settlement_key=first_settlement.settlement_key,
+    )
+    with pytest.raises(FinancialSettlementError, match="APPLICATION_CONFLICT"):
+        store.apply_external_settlement_atomically(
+            local_order_id=plan.local_order_id,
+            settlement_key=second_settlement.settlement_key,
+        )
+    assert len(store.get_financial_settlement_applications(plan.local_order_id)) == 1
+
+
+def test_v12_to_v13_migration_baseexception_rolls_back_application_table(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "state.db"
+    StateStore(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute("DROP TABLE financial_settlement_applications")
+        connection.execute("UPDATE metadata SET value='12' WHERE key='schema_version'")
+
+    class SimulatedPowerLoss(BaseException):
+        pass
+
+    original = StateStore._ensure_financial_settlement_application_schema
+
+    def fail_after_schema_creation(connection):
+        original(connection)
+        raise SimulatedPowerLoss()
+
+    monkeypatch.setattr(
+        StateStore,
+        "_ensure_financial_settlement_application_schema",
+        staticmethod(fail_after_schema_creation),
+    )
+    with pytest.raises(SimulatedPowerLoss):
+        StateStore(path, allow_migration=True)
+
+    with sqlite3.connect(path) as connection:
+        assert (
+            connection.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()[
+                0
+            ]
+            == "12"
+        )
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name='financial_settlement_applications'"
+            ).fetchone()
+            is None
+        )
+
+
+def test_v13_schema_has_application_constraints(tmp_path) -> None:
+    store = StateStore(tmp_path / "state.db")
+    with sqlite3.connect(store.path) as connection:
+        table_info = connection.execute(
+            "PRAGMA table_info(financial_settlement_applications)"
+        ).fetchall()
+        indexes = connection.execute(
+            "PRAGMA index_list(financial_settlement_applications)"
+        ).fetchall()
+        unique_signatures = set()
+        for index in indexes:
+            if index[2] != 1:
+                continue
+            columns = tuple(
+                row[2] for row in connection.execute(f"PRAGMA index_info({index[1]!r})").fetchall()
+            )
+            unique_signatures.add(columns)
+        foreign_keys = {
+            (row[3], row[2], row[4])
+            for row in connection.execute(
+                "PRAGMA foreign_key_list(financial_settlement_applications)"
+            ).fetchall()
+        }
+    assert [row[1] for row in table_info if row[5]] == ["application_key"]
+    assert {
+        ("local_order_id", "plan_key", "application_version"),
+        ("local_order_id", "settlement_key", "application_version"),
+    } <= unique_signatures
+    assert {
+        ("local_order_id", "orders", "id"),
+        ("settlement_key", "external_order_settlements", "settlement_key"),
+        ("plan_key", "financial_application_plans", "plan_key"),
+    } <= foreign_keys

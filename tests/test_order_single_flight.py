@@ -444,6 +444,9 @@ def _reserve_process(database: str, barrier, outcomes) -> None:
 def test_same_transition_from_two_processes_has_one_sqlite_owner(tmp_path):
     context = multiprocessing.get_context("spawn")
     database = str(tmp_path / "state.db")
+    # Initialiser le schéma hors de la course : ce test vérifie l'arbitrage
+    # d'une réservation, pas la concurrence de création de la base.
+    StateStore(database)
     barrier = context.Barrier(2)
     outcomes = context.Queue()
     processes = [
