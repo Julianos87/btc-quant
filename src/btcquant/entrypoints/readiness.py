@@ -12,6 +12,7 @@ from btcquant.console import enable_utf8_output
 from btcquant.execution.readiness import (
     evaluate_readiness,
     finalize_campaign,
+    paper_maturity_status,
     start_campaign,
     testnet_p1_policy,
 )
@@ -36,7 +37,15 @@ def main() -> None:
     enable_utf8_output()
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "command", choices=("start", "status", "finalize", "cancel", "preflight-testnet")
+        "command",
+        choices=(
+            "start",
+            "status",
+            "finalize",
+            "cancel",
+            "paper-maturity-status",
+            "preflight-testnet",
+        ),
     )
     parser.add_argument("--database", default="state/btcquant.db")
     parser.add_argument(
@@ -62,6 +71,16 @@ def main() -> None:
         raise SystemExit(0 if report["status"] == "PASS" else 2)
 
     store = StateStore(ROOT / args.database)
+    if args.command == "paper-maturity-status":
+        report = paper_maturity_status(store)
+        if args.json:
+            print(json.dumps(report, ensure_ascii=True, indent=2))
+        else:
+            print(f"Maturité PAPER : {report['status']}")
+            for key, value in report.items():
+                if key not in {"kind", "status"}:
+                    print(f"  {key}: {value}")
+        raise SystemExit(0 if report["qualified"] else 2)
     if args.command == "start":
         policy = testnet_p1_policy() if args.profile == "testnet-p1" else None
         started_campaign = start_campaign(store, policy)

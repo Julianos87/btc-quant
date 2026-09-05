@@ -5921,6 +5921,104 @@ class StateStore:
             ).fetchone()
         return json.loads(row["payload"]) if row else None
 
+    def record_paper_technical_qualification(
+        self,
+        *,
+        release_sha: str,
+        release_tree: str,
+        schema_version: int,
+        full_test_results: Mapping[str, Any],
+        staging_run: Mapping[str, Any],
+        migration: Mapping[str, Any],
+        rollback_rehearsal: Mapping[str, Any],
+        production_health: Mapping[str, Any],
+        backup_verification: Mapping[str, Any],
+        qualified_at: str | None = None,
+    ) -> int:
+        """Persist a real PAPER technical qualification without changing schema.
+
+        This API is intentionally separate from the 90-day maturity campaign.
+        It accepts only a complete PASS evidence bundle; it cannot turn a
+        failed or canceled historical campaign into a technical qualification.
+        The caller is responsible for supplying evidence produced by staging
+        and deployment protocols, never by a manual SQL update.
+        """
+
+        if self.read_only:
+            raise RuntimeError("Un StateStore read-only ne peut pas qualifier PAPER")
+        for name, value in (("release_sha", release_sha), ("release_tree", release_tree)):
+            if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
+                raise ValueError(f"{name} must be a lowercase Git SHA")
+        if (
+            isinstance(schema_version, bool)
+            or not isinstance(schema_version, int)
+            or schema_version != SCHEMA_VERSION
+        ):
+            raise ValueError("technical qualification schema does not match the running schema")
+        evidence = {
+            "full_test_results": full_test_results,
+            "staging_run": staging_run,
+            "migration": migration,
+            "rollback_rehearsal": rollback_rehearsal,
+            "production_health": production_health,
+            "backup_verification": backup_verification,
+        }
+        for evidence_name, evidence_value in evidence.items():
+            if not isinstance(evidence_value, Mapping) or evidence_value.get("status") != "PASS":
+                raise ValueError(f"{evidence_name} must be a structured PASS record")
+        timestamp = qualified_at or utc_now()
+        try:
+            parsed_timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        except (AttributeError, TypeError, ValueError) as error:
+            raise ValueError("qualified_at must be an ISO-8601 timestamp") from error
+        if parsed_timestamp.tzinfo is None:
+            raise ValueError("qualified_at must include an explicit timezone")
+        payload = {
+            "kind": "PAPER_TECHNICAL_QUALIFICATION",
+            "qualification_version": 1,
+            "release_sha": release_sha,
+            "release_tree": release_tree,
+            "schema_version": schema_version,
+            "full_test_results": dict(full_test_results),
+            "staging_run": dict(staging_run),
+            "migration": dict(migration),
+            "rollback_rehearsal": dict(rollback_rehearsal),
+            "production_health": dict(production_health),
+            "backup_verification": dict(backup_verification),
+            "status": "PAPER_TECHNICAL_QUALIFIED",
+            "qualified_at": parsed_timestamp.astimezone(UTC).isoformat(),
+            "protocol_version": 1,
+        }
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO readiness_reports(
+                    campaign_id, protocol_version, status, generated_at, payload
+                ) VALUES(NULL, ?, 'PASS', ?, ?)
+                """,
+                (1, payload["qualified_at"], self._json(payload)),
+            )
+        assert cursor.lastrowid is not None
+        return int(cursor.lastrowid)
+
+    def latest_paper_technical_qualification(self) -> dict[str, Any] | None:
+        """Return the newest durable PAPER technical qualification, if any."""
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload FROM readiness_reports WHERE status='PASS' ORDER BY id DESC"
+            ).fetchall()
+        for row in rows:
+            try:
+                payload = json.loads(str(row["payload"]))
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(payload, dict) and payload.get("kind") == (
+                "PAPER_TECHNICAL_QUALIFICATION"
+            ):
+                return payload
+        return None
+
     def finish_qualification_campaign(
         self,
         campaign_id: int,
