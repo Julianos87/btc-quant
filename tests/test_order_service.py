@@ -5,6 +5,7 @@ import pytest
 from btcquant.execution.broker import Broker, BrokerOrderResult, Fill, PaperBroker
 from btcquant.execution.errors import ReconciliationRequired
 from btcquant.execution.order_service import OrderExecutionService
+from btcquant.execution.external_submission_commitment import ExternalSubmissionOutcome
 from btcquant.execution.order_state import (
     ExternalOrderState,
     FinancialTransitionType,
@@ -375,3 +376,61 @@ def test_submission_plan_must_match_all_broker_arguments_before_reservation(tmp_
         OrderExecutionService(StateStore(tmp_path / "state.db"), broker).submit_market(**call)
     assert broker.intent_id is None
     assert StateStore(tmp_path / "state.db").read_orders("trend") == []
+
+
+def test_external_submission_response_is_durable_before_legacy_observation(tmp_path, monkeypatch):
+    raw_response = {
+        "id": "9001",
+        "status": "closed",
+        "amount": "1.0",
+        "filled": "1.0",
+        "average": "100000",
+        "info": {
+            "status": "filled",
+            "response": {
+                "type": "order",
+                "data": {
+                    "statuses": [{"filled": {"totalSz": "1.0", "avgPx": "100000", "oid": 9001}}]
+                },
+            },
+        },
+    }
+    result = BrokerOrderResult(
+        Fill(100000.0, 1.0, 0.0),
+        ExternalOrderState.FILLED,
+        1.0,
+        0.0,
+        raw_response=raw_response,
+    )
+    broker = StubBroker(result)
+    broker.external_execution = True
+    broker.exchange_id = "hyperliquid"
+    broker.environment = "testnet"
+    broker.account_scope = "0x" + "1" * 40
+    broker.symbol = "BTC/USDC:USDC"
+    broker.submission_is_ioc = True
+    store = StateStore(tmp_path / "state.db")
+    original_observation = store.record_order_observation
+
+    def checked_observation(*args, **kwargs):
+        response_rows = store.read_external_submission_responses()
+        assert len(response_rows) == 1
+        assert response_rows[0].outcome == ExternalSubmissionOutcome.FILLED_COMMITMENT
+        return original_observation(*args, **kwargs)
+
+    monkeypatch.setattr(store, "record_order_observation", checked_observation)
+    submitted = OrderExecutionService(store, broker).submit_market(
+        engine="trend",
+        slot="external",
+        side="BUY",
+        qty=1.0,
+        reference_price=100000.0,
+        reason="entry",
+        decision_checkpoint="external-submission-checkpoint",
+        transition_type=FinancialTransitionType.ENTER_LONG,
+    )
+
+    response_rows = store.read_external_submission_responses(submitted.intent_id)
+    assert len(response_rows) == 1
+    assert response_rows[0].commitment is not None
+    assert response_rows[0].commitment.external_order_id == "9001"

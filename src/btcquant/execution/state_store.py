@@ -2097,7 +2097,109 @@ class StateStore:
                 event_type=event_type,
             )
 
-    # durable submission response methods are inserted below
+    def append_external_submission_response(
+        self,
+        response: ExternalSubmissionResponse,
+        *,
+        engine: str,
+    ) -> tuple[ExternalSubmissionResponse, bool]:
+        """Durably append one external submission response."""
+
+        if self.read_only:
+            raise RuntimeError("Un StateStore read-only ne peut pas persister une réponse")
+        if not isinstance(response, ExternalSubmissionResponse):
+            raise TypeError("response must be ExternalSubmissionResponse")
+        normalized_engine = str(engine).strip()
+        if not normalized_engine:
+            raise ValueError("engine doit être non vide")
+        payload = response.to_payload()
+        with self._transaction() as connection:
+            rows = connection.execute(
+                "SELECT engine, aggregate_id, payload FROM events WHERE event_type = ? AND correlation_id = ? ORDER BY id",
+                (SUBMISSION_RESPONSE_EVENT_TYPE, response.intent_id),
+            ).fetchall()
+            if rows:
+                for row in rows:
+                    if row["engine"] != normalized_engine or row["aggregate_id"] != str(
+                        response.local_order_id
+                    ):
+                        raise SubmissionCommitmentError(
+                            "EXTERNAL_SUBMISSION_RESPONSE_BINDING_CONFLICT"
+                        )
+                    try:
+                        existing_payload = json.loads(str(row["payload"]))
+                    except json.JSONDecodeError as error:
+                        raise SubmissionCommitmentError(
+                            "corrupt external submission response journal"
+                        ) from error
+                    if not isinstance(existing_payload, dict):
+                        raise SubmissionCommitmentError(
+                            "external submission response journal is not an object"
+                        )
+                    if existing_payload.get("submission_key") != response.submission_key:
+                        raise SubmissionCommitmentError("EXTERNAL_SUBMISSION_RESPONSE_KEY_CONFLICT")
+                    existing_compare = json.loads(canonical_json(existing_payload))
+                    current_compare = json.loads(canonical_json(payload))
+                    existing_compare.pop("response_acquired_at", None)
+                    current_compare.pop("response_acquired_at", None)
+                    for candidate in (existing_compare, current_compare):
+                        commitment_payload = candidate.get("commitment")
+                        if isinstance(commitment_payload, dict):
+                            commitment_payload.pop("response_acquired_at", None)
+                    if canonical_json(existing_compare) != canonical_json(current_compare):
+                        raise SubmissionCommitmentError("EXTERNAL_SUBMISSION_RESPONSE_CONFLICT")
+                return response, False
+            self._insert_event(
+                connection,
+                normalized_engine,
+                SUBMISSION_RESPONSE_EVENT_TYPE,
+                payload,
+                aggregate_type=SUBMISSION_RESPONSE_AGGREGATE_TYPE,
+                aggregate_id=str(response.local_order_id),
+                correlation_id=response.intent_id,
+                ts=response.response_acquired_at,
+            )
+        return response, True
+
+    def read_external_submission_responses(
+        self,
+        intent_id: str | None = None,
+        *,
+        engine: str | None = None,
+    ) -> list[ExternalSubmissionResponse]:
+        """Read and validate durable submission response envelopes."""
+
+        conditions = ["event_type = ?"]
+        params: list[Any] = [SUBMISSION_RESPONSE_EVENT_TYPE]
+        if intent_id is not None:
+            conditions.append("correlation_id = ?")
+            params.append(intent_id)
+        if engine is not None:
+            conditions.append("engine = ?")
+            params.append(engine)
+        query = (
+            "SELECT aggregate_type, payload FROM events WHERE "
+            + " AND ".join(conditions)
+            + " ORDER BY id"
+        )
+        with self._read_transaction() as connection:
+            rows = connection.execute(query, tuple(params)).fetchall()
+        responses: list[ExternalSubmissionResponse] = []
+        for row in rows:
+            if row["aggregate_type"] != SUBMISSION_RESPONSE_AGGREGATE_TYPE:
+                raise SubmissionCommitmentError("EXTERNAL_SUBMISSION_RESPONSE_PROVENANCE_CONFLICT")
+            try:
+                payload = json.loads(str(row["payload"]))
+            except json.JSONDecodeError as error:
+                raise SubmissionCommitmentError(
+                    "corrupt external submission response journal"
+                ) from error
+            if not isinstance(payload, dict):
+                raise SubmissionCommitmentError(
+                    "external submission response payload is not an object"
+                )
+            responses.append(ExternalSubmissionResponse.from_payload(payload))
+        return responses
 
     def _append_external_order_lookup_attempt_in_transaction(
         self,

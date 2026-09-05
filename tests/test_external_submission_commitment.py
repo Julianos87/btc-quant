@@ -25,11 +25,7 @@ RAW_FILLED = {
         "status": "filled",
         "response": {
             "type": "order",
-            "data": {
-                "statuses": [
-                    {"filled": {"totalSz": "1.25", "avgPx": "100000", "oid": 9001}}
-                ]
-            },
+            "data": {"statuses": [{"filled": {"totalSz": "1.25", "avgPx": "100000", "oid": 9001}}]},
         },
     },
 }
@@ -59,17 +55,18 @@ def test_filled_response_produces_decimal_commitment_without_network() -> None:
     assert response.commitment.external_order_id == "9001"
     assert response.commitment.total_filled_qty == "1.25"
     assert response.commitment.average_price == "100000"
-    assert response.commitment.raw_response_hash == hashlib.sha256(
-        json.dumps(RAW_FILLED, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    assert (
+        response.commitment.raw_response_hash
+        == hashlib.sha256(
+            json.dumps(RAW_FILLED, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
     assert response.commitment.submission_key.startswith("submission-")
 
 
 def test_same_submission_response_is_idempotent_even_if_acquisition_time_differs(tmp_path) -> None:
     store = StateStore(tmp_path / "state.db")
-    order_id = store.begin_order(
-        "trend", "slot", "btq-mkt-intent", "MARKET", "BUY", 1.25, "entry"
-    )
+    order_id = store.begin_order("trend", "slot", "btq-mkt-intent", "MARKET", "BUY", 1.25, "entry")
     first = _response()
     second = _response(acquired="2026-09-05T12:01:00+00:00")
     assert order_id == 1

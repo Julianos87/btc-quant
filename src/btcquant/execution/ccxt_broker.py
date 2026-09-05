@@ -89,7 +89,9 @@ class CcxtBroker(Broker):
                     "dans l'environnement (jamais dans config.yaml)."
                 )
             credentials = {"apiKey": api_key, "secret": api_secret}
-            self.account_scope = os.environ.get("BTCQUANT_EXTERNAL_ACCOUNT_SCOPE", f"{exchange_id}-default")
+            self.account_scope = os.environ.get(
+                "BTCQUANT_EXTERNAL_ACCOUNT_SCOPE", f"{exchange_id}-default"
+            )
             if market == "perp":
                 # binanceusdm = futures perpétuels USDT-M
                 klass = ccxt.binanceusdm if exchange_id == "binance" else getattr(ccxt, exchange_id)

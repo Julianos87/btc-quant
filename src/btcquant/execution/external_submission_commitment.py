@@ -43,6 +43,30 @@ def _text(value: object, field: str) -> str:
     return value.strip()
 
 
+_SENSITIVE_KEY_MARKERS = (
+    "api_key",
+    "apikey",
+    "password",
+    "private_key",
+    "privatekey",
+    "secret",
+    "signature",
+    "token",
+)
+
+
+def _assert_no_sensitive_keys(value: object) -> None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            normalized = str(key).lower().replace("-", "_")
+            if any(marker in normalized for marker in _SENSITIVE_KEY_MARKERS):
+                raise SubmissionCommitmentError("raw response contains a sensitive field")
+            _assert_no_sensitive_keys(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _assert_no_sensitive_keys(item)
+
+
 def _optional_text(value: object, field: str) -> str | None:
     if value is None:
         return None
@@ -244,6 +268,7 @@ class ExternalSubmissionResponse:
     submission_key: str | None = None
 
     def __post_init__(self) -> None:
+        _assert_no_sensitive_keys(self.raw_payload)
         if (
             isinstance(self.local_order_id, bool)
             or not isinstance(self.local_order_id, int)
@@ -303,25 +328,87 @@ class ExternalSubmissionResponse:
         elif outcome == ExternalSubmissionOutcome.FILLED_COMMITMENT:
             raise SubmissionCommitmentError("filled response requires a commitment")
         if self.structured_error is not None:
-            object.__setattr__(self, "structured_error", _text(self.structured_error, "structured_error"))
-        key = self.submission_key
-        if key is None:
-            if self.commitment is not None:
-                key = self.commitment.submission_key
-            else:
-                identity = {
-                    "account_scope": self.account_scope,
-                    "client_order_id": self.client_order_id,
-                    "environment": self.environment,
-                    "instrument": self.instrument,
-                    "intent_id": self.intent_id,
-                    "local_order_id": self.local_order_id,
-                    "side": self.side,
-                    "venue": self.venue,
-                    "version": SUBMISSION_RESPONSE_CONTRACT_VERSION,
-                }
-                key = "submission-" + _hash(identity)
+            object.__setattr__(
+                self, "structured_error", _text(self.structured_error, "structured_error")
+            )
+        identity = {
+            "account_scope": self.account_scope,
+            "client_order_id": self.client_order_id,
+            "environment": self.environment,
+            "instrument": self.instrument,
+            "intent_id": self.intent_id,
+            "local_order_id": self.local_order_id,
+            "side": self.side,
+            "venue": self.venue,
+            "version": SUBMISSION_RESPONSE_CONTRACT_VERSION,
+        }
+        derived_key = "submission-" + _hash(identity)
+        if self.commitment is not None and self.commitment.submission_key != derived_key:
+            raise SubmissionCommitmentError("submission commitment key is inconsistent")
+        key = self.submission_key or derived_key
+        if key != derived_key:
+            raise SubmissionCommitmentError("submission_key is inconsistent with binding")
         object.__setattr__(self, "submission_key", _text(key, "submission_key"))
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> ExternalSubmissionResponse:
+        """Reconstruct and validate one durable response envelope."""
+
+        if not isinstance(payload, Mapping):
+            raise SubmissionCommitmentError("submission response payload must be an object")
+        if payload.get("contract_version") != SUBMISSION_RESPONSE_CONTRACT_VERSION:
+            raise SubmissionCommitmentError("unsupported submission response contract version")
+        commitment_payload = payload.get("commitment")
+        commitment: AuthoritativeSubmissionFillCommitment | None = None
+        if commitment_payload is not None:
+            if not isinstance(commitment_payload, Mapping):
+                raise SubmissionCommitmentError("submission commitment payload must be an object")
+            try:
+                commitment = AuthoritativeSubmissionFillCommitment(
+                    local_order_id=commitment_payload["local_order_id"],
+                    intent_id=commitment_payload["intent_id"],
+                    venue=commitment_payload["venue"],
+                    environment=commitment_payload["environment"],
+                    account_scope=commitment_payload["account_scope"],
+                    instrument=commitment_payload["instrument"],
+                    side=commitment_payload["side"],
+                    client_order_id=commitment_payload["client_order_id"],
+                    external_order_id=commitment_payload["external_order_id"],
+                    total_filled_qty=commitment_payload["total_filled_qty"],
+                    average_price=commitment_payload["average_price"],
+                    response_acquired_at=commitment_payload["response_acquired_at"],
+                    raw_response_hash=commitment_payload["raw_response_hash"],
+                    response_type=commitment_payload.get("response_type", "filled"),
+                )
+            except KeyError as error:
+                raise SubmissionCommitmentError(
+                    f"submission commitment field missing: {error.args[0]}"
+                ) from error
+        try:
+            raw_payload = payload["raw_payload"]
+            response = cls(
+                local_order_id=payload["local_order_id"],
+                intent_id=payload["intent_id"],
+                venue=payload["venue"],
+                environment=payload["environment"],
+                account_scope=payload["account_scope"],
+                instrument=payload["instrument"],
+                side=payload["side"],
+                client_order_id=payload["client_order_id"],
+                response_acquired_at=payload["response_acquired_at"],
+                outcome=payload["outcome"],
+                raw_payload=raw_payload,
+                raw_response_hash=payload["raw_response_hash"],
+                commitment=commitment,
+                structured_error=payload.get("structured_error"),
+                ambiguity_classification=payload.get("ambiguity_classification", "NONE"),
+                submission_key=payload.get("submission_key"),
+            )
+        except KeyError as error:
+            raise SubmissionCommitmentError(
+                f"submission response field missing: {error.args[0]}"
+            ) from error
+        return response
 
     def to_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -336,7 +423,7 @@ class ExternalSubmissionResponse:
             "side": self.side,
             "client_order_id": self.client_order_id,
             "response_acquired_at": self.response_acquired_at,
-            "outcome": self.outcome.value,
+            "outcome": ExternalSubmissionOutcome(self.outcome).value,
             "raw_response_hash": self.raw_response_hash,
             "raw_payload": _plain(self.raw_payload),
             "structured_error": self.structured_error,
@@ -390,10 +477,14 @@ def build_submission_response(
 ) -> ExternalSubmissionResponse:
     """Classify one already-returned broker response; never performs I/O."""
 
-    payload = dict(raw_payload) if raw_payload is not None else {
-        "missing_raw_response": True,
-        "error": structured_error or "BROKER_RESPONSE_RAW_PAYLOAD_MISSING",
-    }
+    payload = (
+        dict(raw_payload)
+        if raw_payload is not None
+        else {
+            "missing_raw_response": True,
+            "error": structured_error or "BROKER_RESPONSE_RAW_PAYLOAD_MISSING",
+        }
+    )
     status = str(payload.get("status") or "").strip().lower()
     filled = _filled_status_payload(payload)
     commitment: AuthoritativeSubmissionFillCommitment | None = None
@@ -415,8 +506,8 @@ def build_submission_response(
                 side=side,
                 client_order_id=client_order_id,
                 external_order_id=str(oid),
-                total_filled_qty=total,
-                average_price=average,
+                total_filled_qty=_decimal(total, "total_filled_qty", positive=True),
+                average_price=_decimal(average, "average_price", positive=True),
                 response_acquired_at=response_acquired_at,
                 raw_response_hash=raw_hash,
             )
@@ -458,7 +549,10 @@ def build_submission_response(
         ambiguity_classification=(
             "NONE"
             if outcome
-            in {ExternalSubmissionOutcome.FILLED_COMMITMENT, ExternalSubmissionOutcome.DETERMINISTIC_ORDER_ERROR}
+            in {
+                ExternalSubmissionOutcome.FILLED_COMMITMENT,
+                ExternalSubmissionOutcome.DETERMINISTIC_ORDER_ERROR,
+            }
             else outcome.value
         ),
     )
