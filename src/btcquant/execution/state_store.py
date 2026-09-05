@@ -32,6 +32,12 @@ from .errors import (
     OrderIdentityCollision,
 )
 from .external_evidence import ExternalEvidenceSource, ExternalFill, ExternalOrderObservation
+from .external_submission_commitment import (
+    ExternalSubmissionResponse,
+    SUBMISSION_RESPONSE_AGGREGATE_TYPE,
+    SUBMISSION_RESPONSE_EVENT_TYPE,
+    SubmissionCommitmentError,
+)
 from .paper_execution_evidence import (
     PAPER_EVIDENCE_VERSION,
     PAPER_EXECUTION_EVIDENCE_AGGREGATE_TYPE,
@@ -2090,6 +2096,8 @@ class StateStore:
                 payload=payload,
                 event_type=event_type,
             )
+
+    # durable submission response methods are inserted below
 
     def _append_external_order_lookup_attempt_in_transaction(
         self,
