@@ -8,6 +8,7 @@ import pytest
 from btcquant.execution.ccxt_broker import CcxtBroker
 from btcquant.execution.external_submission_commitment import (
     ExternalSubmissionOutcome,
+    IOC_NO_MATCH_ERROR,
     SubmissionCommitmentError,
     build_submission_response,
 )
@@ -119,6 +120,83 @@ def test_missing_raw_response_is_ambiguous_and_durable() -> None:
     assert response.outcome == ExternalSubmissionOutcome.AMBIGUOUS_TRANSPORT_FAILURE
     assert response.commitment is None
     assert response.structured_error == "RequestTimeout: response lost"
+
+
+def test_exact_ioc_no_match_response_is_an_affirmative_zero_effect_fact() -> None:
+    raw = {
+        "status": "rejected",
+        "info": {
+            "response": {
+                "type": "order",
+                "data": {"statuses": [{"error": IOC_NO_MATCH_ERROR}]},
+            }
+        },
+    }
+
+    response = _response(raw)
+
+    assert response.outcome == ExternalSubmissionOutcome.DETERMINISTIC_IOC_NO_MATCH
+    assert response.commitment is None
+    assert response.structured_error == IOC_NO_MATCH_ERROR
+
+
+def test_ioc_no_match_requires_the_exact_ioc_request_profile() -> None:
+    raw = {
+        "status": "rejected",
+        "info": {"response": {"data": {"statuses": [{"error": IOC_NO_MATCH_ERROR}]}}},
+    }
+
+    response = build_submission_response(
+        local_order_id=1,
+        intent_id="intent-non-ioc",
+        venue="hyperliquid",
+        environment="testnet",
+        account_scope="account",
+        instrument="BTC/USDC:USDC",
+        side="BUY",
+        client_order_id="0x" + "4" * 32,
+        raw_payload=raw,
+        response_acquired_at="2026-09-05T12:00:00Z",
+        ioc_expected=False,
+    )
+
+    assert response.outcome == ExternalSubmissionOutcome.DETERMINISTIC_ORDER_ERROR
+
+
+def test_unknown_or_non_exact_ioc_error_remains_deterministic_error() -> None:
+    raw = {
+        "status": "rejected",
+        "info": {
+            "response": {"data": {"statuses": [{"error": "Order could not immediately match."}]}}
+        },
+    }
+
+    response = _response(raw)
+
+    assert response.outcome == ExternalSubmissionOutcome.DETERMINISTIC_ORDER_ERROR
+
+
+def test_ioc_no_match_with_a_filled_payload_is_conflicting() -> None:
+    raw = {
+        "status": "closed",
+        "info": {
+            "response": {
+                "data": {
+                    "statuses": [
+                        {
+                            "error": IOC_NO_MATCH_ERROR,
+                            "filled": {"totalSz": "1.25", "avgPx": "100000", "oid": 9001},
+                        }
+                    ]
+                }
+            }
+        },
+    }
+
+    response = _response(raw)
+
+    assert response.outcome == ExternalSubmissionOutcome.CONFLICTING_RESPONSE
+    assert response.commitment is None
 
 
 def test_ccxt_result_retains_the_exact_order_response_for_commitment() -> None:
