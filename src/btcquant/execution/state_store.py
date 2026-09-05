@@ -73,6 +73,10 @@ from .financial_order_settlement import (
     calculate_financial_order_settlement,
     financial_settlement_application_key,
 )
+from .external_settlement_finalization import (
+    ExternalSettlementFinalizationResult,
+    ExternalSettlementFinalizationStatus,
+)
 from .paper_order_finalization import (
     PaperFinalizationDecision,
     PaperFinalizationStatus,
@@ -4213,6 +4217,245 @@ class StateStore:
                 already_applied=False,
                 trade_inserted=trade_inserted,
                 event_id=event_id,
+            )
+
+    def finalize_external_order_atomically(
+        self,
+        *,
+        local_order_id: int,
+        settlement_key: str,
+    ) -> ExternalSettlementFinalizationResult:
+        """Finalize a completely settled external order with one CAS.
+
+        Settlement acquisition and financial application happen before this
+        boundary.  This method only promotes the already applied, terminal
+        settlement to a local terminal order state.  The write lock makes the
+        transition idempotent under replay and serializes concurrent callers.
+        """
+
+        if self.read_only:
+            raise RuntimeError("Un StateStore read-only ne peut pas finaliser un ordre externe")
+        if (
+            isinstance(local_order_id, bool)
+            or not isinstance(local_order_id, int)
+            or local_order_id <= 0
+        ):
+            raise ValueError("local_order_id must be a positive integer")
+        if not isinstance(settlement_key, str) or not settlement_key.strip():
+            raise ValueError("settlement_key must be a non-empty string")
+        settlement_key = settlement_key.strip()
+
+        with self._transaction() as connection:
+            order = connection.execute(
+                "SELECT * FROM orders WHERE id = ?", (local_order_id,)
+            ).fetchone()
+            if order is None:
+                raise FinancialSettlementError("FINANCIAL_ORDER_MISSING")
+
+            finalization_events = connection.execute(
+                """
+                SELECT id, payload FROM events
+                WHERE engine = ? AND event_type = 'EXTERNAL_ORDER_FINALIZED'
+                  AND aggregate_type = 'order' AND aggregate_id = ?
+                ORDER BY id
+                """,
+                (str(order["engine"]), str(local_order_id)),
+            ).fetchall()
+            if order["local_state"] == LocalOrderState.TERMINAL.value:
+                if len(finalization_events) != 1:
+                    raise FinancialSettlementError("EXTERNAL_FINALIZATION_EVENT_CONFLICT")
+                try:
+                    payload = json.loads(str(finalization_events[0]["payload"]))
+                except (TypeError, json.JSONDecodeError) as error:
+                    raise FinancialSettlementError("EXTERNAL_FINALIZATION_EVENT_CORRUPT") from error
+                if not isinstance(payload, Mapping):
+                    raise FinancialSettlementError("EXTERNAL_FINALIZATION_EVENT_CORRUPT")
+                if (
+                    payload.get("settlement_key") != settlement_key
+                    or not isinstance(payload.get("application_key"), str)
+                    or not isinstance(payload.get("transition_sequence_before"), int)
+                    or not isinstance(payload.get("transition_sequence_after"), int)
+                ):
+                    raise FinancialSettlementError("EXTERNAL_FINALIZATION_EVENT_CONFLICT")
+                return ExternalSettlementFinalizationResult(
+                    local_order_id=local_order_id,
+                    status=ExternalSettlementFinalizationStatus.ALREADY_FINALIZED,
+                    settlement_key=settlement_key,
+                    application_key=str(payload["application_key"]),
+                    finalization_event_id=int(finalization_events[0]["id"]),
+                    transition_sequence_before=int(payload["transition_sequence_before"]),
+                    transition_sequence_after=int(payload["transition_sequence_after"]),
+                )
+            if order["local_state"] != LocalOrderState.PENDING_RECONCILIATION.value:
+                raise FinancialSettlementError("FINANCIAL_ORDER_NOT_RECONCILIATION_READY")
+            if finalization_events:
+                raise FinancialSettlementError("EXTERNAL_FINALIZATION_EVENT_CONFLICT")
+
+            plan_row = connection.execute(
+                "SELECT * FROM financial_application_plans WHERE local_order_id = ?",
+                (local_order_id,),
+            ).fetchone()
+            if plan_row is None:
+                raise FinancialSettlementError("LEGACY_APPLICATION_CONTEXT_INCOMPLETE")
+            try:
+                persisted_plan = self._plan_from_row(plan_row, order)
+            except (FinancialApplicationPlanConflict, TypeError, ValueError) as error:
+                raise FinancialSettlementError("FINANCIAL_APPLICATION_PLAN_CONFLICT") from error
+
+            settlement_row = connection.execute(
+                "SELECT * FROM external_order_settlements WHERE settlement_key = ?",
+                (settlement_key,),
+            ).fetchone()
+            if settlement_row is None:
+                raise FinancialSettlementError("EXTERNAL_ORDER_SETTLEMENT_MISSING")
+            settlement = self._external_order_settlement_from_row(settlement_row)
+            if (
+                settlement.local_order_id != local_order_id
+                or settlement.intent_id != str(order["intent_id"])
+                or settlement.side != str(order["side"])
+                or not settlement.completeness.is_complete
+                or not settlement.fills
+            ):
+                raise FinancialSettlementError(
+                    "EXTERNAL_SETTLEMENT_BINDING_OR_COMPLETENESS_CONFLICT"
+                )
+
+            application_rows = connection.execute(
+                """
+                SELECT * FROM financial_settlement_applications
+                WHERE local_order_id = ? AND settlement_key = ?
+                ORDER BY applied_at, application_key
+                """,
+                (local_order_id, settlement_key),
+            ).fetchall()
+            if len(application_rows) != 1:
+                raise FinancialSettlementError("EXTERNAL_SETTLEMENT_APPLICATION_NOT_DURABLE")
+            application = self._financial_settlement_application_from_row(application_rows[0])
+            expected_application_key = financial_settlement_application_key(
+                application_version=FINANCIAL_SETTLEMENT_APPLICATION_VERSION,
+                local_order_id=local_order_id,
+                intent_id=str(order["intent_id"]),
+                plan_key=persisted_plan.plan.plan_key,
+                settlement_key=settlement_key,
+            )
+            if (
+                application.application_key != expected_application_key
+                or application.intent_id != str(order["intent_id"])
+                or application.plan_key != persisted_plan.plan.plan_key
+            ):
+                raise FinancialSettlementError("EXTERNAL_SETTLEMENT_APPLICATION_CONFLICT")
+            expected_result = calculate_financial_order_settlement(settlement, persisted_plan)
+            if (
+                application.result.to_persistence_payload()
+                != expected_result.to_persistence_payload()
+            ):
+                raise FinancialSettlementError("EXTERNAL_SETTLEMENT_APPLICATION_REPLAY_CONFLICT")
+
+            current_payload, current_raw_payload = self._load_engine_state_in_transaction(
+                connection, persisted_plan.plan.identity.engine
+            )
+            current_state_sha256 = sha256_json(current_payload)
+            if current_state_sha256 != application.state_after_sha256:
+                raise FinancialSettlementError("FINANCIAL_APPLICATION_STATE_CONFLICT")
+            self._assert_positions_projection_in_transaction(
+                connection,
+                engine=persisted_plan.plan.identity.engine,
+                payload=current_payload,
+            )
+            slot_name = persisted_plan.plan.identity.slot
+            slot = current_payload.get("slots", {}).get(slot_name)
+            if not isinstance(slot, dict):
+                raise FinancialSettlementError("FINANCIAL_APPLICATION_STATE_CONFLICT")
+            transition_before = slot.get("financial_transition_seq")
+            if (
+                isinstance(transition_before, bool)
+                or not isinstance(transition_before, int)
+                or transition_before != persisted_plan.plan.identity.transition_sequence
+            ):
+                raise FinancialSettlementError("FINANCIAL_TRANSITION_SEQUENCE_CONFLICT")
+
+            finalized_payload = json.loads(canonical_json(current_payload))
+            finalized_slot = finalized_payload["slots"][slot_name]
+            finalized_slot["financial_transition_seq"] = transition_before + 1
+            validate_trend_state(finalized_payload)
+            finalized_at = utc_now()
+            final_state_sha256 = sha256_json(finalized_payload)
+            self._update_engine_state_cas_in_transaction(
+                connection,
+                engine=persisted_plan.plan.identity.engine,
+                expected_raw_payload=current_raw_payload,
+                state_after_payload=finalized_payload,
+                applied_at=finalized_at,
+            )
+            self._sync_positions(
+                connection,
+                persisted_plan.plan.identity.engine,
+                finalized_payload,
+                finalized_at,
+            )
+            quantity_tolerance = max(1e-9, float(order["requested_qty"]) * 1e-9)
+            if settlement.total_qty > float(order["requested_qty"]) + quantity_tolerance:
+                raise FinancialSettlementError("EXTERNAL_SETTLEMENT_QUANTITY_CONFLICT")
+            final_status = (
+                "FILLED"
+                if math.isclose(
+                    settlement.total_qty,
+                    float(order["requested_qty"]),
+                    rel_tol=0.0,
+                    abs_tol=quantity_tolerance,
+                )
+                else "PARTIAL"
+            )
+            cursor = connection.execute(
+                """
+                UPDATE orders SET status=?, local_state='TERMINAL', external_state=?,
+                    filled_qty=?, remaining_qty=?, price=?, fee=?,
+                    broker_order_id=?, error=NULL, updated_at=?
+                WHERE id=? AND local_state='PENDING_RECONCILIATION'
+                """,
+                (
+                    final_status,
+                    ExternalOrderState(settlement.terminal_status).value,
+                    settlement.total_qty,
+                    max(0.0, float(order["requested_qty"]) - settlement.total_qty),
+                    settlement.total_notional / settlement.total_qty,
+                    settlement.total_fee,
+                    settlement.external_order_id,
+                    finalized_at,
+                    local_order_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise FinancialSettlementError("EXTERNAL_FINALIZATION_STATE_CONFLICT")
+            event_id = self._insert_event(
+                connection,
+                str(order["engine"]),
+                "EXTERNAL_ORDER_FINALIZED",
+                {
+                    "application_key": application.application_key,
+                    "application_version": application.application_version,
+                    "settlement_key": settlement_key,
+                    "plan_key": persisted_plan.plan.plan_key,
+                    "status": final_status,
+                    "terminal_status": ExternalOrderState(settlement.terminal_status).value,
+                    "state_before_sha256": current_state_sha256,
+                    "state_after_sha256": final_state_sha256,
+                    "transition_sequence_before": transition_before,
+                    "transition_sequence_after": transition_before + 1,
+                },
+                aggregate_type="order",
+                aggregate_id=str(local_order_id),
+                correlation_id=str(order["intent_id"]),
+                ts=finalized_at,
+            )
+            return ExternalSettlementFinalizationResult(
+                local_order_id=local_order_id,
+                status=ExternalSettlementFinalizationStatus.FINALIZED,
+                settlement_key=settlement_key,
+                application_key=application.application_key,
+                finalization_event_id=event_id,
+                transition_sequence_before=transition_before,
+                transition_sequence_after=transition_before + 1,
             )
 
     def read_financial_fill_application_chain(

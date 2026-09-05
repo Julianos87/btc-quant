@@ -41,6 +41,16 @@ from .external_settlement_coordinator import (
     ExternalSettlementReconciliationResult,
     ExternalSettlementReconciliationStatus,
 )
+from .external_settlement_finalization import (
+    ExternalSettlementFinalizationResult,
+    ExternalSettlementFinalizationStatus,
+    ExternalSettlementFinalizer,
+)
+from .external_settlement_recovery import (
+    ExternalSettlementStartupRecovery,
+    ExternalSettlementStartupRecoveryReport,
+)
+
 from .order_state import ExternalOrderState, FinancialTransitionType, LocalOrderState
 
 __all__ = [
@@ -83,4 +93,9 @@ __all__ = [
     "ExternalSettlementCoordinator",
     "ExternalSettlementReconciliationResult",
     "ExternalSettlementReconciliationStatus",
+    "ExternalSettlementFinalizationResult",
+    "ExternalSettlementFinalizationStatus",
+    "ExternalSettlementFinalizer",
+    "ExternalSettlementStartupRecovery",
+    "ExternalSettlementStartupRecoveryReport",
 ]

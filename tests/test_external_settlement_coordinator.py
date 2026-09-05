@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from btcquant.execution.external_evidence import ExternalEvidenceSource, ExternalFill
 from btcquant.execution.external_evidence_reader import (
     EvidenceLookupOutcome,
@@ -25,9 +27,18 @@ from btcquant.execution.external_settlement_coordinator import (
     ExternalSettlementCoordinator,
     ExternalSettlementReconciliationStatus,
 )
+from btcquant.execution.external_settlement_finalization import (
+    ExternalSettlementFinalizationStatus,
+    ExternalSettlementFinalizer,
+)
+
 from btcquant.execution.external_submission_commitment import build_submission_response
 from btcquant.execution.order_state import ExternalOrderState
 from btcquant.execution.state_store import StateStore
+from btcquant.execution.external_settlement_recovery import (
+    ExternalSettlementStartupRecovery,
+)
+
 
 from test_financial_fill_application import _persisted, _plan
 
@@ -298,3 +309,128 @@ def test_external_coordinator_persists_non_found_lookup_but_does_not_apply(tmp_p
     assert outcome.settlement_complete is False
     assert outcome.applied is False
     assert store.read_financial_settlement_application_chain(persisted.local_order_id) == ()
+
+
+def test_external_finalization_is_atomic_and_idempotent(tmp_path: Path) -> None:
+    store, context, acquirer, persisted = _prepared(tmp_path, persist_commitment=True)
+    coordinator_result = ExternalSettlementCoordinator(store).reconcile(
+        context, acquirer, observed_at=OBSERVED
+    )
+    assert coordinator_result.applied is True
+    assert coordinator_result.settlement_key is not None
+
+    finalizer = ExternalSettlementFinalizer(store)
+    first = finalizer.finalize(
+        persisted.local_order_id,
+        settlement_key=coordinator_result.settlement_key,
+    )
+    assert first.status == ExternalSettlementFinalizationStatus.FINALIZED
+    assert first.transition_sequence_before == 0
+    assert first.transition_sequence_after == 1
+
+    order = store.read_orders("trend")[0]
+    assert order["local_state"] == "TERMINAL"
+    assert order["status"] == "FILLED"
+    state = store.load_engine_state("trend")
+    assert state is not None
+    assert state["slots"]["slot"]["financial_transition_seq"] == 1
+
+    second = finalizer.finalize(
+        persisted.local_order_id,
+        settlement_key=coordinator_result.settlement_key,
+    )
+    assert second.status == ExternalSettlementFinalizationStatus.ALREADY_FINALIZED
+    assert second.finalization_event_id == first.finalization_event_id
+    assert (
+        len(
+            [
+                event
+                for event in store.read_events("trend")
+                if event["event_type"] == "EXTERNAL_ORDER_FINALIZED"
+            ]
+        )
+        == 1
+    )
+
+
+def test_external_startup_recovery_applies_and_replays_without_submission(tmp_path: Path) -> None:
+    store, context, acquirer, persisted = _prepared(tmp_path, persist_commitment=True)
+    recovery = ExternalSettlementStartupRecovery(store)
+    report = recovery.recover(
+        "trend",
+        context_factory=lambda _order, commitment: _context(persisted, commitment),
+        acquirer=acquirer,
+        observed_at=OBSERVED,
+    )
+    assert report.inspected_order_ids == (persisted.local_order_id,)
+    assert report.finalized_order_ids == (persisted.local_order_id,)
+    assert report.manual_order_ids == ()
+    assert store.read_orders("trend")[0]["local_state"] == "TERMINAL"
+
+    second = recovery.recover(
+        "trend",
+        context_factory=lambda _order, commitment: _context(persisted, commitment),
+        acquirer=acquirer,
+    )
+    assert second.inspected_order_ids == ()
+    assert acquirer.calls == 1
+
+
+def test_external_startup_recovery_blocks_missing_submission_commitment(tmp_path: Path) -> None:
+    store, _context, acquirer, persisted = _prepared(tmp_path, persist_commitment=False)
+    report = ExternalSettlementStartupRecovery(store).recover(
+        "trend",
+        context_factory=lambda _order, commitment: _context(persisted, commitment),
+        acquirer=acquirer,
+        observed_at=OBSERVED,
+    )
+
+    assert report.inspected_order_ids == (persisted.local_order_id,)
+    assert report.finalized_order_ids == ()
+    assert report.manual_order_ids == (persisted.local_order_id,)
+    assert report.blocking_reasons == (
+        (
+            persisted.local_order_id,
+            "MANUAL_RECONCILIATION_REQUIRED_MISSING_SUBMISSION_COMMITMENT",
+        ),
+    )
+    assert acquirer.calls == 0
+    assert store.read_orders("trend")[0]["local_state"] == "PENDING_RECONCILIATION"
+
+
+def test_external_finalization_rolls_back_on_baseexception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, context, acquirer, persisted = _prepared(tmp_path, persist_commitment=True)
+    coordinator_result = ExternalSettlementCoordinator(store).reconcile(
+        context, acquirer, observed_at=OBSERVED
+    )
+    assert coordinator_result.settlement_key is not None
+
+    class SimulatedPowerLoss(BaseException):
+        pass
+
+    original_insert_event = store._insert_event
+
+    def fail_finalization_event(connection, engine, event_type, payload, **kwargs):
+        if event_type == "EXTERNAL_ORDER_FINALIZED":
+            raise SimulatedPowerLoss()
+        return original_insert_event(connection, engine, event_type, payload, **kwargs)
+
+    monkeypatch.setattr(store, "_insert_event", fail_finalization_event)
+    with pytest.raises(SimulatedPowerLoss):
+        ExternalSettlementFinalizer(store).finalize(
+            persisted.local_order_id,
+            settlement_key=coordinator_result.settlement_key,
+        )
+
+    order = store.read_orders("trend")[0]
+    assert order["local_state"] == "PENDING_RECONCILIATION"
+    state = store.load_engine_state("trend")
+    assert state is not None
+    assert state["slots"]["slot"]["financial_transition_seq"] == 0
+    assert not [
+        event
+        for event in store.read_events("trend")
+        if event["event_type"] == "EXTERNAL_ORDER_FINALIZED"
+    ]
