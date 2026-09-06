@@ -33,10 +33,13 @@ from .errors import (
 )
 from .external_evidence import ExternalEvidenceSource, ExternalFill, ExternalOrderObservation
 from .external_submission_commitment import (
+    IOC_NO_MATCH_ERROR,
     ExternalSubmissionResponse,
+    ExternalSubmissionOutcome,
     SUBMISSION_RESPONSE_AGGREGATE_TYPE,
     SUBMISSION_RESPONSE_EVENT_TYPE,
     SubmissionCommitmentError,
+    build_submission_response,
 )
 from .paper_execution_evidence import (
     PAPER_EVIDENCE_VERSION,
@@ -76,6 +79,8 @@ from .financial_order_settlement import (
 from .external_settlement_finalization import (
     ExternalSettlementFinalizationResult,
     ExternalSettlementFinalizationStatus,
+    ExternalZeroEffectFinalizationResult,
+    ExternalZeroEffectFinalizationStatus,
 )
 from .paper_order_finalization import (
     PaperFinalizationDecision,
@@ -4217,6 +4222,243 @@ class StateStore:
                 already_applied=False,
                 trade_inserted=trade_inserted,
                 event_id=event_id,
+            )
+
+    def finalize_external_zero_effect_atomically(
+        self,
+        *,
+        local_order_id: int,
+        submission_key: str,
+    ) -> ExternalZeroEffectFinalizationResult:
+        """Finalize an exact, durable deterministic IOC no-effect response."""
+
+        if self.read_only:
+            raise RuntimeError("Un StateStore read-only cannot finalize external zero effect")
+        if (
+            isinstance(local_order_id, bool)
+            or not isinstance(local_order_id, int)
+            or local_order_id <= 0
+        ):
+            raise ValueError("local_order_id must be a positive integer")
+        if not isinstance(submission_key, str) or not submission_key.strip():
+            raise ValueError("submission_key must be a non-empty string")
+        submission_key = submission_key.strip()
+
+        with self._transaction() as connection:
+            order = connection.execute(
+                "SELECT * FROM orders WHERE id = ?", (local_order_id,)
+            ).fetchone()
+            if order is None:
+                raise FinancialSettlementError("FINANCIAL_ORDER_MISSING")
+
+            zero_events = connection.execute(
+                """
+                SELECT id, payload FROM events
+                WHERE engine = ? AND event_type = 'EXTERNAL_ZERO_EFFECT_FINALIZED'
+                  AND aggregate_type = 'order' AND aggregate_id = ?
+                ORDER BY id
+                """,
+                (str(order["engine"]), str(local_order_id)),
+            ).fetchall()
+            if order["local_state"] == LocalOrderState.TERMINAL.value:
+                if len(zero_events) != 1 or order["status"] != "CANCELED":
+                    raise FinancialSettlementError("EXTERNAL_ZERO_EFFECT_FINALIZATION_CONFLICT")
+                try:
+                    event_payload = json.loads(str(zero_events[0]["payload"]))
+                except (TypeError, json.JSONDecodeError) as error:
+                    raise FinancialSettlementError(
+                        "EXTERNAL_ZERO_EFFECT_FINALIZATION_CORRUPT"
+                    ) from error
+                if not isinstance(event_payload, Mapping):
+                    raise FinancialSettlementError("EXTERNAL_ZERO_EFFECT_FINALIZATION_CORRUPT")
+                if (
+                    event_payload.get("submission_key") != submission_key
+                    or event_payload.get("status") != "CANCELED"
+                    or not isinstance(event_payload.get("transition_sequence_before"), int)
+                    or not isinstance(event_payload.get("transition_sequence_after"), int)
+                    or event_payload["transition_sequence_before"]
+                    != event_payload["transition_sequence_after"]
+                ):
+                    raise FinancialSettlementError("EXTERNAL_ZERO_EFFECT_FINALIZATION_CONFLICT")
+                return ExternalZeroEffectFinalizationResult(
+                    local_order_id=local_order_id,
+                    status=ExternalZeroEffectFinalizationStatus.ALREADY_FINALIZED,
+                    submission_key=submission_key,
+                    finalization_event_id=int(zero_events[0]["id"]),
+                    transition_sequence_before=int(event_payload["transition_sequence_before"]),
+                    transition_sequence_after=int(event_payload["transition_sequence_after"]),
+                )
+            if order["local_state"] != LocalOrderState.PENDING_RECONCILIATION.value:
+                raise FinancialSettlementError("FINANCIAL_ORDER_NOT_RECONCILIATION_READY")
+            if zero_events:
+                raise FinancialSettlementError("EXTERNAL_ZERO_EFFECT_FINALIZATION_CONFLICT")
+
+            plan_row = connection.execute(
+                "SELECT * FROM financial_application_plans WHERE local_order_id = ?",
+                (local_order_id,),
+            ).fetchone()
+            if plan_row is None:
+                raise FinancialSettlementError("LEGACY_APPLICATION_CONTEXT_INCOMPLETE")
+            try:
+                persisted_plan = self._plan_from_row(plan_row, order)
+            except (FinancialApplicationPlanConflict, TypeError, ValueError) as error:
+                raise FinancialSettlementError("FINANCIAL_APPLICATION_PLAN_CONFLICT") from error
+
+            response_rows = connection.execute(
+                """
+                SELECT aggregate_type, aggregate_id, correlation_id, payload
+                FROM events
+                WHERE engine = ? AND event_type = ? AND correlation_id = ?
+                ORDER BY id
+                """,
+                (
+                    str(order["engine"]),
+                    SUBMISSION_RESPONSE_EVENT_TYPE,
+                    str(order["intent_id"]),
+                ),
+            ).fetchall()
+            if len(response_rows) != 1:
+                raise FinancialSettlementError("EXTERNAL_ZERO_EFFECT_RESPONSE_NOT_DURABLE")
+            response_row = response_rows[0]
+            if response_row["aggregate_type"] != SUBMISSION_RESPONSE_AGGREGATE_TYPE or response_row[
+                "aggregate_id"
+            ] != str(local_order_id):
+                raise FinancialSettlementError("EXTERNAL_ZERO_EFFECT_RESPONSE_PROVENANCE_CONFLICT")
+            try:
+                response_payload = json.loads(str(response_row["payload"]))
+                response = ExternalSubmissionResponse.from_payload(response_payload)
+            except (
+                json.JSONDecodeError,
+                TypeError,
+                ValueError,
+                SubmissionCommitmentError,
+            ) as error:
+                raise FinancialSettlementError("EXTERNAL_ZERO_EFFECT_RESPONSE_CORRUPT") from error
+            if (
+                response.local_order_id != local_order_id
+                or response.intent_id != str(order["intent_id"])
+                or response.side != str(order["side"])
+                or response.submission_key != submission_key
+                or response.venue != "hyperliquid"
+                or response.environment != "testnet"
+                or response.outcome != ExternalSubmissionOutcome.DETERMINISTIC_IOC_NO_MATCH
+                or response.commitment is not None
+                or response.structured_error != IOC_NO_MATCH_ERROR
+            ):
+                raise FinancialSettlementError("EXTERNAL_ZERO_EFFECT_RESPONSE_CONFLICT")
+            try:
+                classified = build_submission_response(
+                    local_order_id=response.local_order_id,
+                    intent_id=response.intent_id,
+                    venue=response.venue,
+                    environment=response.environment,
+                    account_scope=response.account_scope,
+                    instrument=response.instrument,
+                    side=response.side,
+                    client_order_id=response.client_order_id,
+                    raw_payload=response.to_payload()["raw_payload"],
+                    response_acquired_at=response.response_acquired_at,
+                    ioc_expected=True,
+                    structured_error=response.structured_error,
+                )
+            except (TypeError, ValueError, SubmissionCommitmentError) as error:
+                raise FinancialSettlementError("EXTERNAL_ZERO_EFFECT_RESPONSE_CONFLICT") from error
+            if (
+                classified.outcome != ExternalSubmissionOutcome.DETERMINISTIC_IOC_NO_MATCH
+                or classified.submission_key != response.submission_key
+                or classified.raw_response_hash != response.raw_response_hash
+                or classified.structured_error != IOC_NO_MATCH_ERROR
+            ):
+                raise FinancialSettlementError("EXTERNAL_ZERO_EFFECT_RESPONSE_CONFLICT")
+
+            for table in (
+                "external_fills",
+                "external_order_settlements",
+                "financial_settlement_applications",
+                "financial_fill_applications",
+            ):
+                positive = connection.execute(
+                    f"SELECT 1 FROM {table} WHERE local_order_id = ? LIMIT 1",
+                    (local_order_id,),
+                ).fetchone()
+                if positive is not None:
+                    raise FinancialSettlementError("EXTERNAL_ZERO_EFFECT_POSITIVE_EVIDENCE")
+
+            observation_rows = connection.execute(
+                "SELECT * FROM external_order_observations WHERE local_order_id = ?",
+                (local_order_id,),
+            ).fetchall()
+            tolerance = max(1e-9, float(order["requested_qty"]) * 1e-9)
+            for observation_row in observation_rows:
+                try:
+                    observation = self._external_order_observation_from_row(observation_row)
+                    state = ExternalOrderState(observation.normalized_external_status)
+                except (TypeError, ValueError, InvalidExternalObservation) as error:
+                    raise FinancialSettlementError(
+                        "EXTERNAL_ZERO_EFFECT_ORDER_OBSERVATION_CORRUPT"
+                    ) from error
+                if (
+                    observation.cumulative_filled_qty is not None
+                    and observation.cumulative_filled_qty > tolerance
+                ) or state in {
+                    ExternalOrderState.FILLED,
+                    ExternalOrderState.PARTIAL_TERMINAL,
+                }:
+                    raise FinancialSettlementError("EXTERNAL_ZERO_EFFECT_POSITIVE_EVIDENCE")
+
+            current_payload, _ = self._load_engine_state_in_transaction(
+                connection, persisted_plan.plan.identity.engine
+            )
+            slot = current_payload.get("slots", {}).get(persisted_plan.plan.identity.slot)
+            if not isinstance(slot, Mapping):
+                raise FinancialSettlementError("FINANCIAL_ENGINE_STATE_CONFLICT")
+            transition_sequence = slot.get("financial_transition_seq")
+            if (
+                isinstance(transition_sequence, bool)
+                or not isinstance(transition_sequence, int)
+                or transition_sequence < 0
+                or transition_sequence != persisted_plan.plan.identity.transition_sequence
+            ):
+                raise FinancialSettlementError("FINANCIAL_TRANSITION_SEQUENCE_CONFLICT")
+
+            finalized_at = utc_now()
+            cursor = connection.execute(
+                """
+                UPDATE orders SET status='CANCELED', local_state='TERMINAL',
+                    external_state='CANCELED', filled_qty=0, remaining_qty=?,
+                    price=NULL, fee=0, broker_order_id=NULL, error=NULL, updated_at=?
+                WHERE id=? AND local_state='PENDING_RECONCILIATION'
+                """,
+                (float(order["requested_qty"]), finalized_at, local_order_id),
+            )
+            if cursor.rowcount != 1:
+                raise FinancialSettlementError("EXTERNAL_ZERO_EFFECT_STATE_CONFLICT")
+            event_id = self._insert_event(
+                connection,
+                str(order["engine"]),
+                "EXTERNAL_ZERO_EFFECT_FINALIZED",
+                {
+                    "contract": "external-zero-effect-finalization-v1",
+                    "local_order_id": local_order_id,
+                    "intent_id": str(order["intent_id"]),
+                    "submission_key": submission_key,
+                    "raw_response_hash": response.raw_response_hash,
+                    "status": "CANCELED",
+                    "transition_sequence_before": transition_sequence,
+                    "transition_sequence_after": transition_sequence,
+                },
+                aggregate_type="order",
+                aggregate_id=str(local_order_id),
+                correlation_id=str(order["intent_id"]),
+                ts=finalized_at,
+            )
+            return ExternalZeroEffectFinalizationResult(
+                local_order_id=local_order_id,
+                status=ExternalZeroEffectFinalizationStatus.FINALIZED,
+                submission_key=submission_key,
+                finalization_event_id=event_id,
+                transition_sequence_before=transition_sequence,
+                transition_sequence_after=transition_sequence,
             )
 
     def finalize_external_order_atomically(
