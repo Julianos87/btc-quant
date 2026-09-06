@@ -154,7 +154,12 @@ def _quality_funding(path: Path) -> dict[str, Any]:
         raise ValueError(f"{path}: invalid funding timestamps")
     if rates.isna().any() or not np.isfinite(rates.to_numpy()).all():
         raise ValueError(f"{path}: invalid funding rates")
-    deltas = timestamps.to_series().diff().dropna()
+    # Binance publishes a few millisecond timestamp jitter around nominal
+    # 00:00/08:00/16:00 slots.  Validate cadence on rounded slots (the loader
+    # separately enforces the one-second jitter bound), otherwise every
+    # millisecond offset is falsely reported as a missing funding event.
+    slots = pd.Series(timestamps).dt.round("8h")
+    deltas = slots.diff().dropna()
     anomalies = deltas[deltas != pd.Timedelta("8h")]
     return {
         "path": str(path),
