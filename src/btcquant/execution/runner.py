@@ -43,6 +43,7 @@ from .broker import Broker
 from .clock import SystemClock
 from .data_quality import validate_closed_ohlcv
 from .errors import ReconciliationRequired
+from .external_settlement_runtime import ExternalSettlementRuntime
 from .funding_service import FundingService
 from .instance_lock import EngineInstanceLock
 from .order_service import OrderExecutionService, SubmittedOrder
@@ -127,6 +128,7 @@ class LiveRunner:
         risk_service: PortfolioRiskService | None = None,
         order_service: OrderExecutionService | None = None,
         accounting_service: PositionAccountingService | None = None,
+        external_settlement_runtime: ExternalSettlementRuntime | None = None,
     ) -> None:
         self.slots = slots
         self.broker = broker
@@ -163,6 +165,16 @@ class LiveRunner:
         self.risk_service = risk_service or PortfolioRiskService(self.risk)
         self.order_service = order_service or OrderExecutionService(self.store, self.broker)
         self.accounting_service = accounting_service or PositionAccountingService()
+        self.external_settlement_runtime = external_settlement_runtime
+        if (
+            self.external_settlement_runtime is None
+            and ExternalSettlementRuntime.is_qualified_broker(self.broker)
+        ):
+            self.external_settlement_runtime = ExternalSettlementRuntime(
+                self.store,
+                self.broker,
+                self.clock,
+            )
         self.reconciliation_coordinator = OrderReconciliationCoordinator(self.store)
         self.peak_equity = sum(s.cash for s in slots)
         self.halted = False
@@ -177,16 +189,33 @@ class LiveRunner:
             raise ReconciliationRequired(
                 "État trend marqué RECONCILIATION_REQUIRED : démarrage interdit"
             )
-        recovery = recover_interrupted_orders(
-            self.store,
-            self.broker,
-            "trend",
-            external=self.broker.external_execution,
-        )
-        if not recovery.can_start:
+        recovery_can_start: bool
+        recovery_manual_order_ids: tuple[int, ...] | list[int]
+        recovery_lookup_errors: dict[int, str]
+        recovery_finalized_order_ids: tuple[int, ...] | list[int]
+        if self.external_settlement_runtime is not None:
+            external_recovery = self.external_settlement_runtime.recover_startup(
+                observed_at=self.clock.utc_now().isoformat()
+            )
+            recovery_can_start = external_recovery.can_start
+            recovery_manual_order_ids = external_recovery.manual_order_ids
+            recovery_lookup_errors = dict(external_recovery.blocking_reasons)
+            recovery_finalized_order_ids = external_recovery.finalized_order_ids
+        else:
+            recovery = recover_interrupted_orders(
+                self.store,
+                self.broker,
+                "trend",
+                external=self.broker.external_execution,
+            )
+            recovery_can_start = recovery.can_start
+            recovery_manual_order_ids = recovery.manual_order_ids
+            recovery_lookup_errors = recovery.lookup_errors
+            recovery_finalized_order_ids = recovery.finalized_order_ids
+        if not recovery_can_start:
             details = (
-                f"manuel={recovery.manual_order_ids}, "
-                f"erreurs_lookup={sorted(recovery.lookup_errors)}"
+                f"manuel={recovery_manual_order_ids}, "
+                f"erreurs_lookup={sorted(recovery_lookup_errors)}"
             )
             self.store.record_incident(
                 "execution:trend:recovery_blocked",
@@ -195,8 +224,8 @@ class LiveRunner:
                 kind="recovery_blocked",
                 message=f"Reprise trend bloquée : {details}",
                 context={
-                    "manual_order_ids": recovery.manual_order_ids,
-                    "lookup_error_order_ids": sorted(recovery.lookup_errors),
+                    "manual_order_ids": recovery_manual_order_ids,
+                    "lookup_error_order_ids": sorted(recovery_lookup_errors),
                 },
             )
             raise RuntimeError(
@@ -204,7 +233,7 @@ class LiveRunner:
                 "réconciliation manuelle requise, démarrage interdit"
             )
         self.store.resolve_incident("execution:trend:recovery_blocked")
-        if recovery.finalized_order_ids:
+        if recovery_finalized_order_ids:
             # Recovery may have committed finalization after the initial
             # constructor load. Refresh memory from that durable state before
             # any strategy decision can be evaluated.
@@ -1139,6 +1168,20 @@ class LiveRunner:
             self._load_state()
         return reconciliation
 
+    def _reconcile_external_submission(self, submitted: SubmittedOrder) -> None:
+        """Reconcile and apply one qualified external submission durably."""
+
+        runtime = self.external_settlement_runtime
+        if runtime is None:
+            raise ReconciliationRequired(
+                "EXTERNAL_RUNTIME_NOT_QUALIFIED: réconciliation externe indisponible"
+            )
+        runtime.reconcile_order(
+            submitted.order_id,
+            observed_at=self.clock.utc_now().isoformat(),
+        )
+        self._load_state()
+
     @staticmethod
     def _position_generation(position: Position) -> str:
         return (
@@ -1197,6 +1240,20 @@ class LiveRunner:
             reduce_only=True,
             volatility_annual=volatility_annual,
         )
+        if self.external_settlement_runtime is not None:
+            self._reconcile_external_submission(submitted)
+            if self.broker.supports_stop_orders:
+                if slot.position is None:
+                    self._prepare_stop_cancellation(slot, reason=f"position_closed:{reason}")
+                elif slot.position is not None:
+                    self._begin_stop_replacement(
+                        slot,
+                        qty=slot.position.qty,
+                        stop_price=slot.position.stop_price,
+                        direction=slot.position.direction,
+                        reason=f"partial_exit:{reason}",
+                    )
+            return
         if not self.broker.external_execution:
             self._reconcile_paper_submission(submitted)
             return
@@ -1322,6 +1379,17 @@ class LiveRunner:
             entry_direction=direction,
             entry_stop_price=stop,
         )
+        if self.external_settlement_runtime is not None:
+            self._reconcile_external_submission(submitted)
+            if self.broker.supports_stop_orders and slot.position is not None:
+                self._begin_stop_replacement(
+                    slot,
+                    qty=slot.position.qty,
+                    stop_price=slot.position.stop_price,
+                    direction=slot.position.direction,
+                    reason="entry_protection",
+                )
+            return
         if not self.broker.external_execution:
             self._reconcile_paper_submission(submitted)
             return
@@ -1415,6 +1483,9 @@ class LiveRunner:
             float(row["volume"]) if pd.notna(row.get("volume")) else None,
             volatility_annual=(float(rvol) if pd.notna(rvol) else None),
         )
+        if self.external_settlement_runtime is not None:
+            self._reconcile_external_submission(submitted)
+            return
         if not self.broker.external_execution:
             self._reconcile_paper_submission(submitted)
             return
