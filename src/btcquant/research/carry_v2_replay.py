@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -310,8 +311,21 @@ def _cycle_basis_ratio(cycles: list[dict[str, Any]]) -> dict[str, float | None]:
     }
 
 
-def replay_policy(frame: pd.DataFrame, policy: ReplayPolicy) -> dict[str, Any]:
-    """Replay one fixed policy with causal prices and explicit equity identity."""
+def replay_policy(
+    frame: pd.DataFrame,
+    policy: ReplayPolicy,
+    *,
+    entry_filter: Callable[[pd.Series], bool] | None = None,
+    exit_filter: Callable[[pd.Series], bool] | None = None,
+) -> dict[str, Any]:
+    """Replay one policy with causal prices and explicit equity identity.
+
+    Optional filters are research-only signal gates. They are evaluated on
+    the current funding observation (never on a future row), which lets a
+    benchmark express volatility- or basis-conditioned carry without
+    duplicating the accounting implementation. The default remains exactly
+    the production V1 replay semantics.
+    """
 
     if frame.empty:
         raise ReplayInputError("replay frame is empty")
@@ -367,6 +381,10 @@ def replay_policy(frame: pd.DataFrame, policy: ReplayPolicy) -> dict[str, Any]:
             exit_ann=policy.exit_ann,
         )
         action = str(decision.action)
+        if action == "OPEN" and entry_filter is not None and not entry_filter(row):
+            action = "HOLD"
+        if action == "CLOSE" and exit_filter is not None and not exit_filter(row):
+            action = "HOLD"
         if position is not None and action == "CLOSE":
             realized_spot += spot_mark_pnl
             realized_perp += perp_mark_pnl
