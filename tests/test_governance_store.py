@@ -102,6 +102,29 @@ def test_execute_trial_reserves_before_callback_and_persists_result(tmp_path) ->
         assert reopened.get_trial(f"{spec.experiment_id}:trial:000001")["status"] == "SUCCEEDED"
 
 
+def test_execute_trial_is_idempotent_after_durable_success(tmp_path) -> None:
+    path = tmp_path / "governance.sqlite3"
+    spec = complete_spec()
+    calls = 0
+
+    def evaluator(_reservation):
+        nonlocal calls
+        calls += 1
+        return {"metrics": {"sharpe": 0.5}, "value": 7}
+
+    with GovernanceStore(path) as store:
+        first = store.execute_trial(**trial_args(spec), evaluator=evaluator)
+        second = store.execute_trial(
+            **trial_args(spec),
+            evaluator=lambda _reservation: (_ for _ in ()).throw(
+                AssertionError("duplicate trial must be replayed")
+            ),
+        )
+
+    assert first == second == {"metrics": {"sharpe": 0.5}, "value": 7}
+    assert calls == 1
+
+
 def test_trial_reservation_survives_restart_and_failed_result(tmp_path) -> None:
     path = tmp_path / "governance.sqlite3"
     spec = replace(complete_spec(), maximum_trial_budget=2)

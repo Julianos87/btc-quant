@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from dataclasses import replace
 
 import pandas as pd
 import pytest
 
 from btcquant.research.governance import DIAGNOSTIC_LABEL, GovernanceError
+from btcquant.research.governance_store import GovernanceStore
 from btcquant.research.governed_walkforward import governed_walk_forward
 
 from test_quant_governance import make_spec
+from test_search_gates import complete_spec
 
 
 def test_governed_walkforward_counts_every_candidate_and_keeps_oos_flat() -> None:
@@ -67,3 +70,53 @@ def test_governed_walkforward_refuses_budget_overflow() -> None:
             run_mode="diagnostic",
             diagnostic_label=DIAGNOSTIC_LABEL,
         )
+
+
+def test_governed_walkforward_search_persists_trials_and_replays_without_evaluator(
+    tmp_path,
+) -> None:
+    index = pd.date_range("2026-01-01T00:00Z", periods=30, freq="h")
+    frame = pd.DataFrame({"close": range(len(index))}, index=index)
+    candidates = [{"kind": "stable"}, {"kind": "other"}]
+    calls = 0
+
+    def evaluator(parameters, train, evaluation):
+        nonlocal calls
+        calls += 1
+        score = 1.0 if parameters["kind"] == "stable" else 0.5
+        return {"sharpe": score, "evaluation_metrics": {"return": score}}
+
+    spec = replace(complete_spec(), maximum_trial_budget=100)
+    path = tmp_path / "governance.sqlite3"
+    with GovernanceStore(path) as store:
+        first = governed_walk_forward(
+            frame,
+            candidates,
+            spec=spec,
+            train_duration=timedelta(hours=8),
+            evaluation_duration=timedelta(hours=4),
+            warmup_duration=timedelta(hours=2),
+            purge_duration=timedelta(hours=1),
+            embargo_duration=timedelta(hours=1),
+            evaluator=evaluator,
+            governance_store=store,
+        )
+        first_calls = calls
+        assert first_calls == first.trials_attempted
+        assert store.trial_count(spec.experiment_id) == first.trials_attempted
+
+        second = governed_walk_forward(
+            frame,
+            candidates,
+            spec=spec,
+            train_duration=timedelta(hours=8),
+            evaluation_duration=timedelta(hours=4),
+            warmup_duration=timedelta(hours=2),
+            purge_duration=timedelta(hours=1),
+            embargo_duration=timedelta(hours=1),
+            evaluator=lambda *_: (_ for _ in ()).throw(AssertionError("must not rerun")),
+            governance_store=store,
+        )
+
+    assert calls == first_calls
+    assert second.folds == first.folds

@@ -12,7 +12,8 @@ UV_BIN="$2"
 [ "${UV_BIN#/}" != "${UV_BIN}" ] || { echo "uv doit être un chemin absolu résolu." >&2; exit 1; }
 [ -x "${UV_BIN}" ] || { echo "uv absent ou non exécutable." >&2; exit 1; }
 
-VALIDATION_ROOT="$(mktemp -d /tmp/btcquant-release-validation.XXXXXX)"
+TMP_BASE="${TMPDIR:-/tmp}"
+VALIDATION_ROOT="$(mktemp -d "${TMP_BASE%/}/btcquant-release-validation.XXXXXX")"
 VALIDATION_BIN="${VALIDATION_ROOT}/bin"
 VALIDATION_ENV="${VALIDATION_ROOT}/venv"
 PIP_AUDIT_CACHE="${VALIDATION_ROOT}/pip-audit"
