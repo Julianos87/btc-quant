@@ -154,6 +154,23 @@ class ExternalSettlementStartupRecovery:
                 responses = self._store.read_external_submission_responses(
                     str(order["intent_id"]), engine=engine
                 )
+                zero_responses = [
+                    response
+                    for response in responses
+                    if response.outcome == ExternalSubmissionOutcome.DETERMINISTIC_IOC_NO_MATCH
+                ]
+                if zero_responses:
+                    if len(responses) != 1 or len(zero_responses) != 1:
+                        raise FinancialSettlementError("EXTERNAL_ZERO_EFFECT_RESPONSE_CONFLICT")
+                    submission_key = zero_responses[0].submission_key
+                    if submission_key is None:
+                        raise FinancialSettlementError("EXTERNAL_ZERO_EFFECT_RESPONSE_CONFLICT")
+                    self._finalizer.finalize_zero_effect(
+                        order_id,
+                        submission_key=submission_key,
+                    )
+                    finalized.append(order_id)
+                    continue
                 commitment = self._commitment(responses)
                 if commitment is None:
                     raise FinancialSettlementError(

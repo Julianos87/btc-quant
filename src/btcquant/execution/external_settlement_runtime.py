@@ -31,6 +31,7 @@ from .external_settlement_coordinator import (
 from .external_settlement_finalization import (
     ExternalSettlementFinalizationResult,
     ExternalSettlementFinalizer,
+    ExternalZeroEffectFinalizationResult,
 )
 from .external_settlement_recovery import (
     ExternalSettlementStartupRecovery,
@@ -59,6 +60,17 @@ class ExternalSettlementRuntimeResult:
     @property
     def local_order_id(self) -> int:
         return self.reconciliation.local_order_id
+
+
+@dataclass(frozen=True)
+class ExternalZeroEffectRuntimeResult:
+    """Runtime result for a durable deterministic IOC no-effect outcome."""
+
+    finalization: ExternalZeroEffectFinalizationResult
+
+    @property
+    def local_order_id(self) -> int:
+        return self.finalization.local_order_id
 
 
 def _parse_timestamp(value: object, field: str) -> datetime:
@@ -221,8 +233,29 @@ class ExternalSettlementRuntime:
         order_id: int,
         *,
         observed_at: str | None = None,
-    ) -> ExternalSettlementRuntimeResult:
+    ) -> ExternalSettlementRuntimeResult | ExternalZeroEffectRuntimeResult:
         """Perform one bounded read/persist/assess/apply/finalize pass."""
+
+        order = self._order(order_id)
+        responses = self.store.read_external_submission_responses(
+            str(order["intent_id"]), engine=str(order["engine"])
+        )
+        zero_responses = [
+            response
+            for response in responses
+            if response.outcome == ExternalSubmissionOutcome.DETERMINISTIC_IOC_NO_MATCH
+        ]
+        if zero_responses:
+            if len(responses) != 1 or len(zero_responses) != 1:
+                raise ReconciliationRequired("EXTERNAL_ZERO_EFFECT_RESPONSE_CONFLICT")
+            submission_key = zero_responses[0].submission_key
+            if submission_key is None:
+                raise ReconciliationRequired("EXTERNAL_ZERO_EFFECT_RESPONSE_CONFLICT")
+            zero_finalization = self.finalizer.finalize_zero_effect(
+                order_id,
+                submission_key=submission_key,
+            )
+            return ExternalZeroEffectRuntimeResult(zero_finalization)
 
         context = self._context_for_order(order_id)
         reconciliation = self.coordinator.reconcile(context, self.acquirer, observed_at=observed_at)
@@ -258,4 +291,8 @@ class ExternalSettlementRuntime:
         )
 
 
-__all__ = ["ExternalSettlementRuntime", "ExternalSettlementRuntimeResult"]
+__all__ = [
+    "ExternalSettlementRuntime",
+    "ExternalSettlementRuntimeResult",
+    "ExternalZeroEffectRuntimeResult",
+]
