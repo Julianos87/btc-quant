@@ -263,7 +263,8 @@ def test_deployment_scripts_expose_fail_closed_guards():
     assert "pytest" in validate
     assert "check_baseline_provenance.py" in validate
     assert "pip-audit" in validate
-    assert 'VALIDATION_ROOT="$(mktemp -d /tmp/btcquant-release-validation.' in validate
+    assert 'TMP_BASE="${TMPDIR:-/tmp}"' in validate
+    assert 'VALIDATION_ROOT="$(mktemp -d "${TMP_BASE%/}/btcquant-release-validation.' in validate
     assert 'VALIDATION_BIN="${VALIDATION_ROOT}/bin"' in validate
     assert 'VALIDATION_ENV="${RELEASE}/.validation-venv"' not in validate
     assert "-u BTCQUANT_ROOT" in validate
@@ -1198,6 +1199,7 @@ def test_validate_release_isolates_and_cleans_validation_artifacts(tmp_path):
             "GIT_INDEX_FILE": str(runtime_root / "git-index"),
             "GIT_OBJECT_DIRECTORY": str(runtime_root / "git-objects"),
             "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(runtime_root / "git-alternates"),
+            "TMPDIR": str(tmp_path),
         }
     )
     command = ["bash", "deploy/validate-release.sh", str(release), str(uv)]

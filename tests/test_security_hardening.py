@@ -533,6 +533,7 @@ def test_legacy_backup_snapshots_all_allowlisted_sqlite_wal_databases(tmp_path: 
     env = os.environ.copy()
     env["BACKUP_ENCRYPTION_KEY"] = "lot7-wal-fixture-key"
     env["BTCQUANT_ROOT"] = str(app)
+    env["TMPDIR"] = str(tmp_path)
     result = subprocess.run(
         ["bash", str(app / "scripts" / "backup_state.sh")],
         env=env,
@@ -615,6 +616,7 @@ def test_backup_script_does_not_invoke_compaction_and_publishes_only_encrypted(
     env = os.environ.copy()
     env["BACKUP_ENCRYPTION_KEY"] = "lot7-test-key"
     env["BTCQUANT_ROOT"] = str(app)
+    env["TMPDIR"] = str(tmp_path)
     result = subprocess.run(
         ["bash", str(app / "scripts" / "backup_state.sh")],
         env=env,

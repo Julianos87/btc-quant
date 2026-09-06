@@ -779,18 +779,33 @@ class GovernanceStore:
     ) -> dict[str, Any]:
         """Reserve, then execute; a crash leaves the reservation durable."""
 
-        reservation = self.reserve_trial(
-            spec,
-            parameters,
-            dataset_fingerprint=dataset_fingerprint,
-            split_fingerprint=split_fingerprint,
-            seed=seed,
-            cost_assumptions=cost_assumptions,
-        )
+        try:
+            reservation = self.reserve_trial(
+                spec,
+                parameters,
+                dataset_fingerprint=dataset_fingerprint,
+                split_fingerprint=split_fingerprint,
+                seed=seed,
+                cost_assumptions=cost_assumptions,
+            )
+        except DuplicateTrial:
+            # ``reserve_trial`` deliberately rejects an accidental duplicate.
+            # The execute API is the explicit idempotent boundary: turn that
+            # duplicate into a read-only reproduction request, then only replay
+            # a successfully persisted result.
+            reservation = self.begin_reproduction(
+                spec,
+                parameters,
+                dataset_fingerprint=dataset_fingerprint,
+                split_fingerprint=split_fingerprint,
+                seed=seed,
+                cost_assumptions=cost_assumptions,
+            )
         if not reservation.is_new:
             row = self.get_trial(reservation.trial_id)
-            if row is None or not row.get("result_json"):
-                raise GovernanceStoreError("reproduction sans résultat durable")
+            if row is None or row.get("status") != "SUCCEEDED" or not row.get("result_json"):
+                status = row.get("status") if row is not None else "MISSING"
+                raise GovernanceStoreError(f"reproduction sans résultat durable ({status})")
             return _json_load(row["result_json"])
         self.start_trial(reservation.trial_id)
         try:

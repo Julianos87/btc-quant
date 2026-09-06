@@ -29,10 +29,11 @@ mkdir -p "${BACKUP_DIR}"
 # must never mutate the authoritative database as a side effect of backup.
 PYBIN="${APP_ROOT}/venv/bin/python"; [ -x "${PYBIN}" ] || PYBIN="python3"
 STAMP="$(date -u +%Y%m%d-%H%M)"
-TMP_DIR="$(mktemp -d /tmp/btcquant-backup.XXXXXX)"
+TMP_BASE="${TMPDIR:-/tmp}"
+TMP_DIR="$(mktemp -d "${TMP_BASE%/}/btcquant-backup.XXXXXX")"
 cleanup() {
   case "${TMP_DIR}" in
-    /tmp/btcquant-backup.*) rm -rf -- "${TMP_DIR}" ;;
+    "${TMP_BASE%/}"/btcquant-backup.*) rm -rf -- "${TMP_DIR}" ;;
     *) echo "Refus de supprimer un chemin temporaire inattendu : ${TMP_DIR}" >&2 ;;
   esac
 }

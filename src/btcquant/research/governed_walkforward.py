@@ -25,6 +25,7 @@ from .governance import (
     parameter_fingerprint,
     sha256_canonical,
 )
+from .governance_store import GovernanceStore
 
 from .search_gates import require_diagnostic_label, validate_search_ready
 
@@ -66,6 +67,7 @@ def governed_walk_forward(
     code_sha: str | None = None,
     run_mode: str = "search",
     diagnostic_label: str | None = None,
+    governance_store: GovernanceStore | None = None,
 ) -> GovernedWalkForwardResult:
     """Évalue un espace pré-enregistré avec sélection et essai exhaustifs.
 
@@ -80,7 +82,9 @@ def governed_walk_forward(
         ExperimentRegistry().register(spec)
     elif run_mode == "search":
         validate_search_ready(spec)
-        raise GovernanceError("durable search adapter required; real selection is fail-closed")
+        if governance_store is None:
+            raise GovernanceError("durable search adapter required; real selection is fail-closed")
+        governance_store.register_experiment(spec)
     else:
         raise GovernanceError("run_mode inconnu")
     if not candidates:
@@ -108,7 +112,56 @@ def governed_walk_forward(
         ranked: list[tuple[float, str, Mapping[str, Any], Mapping[str, Any]]] = []
         for parameters in candidates:
             try:
-                outcome = dict(evaluator(parameters, train, evaluation))
+                if governance_store is None:
+                    outcome = dict(evaluator(parameters, train, evaluation))
+                else:
+                    # Reserve the semantic trial before invoking user code. A
+                    # crash therefore leaves a durable RESERVED/RUNNING row;
+                    # rerunning the same trial cannot silently execute it a
+                    # second time. Finished trials are reproduced from the
+                    # store without calling the evaluator again.
+                    dataset_fingerprint = sha256_canonical(
+                        {
+                            "dataset_ids": spec.dataset_ids,
+                            "dataset_hashes": spec.dataset_hashes,
+                            "dataset_roles": spec.dataset_roles,
+                        }
+                    )
+
+                    def evaluate_durable(
+                        _reservation: object,
+                        *,
+                        trial_parameters: Mapping[str, Any] = parameters,
+                        trial_train: pd.DataFrame = train,
+                        trial_evaluation: pd.DataFrame = evaluation,
+                    ) -> Mapping[str, Any]:
+                        evaluated = dict(evaluator(trial_parameters, trial_train, trial_evaluation))
+                        selected_score = evaluated.get(spec.selection_metric)
+                        if not isinstance(selected_score, (int, float)) or not pd.notna(
+                            selected_score
+                        ):
+                            raise GovernanceError("non_finite_selection_metric")
+                        evaluation_result = evaluated.get("evaluation_metrics", {})
+                        if not isinstance(evaluation_result, Mapping):
+                            raise GovernanceError("evaluation_metrics doit être un mapping")
+                        return {
+                            "selection_score": float(selected_score),
+                            "evaluation_metrics": dict(evaluation_result),
+                            "outcome": evaluated,
+                            "metrics": {spec.selection_metric: float(selected_score)},
+                        }
+
+                    durable = governance_store.execute_trial(
+                        spec,
+                        parameters,
+                        dataset_fingerprint=dataset_fingerprint,
+                        split_fingerprint=split_fingerprint,
+                        evaluator=evaluate_durable,
+                    )
+                    persisted_outcome = durable.get("outcome")
+                    if not isinstance(persisted_outcome, Mapping):
+                        raise GovernanceError("résultat de trial durable invalide")
+                    outcome = dict(persisted_outcome)
                 score = outcome.get(spec.selection_metric)
                 evaluation_metrics = outcome.get("evaluation_metrics", {})
                 if not isinstance(score, (int, float)) or not pd.notna(score):

@@ -82,6 +82,7 @@ def test_backup_uses_real_runtime_state_and_release_venv(tmp_path: Path) -> None
     env = os.environ.copy()
     env["BACKUP_ENCRYPTION_KEY"] = "fixture-key-runtime"
     env["BTCQUANT_ROOT"] = str(runtime)
+    env["TMPDIR"] = str(tmp_path)
     result = subprocess.run(
         ["bash", str(release / "scripts" / "backup_state.sh")],
         env=env,
@@ -148,6 +149,7 @@ def test_backup_encrypted_roundtrip_from_runtime_root(tmp_path: Path) -> None:
     env = os.environ.copy()
     env["BACKUP_ENCRYPTION_KEY"] = "roundtrip-key"
     env["BTCQUANT_ROOT"] = str(runtime)
+    env["TMPDIR"] = str(tmp_path)
     result = subprocess.run(
         ["bash", str(release / "scripts" / "backup_state.sh")],
         env=env,
