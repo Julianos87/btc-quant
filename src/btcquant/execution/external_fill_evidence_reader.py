@@ -48,6 +48,7 @@ _RAW_HASH_FIELDS = (
     "time",
     "fee",
     "feeToken",
+    "builderFee",
     "oid",
     "tid",
     "cloid",
@@ -149,6 +150,32 @@ def _merge_numeric(
     if unified is not None and raw is not None and not _same_numeric(unified, raw):
         raise _ConflictingResponse(f"{field} unified/raw contradictoire")
     return unified if unified is not None else raw
+
+
+def _hyperliquid_fee(
+    unified: float | None,
+    raw: float | None,
+    builder: float | None,
+) -> float | None:
+    """Return the authoritative Hyperliquid fee without double-counting.
+
+    Hyperliquid documents ``builderFee`` as already included in raw ``fee``.
+    CCXT 4.5.71 adds it once more to the unified ``trade.fee.cost``. Accept
+    either the raw value or that known CCXT representation, but persist the
+    raw venue total in both cases. Any other disagreement remains fail-closed.
+    """
+
+    if builder is not None and raw is None:
+        raise _IncompleteResponse("builderFee observé sans fee venue exploitable")
+    if raw is None:
+        return unified
+    if unified is None:
+        return raw
+    if _same_numeric(unified, raw):
+        return raw
+    if builder is not None and _same_numeric(unified, raw + builder):
+        return raw
+    raise _ConflictingResponse("fee/cost unified/raw contradictoire")
 
 
 def _timestamp(value: object, field: str) -> tuple[float, str] | None:
@@ -443,8 +470,9 @@ def _normalize_target_trade(
         unified_fee = _numeric_field(fee_value, "cost", signed=True)
         unified_fee_asset = _optional_text(fee_value.get("currency"), "fee.currency")
     raw_fee = _numeric_field(info, "fee", signed=True)
+    raw_builder_fee = _numeric_field(info, "builderFee")
     raw_fee_asset = _optional_text(info.get("feeToken"), "feeToken")
-    fee = _merge_numeric(unified_fee, raw_fee, "fee/cost")
+    fee = _hyperliquid_fee(unified_fee, raw_fee, raw_builder_fee)
     fee_asset = _merge_text(unified_fee_asset, raw_fee_asset, "fee asset")
     if fee is None and fee_asset is not None:
         raise _IncompleteResponse("feeToken observé sans fee exploitable")

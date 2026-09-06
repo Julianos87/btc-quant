@@ -71,6 +71,23 @@ configure_pending_rebalance_timer() {
   fi
 }
 
+configure_writer_timers() {
+  # update.sh quiesces every SQLite writer before a migration. Re-enable the
+  # complete writer schedule afterwards; an enabled-but-inactive timer has no
+  # next trigger and silently removes backup, watchdog, or rebalance coverage.
+  TARGET_WRITES_STARTED=true
+  systemctl enable --now btcquant-compact.timer btcquant-backup.timer \
+    btcquant-rebalance.timer
+  configure_pending_rebalance_timer
+  if [ -f "${TESTNET_APPROVAL}" ]; then
+    systemctl disable --now btcquant-watchdog.timer 2>/dev/null || true
+    systemctl enable --now btcquant-hyperliquid-watchdog.timer
+  else
+    systemctl disable --now btcquant-hyperliquid-watchdog.timer 2>/dev/null || true
+    systemctl enable --now btcquant-watchdog.timer
+  fi
+}
+
 wait_for_dashboard() {
   local attempt
   for attempt in {1..15}; do
@@ -156,6 +173,11 @@ from btcquant.deployment import atomic_switch_release
 atomic_switch_release(sys.argv[1], sys.argv[2])
 ' "${ROOT}" "${old_target}"
   install_units
+  configure_writer_timers
+  configure_shadow_service
+  if ${RESTART_ENGINES}; then
+    restart_selected_engines
+  fi
   systemctl restart btcquant-dashboard
   wait_for_dashboard
 }
@@ -242,7 +264,7 @@ from btcquant.deployment import atomic_switch_release
 atomic_switch_release(sys.argv[1], sys.argv[2])
 ' "${ROOT}" "${TARGET}"
   install_units
-  configure_pending_rebalance_timer
+  configure_writer_timers
   configure_shadow_service
   if ! systemctl restart btcquant-dashboard || ! wait_for_dashboard; then
     echo "Rollback invalide; restauration manuelle requise." >&2
@@ -408,6 +430,11 @@ atomic_switch_release(sys.argv[1], sys.argv[2])
 ' "${ROOT}" "${OLD_TARGET}" || true
   install_units || true
   systemctl daemon-reload || true
+  configure_writer_timers || true
+  configure_shadow_service || true
+  if ${RESTART_ENGINES}; then
+    restart_selected_engines || true
+  fi
   systemctl restart btcquant-dashboard || true
   exit "${code}"
 }
@@ -428,14 +455,13 @@ if ${MIGRATION_MODE}; then
   wait_for_dashboard
   # À partir d'ici timers/shadow/engines peuvent écrire: c'est le point de
   # non-retour documenté pour un rollback automatique de migration.
-  configure_pending_rebalance_timer
+  configure_writer_timers
   configure_shadow_service
   if ${RESTART_ENGINES}; then
     restart_selected_engines
   fi
 else
-  systemctl enable --now btcquant-compact.timer
-  configure_pending_rebalance_timer
+  configure_writer_timers
   configure_shadow_service
   systemctl restart btcquant-dashboard
   if ${RESTART_ENGINES}; then

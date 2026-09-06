@@ -99,13 +99,19 @@ class CcxtBroker(Broker):
                 klass = ccxt.binanceusdm if exchange_id == "binance" else getattr(ccxt, exchange_id)
             else:
                 klass = getattr(ccxt, exchange_id)
+        exchange_options: dict[str, object] = {"defaultSlippage": 0.01}
+        if exchange_id == "hyperliquid":
+            # CCXT enables its Hyperliquid builder fee by default. BTCQuant
+            # never opts into an additional execution fee: the builder stays
+            # attributable at a zero rate and venue fee/rebate is authoritative.
+            exchange_options["builderFee"] = False
         self.exchange: ccxt.Exchange = klass(
             {
                 **credentials,
                 "enableRateLimit": True,
                 "timeout": 30_000,
                 # 1 % maximum pour les IOC simulant les marchés Hyperliquid.
-                "options": {"defaultSlippage": 0.01},
+                "options": exchange_options,
             }
         )
         # CCXT raises on structured Hyperliquid order errors before returning
