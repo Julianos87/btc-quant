@@ -46,21 +46,26 @@ def _post(payload: dict[str, Any]) -> Any:
         return json.load(response)
 
 
-def _candles(coin: str) -> list[dict[str, Any]]:
+def _candles(
+    coin: str,
+    *,
+    start_ms: int = START_MS,
+    end_ms: int = END_MS,
+) -> list[dict[str, Any]]:
     response = _post(
         {
             "type": "candleSnapshot",
             "req": {
                 "coin": coin,
                 "interval": INTERVAL,
-                "startTime": START_MS - 3_600_000,
-                "endTime": END_MS,
+                "startTime": start_ms - 3_600_000,
+                "endTime": end_ms,
             },
         }
     )
     if not isinstance(response, list):
         raise ValueError(f"unexpected candle response for {coin}")
-    rows = [row for row in response if START_MS - 3_600_000 <= int(row["t"]) <= END_MS]
+    rows = [row for row in response if start_ms - 3_600_000 <= int(row["t"]) <= end_ms]
     rows.sort(key=lambda row: int(row["t"]))
     timestamps = [int(row["t"]) for row in rows]
     if len(timestamps) != len(set(timestamps)):
@@ -70,21 +75,21 @@ def _candles(coin: str) -> list[dict[str, Any]]:
     return rows
 
 
-def _funding() -> list[dict[str, Any]]:
+def _funding(*, start_ms: int = START_MS, end_ms: int = END_MS) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    cursor = START_MS
-    while cursor <= END_MS:
+    cursor = start_ms
+    while cursor <= end_ms:
         response = _post(
             {
                 "type": "fundingHistory",
                 "coin": PERP_COIN,
                 "startTime": cursor,
-                "endTime": END_MS,
+                "endTime": end_ms,
             }
         )
         if not isinstance(response, list):
             raise ValueError("unexpected funding response")
-        batch = [row for row in response if START_MS <= int(row["time"]) <= END_MS]
+        batch = [row for row in response if start_ms <= int(row["time"]) <= end_ms]
         if not batch:
             break
         rows.extend(batch)
@@ -109,7 +114,9 @@ def _write_csv_gz(path: Path, fieldnames: list[str], rows: list[dict[str, Any]])
         writer.writerows(rows)
 
 
-def _normalize_candles(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _normalize_candles(
+    rows: list[dict[str, Any]], *, start_ms: int = START_MS, end_ms: int = END_MS
+) -> list[dict[str, Any]]:
     return [
         {
             "open_timestamp": _iso(int(row["t"])),
@@ -124,7 +131,7 @@ def _normalize_candles(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "trades": row["n"],
         }
         for row in rows
-        if START_MS <= int(row["t"]) <= END_MS
+        if start_ms <= int(row["t"]) <= end_ms
     ]
 
 
@@ -159,7 +166,7 @@ def _inventory(path: Path, timestamp_column: str) -> dict[str, Any]:
     timestamps = pd.to_datetime(frame[timestamp_column], utc=True, format="mixed")
     deltas = timestamps.diff().dropna()
     return {
-        "path": str(path.relative_to(ROOT)),
+        "path": str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path),
         "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "rows": int(len(frame)),
         "coverage_start": timestamps.iloc[0].isoformat() if len(frame) else None,
@@ -172,19 +179,41 @@ def _inventory(path: Path, timestamp_column: str) -> dict[str, Any]:
     }
 
 
-def acquire() -> dict[str, Any]:
-    spot_raw = _candles(SPOT_COIN)
-    perp_raw = _candles(PERP_COIN)
-    funding_raw = _funding()
+def _window_label(milliseconds: int) -> str:
+    return datetime.fromtimestamp(milliseconds / 1000, tz=UTC).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _parse_iso_ms(value: str) -> int:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"invalid ISO-8601 timestamp: {value}") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("timestamp must include an explicit timezone")
+    return int(parsed.timestamp() * 1000)
+
+
+def acquire(
+    *,
+    start_ms: int = START_MS,
+    end_ms: int = END_MS,
+    output_dir: Path = OUTPUT_DIR,
+) -> dict[str, Any]:
+    if start_ms <= 0 or end_ms <= start_ms:
+        raise ValueError("Carry window must have positive start < end")
+    spot_raw = _candles(SPOT_COIN, start_ms=start_ms, end_ms=end_ms)
+    perp_raw = _candles(PERP_COIN, start_ms=start_ms, end_ms=end_ms)
+    funding_raw = _funding(start_ms=start_ms, end_ms=end_ms)
     funding_raw = [
         row for row in funding_raw if int(row["time"]) >= int(perp_raw[0]["t"]) + 3_600_000
     ]
-    spot = _normalize_candles(spot_raw)
-    perp = _normalize_candles(perp_raw)
+    spot = _normalize_candles(spot_raw, start_ms=start_ms, end_ms=end_ms)
+    perp = _normalize_candles(perp_raw, start_ms=start_ms, end_ms=end_ms)
     funding = _normalize_funding(funding_raw, perp_raw)
-    spot_path = OUTPUT_DIR / "hyperliquid_ubtc_usdc_spot_1h_20260114_20260810_v2.csv.gz"
-    perp_path = OUTPUT_DIR / "hyperliquid_btc_perp_1h_20260114_20260810_v2.csv.gz"
-    funding_path = OUTPUT_DIR / "hyperliquid_btc_funding_1h_20260114_20260810_v2.csv.gz"
+    stem = f"{_window_label(start_ms)}_{_window_label(end_ms)}"
+    spot_path = output_dir / f"hyperliquid_ubtc_usdc_spot_1h_{stem}_v2.csv.gz"
+    perp_path = output_dir / f"hyperliquid_btc_perp_1h_{stem}_v2.csv.gz"
+    funding_path = output_dir / f"hyperliquid_btc_funding_1h_{stem}_v2.csv.gz"
     _write_csv_gz(spot_path, list(spot[0]), spot)
     _write_csv_gz(perp_path, list(perp[0]), perp)
     _write_csv_gz(funding_path, list(funding[0]), funding)
@@ -201,13 +230,18 @@ def acquire() -> dict[str, Any]:
             "available_at": "close_timestamp",
             "generic_timestamp": "close_timestamp / available_at",
         },
-        "supersedes": [
-            "hyperliquid_ubtc_usdc_spot_1h_20260114_20260810.csv.gz",
-            "hyperliquid_btc_perp_1h_20260114_20260810.csv.gz",
-            "hyperliquid_btc_funding_1h_20260114_20260810.csv.gz",
-            "hyperliquid_carry_v2_20260114_20260810.metadata.json",
-        ],
-        "window": {"start": _iso(START_MS), "end": _iso(END_MS)},
+        "supersedes": (
+            [
+                "hyperliquid_ubtc_usdc_spot_1h_20260114_20260810.csv.gz",
+                "hyperliquid_btc_perp_1h_20260114_20260810.csv.gz",
+                "hyperliquid_btc_funding_1h_20260114_20260810.csv.gz",
+                "hyperliquid_carry_v2_20260114_20260810.metadata.json",
+            ]
+            if start_ms == START_MS and end_ms == END_MS
+            else []
+        ),
+        "snapshot_identity": f"hyperliquid_carry_v2_{_window_label(start_ms)}_{_window_label(end_ms)}_v2",
+        "window": {"start": _iso(start_ms), "end": _iso(end_ms)},
         "spot": {
             "coin": SPOT_COIN,
             "instrument": "@142 / UBTC/USDC",
@@ -233,7 +267,7 @@ def acquire() -> dict[str, Any]:
             "status": "TO_BE_VALIDATED_BY_REPLAY",
         },
     }
-    metadata_path = OUTPUT_DIR / "hyperliquid_carry_v2_20260114_20260810_v2.metadata.json"
+    metadata_path = output_dir / f"hyperliquid_carry_v2_{stem}_v2.metadata.json"
     metadata_path.write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
@@ -242,17 +276,24 @@ def acquire() -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--refresh", action="store_true", help="re-download the fixed public window"
-    )
+    parser.add_argument("--refresh", action="store_true", help="re-download this public window")
+    parser.add_argument("--start", default=_iso(START_MS), help="UTC ISO-8601 window start")
+    parser.add_argument("--end", default=_iso(END_MS), help="UTC ISO-8601 window end")
+    parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
     args = parser.parse_args()
-    if not args.refresh:
-        existing = OUTPUT_DIR / "hyperliquid_carry_v2_20260114_20260810_v2.metadata.json"
-        if existing.exists():
-            raise SystemExit(
-                "baseline exists; pass --refresh only for an explicit research refresh"
-            )
-    print(json.dumps(acquire(), indent=2, sort_keys=True))
+    start_ms = _parse_iso_ms(args.start)
+    end_ms = _parse_iso_ms(args.end)
+    stem = f"{_window_label(start_ms)}_{_window_label(end_ms)}"
+    existing = args.output_dir / f"hyperliquid_carry_v2_{stem}_v2.metadata.json"
+    if not args.refresh and existing.exists():
+        raise SystemExit("snapshot exists; pass --refresh only for an explicit research refresh")
+    print(
+        json.dumps(
+            acquire(start_ms=start_ms, end_ms=end_ms, output_dir=args.output_dir),
+            indent=2,
+            sort_keys=True,
+        )
+    )
     return 0
 
 
