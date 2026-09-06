@@ -138,7 +138,13 @@ class ExternalSettlementStartupRecovery:
             order_id = int(order["id"])
             if order.get("local_state") == LocalOrderState.INTENT_CREATED.value:
                 # This is the existing local proof that broker submission could
-                # not have started; the generic local recovery owns it.
+                # not have started. Keep the external path self-contained:
+                # this transition is local and requires no venue lookup.
+                self._store.complete_order(
+                    order_id,
+                    status="RECOVERED_ABORTED",
+                    error="Crash après réservation et avant soumission broker",
+                )
                 continue
             inspected.append(order_id)
             try:
