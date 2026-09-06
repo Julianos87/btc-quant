@@ -1,9 +1,9 @@
 """Read-only gate for a deliberately inactive Hyperliquid testnet profile.
 
 This module does not start a service, load execution credentials, or call an
-exchange.  A failing external-evidence gate is intentional until venue fill
-identity and the external reconciliation/application path are formally
-qualified.
+exchange.  Historical fill-identity and general zero-effect gates remain
+explicitly separate from the narrow terminal-IOC capability that is now
+qualified by the external runtime contracts.
 """
 
 from __future__ import annotations
@@ -123,6 +123,11 @@ def _gate_summary(
         required="atomic settlement application",
     )
     add("EXTERNAL_FINALIZATION", ("external_finalization",), required="atomic finalization")
+    add(
+        "ZERO_EFFECT_CAPABILITY",
+        ("external_zero_effect_capability",),
+        required="approved deterministic IOC no-match only",
+    )
     add("STARTUP_RECOVERY", ("startup_recovery",), required="settlement-aware startup recovery")
     add("STOP_RECOVERY", ("stop_recovery",), required="protective stop recovery")
     add("SAFE_RETRY", ("external_automatic_retry",), required="disabled")
@@ -309,8 +314,12 @@ def _runtime_capability_checks() -> dict[str, tuple[bool, str | None]]:
         ExternalSettlementEvidenceAcquirer,
     )
     from .external_settlement_coordinator import ExternalSettlementCoordinator
-    from .external_settlement_finalization import ExternalSettlementFinalizer
+    from .external_settlement_finalization import (
+        ExternalSettlementFinalizer,
+        ExternalZeroEffectFinalizationResult,
+    )
     from .external_settlement_recovery import ExternalSettlementStartupRecovery
+    from .external_submission_commitment import IOC_NO_MATCH_ERROR, ExternalSubmissionOutcome
 
     checks: dict[str, tuple[bool, str | None]] = {
         "submission_commitment": (
@@ -346,6 +355,15 @@ def _runtime_capability_checks() -> dict[str, tuple[bool, str | None]]:
             callable(ExternalSettlementFinalizer)
             and callable(getattr(StateStore, "finalize_external_order_atomically", None)),
             "EXTERNAL_FINALIZATION_NOT_AVAILABLE",
+        ),
+        "external_zero_effect_capability": (
+            bool(IOC_NO_MATCH_ERROR)
+            and ExternalSubmissionOutcome.DETERMINISTIC_IOC_NO_MATCH.value
+            == "DETERMINISTIC_IOC_NO_MATCH"
+            and callable(getattr(ExternalSettlementFinalizer, "finalize_zero_effect", None))
+            and callable(getattr(StateStore, "finalize_external_zero_effect_atomically", None))
+            and callable(ExternalZeroEffectFinalizationResult),
+            "EXTERNAL_ZERO_EFFECT_CAPABILITY_NOT_AVAILABLE",
         ),
         "startup_recovery": (
             callable(ExternalSettlementStartupRecovery)
@@ -706,10 +724,17 @@ def evaluate_testnet_preflight(
         "EXTERNAL_CAPABILITY_PROFILE_INVALID" if not profile_ok else None,
     )
     for key, (passed, reason) in _runtime_capability_checks().items():
+        value = (
+            "PARTIAL_PROVEN"
+            if key == "external_zero_effect_capability" and passed
+            else "available"
+            if passed
+            else "unavailable"
+        )
         add_check(
             key,
             passed,
-            "available" if passed else "unavailable",
+            value,
             "qualified passive boundary",
             reason,
         )

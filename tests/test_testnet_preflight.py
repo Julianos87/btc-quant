@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 import json
+from pathlib import Path
 
 import pytest
 
@@ -91,6 +92,7 @@ def test_preflight_exposes_independent_fail_closed_gate_summary(tmp_path) -> Non
         "SETTLEMENT_PERSISTENCE",
         "SETTLEMENT_APPLICATION",
         "EXTERNAL_FINALIZATION",
+        "ZERO_EFFECT_CAPABILITY",
         "STARTUP_RECOVERY",
         "STOP_RECOVERY",
         "SAFE_RETRY",
@@ -110,6 +112,19 @@ def test_preflight_exposes_independent_fail_closed_gate_summary(tmp_path) -> Non
     assert gates["PAPER_TECHNICAL_QUALIFICATION"]["status"] == "FAIL"
     assert gates["SERVICE_STATE"]["reason"] == "SERVICE_STATE_NOT_INSPECTED"
     assert report["activation_performed"] is False
+
+
+def test_preflight_reports_narrow_zero_effect_capability_separately(tmp_path: Path) -> None:
+    report = evaluate_testnet_preflight(tmp_path)
+
+    checks = {item["key"]: item for item in report["checks"]}
+    assert checks["external_zero_effect_capability"]["passed"] is True
+    assert checks["external_zero_effect_capability"]["value"] == "PARTIAL_PROVEN"
+    gates = {item["name"]: item for item in report["gate_summary"]}
+    assert gates["ZERO_EFFECT_CAPABILITY"]["status"] == "PASS"
+    assert report["historical_gates"]["ZERO_FILL_PROOF_NOT_YET_SUFFICIENTLY_ESTABLISHED"] is True
+    assert report["activation_performed"] is False
+    assert report["authenticated_exchange_call"] is False
 
 
 def test_capability_profile_is_explicit_and_non_activating() -> None:
