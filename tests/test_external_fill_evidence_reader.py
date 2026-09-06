@@ -68,6 +68,7 @@ def trade(
     raw_timestamp: int | float | str | None | object = _RAW_UNSET,
     raw_fee: float | str | None | object = _RAW_UNSET,
     raw_fee_asset: str | None | object = _RAW_UNSET,
+    raw_builder_fee: float | str | None | object = _RAW_UNSET,
     client_order_id: str | None = None,
     raw_cloid: str | None = None,
 ) -> dict:
@@ -84,6 +85,8 @@ def trade(
     }
     if raw_cloid is not None:
         info["cloid"] = raw_cloid
+    if raw_builder_fee is not _RAW_UNSET:
+        info["builderFee"] = raw_builder_fee
     value = {
         "id": str(tid),
         "order": str(oid) if oid is not None else None,
@@ -268,6 +271,37 @@ def test_signed_zero_positive_and_missing_fees_are_preserved(fee):
 
     assert result.outcome == FillEvidenceLookupOutcome.FOUND
     assert result.fills[0].fee == (None if fee is None else pytest.approx(float(fee)))
+
+
+@pytest.mark.parametrize(
+    ("raw_fee", "builder_fee", "ccxt_fee"),
+    [
+        ("1.25", "0.10", "1.35"),
+        ("-1.25", "0.10", "-1.15"),
+        ("0", "0.10", "0.10"),
+    ],
+)
+def test_builder_fee_already_in_raw_fee_is_not_double_counted(
+    raw_fee: str, builder_fee: str, ccxt_fee: str
+) -> None:
+    _, result = read([trade(fee=ccxt_fee, raw_fee=raw_fee, raw_builder_fee=builder_fee)])
+
+    assert result.outcome == FillEvidenceLookupOutcome.FOUND
+    assert result.fills[0].fee == pytest.approx(float(raw_fee))
+
+
+def test_builder_fee_unknown_fee_representation_fails_closed() -> None:
+    _, result = read([trade(fee="1.50", raw_fee="1.25", raw_builder_fee="0.10")])
+
+    assert result.outcome == FillEvidenceLookupOutcome.CONFLICTING_RESPONSE
+    assert result.fills == ()
+
+
+def test_builder_fee_changes_raw_evidence_hash() -> None:
+    _, first = read([trade(fee="1.35", raw_fee="1.25", raw_builder_fee="0.10")])
+    _, second = read([trade(fee="1.45", raw_fee="1.25", raw_builder_fee="0.20")])
+
+    assert first.fills[0].raw_payload_hash != second.fills[0].raw_payload_hash
 
 
 def test_fee_token_without_fee_is_incomplete():

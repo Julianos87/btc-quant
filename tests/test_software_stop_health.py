@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from btcquant.domain import ExitRequested
 from btcquant.execution.broker import Broker, PaperBroker
 from btcquant.execution.health import (
     evaluate_open_slot_protection,
@@ -549,6 +550,32 @@ def test_first_cycle_stop_hit_exits_before_due_bar(tmp_path: Path) -> None:
     reasons = [item.get("reason") for item in trades] if trades else []
     if reasons:
         assert "stop" in reasons
+
+
+def test_closed_bar_wick_triggers_paper_stop_after_close_recovers(tmp_path: Path) -> None:
+    runner, source, store = _seed_open_runner(tmp_path)
+    last_ts = pd.Timestamp("2026-08-21T04:00:00Z")
+    stop_price = float(source["stop_price"])
+    frame = pd.DataFrame(
+        {
+            "open": [stop_price + 200.0],
+            "high": [stop_price + 500.0],
+            "low": [stop_price - 50.0],
+            "close": [stop_price + 300.0],
+            "volume": [100.0],
+        },
+        index=pd.DatetimeIndex([last_ts]),
+    )
+    runner._fetch_frame = lambda _strategy: frame  # type: ignore[method-assign]
+
+    decision = runner._process_bar(runner.slots[0], stop_price + 300.0)
+
+    assert decision is not None
+    assert decision.events == (ExitRequested(reason="stop"),)
+    assert runner.slots[0].position is None
+    persisted = store.load_engine_state("trend") or {}
+    assert persisted["slots"]["trend_ls_20"]["last_bar_ts"] == last_ts.isoformat()
+    assert store.unresolved_orders("trend") == []
 
 
 def test_historical_terminal_orders_are_not_replayed(tmp_path: Path) -> None:

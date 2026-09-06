@@ -69,6 +69,7 @@ def test_hyperliquid_credentials_and_sandbox_are_wired_before_market_load(monkey
     assert FakeHyperliquid.last_config is not None
     assert FakeHyperliquid.last_config["walletAddress"] == "0x" + "1" * 40
     assert FakeHyperliquid.last_config["privateKey"] == "0x" + "2" * 64
+    assert FakeHyperliquid.last_config["options"]["builderFee"] is False
     assert "apiKey" not in FakeHyperliquid.last_config
     assert FakeHyperliquid.calls == [
         ("sandbox", True),

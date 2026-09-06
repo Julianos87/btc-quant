@@ -214,6 +214,14 @@ def test_update_has_atomic_activation_backup_healthcheck_and_rollback():
     assert "migration_abort_on_error" in script
     assert "MANUAL RECOVERY REQUIRED" in script
     assert "systemctl enable --now btcquant-compact.timer" in script
+    assert "configure_writer_timers" in script
+    assert script.count("configure_writer_timers") >= 5
+    assert "configure_writer_timers || true" in script
+    assert "configure_shadow_service || true" in script
+    assert "restart_selected_engines || true" in script
+    assert "btcquant-backup.timer" in script
+    assert "btcquant-rebalance.timer" in script
+    assert "systemctl enable --now btcquant-watchdog.timer" in script
     assert "configure_pending_rebalance_timer" in script
     pending_timer = (ROOT / "deploy" / "btcquant-rebalance-pending.timer").read_text(
         encoding="utf-8"

@@ -34,6 +34,7 @@ from ..domain import (
     decide_bar_close,
     funding_amount,
 )
+from ..domain.execution import ExecutionSimulator
 from ..indicators import bars_per_year, realized_vol
 from ..backup import assert_writer_recovery_clear
 from ..notify import notify
@@ -1527,6 +1528,41 @@ class LiveRunner:
         last_ts = df.index[-1]
         if slot.last_bar_ts is not None and last_ts <= slot.last_bar_ts:
             return None  # pas de nouvelle barre clôturée
+        if slot.position is not None and not self.broker.supports_stop_orders:
+            position = slot.position
+            # A position opened after this candle began cannot safely use the
+            # candle's full high/low: part of that range predates the entry.
+            # Tick monitoring still protects it until the next complete bar.
+            entry_time = position.entry_time
+            if entry_time.tzinfo is None:
+                entry_time = entry_time.tz_localize("UTC")
+            else:
+                entry_time = entry_time.tz_convert("UTC")
+            if entry_time <= last_ts:
+                raw_row = df.iloc[-1]
+                stop_reference = ExecutionSimulator.stop_trigger_price(
+                    direction=position.direction,
+                    open_price=float(raw_row["open"]),
+                    high_price=float(raw_row["high"]),
+                    low_price=float(raw_row["low"]),
+                    stop_price=position.stop_price,
+                )
+                if stop_reference is not None:
+                    # Mark the bar before submitting. The FinancialApplicationPlan
+                    # binds this checkpoint to the atomic PAPER fill writer, so a
+                    # restart cannot replay the same wick.
+                    slot.last_bar_ts = last_ts
+                    self._exit_position(
+                        slot,
+                        stop_reference,
+                        "stop",
+                        float(raw_row["volume"]) if pd.notna(raw_row.get("volume")) else None,
+                        decision_checkpoint=last_ts.isoformat(),
+                    )
+                    return BarDecision(
+                        position=None,
+                        events=(ExitRequested(reason="stop"),),
+                    )
         data = slot.strategy.prepare(df)
         data["_rvol"] = realized_vol(
             data["close"], VOL_LOOKBACK, bars_per_year(slot.strategy.timeframe)
