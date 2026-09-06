@@ -30,6 +30,7 @@ from .errors import (
     InvalidOrderStateTransition,
     MigrationRequiredError,
     OrderIdentityCollision,
+    ReconciliationRequired,
 )
 from .external_evidence import ExternalEvidenceSource, ExternalFill, ExternalOrderObservation
 from .external_submission_commitment import (
@@ -1587,6 +1588,96 @@ class StateStore:
             "state_sha256": hashlib.sha256(canonical).hexdigest(),
         }
 
+    def _checkpoint_payload(
+        self,
+        connection: sqlite3.Connection,
+        engine: str,
+        payload: Mapping[str, Any],
+        *,
+        allow_reconciliation_clear: bool = False,
+    ) -> dict[str, Any]:
+        """Return the state that this checkpoint is allowed to persist.
+
+        "reconciliation_required" is an engine safety latch. A normal
+        checkpoint may update every other field, but it cannot clear a latch
+        that was already durable when the transaction began. Clearing it is
+        deliberately available only to the explicit, hash-checked
+        reconciliation writer below; there is no inferred "safe" condition.
+        """
+
+        candidate = json.loads(self._json(payload))
+        if not isinstance(candidate, dict):
+            raise ValueError("État engine invalide : objet JSON attendu")
+        if allow_reconciliation_clear:
+            return candidate
+
+        row = connection.execute(
+            "SELECT payload FROM engine_state WHERE engine = ?", (engine,)
+        ).fetchone()
+        if row is None:
+            return candidate
+        existing = json.loads(row["payload"])
+        if not isinstance(existing, dict):
+            raise ValueError("État engine durable invalide : objet JSON attendu")
+        if existing.get("reconciliation_required") is True:
+            candidate["reconciliation_required"] = True
+        return candidate
+
+    def _assert_engine_reconciliation_clear(
+        self,
+        connection: sqlite3.Connection,
+        engine: str,
+    ) -> None:
+        """Refuse toute nouvelle intention pendant un verrou moteur durable."""
+
+        row = connection.execute(
+            "SELECT payload FROM engine_state WHERE engine = ?", (engine,)
+        ).fetchone()
+        if row is None:
+            return
+        payload = json.loads(row["payload"])
+        if not isinstance(payload, dict):
+            raise ValueError("État engine durable invalide : objet JSON attendu")
+        if payload.get("reconciliation_required") is True:
+            raise ReconciliationRequired(f"Moteur {engine} marqué reconciliation_required")
+
+    def _save_engine_state_in_transaction(
+        self,
+        connection: sqlite3.Connection,
+        engine: str,
+        payload: Mapping[str, Any],
+        *,
+        now: str,
+        event_type: str,
+        event_payload: dict[str, Any] | None = None,
+        event_aggregate_type: str | None = None,
+        event_aggregate_id: str | None = None,
+        allow_reconciliation_clear: bool = False,
+    ) -> None:
+        checkpoint = self._checkpoint_payload(
+            connection,
+            engine,
+            payload,
+            allow_reconciliation_clear=allow_reconciliation_clear,
+        )
+        connection.execute(
+            """
+            INSERT INTO engine_state(engine, payload, updated_at) VALUES(?, ?, ?)
+            ON CONFLICT(engine) DO UPDATE SET
+                payload=excluded.payload, updated_at=excluded.updated_at
+            """,
+            (engine, self._json(checkpoint), now),
+        )
+        self._sync_positions(connection, engine, checkpoint, now)
+        self._insert_event(
+            connection,
+            engine,
+            event_type,
+            self._state_event(checkpoint, event_payload),
+            aggregate_type=event_aggregate_type or "engine",
+            aggregate_id=event_aggregate_id or engine,
+        )
+
     def load_engine_state(self, engine: str) -> dict[str, Any] | None:
         with self._connect() as connection:
             row = connection.execute(
@@ -1849,22 +1940,77 @@ class StateStore:
     ) -> None:
         now = utc_now()
         with self._transaction() as connection:
-            connection.execute(
-                """
-                INSERT INTO engine_state(engine, payload, updated_at) VALUES(?, ?, ?)
-                ON CONFLICT(engine) DO UPDATE SET
-                    payload=excluded.payload, updated_at=excluded.updated_at
-                """,
-                (engine, self._json(payload), now),
-            )
-            self._sync_positions(connection, engine, payload, now)
-            self._insert_event(
+            self._save_engine_state_in_transaction(
                 connection,
                 engine,
-                event_type,
-                self._state_event(payload, event_payload),
-                aggregate_type=event_aggregate_type or "engine",
-                aggregate_id=event_aggregate_id or engine,
+                payload,
+                now=now,
+                event_type=event_type,
+                event_payload=event_payload,
+                event_aggregate_type=event_aggregate_type,
+                event_aggregate_id=event_aggregate_id,
+            )
+
+    def save_engine_state_after_reconciliation(
+        self,
+        engine: str,
+        payload: Mapping[str, Any],
+        *,
+        expected_state_sha256: str,
+        resolution: str,
+        event_payload: dict[str, Any] | None = None,
+    ) -> None:
+        """Persist a state after an explicitly completed reconciliation.
+
+        The caller must provide the hash of the durable state it reconciled.
+        This prevents a stale resolver from clearing a newer checkpoint. No
+        order/incident heuristic is used here: the caller is the qualified
+        reconciliation/finalization path and must already have durable proof
+        of resolution.
+        """
+
+        if not isinstance(expected_state_sha256, str) or len(expected_state_sha256) != 64:
+            raise ValueError("expected_state_sha256 doit être un SHA-256 hexadécimal")
+        if any(character not in "0123456789abcdef" for character in expected_state_sha256):
+            raise ValueError("expected_state_sha256 doit être un SHA-256 hexadécimal")
+        if not isinstance(resolution, str) or not resolution.strip():
+            raise ValueError("resolution doit être non vide")
+        candidate = json.loads(self._json(payload))
+        if not isinstance(candidate, dict):
+            raise ValueError("État engine invalide : objet JSON attendu")
+        if candidate.get("reconciliation_required") is not False:
+            raise ValueError("La résolution qualifiée doit produire reconciliation_required=false")
+
+        now = utc_now()
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT payload FROM engine_state WHERE engine = ?", (engine,)
+            ).fetchone()
+            if row is None:
+                raise ReconciliationRequired(f"Moteur {engine} absent : résolution non qualifiable")
+            current = json.loads(row["payload"])
+            if not isinstance(current, dict):
+                raise ValueError("État engine durable invalide : objet JSON attendu")
+            if current.get("reconciliation_required") is not True:
+                raise ReconciliationRequired(
+                    f"Moteur {engine} sans verrou reconciliation_required à résoudre"
+                )
+            if sha256_json(current) != expected_state_sha256:
+                raise ReconciliationRequired(
+                    f"Moteur {engine} modifié depuis la preuve de réconciliation"
+                )
+            self._save_engine_state_in_transaction(
+                connection,
+                engine,
+                candidate,
+                now=now,
+                event_type="reconciliation_resolved",
+                event_payload={
+                    **(event_payload or {}),
+                    "resolution": resolution.strip(),
+                    "expected_state_sha256": expected_state_sha256,
+                },
+                allow_reconciliation_clear=True,
             )
 
     def _insert_funding_ledger(
@@ -2001,20 +2147,21 @@ class StateStore:
                 raise ValueError("funding_notional_price doit être fini et positif")
             self._insert_funding_ledger(connection, ledger)
             now = str(ledger.get("applied_at") or utc_now())
+            checkpoint = self._checkpoint_payload(connection, engine, state)
             connection.execute(
                 """
                 INSERT INTO engine_state(engine, payload, updated_at) VALUES(?, ?, ?)
                 ON CONFLICT(engine) DO UPDATE SET
                     payload=excluded.payload, updated_at=excluded.updated_at
                 """,
-                (engine, self._json(state), now),
+                (engine, self._json(checkpoint), now),
             )
-            self._sync_positions(connection, engine, state, now)
+            self._sync_positions(connection, engine, checkpoint, now)
             self._insert_event(
                 connection,
                 engine,
                 "funding_payment",
-                self._state_event(state, event_payload),
+                self._state_event(checkpoint, event_payload),
                 aggregate_type="funding_event",
                 aggregate_id=event_key,
             )
@@ -2051,20 +2198,21 @@ class StateStore:
         now = utc_now()
         with self._transaction() as connection:
             for engine, payload in states.items():
+                checkpoint = self._checkpoint_payload(connection, engine, payload)
                 connection.execute(
                     """
                     INSERT INTO engine_state(engine, payload, updated_at) VALUES(?, ?, ?)
                     ON CONFLICT(engine) DO UPDATE SET
                         payload=excluded.payload, updated_at=excluded.updated_at
                     """,
-                    (engine, self._json(payload), now),
+                    (engine, self._json(checkpoint), now),
                 )
-                self._sync_positions(connection, engine, payload, now)
+                self._sync_positions(connection, engine, checkpoint, now)
                 self._insert_event(
                     connection,
                     engine,
                     "state_checkpoint",
-                    self._state_event(payload),
+                    self._state_event(checkpoint),
                     "engine",
                     engine,
                 )
@@ -2601,6 +2749,7 @@ class StateStore:
                 if persisted.plan.semantic_content() != plan.semantic_content():
                     raise FinancialApplicationPlanConflict("Le plan financier existant diffère")
                 return self._reservation_from_row(existing, acquired=False)
+            self._assert_engine_reconciliation_clear(connection, identity.engine)
             cursor = connection.execute(
                 """
                 INSERT INTO orders(
@@ -2629,12 +2778,13 @@ class StateStore:
             self._insert_financial_application_plan(
                 connection, order_id=int(order_id), intent_id=intent_id, plan=plan, now=now
             )
+            checkpoint = self._checkpoint_payload(connection, identity.engine, pre_state)
             connection.execute(
                 """INSERT INTO engine_state(engine, payload, updated_at) VALUES(?, ?, ?)
                    ON CONFLICT(engine) DO UPDATE SET payload=excluded.payload, updated_at=excluded.updated_at""",
-                (identity.engine, canonical_json(pre_state), now),
+                (identity.engine, canonical_json(checkpoint), now),
             )
-            self._sync_positions(connection, identity.engine, pre_state, now)
+            self._sync_positions(connection, identity.engine, checkpoint, now)
             self._insert_event(
                 connection,
                 identity.engine,
@@ -2716,6 +2866,7 @@ class StateStore:
         intent_id = identity.intent_id
         now = utc_now()
         with self._transaction() as connection:
+            self._assert_engine_reconciliation_clear(connection, identity.engine)
             try:
                 cursor = connection.execute(
                     """
@@ -5052,6 +5203,14 @@ class StateStore:
         state_after_payload: Mapping[str, Any],
         applied_at: str,
     ) -> None:
+        expected_payload = json.loads(expected_raw_payload)
+        if not isinstance(expected_payload, dict):
+            raise FinancialFillApplicationError("FINANCIAL_APPLICATION_STATE_CONFLICT")
+        if (
+            expected_payload.get("reconciliation_required") is True
+            and state_after_payload.get("reconciliation_required") is not True
+        ):
+            raise FinancialFillApplicationError("FINANCIAL_APPLICATION_RECONCILIATION_REQUIRED")
         cursor = connection.execute(
             """
             UPDATE engine_state SET payload = ?, updated_at = ?
@@ -5307,6 +5466,7 @@ class StateStore:
     ) -> int:
         now = utc_now()
         with self._transaction() as connection:
+            self._assert_engine_reconciliation_clear(connection, engine)
             cursor = connection.execute(
                 """
                 INSERT INTO orders(
@@ -5369,6 +5529,7 @@ class StateStore:
 
         now = utc_now()
         with self._transaction() as connection:
+            self._assert_engine_reconciliation_clear(connection, engine)
             cursor = connection.execute(
                 """
                 INSERT INTO orders(
@@ -5396,15 +5557,16 @@ class StateStore:
             )
             order_id = cursor.lastrowid
             assert order_id is not None
+            checkpoint = self._checkpoint_payload(connection, engine, state)
             connection.execute(
                 """
                 INSERT INTO engine_state(engine, payload, updated_at) VALUES(?, ?, ?)
                 ON CONFLICT(engine) DO UPDATE SET
                     payload=excluded.payload, updated_at=excluded.updated_at
                 """,
-                (engine, self._json(state), now),
+                (engine, self._json(checkpoint), now),
             )
-            self._sync_positions(connection, engine, state, now)
+            self._sync_positions(connection, engine, checkpoint, now)
             self._insert_event(
                 connection,
                 engine,
@@ -5425,7 +5587,7 @@ class StateStore:
                 engine,
                 "transitional_checkpoint",
                 self._state_event(
-                    state,
+                    checkpoint,
                     {
                         "order_id": order_id,
                         "execution_state": state.get("execution_state"),
@@ -5592,6 +5754,7 @@ class StateStore:
                 if resolved_local == LocalOrderState.TERMINAL
                 else float(order["remaining_qty"])
             )
+            checkpoint = self._checkpoint_payload(connection, engine, state)
             connection.execute(
                 """
                 UPDATE orders SET status=?, local_state=?, external_state=?,
@@ -5619,9 +5782,9 @@ class StateStore:
                 ON CONFLICT(engine) DO UPDATE SET
                     payload=excluded.payload, updated_at=excluded.updated_at
                 """,
-                (engine, self._json(state), now),
+                (engine, self._json(checkpoint), now),
             )
-            self._sync_positions(connection, engine, state, now)
+            self._sync_positions(connection, engine, checkpoint, now)
             self._insert_event(
                 connection,
                 engine,
@@ -5647,7 +5810,7 @@ class StateStore:
                 connection,
                 engine,
                 "order_checkpoint",
-                self._state_event(state, {"order_id": order_id}),
+                self._state_event(checkpoint, {"order_id": order_id}),
                 "engine",
                 engine,
                 order["intent_id"],
@@ -5744,15 +5907,16 @@ class StateStore:
             )
             order_id = cursor.lastrowid
             assert order_id is not None
+            checkpoint = self._checkpoint_payload(connection, engine, state)
             connection.execute(
                 """
                 INSERT INTO engine_state(engine, payload, updated_at) VALUES(?, ?, ?)
                 ON CONFLICT(engine) DO UPDATE SET
                     payload=excluded.payload, updated_at=excluded.updated_at
                 """,
-                (engine, self._json(state), now),
+                (engine, self._json(checkpoint), now),
             )
-            self._sync_positions(connection, engine, state, now)
+            self._sync_positions(connection, engine, checkpoint, now)
             connection.execute(
                 """
                 INSERT INTO trades(
