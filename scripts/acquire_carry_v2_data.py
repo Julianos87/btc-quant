@@ -12,6 +12,7 @@ import argparse
 import csv
 import gzip
 import hashlib
+import io
 import json
 import sys
 from bisect import bisect_right
@@ -51,7 +52,10 @@ def _candles(
     *,
     start_ms: int = START_MS,
     end_ms: int = END_MS,
+    as_of_ms: int | None = None,
 ) -> list[dict[str, Any]]:
+    if as_of_ms is None:
+        as_of_ms = int(datetime.now(UTC).timestamp() * 1000)
     response = _post(
         {
             "type": "candleSnapshot",
@@ -65,7 +69,11 @@ def _candles(
     )
     if not isinstance(response, list):
         raise ValueError(f"unexpected candle response for {coin}")
-    rows = [row for row in response if start_ms - 3_600_000 <= int(row["t"]) <= end_ms]
+    rows = [
+        row
+        for row in response
+        if start_ms - 3_600_000 <= int(row["t"]) <= end_ms and int(row["T"]) <= as_of_ms
+    ]
     rows.sort(key=lambda row: int(row["t"]))
     timestamps = [int(row["t"]) for row in rows]
     if len(timestamps) != len(set(timestamps)):
@@ -75,7 +83,14 @@ def _candles(
     return rows
 
 
-def _funding(*, start_ms: int = START_MS, end_ms: int = END_MS) -> list[dict[str, Any]]:
+def _funding(
+    *,
+    start_ms: int = START_MS,
+    end_ms: int = END_MS,
+    as_of_ms: int | None = None,
+) -> list[dict[str, Any]]:
+    if as_of_ms is None:
+        as_of_ms = int(datetime.now(UTC).timestamp() * 1000)
     rows: list[dict[str, Any]] = []
     cursor = start_ms
     while cursor <= end_ms:
@@ -89,7 +104,11 @@ def _funding(*, start_ms: int = START_MS, end_ms: int = END_MS) -> list[dict[str
         )
         if not isinstance(response, list):
             raise ValueError("unexpected funding response")
-        batch = [row for row in response if start_ms <= int(row["time"]) <= end_ms]
+        batch = [
+            row
+            for row in response
+            if start_ms <= int(row["time"]) <= end_ms and int(row["time"]) <= as_of_ms
+        ]
         if not batch:
             break
         rows.extend(batch)
@@ -108,10 +127,18 @@ def _funding(*, start_ms: int = START_MS, end_ms: int = END_MS) -> list[dict[str
 
 def _write_csv_gz(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with gzip.open(path, "wt", encoding="utf-8", newline="", compresslevel=9) as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, lineterminator="\n")
-        writer.writeheader()
-        writer.writerows(rows)
+    # ``gzip.open`` embeds the current wall-clock mtime, making an otherwise
+    # identical snapshot acquire a different SHA-256 on every run. A research
+    # manifest must identify bytes, so freeze the gzip timestamp and omit the
+    # source filename from the header.
+    with path.open("wb") as raw:
+        with gzip.GzipFile(
+            fileobj=raw, mode="wb", filename="", compresslevel=9, mtime=0
+        ) as compressed:
+            with io.TextIOWrapper(compressed, encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fieldnames, lineterminator="\n")
+                writer.writeheader()
+                writer.writerows(rows)
 
 
 def _normalize_candles(
@@ -201,9 +228,10 @@ def acquire(
 ) -> dict[str, Any]:
     if start_ms <= 0 or end_ms <= start_ms:
         raise ValueError("Carry window must have positive start < end")
-    spot_raw = _candles(SPOT_COIN, start_ms=start_ms, end_ms=end_ms)
-    perp_raw = _candles(PERP_COIN, start_ms=start_ms, end_ms=end_ms)
-    funding_raw = _funding(start_ms=start_ms, end_ms=end_ms)
+    retrieval_cutoff_ms = int(datetime.now(UTC).timestamp() * 1000)
+    spot_raw = _candles(SPOT_COIN, start_ms=start_ms, end_ms=end_ms, as_of_ms=retrieval_cutoff_ms)
+    perp_raw = _candles(PERP_COIN, start_ms=start_ms, end_ms=end_ms, as_of_ms=retrieval_cutoff_ms)
+    funding_raw = _funding(start_ms=start_ms, end_ms=end_ms, as_of_ms=retrieval_cutoff_ms)
     funding_raw = [
         row for row in funding_raw if int(row["time"]) >= int(perp_raw[0]["t"]) + 3_600_000
     ]
@@ -221,6 +249,7 @@ def acquire(
         "venue": "Hyperliquid",
         "endpoint": API_URL,
         "downloaded_at": datetime.now(UTC).isoformat(),
+        "retrieval_cutoff": _iso(retrieval_cutoff_ms),
         "schema_version": 2,
         "temporal_semantics": {
             "old_baseline_status": "TEMPORAL_SEMANTICS_INVALID_FOR_CAUSAL_CLOSE_REPLAY",
