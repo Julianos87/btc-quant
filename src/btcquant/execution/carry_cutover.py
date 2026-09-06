@@ -455,6 +455,7 @@ def apply_cutover_on_connection(
 
     cutover_ts = utc_now()
     new_payload = build_flat_payload(payload, last_funding_ts=cutover_ts)
+    new_payload = store._checkpoint_payload(connection, "carry", new_payload)
     new_sha = canonical_carry_state_sha256(new_payload)
     event_payload = {
         "schema_version": SCHEMA_VERSION,
