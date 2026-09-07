@@ -20,7 +20,7 @@ const I18N = {
   fr: {
     paper:"PAPER TRADING", theme:"Thème", settings:"Réglages", btcusdt:"BTC-PERP / USDC",
     h24:"24 heures", funding_ann:"Funding annualisé", live_perf:"Performance en direct",
-    realized:"réalisé", exposure_health:"Exposition & santé", gross_exposure:"Exposition brute portefeuille",
+    realized:"réalisé", exposure_title:"Exposition", system_health_label:"Santé système", exposure_health:"Exposition & santé", gross_exposure:"Exposition brute portefeuille",
     leverage_note:"ratio d’exposition brute · repère = 1× ; descriptif, pas le levier du moteur", next_bar:"Prochaine bougie 4 h",
     next_funding:"Prochain funding", api_latency:"Latence API Hyperliquid", uptime:"Uptime dashboard",
     protocol:"Protocole", phase:"Phase actuelle", next_step:"Étape suivante",
@@ -61,7 +61,10 @@ const I18N = {
     carry_modeled_perp:"Perp notionnel modélisé",
     carry_uncertain:"Comptabilité Carry incertaine — pas d'exposition venue",
     paper_vs_bt:"Hyperliquid 1 m · backtest Binance 4 h",
-    readiness_title:"Testnet", readiness_note:"Critères fixés à froid — le passage ne se décide pas au feeling.",
+    readiness_title:"Qualification", testnet_guard:"Testnet non autorisé · cette carte décrit uniquement la qualification PAPER.", readiness_note:"Critères fixés à froid — le passage ne se décide pas au feeling.",
+    decision_current:"Décision actuelle", decision_unknown:"UNKNOWN", decision_unavailable:"Régime 4 h indisponible — aucune direction confirmée.",
+    decision_open:"position(s) ouverte(s)", decision_next_close:"prochaine clôture 4 h", decision_protected:"protégé(s)",
+    decision_bullish:"haussier", decision_bearish:"baissier",
     rdy_ready:"PRÊT", rdy_not_ready:"NON PRÊT", rdy_blocked:"BLOQUÉ",
     rdy_ready_why:"Tous les critères sont au vert. La décision de passer au testnet reste humaine.",
     rdy_wait_why:"Le système est sain, mais la campagne n'a pas encore assez de preuves.",
@@ -88,13 +91,12 @@ const I18N = {
     cards:{performance_brief:"Synthèse de performance", risk_radar:"Radar de risque", monitor_pulse:"Pulse opérationnel",
       chart:"Courbe d’équity", price:"Graphe prix", events:"Journal", trend:"Moteur Trend",
       carry:"Moteur Carry", breakdown:"Répartition & records", conformity:"Est-ce normal ?", yearly:"Années précédentes",
-      trades:"Trades clôturés", metrics:"Performance en direct", exposure:"Exposition & santé", protocol:"Protocole",
-      readiness:"Testnet"},
+      trades:"Trades clôturés", metrics:"Performance en direct", exposure:"Exposition", readiness:"Qualification"},
   },
   en: {
     paper:"PAPER TRADING", theme:"Theme", settings:"Settings", btcusdt:"BTC-PERP / USDC",
     h24:"24 hours", funding_ann:"Annualized funding", live_perf:"Live performance",
-    realized:"realized", exposure_health:"Exposure & health", gross_exposure:"Portfolio gross exposure",
+    realized:"realized", exposure_title:"Exposure", system_health_label:"System health", exposure_health:"Exposure & health", gross_exposure:"Portfolio gross exposure",
     leverage_note:"gross exposure ratio · descriptive 1× marker, not engine leverage", next_bar:"Next 4h candle",
     next_funding:"Next funding", api_latency:"Hyperliquid API latency", uptime:"Dashboard uptime",
     protocol:"Protocol", phase:"Current phase", next_step:"Next step",
@@ -121,7 +123,9 @@ const I18N = {
     carry_modeled_perp:"Modeled perp notional",
     carry_uncertain:"Carry accounting uncertain — no venue exposure",
     paper_vs_bt:"Hyperliquid 1m · Binance 4h backtest",
-    readiness_title:"Testnet", readiness_note:"Criteria set in advance — the transition is not a gut call.",
+    readiness_title:"Qualification", testnet_guard:"Testnet is not authorized · this card describes PAPER qualification only.", readiness_note:"Criteria set in advance — the transition is not a gut call.",
+    decision_current:"Current decision", decision_unknown:"UNKNOWN", decision_unavailable:"4h regime unavailable — no direction confirmed.",
+    decision_open:"position(s) open", decision_next_close:"next 4h close", decision_protected:"protected", decision_bullish:"bullish", decision_bearish:"bearish",
     rdy_ready:"READY", rdy_not_ready:"NOT READY", rdy_blocked:"BLOCKED",
     rdy_ready_why:"Every criterion is green. The testnet decision remains a human call.",
     rdy_wait_why:"The system is healthy, but the campaign does not yet have enough evidence.",
@@ -162,8 +166,7 @@ const I18N = {
     cards:{performance_brief:"Performance snapshot", risk_radar:"Risk radar", monitor_pulse:"Operations pulse",
       chart:"Equity curve", price:"Price chart", events:"Event log", trend:"Trend engine",
       carry:"Carry engine", breakdown:"Breakdown & records", conformity:"Is this normal?", yearly:"Previous years",
-      trades:"Closed trades", metrics:"Live performance", exposure:"Exposure & health", protocol:"Protocol",
-      readiness:"Testnet"},
+      trades:"Closed trades", metrics:"Live performance", exposure:"Exposure", readiness:"Qualification"},
   },
 };
 const t = k => (I18N[PREFS.lang] || I18N.fr)[k] || k;
@@ -429,6 +432,7 @@ async function refreshSummary() {
     const next = summary.health && summary.health.next_bar_ts;
     $("trend-next-boundary").textContent = fmtTimeUTC(next);
     $("trend-next-countdown").textContent = next ? "dans " + cdText(next) + " · aucune action garantie" : "N/A";
+    renderTrendDecisionContext(summary);
   }
 
   renderTrendOverview(s);
@@ -987,14 +991,14 @@ function renderReadiness(report) {
   const verdictLabel = decided.verdict === "PRÊT" ? t("rdy_ready")
     : decided.verdict === "BLOQUÉ" ? t("rdy_blocked") : t("rdy_not_ready");
   const why = decided.tone === "block" ? t("rdy_block_why") : decided.tone === "ok" ? t("rdy_ready_why") : t("rdy_wait_why");
-  badge.textContent = `TESTNET — ${verdictLabel}`;
+  badge.textContent = `PAPER · ${verdictLabel}`;
   badge.className = "estate " + (decided.tone === "ok" ? "on" : decided.tone === "block" ? "off" : "");
   badge.style.color = decided.tone === "wait" ? "var(--warn)" : "";
   const outstanding = ux.blockers(report);
   root.innerHTML = `
     <div class="rdy-banner" data-tone="${decided.tone}">
       <div class="rdy-kicker">${esc(ux.campaignLine(report, readinessLabels()))}</div>
-      <div class="rdy-verdict">${esc(`TESTNET — ${verdictLabel}`)}</div>
+      <div class="rdy-verdict">${esc(`PAPER · ${verdictLabel}`)}</div>
       <div class="rdy-why">${esc(why)}</div>
       <div class="rdy-counts">${esc(`${nOk} / ${nTotal} ${t("rdy_counts")}`)} · ${esc(`${remain} ${t("rdy_remain")}`)}</div>
       <div class="rdy-scores">
@@ -1113,9 +1117,38 @@ async function refreshPrice() {
   drawPChart();
 }
 
+// Compact, read-only decision summary. It uses only fields already exposed
+// by /api/summary and /api/price; it is not a signal engine.
+function renderTrendDecisionContext(summary = lastSummary, priceData = pcData) {
+  const root = $("trend-decision-context"), value = $("trend-decision"), detail = $("trend-decision-detail");
+  if (!root || !value || !detail) return;
+  const trend = summary && summary.trend || {};
+  const slots = Array.isArray(trend.slots) ? trend.slots.filter(slot => slot && slot.state && slot.state !== "FLAT") : [];
+  // A public price regime is not enough to claim an operational decision:
+  // require a fresh, alive Trend summary as well, otherwise source outages
+  // would look like an actionable LONG/SHORT state.
+  const operational = trend.alive === true && trend.freshness === "FRESH";
+  const regimeKnown = operational && priceData && (priceData.regime_up === true || priceData.regime_up === false);
+  const regime = regimeKnown ? (priceData.regime_up ? "LONG" : "SHORT") : null;
+  const states = [...new Set(slots.map(slot => slot.state).filter(state => state === "LONG" || state === "SHORT"))];
+  const active = states.length ? states.join(" / ") : regime ? `${regime} ${PREFS.lang === "en" ? "allowed" : "autorisé"}` : t("decision_unknown");
+  value.textContent = active;
+  root.dataset.tone = active === t("decision_unknown") ? "unknown" : slots.length ? "position" : regime.toLowerCase();
+  if (!regime) {
+    detail.textContent = t("decision_unavailable");
+  } else if (slots.length) {
+    const protection = trend.protected_slots != null && trend.open_slots != null
+      ? ` · ${trend.protected_slots}/${trend.open_slots} ${t("decision_protected")}` : "";
+    detail.textContent = `${slots.length} ${t("decision_open")} · ${t("decision_next_close")}${protection}`;
+  } else {
+    detail.textContent = `${PREFS.lang === "en" ? "Regime" : "Régime"} ${t(regime === "LONG" ? "decision_bullish" : "decision_bearish")} · ${t("decision_next_close")}`;
+  }
+}
+
 function drawPChart() {
   const data = pcData;
   if (!data) return;
+  renderTrendDecisionContext(lastSummary, data);
   const svg = $("pchart"), W = svg.clientWidth, H = svg.clientHeight;
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   const all = data.candles || [];
@@ -1793,7 +1826,7 @@ function buildDrawer() {
   $("pref-notif-pos").checked = PREFS.notifPos;
   $("pref-dd").value = PREFS.ddAlert;
   // cartes visibles
-  const CARDS = ["performance_brief","risk_radar","monitor_pulse","chart","price","events","trend","carry","breakdown","conformity","yearly","trades","metrics","exposure","protocol","readiness"];
+  const CARDS = ["performance_brief","risk_radar","monitor_pulse","chart","price","events","trend","carry","breakdown","conformity","yearly","trades","metrics","exposure","readiness"];
   $("pref-cards").innerHTML = CARDS.map(k =>
     `<div class="setrow"><span class="sk">${(t("cards")||{})[k]||k}</span>
      <label class="toggle"><input type="checkbox" data-card-k="${k}" aria-label="${esc((t("cards")||{})[k]||k)}" ${PREFS.hidden[k]?"":"checked"}><span class="sl"></span></label></div>`).join("");

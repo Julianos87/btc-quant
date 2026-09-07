@@ -348,10 +348,10 @@
 
   /* ── layout ─────────────────────────────────────────────── */
   .grid {
-    display:grid; gap:16px; align-items:stretch; min-width:0;
+    display:grid; gap:16px; align-items:start; min-width:0;
     grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);
   }
-  .grid > .card { min-width:0; max-width:100%; height:100%; display:flex; flex-direction:column; }
+  .grid > .card { min-width:0; max-width:100%; height:auto; align-self:start; display:flex; flex-direction:column; }
   .card-head { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
   .card-head h2 { flex:1 1 180px; min-width:0; }
   .card-head .chips { flex:0 1 auto; }
@@ -370,15 +370,15 @@
   [data-card="trades"] { grid-area:trades; }
   [data-card="metrics"] { grid-area:metrics; }
   [data-card="exposure"] { grid-area:exposure; }
-  [data-card="protocol"] { grid-area:protocol; }
   [data-card="readiness"] { grid-area:readiness; }
   body[data-view="monitor"] .grid {
     grid-template-areas:
-      "pulse readiness"
+      "pulse pulse"
       "trend trend"
       "price carry"
       "price exposure"
-      "events events";
+      "events events"
+      "readiness readiness";
   }
   body[data-view="performance"] .grid {
     grid-template-areas:
@@ -390,10 +390,11 @@
   }
   body[data-view="risk"] .grid {
     grid-template-areas:
-      "radar exposure"
+      "radar radar"
       "trend trend"
       "chart carry"
       "price price"
+      "exposure exposure"
       "events events";
   }
   @media (max-width:1120px){
@@ -426,7 +427,10 @@
     content:""; position:absolute; inset:0; z-index:0; pointer-events:none;
     background:radial-gradient(120% 100% at 50% 100%, color-mix(in oklch, var(--s1) 6%, transparent), transparent 60%);
   }
-  #chart { width:100%; height:380px; display:block; position:relative; z-index:1; }
+  #chart { width:100%; height:clamp(260px, 28vw, 380px); display:block; position:relative; z-index:1; }
+  .price-chart-wrap { position:relative; margin-top:8px; }
+  .price-chart { width:100%; height:clamp(230px, 31vw, 440px); display:block; }
+  .yearly-chart { width:100%; height:clamp(180px, 20vw, 235px); display:block; margin-top:10px; }
   /* les marqueurs "vivants" (points d'ancrage, réticule) reçoivent une ombre
      portée neutre : lisible sur les deux thèmes, sans jamais flouter le texte
      des axes (le filtre ne cible que les <circle>, pas la racine du SVG) */
@@ -456,6 +460,20 @@
   .signal-key i { display:inline-block; width:23px; height:0; border-top:2px solid var(--s1); }
   .signal-key .threshold-inactive { border-top:1px dashed var(--muted); opacity:.65; }
   .signal-key .waiting-zone { height:8px; border:1px solid var(--ring); background:color-mix(in srgb,var(--muted) 8%,transparent); }
+  .decision-context {
+    display:flex; align-items:center; justify-content:space-between; gap:12px; min-width:0;
+    padding:9px 11px; margin:0 0 11px; border:1px solid var(--ring); border-radius:11px;
+    background:color-mix(in srgb,var(--surface-2) 72%,transparent);
+  }
+  .decision-label { display:block; color:var(--muted); font-size:10px; font-weight:700; letter-spacing:.7px; text-transform:uppercase; }
+  .decision-context strong { display:block; margin-top:2px; font-size:14px; letter-spacing:.1px; }
+  .decision-detail { min-width:0; color:var(--muted); font-size:11px; line-height:1.35; text-align:right; overflow-wrap:anywhere; }
+  .decision-context[data-tone="long"], .decision-context[data-tone="position"] { border-color:color-mix(in srgb,var(--good) 38%,var(--ring)); }
+  .decision-context[data-tone="long"] strong, .decision-context[data-tone="position"] strong { color:var(--good-text); }
+  .decision-context[data-tone="short"] { border-color:color-mix(in srgb,var(--crit) 38%,var(--ring)); }
+  .decision-context[data-tone="short"] strong { color:var(--crit); }
+  .decision-context[data-tone="unknown"] { border-color:color-mix(in srgb,var(--warn) 38%,var(--ring)); background:var(--warn-bg); }
+  .decision-context[data-tone="unknown"] strong { color:var(--warn); }
 
   /* ── moteurs ────────────────────────────────────────────── */
   .engines { display:grid; gap:16px; align-content:start; }
@@ -572,6 +590,12 @@
   .ops-note { margin-top:1px; color:var(--muted); font-size:10.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   @media (max-width:760px) { .focus-grid { grid-template-columns:1fr 1fr; } }
   @media (max-width:520px) { .ops-grid { grid-template-columns:1fr; } .focus-metric .fv { font-size:19px; } }
+  @media (max-width:520px) {
+    body[data-view="risk"] #risk-radar .focus-metric:last-child .fv {
+      white-space:normal; overflow:visible; text-overflow:clip; overflow-wrap:anywhere; line-height:1.15;
+      font-size:17px;
+    }
+  }
   @container colleft (max-width:480px) {
     .focus-grid { grid-template-columns:1fr 1fr; }
     .ops-grid { grid-template-columns:1fr; }
@@ -805,6 +829,20 @@
   }
   .technical-details[open] > .detail-grid, .technical-details[open] > .technical-note { opacity:1; transform:none; }
   .technical-note { margin-top:8px; color:var(--muted); font-size:10.5px; line-height:1.4; }
+  .price-tech-details { margin-top:10px; }
+  .section-label {
+    margin:14px 0 2px; padding-top:10px; border-top:1px solid var(--grid);
+    color:var(--muted); font-size:10px; font-weight:700; letter-spacing:.8px; text-transform:uppercase;
+  }
+  .authorization-note {
+    display:flex; align-items:flex-start; gap:8px; margin:8px 0 11px; padding:8px 10px;
+    color:var(--warn); background:var(--warn-bg); border:1px solid color-mix(in srgb,var(--warn) 38%,var(--ring));
+    border-radius:10px; font-size:11px; line-height:1.4;
+  }
+  .authorization-mark {
+    display:grid; place-items:center; flex:none; width:16px; height:16px; border-radius:50%;
+    color:var(--surface-solid); background:var(--warn); font-size:11px; font-weight:800;
+  }
   .exposure-primary { display:grid; grid-template-columns:1.2fr 1fr 1fr; gap:8px; margin:11px 0 10px; }
   .exposure-hero { min-width:0; padding:12px; border:1px solid var(--ring); border-radius:12px; background:color-mix(in srgb,var(--surface-2) 62%,transparent); }
   .exposure-hero span { display:block; color:var(--muted); font-size:10px; font-weight:700; letter-spacing:.7px; text-transform:uppercase; }
@@ -852,6 +890,9 @@
     .modal-grid { grid-template-columns:1fr; }
     .trend-next-line { flex-wrap:wrap; }
     .trend-next-line span:last-child { flex-basis:100%; }
+    .price-chart { height:clamp(220px, 58vw, 320px); }
+    .decision-context { align-items:flex-start; flex-direction:column; gap:4px; }
+    .decision-detail { text-align:left; }
   }
   @media (prefers-reduced-motion: reduce) {
     .mode .blink, .fresh-dot, .refresh-action[data-state="loading"] .refresh-glyph { animation:none !important; }
