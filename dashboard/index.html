@@ -148,13 +148,15 @@
         <span><i class="threshold-inactive"></i><span data-i18n="threshold_inactive">direction inactive</span></span>
         <span><i class="waiting-zone"></i><span data-i18n="waiting_zone">zone d’attente</span></span>
       </div>
-      <div style="position:relative;margin-top:8px">
-        <svg id="pchart" style="width:100%;height:440px;display:block" role="img" aria-label="Prix BTC, seuils Donchian actifs et positions"></svg>
+      <div class="price-chart-wrap">
+        <svg id="pchart" class="price-chart" role="img" aria-label="Prix BTC, seuils Donchian actifs et positions"></svg>
         <div id="ptip"></div>
       </div>
-      <div style="color:var(--muted);font-size:11px;margin-top:6px">Bougies affichées : 1 h · décisions, régime EMA et seuils D20 / D55 / D100 : clôtures 4 h uniquement.</div>
-      <div style="color:var(--muted);font-size:11px;margin-top:4px">Pas de take-profit fixe : la sortie se fait par
-        stop suiveur 3×ATR (remonte avec le prix, ne redescend jamais) ou retournement de régime EMA50/200 — les gains courent.</div>
+      <details class="technical-details price-tech-details">
+        <summary>Détails stratégie et calendrier</summary>
+        <div class="technical-note">Bougies affichées : 1 h. Les décisions, le régime EMA et les seuils D20 / D55 / D100 utilisent uniquement des clôtures 4 h.</div>
+        <div class="technical-note">Pas de take-profit fixe : sortie par stop suiveur 3×ATR ou retournement de régime EMA50/200. Les gains courent.</div>
+      </details>
     </div>
 
     <div class="card" data-card="events">
@@ -166,7 +168,7 @@
           <button class="chip" data-f="carry" aria-pressed="false">Carry</button>
         </span>
       </div>
-      <div id="events"><div class="empty">Chargement…</div></div>
+      <div id="events" tabindex="0" aria-label="Journal des événements défilable"><div class="empty">Chargement…</div></div>
     </div>
 
     <div class="card" data-card="trend">
@@ -174,6 +176,10 @@
       <div class="eequity num" id="trend-eq">—</div>
       <div class="esub">ensemble Donchian 20 / 55 / 100 · futures · <span id="trend-guard">—</span>
         <span class="beat num" id="trend-beat"></span></div>
+      <div class="decision-context" id="trend-decision-context" data-tone="unknown">
+        <div><span class="decision-label" data-i18n="decision_current">Décision actuelle</span><strong id="trend-decision">UNKNOWN</strong></div>
+        <span class="decision-detail" id="trend-decision-detail">Régime 4 h indisponible — aucune direction confirmée.</span>
+      </div>
       <div class="engine-summary trend-summary" id="trend-overview">
         <div class="summary-item"><span>Slots ouverts</span><strong class="num" id="trend-open-slots">—</strong><small id="trend-open-detail">—</small></div>
         <div class="summary-item"><span>Exposition</span><strong class="num" id="trend-total-notional">—</strong><small>notionnel estimé · prix observé</small></div>
@@ -255,7 +261,7 @@
           <span><span class="swatch" style="background:var(--muted)"></span>BTC</span>
         </span>
       </h2>
-      <svg id="ychart" style="width:100%;height:235px;display:block;margin-top:10px" role="img" aria-label="Rendements annuels du backtest, portefeuille et BTC"></svg>
+      <svg id="ychart" class="yearly-chart" role="img" aria-label="Rendements annuels du backtest, portefeuille et BTC"></svg>
       <div id="ynote" style="font-size:10.5px;color:var(--muted);margin-top:6px"></div>
     </div>
 
@@ -279,7 +285,7 @@
     </div>
 
     <div class="card" data-card="exposure">
-      <h2 data-i18n="exposure_health">Exposition &amp; santé</h2>
+      <h2 data-i18n="exposure_title">Exposition</h2>
       <span class="sr-only" id="exp-val">—</span>
       <div class="exposure-primary">
         <div class="exposure-hero"><span>Brut portefeuille</span><strong class="num" id="exp-gross">—</strong></div>
@@ -296,6 +302,7 @@
         <div><span>Carry brut 2 jambes</span><strong class="num" id="exp-carry">—</strong></div>
         <div><span>Équité</span><strong class="num" id="exp-equity">—</strong></div>
       </div>
+      <div class="section-label" data-i18n="system_health_label">Santé système</div>
       <div class="exposure-health-grid">
         <div><span>Protection</span><strong id="exp-protection">—</strong></div>
         <div><span>Fraîcheur</span><strong id="exp-freshness">—</strong></div>
@@ -314,19 +321,12 @@
       <div class="kv"><span class="k" data-i18n="uptime">Uptime dashboard</span><span class="num" id="h-uptime">—</span></div>
     </div>
 
-    <div class="card" data-card="protocol">
-      <h2 data-i18n="protocol">Protocole</h2>
-      <div class="kv"><span class="k" data-i18n="phase">Phase actuelle</span><span><b>1 · Paper trading</b></span></div>
-      <div class="kv"><span class="k" data-i18n="next_step">Étape suivante</span><span>Testnet Hyperliquid</span></div>
-      <div class="kv"><span class="k" data-i18n="rebalance">Rééquilibrage 60/40</span><span data-i18n="monthly">mensuel</span></div>
-      <div class="kv"><span class="k" data-i18n="golden_rule">Règle d’or</span><span data-i18n="no_change">ne rien modifier en route</span></div>
-    </div>
-
     <div class="card" data-card="readiness">
-      <h2><span data-i18n="readiness_title">Testnet</span>
+      <h2><span data-i18n="readiness_title">Qualification</span>
         <span class="estate" id="rdy-badge">—</span>
       </h2>
       <div style="font-size:11px;color:var(--muted);margin:4px 0 6px" data-i18n="readiness_note">Critères fixés à froid — le passage ne se décide pas au feeling.</div>
+      <div class="authorization-note" role="note"><span class="authorization-mark" aria-hidden="true">!</span><span data-i18n="testnet_guard">Testnet non autorisé · cette carte décrit uniquement la qualification PAPER.</span></div>
       <div id="readiness"><div class="empty">Chargement…</div></div>
     </div>
 </div>

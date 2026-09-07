@@ -198,3 +198,24 @@ def test_dashboard_interactions_are_accessible_and_fail_closed(monkeypatch):
 
     effects = (dashboard.ROOT / "dashboard" / "static" / "effects.js").read_text(encoding="utf-8")
     assert "document.startViewTransition(" not in effects
+
+
+def test_dashboard_read_only_hierarchy_is_explicit_and_adaptive(monkeypatch):
+    monkeypatch.setattr(dashboard, "AUTH_TOKEN", None)
+    html = dashboard.app.test_client().get("/").data.decode("utf-8")
+    css = (dashboard.ROOT / "dashboard" / "static" / "dashboard.css").read_text(encoding="utf-8")
+    effects = (dashboard.ROOT / "dashboard" / "static" / "effects.js").read_text(encoding="utf-8")
+
+    assert 'id="trend-decision-context"' in html
+    assert 'data-i18n="decision_current"' in html
+    assert 'data-i18n="testnet_guard"' in html
+    assert 'data-card="protocol"' not in html
+    assert 'id="events" tabindex="0"' in html
+    assert 'class="price-chart"' in html
+    assert 'class="yearly-chart"' in html
+    assert "align-items:start" in css
+    assert ".price-chart {" in css and "clamp(" in css
+    assert ".yearly-chart {" in css
+    assert ".authorization-note {" in css
+    assert '.decision-context[data-tone="unknown"]' in css
+    assert "setupColumnBalance" not in effects
