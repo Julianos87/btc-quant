@@ -1,0 +1,382 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-07T19:03:09Z",
+  "title": "Design System: TANDEM BTCQuant Dashboard",
+  "extensions": {
+    "colorMeta": {
+      "carbon-black": {
+        "role": "neutral",
+        "displayName": "Carbon Black",
+        "canonical": "#090f12",
+        "tonalRamp": ["#090f12", "#101c20", "#172a2f", "#203b40", "#36585c", "#5a7a7b", "#9eb5b1", "#eef4f1"]
+      },
+      "surface-deep": {
+        "role": "neutral",
+        "displayName": "Deep Teal Surface",
+        "canonical": "#111b1f",
+        "tonalRamp": ["#111b1f", "#16262b", "#1d353b", "#29474d", "#416269", "#66878a", "#a3bbb8", "#eef4f1"]
+      },
+      "surface-raised": {
+        "role": "neutral",
+        "displayName": "Raised Teal Surface",
+        "canonical": "#152126",
+        "tonalRamp": ["#152126", "#1b2c31", "#233c42", "#315158", "#4b6d72", "#719194", "#a9bfbc", "#eef4f1"]
+      },
+      "surface-inset": {
+        "role": "neutral",
+        "displayName": "Inset Teal Surface",
+        "canonical": "#1a292e",
+        "tonalRamp": ["#1a292e", "#20343a", "#29434a", "#38575e", "#547276", "#789497", "#b0c5c1", "#eef4f1"]
+      },
+      "datum-white": {
+        "role": "neutral",
+        "displayName": "Datum White",
+        "canonical": "#eef4f1",
+        "tonalRamp": ["#172124", "#293638", "#3d4c4d", "#566565", "#738281", "#99a8a4", "#c8d6d2", "#eef4f1"]
+      },
+      "datum-muted": {
+        "role": "neutral",
+        "displayName": "Datum Muted",
+        "canonical": "#a6b7b5",
+        "tonalRamp": ["#172124", "#293638", "#3d4c4d", "#566565", "#738281", "#899c9b", "#a6b7b5", "#dbe6e2"]
+      },
+      "datum-grid": {
+        "role": "neutral",
+        "displayName": "Datum Grid",
+        "canonical": "#263a3f",
+        "tonalRamp": ["#10191c", "#17282c", "#203940", "#2f4b51", "#46656a", "#6e898b", "#a9bcba", "#edf4f1"]
+      },
+      "datum-axis": {
+        "role": "neutral",
+        "displayName": "Datum Axis",
+        "canonical": "#40555a",
+        "tonalRamp": ["#172124", "#233438", "#314a4f", "#40555a", "#5c7377", "#7d9697", "#b4c5c1", "#eef4f1"]
+      },
+      "signal-teal": {
+        "role": "primary",
+        "displayName": "Signal Teal",
+        "canonical": "#4cc2d3",
+        "tonalRamp": ["#073238", "#084c55", "#0b6974", "#168a98", "#35aebd", "#64cbd5", "#a0e4e8", "#effdfd"]
+      },
+      "signal-mint": {
+        "role": "secondary",
+        "displayName": "Signal Mint",
+        "canonical": "#45c49d",
+        "tonalRamp": ["#06362a", "#075340", "#087257", "#10946f", "#35b08b", "#62cba8", "#9be2c5", "#edfff7"]
+      },
+      "tension-red": {
+        "role": "tertiary",
+        "displayName": "Tension Red",
+        "canonical": "#f16b76",
+        "tonalRamp": ["#4b0b17", "#721321", "#9d1d2b", "#c83240", "#df4d5a", "#f16b76", "#f69ca2", "#ffedef"]
+      },
+      "caution-amber": {
+        "role": "tertiary",
+        "displayName": "Caution Amber",
+        "canonical": "#e6ac57",
+        "tonalRamp": ["#422507", "#683a09", "#8f520d", "#b67322", "#d2943d", "#e6ac57", "#f0cc8b", "#fff6e2"]
+      },
+      "chart-dark": {
+        "role": "neutral",
+        "displayName": "Chart Black",
+        "canonical": "#0d171b",
+        "tonalRamp": ["#0d171b", "#14252a", "#1d343a", "#2a454a", "#456166", "#6d8689", "#a9bcb9", "#eef4f1"]
+      },
+      "paper-field": {
+        "role": "neutral",
+        "displayName": "Paper Field",
+        "canonical": "#e9ecea",
+        "tonalRamp": ["#273638", "#405052", "#5a6b6c", "#748383", "#939f9d", "#b4bfbc", "#d2dbd8", "#e9ecea"]
+      },
+      "paper-surface": {
+        "role": "neutral",
+        "displayName": "Paper Surface",
+        "canonical": "#f7f8f6",
+        "tonalRamp": ["#283536", "#465354", "#647171", "#808b89", "#a0aaa7", "#c1c9c5", "#dfe4e1", "#f7f8f6"]
+      },
+      "paper-solid": {
+        "role": "neutral",
+        "displayName": "Paper Solid",
+        "canonical": "#fbfcfa",
+        "tonalRamp": ["#2a3738", "#4a5858", "#6c7775", "#8b9592", "#abb3ae", "#cbd1cc", "#e5e9e5", "#fbfcfa"]
+      },
+      "paper-ink": {
+        "role": "neutral",
+        "displayName": "Paper Ink",
+        "canonical": "#172124",
+        "tonalRamp": ["#172124", "#293638", "#3d4c4d", "#566565", "#738281", "#99a8a4", "#c8d6d2", "#eef4f1"]
+      },
+      "paper-muted": {
+        "role": "neutral",
+        "displayName": "Paper Muted",
+        "canonical": "#566468",
+        "tonalRamp": ["#172124", "#28383b", "#3a4c50", "#566468", "#6e8082", "#91a0a0", "#bdc9c6", "#eef4f1"]
+      },
+      "paper-grid": {
+        "role": "neutral",
+        "displayName": "Paper Grid",
+        "canonical": "#d5dddb",
+        "tonalRamp": ["#263536", "#465353", "#647271", "#818e8b", "#a2adaa", "#b9c5c1", "#c8d2ce", "#d5dddb"]
+      },
+      "paper-axis": {
+        "role": "neutral",
+        "displayName": "Paper Axis",
+        "canonical": "#aebbb9",
+        "tonalRamp": ["#263536", "#425151", "#5d6d6c", "#778583", "#8e9d9a", "#aebbb9", "#c7d2ce", "#eef4f1"]
+      },
+      "paper-teal": {
+        "role": "primary",
+        "displayName": "Paper Teal",
+        "canonical": "#0b6f86",
+        "tonalRamp": ["#062d37", "#084554", "#0b6073", "#0b6f86", "#328fa0", "#62afbb", "#9bcdd1", "#e8f8f8"]
+      },
+      "paper-mint": {
+        "role": "secondary",
+        "displayName": "Paper Mint",
+        "canonical": "#168267",
+        "tonalRamp": ["#073226", "#094b39", "#0d634d", "#168267", "#399b80", "#68b69f", "#a0d1bf", "#eafbf4"]
+      },
+      "paper-red": {
+        "role": "tertiary",
+        "displayName": "Paper Tension Red",
+        "canonical": "#bd3542",
+        "tonalRamp": ["#430b14", "#66131c", "#881e28", "#a72a35", "#bd3542", "#d55d68", "#e9959c", "#fcebed"]
+      },
+      "paper-amber": {
+        "role": "tertiary",
+        "displayName": "Paper Caution Amber",
+        "canonical": "#8b5608",
+        "tonalRamp": ["#321c04", "#4e2b06", "#693b07", "#8b5608", "#a9752c", "#c09654", "#ddc08e", "#fff4dc"]
+      },
+      "chart-paper": {
+        "role": "neutral",
+        "displayName": "Chart Paper",
+        "canonical": "#f0f4f2",
+        "tonalRamp": ["#283837", "#455553", "#62716f", "#7f8e8b", "#9daaa6", "#bbc6c2", "#d6dfdb", "#f0f4f2"]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Equity Display",
+        "purpose": "Total equity hero value only; tabular and intentionally dominant."
+      },
+      "body": {
+        "displayName": "Operator Body",
+        "purpose": "Readable explanatory copy, notes, and supporting descriptions."
+      },
+      "title": {
+        "displayName": "Instrument Title",
+        "purpose": "Uppercase card and module headings that need to scan as controls."
+      },
+      "label": {
+        "displayName": "Terminal Label",
+        "purpose": "Eyebrows, truth labels, table headers, and compact operational metadata."
+      }
+    },
+    "shadows": [
+      {
+        "name": "resting-instrument",
+        "value": "inset 0 1px 0 color-mix(in srgb, var(--ink) 5%, transparent)",
+        "purpose": "Flat-by-default edge definition for cards, tiles, truth nodes, and the cockpit bar."
+      },
+      {
+        "name": "active-instrument",
+        "value": "inset 0 1px 0 color-mix(in srgb, var(--s1) 16%, transparent)",
+        "purpose": "Quiet teal response for card hover and active instrument state."
+      },
+      {
+        "name": "drawer-separation",
+        "value": "-20px 0 60px -20px rgba(0,0,0,.5)",
+        "purpose": "Structural separation for the settings drawer only."
+      },
+      {
+        "name": "modal-separation",
+        "value": "0 30px 80px -20px rgba(0,0,0,.6)",
+        "purpose": "Structural separation for drill-down modal content only."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-ui",
+        "value": "cubic-bezier(.2,.8,.2,1)",
+        "purpose": "Local easing for the view indicator, drawer, modal, and control state transitions."
+      },
+      {
+        "name": "motion-fast",
+        "value": "120ms",
+        "purpose": "Small color, border, and control feedback transitions."
+      },
+      {
+        "name": "motion-ui",
+        "value": "180ms",
+        "purpose": "View indicator, chip, and technical-detail transitions."
+      },
+      {
+        "name": "motion-panel",
+        "value": "220ms",
+        "purpose": "Settings drawer and backdrop entry/exit."
+      },
+      {
+        "name": "count-ticker",
+        "value": "700ms ease-out cubic",
+        "purpose": "Subtle equity and BTC price odometer interpolation on refresh."
+      },
+      {
+        "name": "fx-frame-cap",
+        "value": "30fps",
+        "purpose": "Optional WebGL field cap; it remains behind the UI and is disabled for reduced motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "wide-to-stacked",
+        "value": "1120px",
+        "purpose": "Named grid areas collapse to one column; truth rail becomes 2×2."
+      },
+      {
+        "name": "position-cards",
+        "value": "899px",
+        "purpose": "Trend position rows switch from a table to stacked slot cards."
+      },
+      {
+        "name": "compact-tablet",
+        "value": "780px",
+        "purpose": "Header becomes non-sticky; hero tile spans the 2-column tile row."
+      },
+      {
+        "name": "focus-grid",
+        "value": "760px",
+        "purpose": "Focus metrics reduce to two columns."
+      },
+      {
+        "name": "engine-grid",
+        "value": "700px",
+        "purpose": "Engine summaries reduce to two columns and Carry state stacks."
+      },
+      {
+        "name": "phone",
+        "value": "520px",
+        "purpose": "Page padding becomes 10px; headings, controls, charts, and detail grids tighten."
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "View Tabs",
+      "kind": "nav",
+      "refersTo": "button-chip",
+      "description": "Compact Monitor/Performance/Risk navigation with a local selected rail.",
+      "html": "<nav class=\"ds-view-tabs\" aria-label=\"Dashboard view\"><button class=\"ds-chip\" type=\"button\" aria-selected=\"true\">Monitor</button><button class=\"ds-chip\" type=\"button\" aria-selected=\"false\">Performance</button><button class=\"ds-chip\" type=\"button\" aria-selected=\"false\">Risk</button></nav>",
+      "css": ".ds-view-tabs { display:flex; gap:2px; padding:3px; background:var(--surface-2); border:1px solid var(--ring); border-radius:5px; } .ds-chip { border:0; border-radius:3px; padding:5px 10px; background:transparent; color:var(--muted); font:700 10px/1.2 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; letter-spacing:.02em; cursor:pointer; transition:background-color 120ms, color 120ms; } .ds-chip:hover { color:var(--ink); } .ds-chip:focus-visible { outline:2px solid var(--s1); outline-offset:2px; } .ds-chip[aria-selected=\"true\"] { background:var(--surface-solid); color:var(--ink); box-shadow:0 1px 4px rgba(0,0,0,.18); } .ds-chip:active { background:var(--surface-solid); }"
+    },
+    {
+      "name": "Icon Control",
+      "kind": "button",
+      "refersTo": "button-icon",
+      "description": "Small settings/theme/export control with an inline SVG glyph.",
+      "html": "<button class=\"ds-icon-btn\" type=\"button\" aria-label=\"Open settings\"><svg class=\"ds-icon\" aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z\"/><path d=\"m19 13.5 1.3 1-.9 1.6-1.5-.5a7.8 7.8 0 0 1-1.4 1.1l.1 1.6-1.8.6-.8-1.4a7.7 7.7 0 0 1-1.8.2l-.8 1.4-1.8-.6.1-1.6a7.8 7.8 0 0 1-1.4-1.1l-1.5.5-.9-1.6 1.3-1a7.4 7.4 0 0 1 0-1.8l-1.3-1 .9-1.6 1.5.5A7.8 7.8 0 0 1 9.8 8l-.1-1.6 1.8-.6.8 1.4a7.7 7.7 0 0 1 1.8-.2l.8-1.4 1.8.6-.1 1.6a7.8 7.8 0 0 1 1.4 1.1l1.5-.5.9 1.6-1.3 1a7.4 7.4 0 0 1 0 1.8Z\"/></svg><span>Settings</span></button>",
+      "css": ".ds-icon-btn { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--ring); border-radius:6px; padding:7px 11px; background:var(--surface-2); color:var(--ink-2); font:400 14px/1.5 \"Trebuchet MS\",ui-sans-serif,system-ui,sans-serif; cursor:pointer; transition:color 120ms, border-color 120ms, background-color 120ms; } .ds-icon { width:14px; height:14px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; } .ds-icon-btn:hover { color:var(--ink); border-color:var(--axis); } .ds-icon-btn:focus-visible { outline:2px solid var(--s1); outline-offset:2px; } .ds-icon-btn:active { background:var(--surface-solid); }"
+    },
+    {
+      "name": "Refresh Control",
+      "kind": "button",
+      "refersTo": "button-refresh",
+      "description": "Read-only refresh action whose state can move from idle to loading or success.",
+      "html": "<button class=\"ds-refresh\" type=\"button\"><svg class=\"ds-refresh-icon\" aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M20 11a8 8 0 1 0-2.34 5.66M20 5v6h-6\"/></svg><span>Refresh</span></button>",
+      "css": ".ds-refresh { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:34px; padding:6px 11px; border:1px solid var(--ring); border-radius:5px; background:var(--surface-solid); color:var(--ink-2); font:700 12px/1.5 \"Trebuchet MS\",ui-sans-serif,system-ui,sans-serif; cursor:pointer; transition:background-color 120ms, border-color 120ms, color 120ms; } .ds-refresh-icon { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; } .ds-refresh:hover { color:var(--ink); border-color:color-mix(in srgb,var(--s1) 40%,var(--ring)); } .ds-refresh:focus-visible { outline:2px solid var(--s1); outline-offset:2px; } .ds-refresh:active { background:var(--surface-2); }"
+    },
+    {
+      "name": "Truth Rail Node",
+      "kind": "custom",
+      "refersTo": "truth-node",
+      "description": "One of the four explicit PAPER/read-only/authorization/cadence contract nodes.",
+      "html": "<article class=\"ds-truth-node\"><span class=\"ds-truth-wire\" aria-hidden=\"true\"></span><span class=\"ds-truth-label\">External authorization</span><strong>TESTNET BLOCKED</strong><small>PAPER qualification is not permission</small></article>",
+      "css": ".ds-truth-node { position:relative; min-height:74px; padding:12px 13px 11px 18px; overflow:hidden; border:1px solid var(--ring); border-radius:7px; background:var(--surface); box-shadow:inset 0 1px 0 color-mix(in srgb,var(--ink) 5%,transparent); } .ds-truth-node::after { content:\"\"; position:absolute; inset:auto 0 0; height:1px; background:var(--crit); opacity:.75; } .ds-truth-wire { position:absolute; left:8px; top:12px; width:7px; height:7px; border-radius:50%; background:var(--crit); box-shadow:0 0 0 3px var(--crit-bg); } .ds-truth-label { display:block; color:var(--muted); font:700 9px/1.2 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; letter-spacing:.13em; text-transform:uppercase; } .ds-truth-node strong { display:block; margin-top:7px; color:var(--crit); font:700 15px/1.2 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; letter-spacing:.04em; } .ds-truth-node small { display:block; margin-top:2px; color:var(--muted); font:400 10px/1.25 \"Trebuchet MS\",ui-sans-serif,system-ui,sans-serif; }"
+    },
+    {
+      "name": "Instrument Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Opaque dashboard instrument plane with a semantic top rule and compact metric content.",
+      "html": "<article class=\"ds-card\"><h2><span class=\"ds-card-dot\" aria-hidden=\"true\"></span>Operational pulse</h2><p class=\"ds-card-note\">Four signals that matter during monitoring.</p><strong class=\"ds-card-value\">PAPER / READ ONLY</strong></article>",
+      "css": ".ds-card { padding:18px 19px; border:1px solid var(--ring); border-radius:7px; background:var(--surface); color:var(--ink); box-shadow:inset 0 1px 0 color-mix(in srgb,var(--ink) 5%,transparent); } .ds-card h2 { display:flex; align-items:center; gap:9px; margin:0; color:var(--ink); font:700 12px/1.3 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; letter-spacing:.09em; text-transform:uppercase; } .ds-card-dot { width:8px; height:8px; border-radius:50%; background:var(--s2); box-shadow:0 0 0 3px color-mix(in srgb,var(--s2) 12%,transparent); } .ds-card-note { margin:4px 0 13px; color:var(--muted); font:400 11.5px/1.4 \"Trebuchet MS\",ui-sans-serif,system-ui,sans-serif; } .ds-card-value { display:block; padding-top:10px; border-top:1px solid var(--datum-grid); color:var(--ink); font:700 16px/1.2 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; } .ds-card:hover { border-color:color-mix(in srgb,var(--s1) 34%,var(--ring)); box-shadow:inset 0 1px 0 color-mix(in srgb,var(--s1) 16%,transparent); } .ds-card:focus-visible { outline:2px solid var(--s1); outline-offset:2px; }"
+    },
+    {
+      "name": "Settings Field",
+      "kind": "input",
+      "refersTo": "field",
+      "description": "Compact select/date/number field used in the settings and trade filters.",
+      "html": "<label class=\"ds-field\"><span>Display currency</span><select aria-label=\"Display currency\"><option>USD</option><option>EUR</option></select></label>",
+      "css": ".ds-field { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:9px 0; border-bottom:1px solid var(--grid); color:var(--ink-2); font:400 13px/1.5 \"Trebuchet MS\",ui-sans-serif,system-ui,sans-serif; } .ds-field select { min-width:88px; padding:6px 9px; border:1px solid var(--ring); border-radius:5px; background:var(--surface-2); color:var(--ink); font:700 10px/1.2 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; } .ds-field select:hover { border-color:var(--axis); } .ds-field select:focus-visible { outline:2px solid var(--s1); outline-offset:2px; }"
+    },
+    {
+      "name": "State Badge",
+      "kind": "chip",
+      "refersTo": "button-chip-active",
+      "description": "Small semantic state label for long, short, protected, unknown, or blocked readings.",
+      "html": "<span class=\"ds-state-badge\" data-tone=\"blocked\"><span class=\"ds-state-dot\" aria-hidden=\"true\"></span>TESTNET BLOCKED</span>",
+      "css": ".ds-state-badge { display:inline-flex; align-items:center; gap:6px; padding:4px 9px; border:1px solid color-mix(in srgb,var(--crit) 36%,var(--ring)); border-radius:4px; background:var(--crit-bg); color:var(--crit); font:700 10px/1.2 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; letter-spacing:.08em; text-transform:uppercase; } .ds-state-dot { width:6px; height:6px; border-radius:50%; background:currentColor; } .ds-state-badge:hover { border-color:var(--crit); } .ds-state-badge:focus-visible { outline:2px solid var(--s1); outline-offset:2px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Tensegrity Control Room",
+    "overview": "TANDEM is a dense, read-only operator cockpit: a system of forces held in visible balance. The visual world is code-led and structural, with carbon-black planes, teal signal surfaces, pale datum rails, and red tension accents. The first scan is intentionally operational: PAPER truth, read-only provenance, and blocked external authorization sit on a four-node rail before the dashboard asks the operator to interpret performance.\n\nThe dark expression is the signature control-room mode (`#090f12` field with layered teal-black surfaces). A deliberately pale-paper counterpart is available through the existing light theme for bright environments; it keeps the same geometry, rails, labels, and semantic accents. Surfaces are opaque and quiet rather than glassy. Depth comes from inset rules, one-pixel datum lines, and restrained state color. SVG controls and charts are part of the instrument panel, not decorative chrome. The direction contract is the assignment 4 / seed `e7f8d8f0` tensegrity world recorded in the first body child of `dashboard/index.html`.",
+    "keyCharacteristics": [
+      "Code-led operational labels: compact monospace uppercase labels, tabular numerals, and visible `//` eyebrow markers.",
+      "Tensegrity rails: pale datum lines and small anchor dots connect the truth rail and semantic state changes.",
+      "Flat/inset depth: opaque planes, thin borders, and inset top rules carry hierarchy; shadows are reserved for overlays.",
+      "Explicit trust states: PAPER, LECTURE SEULE, and TESTNET BLOQUÉ remain distinct and visible.",
+      "Restrained motion: local control transitions and reduced-motion fallbacks support scanning without spectacle."
+    ],
+    "rules": [
+      {
+        "name": "The Trust-First Rule",
+        "body": "The four truth nodes precede interpretation: keep PAPER, read-only, testnet-blocked, and causal cadence visible in the first scan.",
+        "section": "colors"
+      },
+      {
+        "name": "The Signal-Rarity Rule",
+        "body": "Teal, mint, amber, and red are semantic wires. Keep their large fills rare; let thin rules, anchor dots, badges, and state copy carry most of the signal.",
+        "section": "colors"
+      },
+      {
+        "name": "The Terminal-Label Rule",
+        "body": "Labels name the instrument; values carry the reading. Use compact uppercase mono for operational metadata and reserve body type for explanation.",
+        "section": "typography"
+      },
+      {
+        "name": "The View-Order Rule",
+        "body": "Reordering a view changes scan priority, not product truth: Monitor foregrounds pulse and engine state, Performance foregrounds realized results and history, and Risk foregrounds radar, exposure, and authorization context.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat-by-Default Rule",
+        "body": "Do not make an instrument card float. Use opaque tonal layers, datum lines, and inset rules; reserve ambient shadow for drawer and modal boundaries.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Rail-Over-Glow Rule",
+        "body": "A state must remain legible when decorative effects are disabled. The WebGL field, if enabled, sits behind the UI and never carries the sole meaning of a state.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do show the PAPER, read-only, and testnet-blocked contract before performance interpretation.",
+      "Do use the dark carbon-black/teal expression as the signature world and preserve the same roles in the pale-paper theme.",
+      "Do use compact monospace labels, tabular numerals, semantic top rules, and one-pixel datum rails to make dense state scannable.",
+      "Do keep red for tension/blocking/critical risk and amber for warning/qualification/unknown; make the distinction explicit in copy.",
+      "Do preserve non-color meaning through text, badges, symbols, and SVG legend treatments.",
+      "Do honor `prefers-reduced-motion`: the canvas, tilt, pulses, and local transitions must have a quiet fallback.",
+      "Do keep chart, table, drawer, and modal content bounded on mobile; the dashboard is an always-on cockpit that must remain useful at phone widths."
+    ],
+    "donts": [
+      "Don't imply live authorization, venue execution, wallets, trading actions, or testnet permission anywhere in the visual system.",
+      "Don't turn the dashboard into a generic rounded glass card wall, soft gradient brand page, or decorative hero.",
+      "Don't use glow, motion, or a background canvas as the only indicator of health, risk, freshness, or authorization.",
+      "Don't flatten PAPER, stale, unknown, unavailable, realized, modeled, and backtest states into one generic status color.",
+      "Don't spend the red accent on ordinary decoration; it marks tension that can break the balance.",
+      "Don't introduce large corner radii, heavy floating shadows, or broad gradients into standard instrument cards.",
+      "Don't replace the causal 4h decision cadence or provenance notes with a more convenient but less truthful summary."
+    ]
+  }
+}

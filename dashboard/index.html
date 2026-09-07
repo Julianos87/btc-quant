@@ -12,6 +12,14 @@
 
 </head>
 <body data-view="monitor">
+<!--
+  THESIS: Make trust and tension visible before performance: this cockpit refuses the generic card wall.
+  OWN-WORLD: A tensegrity control room—carbon-black planes, pale datum lines, red tension accents, and monospaced force labels.
+  STORY: An operator sees PAPER truth, then the live Trend/Cary forces, then the risk that could break the balance.
+  FIRST VIEWPORT: The masthead and view rail establish mode; a four-cell trust rail anchors the first scan; equity and state tiles lead into the active engine.
+  FORM: Tensegrity force network, assigned direction 4, seed e7f8d8f0; terminal-density donation from the competitive phosphor-terminal challenger.
+  FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
+-->
 <canvas id="fx" aria-hidden="true"></canvas>
 <a class="skip-link" href="#dashboard-content">Aller au contenu principal</a>
 
@@ -24,8 +32,8 @@
     </div>
   </div>
   <span class="mode"><span class="blink"></span><span data-i18n="paper">PAPER TRADING</span></span>
-  <button type="button" class="iconbtn" id="theme-btn" title="Basculer le thème" aria-pressed="false">🌗 <span data-i18n="theme">Thème</span></button>
-  <button type="button" class="iconbtn" id="settings-btn" title="Préférences" aria-expanded="false" aria-controls="drawer">⚙️ <span data-i18n="settings">Réglages</span></button>
+  <button type="button" class="iconbtn" id="theme-btn" title="Basculer le thème" aria-pressed="false"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"/></svg><span data-i18n="theme">Thème</span></button>
+  <button type="button" class="iconbtn" id="settings-btn" title="Préférences" aria-expanded="false" aria-controls="drawer"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/><path d="m19 13.5 1.3 1-.9 1.6-1.5-.5a7.8 7.8 0 0 1-1.4 1.1l.1 1.6-1.8.6-.8-1.4a7.7 7.7 0 0 1-1.8.2l-.8 1.4-1.8-.6.1-1.6a7.8 7.8 0 0 1-1.4-1.1l-1.5.5-.9-1.6 1.3-1a7.4 7.4 0 0 1 0-1.8l-1.3-1 .9-1.6 1.5.5A7.8 7.8 0 0 1 9.8 8l-.1-1.6 1.8-.6.8 1.4a7.7 7.7 0 0 1 1.8-.2l.8-1.4 1.8.6-.1 1.6a7.8 7.8 0 0 1 1.4 1.1l1.5-.5.9 1.6-1.3 1a7.4 7.4 0 0 1 0 1.8Z"/></svg><span data-i18n="settings">Réglages</span></button>
   <span class="spacer"></span>
   <div class="hm"><div class="lab" data-i18n="btcusdt">BTC-PERP / USDC</div><div class="val num display" id="h-price">—</div></div>
   <div class="hm"><div class="lab" data-i18n="h24">24 heures</div><div class="val num" id="h-change">—</div></div>
@@ -56,8 +64,35 @@
   </button>
 </section>
 
+<section class="truth-rail" aria-label="Contrat d'état du cockpit">
+  <article class="truth-node truth-paper">
+    <span class="truth-wire" aria-hidden="true"></span>
+    <span class="truth-label">Mode opératoire</span>
+    <strong>PAPER</strong>
+    <small>simulation · aucune exécution venue</small>
+  </article>
+  <article class="truth-node truth-readonly">
+    <span class="truth-wire" aria-hidden="true"></span>
+    <span class="truth-label">Contrat des données</span>
+    <strong>LECTURE SEULE</strong>
+    <small>état, ledger et métriques observés</small>
+  </article>
+  <article class="truth-node truth-auth">
+    <span class="truth-wire" aria-hidden="true"></span>
+    <span class="truth-label">Autorisation externe</span>
+    <strong>TESTNET BLOQUÉ</strong>
+    <small>qualification PAPER ≠ permission</small>
+  </article>
+  <article class="truth-node truth-clock">
+    <span class="truth-wire" aria-hidden="true"></span>
+    <span class="truth-label">Cadence de décision</span>
+    <strong>4 H · CAUSAL</strong>
+    <small>signal à la clôture · refresh 30 s</small>
+  </article>
+</section>
+
 <main id="dashboard-content" aria-labelledby="view-monitor" tabindex="-1">
-<div id="alert" role="alert" aria-live="assertive"><span class="ic" aria-hidden="true">⚠</span><span id="alert-msg"></span></div>
+<div id="alert" role="alert" aria-live="assertive"><span class="ic" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><path d="m12 3 9 17H3L12 3Z"/><path d="M12 9v5m0 3h.01"/></svg></span><span id="alert-msg"></span></div>
 
 <section class="tiles" id="top-tiles">
   <div class="card tile hero" data-view-tile="equity">
@@ -267,7 +302,7 @@
 
     <div class="card" data-card="trades">
       <h2><span data-i18n="closed_trades">Trades clôturés</span> <span class="estate" id="tr-stats" style="background:color-mix(in srgb,var(--muted) 10%,transparent);color:var(--ink-2)">—</span>
-        <a class="iconbtn" href="/api/trades.csv" download style="margin-left:auto;text-decoration:none">⬇ CSV</a>
+        <a class="iconbtn" href="/api/trades.csv" download style="margin-left:auto;text-decoration:none"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14"/></svg>CSV</a>
       </h2>
       <div class="controls" style="margin:8px 0 2px">
         <label class="sk" for="tr-from" style="font-size:11.5px;color:var(--muted)" data-i18n="from">Du</label>
@@ -336,7 +371,7 @@
 <div class="drawer-backdrop" id="drawer-bd" hidden></div>
 <aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" hidden inert>
   <div class="dh"><h3 id="drawer-title" data-i18n="settings">Réglages</h3><span class="spacer" style="flex:1"></span>
-    <button type="button" class="iconbtn" id="drawer-close" aria-label="Fermer les réglages">✕</button></div>
+    <button type="button" class="iconbtn" id="drawer-close" aria-label="Fermer les réglages"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
 
   <div class="setgrp">
     <div class="gl" data-i18n="grp_display">Affichage</div>
@@ -382,7 +417,7 @@
 <!-- ── modal drill-down par stratégie ─────────────────────── -->
 <div class="modal-backdrop" id="modal-bd" hidden>
   <div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" tabindex="-1" inert>
-    <div class="mh"><h3 id="modal-title">—</h3><span style="flex:1"></span><button type="button" class="iconbtn" id="modal-close" aria-label="Fermer les détails">✕</button></div>
+    <div class="mh"><h3 id="modal-title">—</h3><span style="flex:1"></span><button type="button" class="iconbtn" id="modal-close" aria-label="Fermer les détails"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
     <div id="modal-body"></div>
   </div>
 </div>
