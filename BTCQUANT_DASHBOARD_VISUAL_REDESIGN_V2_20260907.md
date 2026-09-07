@@ -10,8 +10,8 @@ Scope: dashboard, reporting, read-only UI only
 - Initial tree: `6cea848964941b5f9bc9403c097761aea2006edb`
 - Working branch: `feat/dashboard-visual-redesign-v2-20260907`
 - Initial worktree: clean; source was based on a clean checkout of `origin/main`.
-- Final merged `origin/main`: `05559a83312189c61ddb56844be7e9c17ae1d708`
-- Final tree: `f58ed2d1cd8edce6ed61379451166166ada0d983`
+- Redesign merge (`origin/main` after PR #92): `05559a83312189c61ddb56844be7e9c17ae1d708` (tree `f58ed2d1cd8edce6ed61379451166166ada0d983`).
+- Final report merge (`origin/main` after PR #93): `9bb951c382be81bc9308dc7966a24650b5214474` (tree `121a45f67db8471f3dcd3b770312ab4739149abd`).
 - Schema/trading runtime: unchanged; no production deployment was performed.
 
 ## B. Changes delivered
@@ -106,6 +106,7 @@ Checks:
 - PR: [#92](https://github.com/Julianos87/btc-quant/pull/92).
 - PR merged: 2026-09-07 19:26:02 UTC.
 - Squash merge commit on main: `05559a83312189c61ddb56844be7e9c17ae1d708`.
+- Final report PR: [#93](https://github.com/Julianos87/btc-quant/pull/93), merged 2026-09-07 19:31:18 UTC; final main is `9bb951c382be81bc9308dc7966a24650b5214474`.
 - The local `gh pr merge` helper was blocked because another worktree owns local `main`; the GitHub merge API completed the same authorized merge after CI was green.
 
 ## J. Before / after scorecard
