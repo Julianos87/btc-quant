@@ -471,6 +471,29 @@ def test_backtest_rejected_entry_does_not_create_a_position():
     assert result.trades == []
 
 
+def test_backtest_rejected_stop_retry_uses_a_new_attempt_identity():
+    index = pd.date_range("2026-01-01", periods=12, freq="4h", tz="UTC")
+    price = np.full(len(index), 100.0)
+    frame = pd.DataFrame(
+        {
+            "open": price,
+            "high": price + 1.0,
+            "low": np.where(np.arange(len(index)) >= 6, 80.0, 99.0),
+            "close": price,
+            "volume": np.full(len(index), 100.0),
+        },
+        index=index,
+    )
+    # A rejected stop is retried at the next open and can be seen again by
+    # the same bar's intrabar stop path.  Those are distinct attempts, not an
+    # idempotent replay of one already accepted order.
+    simulator = ExecutionSimulator(ExecutionConfig(rejection_rate=1.0, seed=17))
+
+    result = BacktestEngine(execution_simulator=simulator).run(OneTradeStrategy(), frame)
+
+    assert result.trades == []
+
+
 def test_reusing_a_backtest_engine_starts_a_fresh_execution_session():
     index = pd.date_range("2026-01-01", periods=12, freq="4h", tz="UTC")
     price = np.full(len(index), 100.0)

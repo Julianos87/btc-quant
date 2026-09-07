@@ -78,6 +78,11 @@ class _BacktestState:
     pending_exit_reason: str | None = None
     pending_exit_volatility: float | None = None
     trades: list[Trade] = field(default_factory=list)
+    # Each simulator invocation is a new execution attempt.  A rejected or
+    # partial stop must not reuse the id of the previous attempt with a
+    # different reference price/quantity, otherwise the idempotence guard
+    # correctly raises a conflict instead of allowing the retry to proceed.
+    exit_attempts: int = 0
 
 
 class BacktestEngine:
@@ -118,11 +123,13 @@ class BacktestEngine:
         assert position is not None
         requested_qty = position.qty
         side = OrderSide.SELL if position.direction == 1 else OrderSide.BUY
+        attempt = state.exit_attempts
+        state.exit_attempts += 1
         fill = execution.execute_market(
             MarketOrder(
                 order_id=(
                     f"backtest:{strategy_name}:{ts.isoformat()}:exit:"
-                    f"{reason}:{position.direction}:{requested_qty:.17g}"
+                    f"{reason}:{position.direction}:{requested_qty:.17g}:attempt:{attempt}"
                 ),
                 side=side,
                 qty=requested_qty,
