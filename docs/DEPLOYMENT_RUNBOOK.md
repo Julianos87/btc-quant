@@ -10,6 +10,9 @@ Hyperliquid**. Toute exécution mainnet reste verrouillée par la Safety Baselin
 - `/opt/btcquant/previous` : release de rollback ;
 - `/opt/btcquant/state`, `backups`, `data` et `.env` : données partagées,
   jamais remplacées par un déploiement.
+- `/opt/btcquant/dashboard-current` et `/opt/btcquant/dashboard-previous` :
+  liens atomiques dédiés au dashboard. Le dashboard lit sa release par ces
+  liens ; Trend, Carry et les autres writers continuent de lire `current`.
 - `BTCQUANT_ROOT=/opt/btcquant` est posé **dans les units source**. Ne pas
   dépendre d'un drop-in hôte `btcquant-*.service.d` pour cette variable :
   `WorkingDirectory=/opt/btcquant/current` se résout vers le répertoire
@@ -128,6 +131,25 @@ Le chemin code-only (`update.sh --sha ...`) refuse toute DB sous le schéma cibl
 et ne touche pas à la DB; il peut donc faire un rollback de code automatique si
 le health check échoue. Une DB v6 ne doit jamais être utilisée avec un ancien
 binaire v5.
+
+## Déploiement dashboard-only
+
+Une mise à jour de l'interface ne doit pas basculer `/opt/btcquant/current`.
+Construire d'abord une release complète vérifiée avec `create-release.sh`, puis
+publier son SHA via le helper root-only de la release :
+
+```bash
+sudo BTCQUANT_ROOT=/opt/btcquant \
+  /opt/btcquant/releases/<SHA>/deploy/switch-dashboard-release.sh \
+  /opt/btcquant/releases/<SHA>
+```
+
+Le helper valide le manifeste, le virtualenv, les assets et le lien `state`
+avant de faire deux `mv -T` atomiques. Il ne touche jamais `current`,
+`previous`, la base ou un service moteur. Après installation de l'unit
+dashboard depuis la release cible, seul `btcquant-dashboard.service` peut être
+redémarré. Le retour exact s'effectue avec `--rollback`, puis le même contrôle
+de santé et d'identité des PID doit être effectué.
 
 ## Mise à jour
 

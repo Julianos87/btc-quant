@@ -93,6 +93,9 @@ command -v uv >/dev/null || {
 }
 TARGET="$(bash "${SOURCE}/deploy/create-release.sh" "${SOURCE}" "${RELEASE_ID}")"
 BTCQUANT_ROOT="${ROOT}" BTCQUANT_CURRENT="${TARGET}" bash "${TARGET}/deploy/preflight.sh"
+# Keep the dashboard on its own immutable release link. Engines continue to
+# resolve /opt/btcquant/current and are not affected by this pointer.
+BTCQUANT_ROOT="${ROOT}" bash "${TARGET}/deploy/switch-dashboard-release.sh" "${TARGET}"
 ln -sfn "${TARGET}" "${ROOT}/.current-next"
 mv -Tf "${ROOT}/.current-next" "${ROOT}/current"
 
