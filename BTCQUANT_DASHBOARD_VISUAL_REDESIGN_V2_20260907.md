@@ -106,7 +106,8 @@ Checks:
 - PR: [#92](https://github.com/Julianos87/btc-quant/pull/92).
 - PR merged: 2026-09-07 19:26:02 UTC.
 - Squash merge commit on main: `05559a83312189c61ddb56844be7e9c17ae1d708`.
-- Final report PR: [#93](https://github.com/Julianos87/btc-quant/pull/93), merged 2026-09-07 19:31:18 UTC; final main is `9bb951c382be81bc9308dc7966a24650b5214474`.
+- Final report PR: [#93](https://github.com/Julianos87/btc-quant/pull/93), merged 2026-09-07 19:31:18 UTC; report merge main was `9bb951c382be81bc9308dc7966a24650b5214474`.
+- Provenance correction PR: [#95](https://github.com/Julianos87/btc-quant/pull/95), merged 2026-09-07 19:36:38 UTC; current main is `86422d848a9dad7ad75067b4e6d5cf237fc5fc66` with tree `f922da2afc024f4e94a805c3f80603c2c508d456`.
 - The local `gh pr merge` helper was blocked because another worktree owns local `main`; the GitHub merge API completed the same authorized merge after CI was green.
 
 ## J. Before / after scorecard
