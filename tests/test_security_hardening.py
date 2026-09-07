@@ -102,6 +102,10 @@ def test_services_execute_only_from_the_atomic_current_release():
         service = path.read_text(encoding="utf-8")
         if "User=root" in service:
             continue
+        if path.name == "btcquant-dashboard.service":
+            assert "/opt/btcquant/dashboard-current" in service, path.name
+            assert "/opt/btcquant/current/venv/" not in service, path.name
+            continue
         assert "/opt/btcquant/current" in service, path.name
         assert "/opt/btcquant/venv/" not in service, path.name
 
@@ -241,7 +245,7 @@ def test_update_has_atomic_activation_backup_healthcheck_and_rollback():
     assert "for attempt in {1..15}" in script
     assert "systemd-analyze verify" in script
     assert "configure_shadow_service" in script
-    assert 'systemd-analyze verify "${CURRENT}/deploy/"*.service' in script
+    assert 'systemd-analyze verify "${source}/deploy/"*.service' in script
 
 
 def test_host_preflight_blocks_bad_clock_permissions_disk_and_database():

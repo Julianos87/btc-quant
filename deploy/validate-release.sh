@@ -71,6 +71,7 @@ command -v node >/dev/null
 node --check dashboard/static/dashboard.js
 node --check dashboard/static/effects.js
 bash -n deploy/install.sh deploy/update.sh deploy/create-release.sh \
+  deploy/switch-dashboard-release.sh \
   deploy/preflight.sh deploy/migrate.sh deploy/rebalance-root.sh \
   deploy/resolve-uv.sh \
   deploy/start-hyperliquid-testnet.sh deploy/stop-hyperliquid-testnet.sh \

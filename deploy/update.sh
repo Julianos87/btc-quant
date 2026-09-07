@@ -7,6 +7,8 @@ ROOT="${BTCQUANT_ROOT:-/opt/btcquant}"
 CLONE="${BTCQUANT_CLONE:-/home/btcquant/btc-quant}"
 CURRENT="${ROOT}/current"
 PREVIOUS="${ROOT}/previous"
+DASHBOARD_CURRENT="${ROOT}/dashboard-current"
+DASHBOARD_PREVIOUS="${ROOT}/dashboard-previous"
 RESTART_ENGINES=false
 MIGRATION_MODE=false
 TARGET_SHA=""
@@ -20,6 +22,10 @@ MIGRATION_COMPLETED=false
 TARGET_WRITES_STARTED=false
 MIGRATION_BACKUP=""
 TARGET_SCHEMA_VERSION=""
+DASHBOARD_HELPER_SOURCE=""
+DASHBOARD_UNIT_SOURCE=""
+OLD_DASHBOARD_TARGET=""
+OLD_DASHBOARD_UNIT_SOURCE=""
 
 WRITER_UNITS=(
   btcquant-carry.service btcquant-trend.service btcquant-dashboard.service
@@ -34,6 +40,16 @@ WRITER_TIMERS=(
 
 stop_all_writer_processes() {
   systemctl stop "${WRITER_UNITS[@]}" "${WRITER_TIMERS[@]}" 2>/dev/null || true
+}
+
+switch_dashboard_release() {
+  local target="$1"
+  local helper="${DASHBOARD_HELPER_SOURCE:-${target}/deploy/switch-dashboard-release.sh}"
+  [ -x "${helper}" ] || {
+    echo "Refus: helper de release dashboard absent (${helper})." >&2
+    return 1
+  }
+  BTCQUANT_ROOT="${ROOT}" bash "${helper}" "${target}"
 }
 
 restart_target_dashboard() {
@@ -116,12 +132,18 @@ wait_for_readiness() {
 }
 
 install_units() {
-  cp "${CURRENT}/deploy/"btcquant-*.service "${CURRENT}/deploy/"btcquant-*.timer \
+  local source="${1:-${CURRENT}}"
+  cp "${source}/deploy/"btcquant-*.service "${source}/deploy/"btcquant-*.timer \
     /etc/systemd/system/
-  install -o root -g root -m 0755 "${CURRENT}/deploy/rebalance-root.sh" \
+  if [ -n "${DASHBOARD_UNIT_SOURCE}" ] &&
+    [ "${DASHBOARD_UNIT_SOURCE}" != "${source}" ]; then
+    cp "${DASHBOARD_UNIT_SOURCE}/deploy/btcquant-dashboard.service" \
+      /etc/systemd/system/btcquant-dashboard.service
+  fi
+  install -o root -g root -m 0755 "${source}/deploy/rebalance-root.sh" \
     /usr/local/libexec/btcquant-rebalance
   systemctl daemon-reload
-  systemd-analyze verify "${CURRENT}/deploy/"*.service "${CURRENT}/deploy/"*.timer
+  systemd-analyze verify "${source}/deploy/"*.service "${source}/deploy/"*.timer
 }
 
 validate_release_target() {
@@ -172,7 +194,9 @@ from btcquant.deployment import atomic_switch_release
 
 atomic_switch_release(sys.argv[1], sys.argv[2])
 ' "${ROOT}" "${old_target}"
-  install_units
+  switch_dashboard_release "${OLD_DASHBOARD_TARGET:-${old_target}}"
+  DASHBOARD_UNIT_SOURCE="${OLD_DASHBOARD_UNIT_SOURCE}"
+  install_units "${old_target}"
   configure_writer_timers
   configure_shadow_service
   if ${RESTART_ENGINES}; then
@@ -236,6 +260,9 @@ if [ "${TARGET_SHA}" = rollback ]; then
   [ -L "${CURRENT}" ] && [ -L "${PREVIOUS}" ] || { echo "Rollback refusé: liens absents." >&2; exit 1; }
   TARGET="$(readlink -f "${PREVIOUS}")"
   OLD_TARGET="$(readlink -f "${CURRENT}")"
+  DASHBOARD_HELPER_SOURCE="${OLD_TARGET}/deploy/switch-dashboard-release.sh"
+  DASHBOARD_UNIT_SOURCE="${OLD_TARGET}"
+  OLD_DASHBOARD_TARGET="$(readlink -f "${DASHBOARD_CURRENT}" 2>/dev/null || true)"
   RELEASE_ID="$(basename "${TARGET}")"
   [[ "${RELEASE_ID}" =~ ^[0-9a-f]{40}$ ]] || { echo "Rollback refusé: previous invalide." >&2; exit 1; }
   [ -f "${TARGET}/release-manifest.json" ] || { echo "Rollback refusé: manifeste absent." >&2; exit 1; }
@@ -263,7 +290,8 @@ from btcquant.deployment import atomic_switch_release
 
 atomic_switch_release(sys.argv[1], sys.argv[2])
 ' "${ROOT}" "${TARGET}"
-  install_units
+  switch_dashboard_release "${TARGET}"
+  install_units "${TARGET}"
   configure_writer_timers
   configure_shadow_service
   if ! systemctl restart btcquant-dashboard || ! wait_for_dashboard; then
@@ -319,6 +347,8 @@ sudo -u btcquant git -C "${CLONE}" checkout --detach --quiet "${TARGET_SHA}"
 RELEASE_ID="${TARGET_SHA}"
 OLD_TARGET="$(readlink -f "${CURRENT}")"
 OLD_PREVIOUS="$(readlink -f "${PREVIOUS}" 2>/dev/null || true)"
+OLD_DASHBOARD_TARGET="$(readlink -f "${DASHBOARD_CURRENT}" 2>/dev/null || true)"
+OLD_DASHBOARD_UNIT_SOURCE="${OLD_TARGET}"
 
 # create-release.sh emits build logs; the release identity is the deterministic
 # ROOT/releases/SHA path, never a value parsed from its stdout.
@@ -370,6 +400,11 @@ if ${MIGRATION_MODE}; then
 else
   BTCQUANT_ROOT="${ROOT}" BTCQUANT_CURRENT="${TARGET}" bash "${TARGET}/deploy/preflight.sh"
 fi
+
+# The dashboard pointer is switched independently from current. The helper is
+# kept in the target release so this operation remains exact-SHA and atomic.
+DASHBOARD_HELPER_SOURCE="${TARGET}/deploy/switch-dashboard-release.sh"
+DASHBOARD_UNIT_SOURCE="${TARGET}"
 
 migration_abort_on_error() {
   code=$?
@@ -428,7 +463,9 @@ from btcquant.deployment import atomic_switch_release
 
 atomic_switch_release(sys.argv[1], sys.argv[2])
 ' "${ROOT}" "${OLD_TARGET}" || true
-  install_units || true
+  switch_dashboard_release "${OLD_DASHBOARD_TARGET:-${OLD_TARGET}}" || true
+  DASHBOARD_UNIT_SOURCE="${OLD_DASHBOARD_UNIT_SOURCE}"
+  install_units "${OLD_TARGET}" || true
   systemctl daemon-reload || true
   configure_writer_timers || true
   configure_shadow_service || true
@@ -446,7 +483,8 @@ from btcquant.deployment import atomic_switch_release
 
 atomic_switch_release(sys.argv[1], sys.argv[2])
 ' "${ROOT}" "${TARGET}"
-install_units
+switch_dashboard_release "${TARGET}"
+install_units "${TARGET}"
 
 if ${MIGRATION_MODE}; then
   # Le dashboard appartient au writer set: son démarrage franchit la frontière
