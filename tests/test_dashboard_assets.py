@@ -112,7 +112,7 @@ def test_dashboard_visual_hierarchy_uses_progressive_disclosure(monkeypatch):
     trend = html.split('id="trend-overview"', 1)[1].split('class="table-wrap', 1)[0]
     assert trend.count('class="summary-item"') == 4
     assert 'class="summary-item trend-next"' not in trend
-    assert 'class="trend-next-line"' in trend
+    assert 'class="decision-next"' in html
     assert '<details class="technical-details carry-tech-details">' in html
     assert '<details class="technical-details carry-tech-details" open' not in html
     assert "Détails techniques" in html
@@ -219,3 +219,37 @@ def test_dashboard_read_only_hierarchy_is_explicit_and_adaptive(monkeypatch):
     assert ".authorization-note {" in css
     assert '.decision-context[data-tone="unknown"]' in css
     assert "setupColumnBalance" not in effects
+
+
+def test_v3_decision_board_exposes_only_observed_position_and_risk_context(monkeypatch):
+    monkeypatch.setattr(dashboard, "AUTH_TOKEN", None)
+    html = dashboard.app.test_client().get("/").data.decode("utf-8")
+    css = (dashboard.ROOT / "dashboard" / "static" / "dashboard.css").read_text(encoding="utf-8")
+    javascript = (dashboard.ROOT / "dashboard" / "static" / "dashboard.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'class="card trend-hero-panel"' in html
+    assert 'class="decision-matrix"' in html
+    assert 'id="position-visuals"' in html
+    assert 'class="card focus-card risk risk-command"' in html
+    assert 'id="market-price-panel"' in html
+    assert "ATR exposé" in html
+    assert "ADX exposé" in html
+
+    assert "function renderPositionVisuals(slots)" in javascript
+    assert "position-rail" in javascript
+    assert "track-marker marker-stop" in javascript
+    assert "trendStopProfile(summary)" in javascript
+    assert "risk-measure" in javascript
+    assert "headroom" not in javascript.lower()
+    assert "const LEGACY_DEFAULT_ACCENT" in javascript
+    assert 'style.removeProperty("--s1")' in javascript
+
+    assert ".decision-board" in css
+    assert ".trend-hero-panel" in css
+    assert ".position-track" in css
+    assert ".risk-measure-track" in css
+    assert ".market-panel" in css
+    assert "@media (max-width:430px)" in css
+    assert "overflow-x:hidden" not in css

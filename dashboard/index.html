@@ -13,12 +13,12 @@
 </head>
 <body data-view="monitor">
 <!--
-  THESIS: Make trust and tension visible before performance: this cockpit refuses the generic card wall.
-  OWN-WORLD: A tensegrity control room—carbon-black planes, pale datum lines, red tension accents, and monospaced force labels.
-  STORY: An operator sees PAPER truth, then the live Trend/Cary forces, then the risk that could break the balance.
-  FIRST VIEWPORT: The masthead and view rail establish mode; a four-cell trust rail anchors the first scan; equity and state tiles lead into the active engine.
-  FORM: Tensegrity force network, assigned direction 4, seed e7f8d8f0; terminal-density donation from the competitive phosphor-terminal challenger.
-  FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
+  THESIS: Make the next trading decision legible as one control surface, refusing an undifferentiated wall of reporting cards.
+  OWN-WORLD: A dark-first decision board: seam-divided instrument planes, ranked signal fields, and semantic color used only for operational truth.
+  STORY: An operator first verifies PAPER, freshness and safety; then reads Trend intent, position protection, market context and the precise evidence behind risk.
+  FIRST VIEWPORT: A system rail leads to a dominant Trend decision hero; the market instrument is its peer, while positions and events form secondary operating modules.
+  FORM: Decision board / flight-control cross-check, grounded candidate 5, seed 7809c6e7; the six-pack challenger donates a deliberate criticality order without borrowing its costume.
+  FINISH: unreviewed is unfinished; this build ends with the finish review, the verdict, and reproducible visual evidence.
 -->
 <canvas id="fx" aria-hidden="true"></canvas>
 <a class="skip-link" href="#dashboard-content">Aller au contenu principal</a>
@@ -32,8 +32,8 @@
     </div>
   </div>
   <span class="mode"><span class="blink"></span><span data-i18n="paper">PAPER TRADING</span></span>
-  <button type="button" class="iconbtn" id="theme-btn" title="Basculer le thème" aria-pressed="false"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"/></svg><span data-i18n="theme">Thème</span></button>
-  <button type="button" class="iconbtn" id="settings-btn" title="Préférences" aria-expanded="false" aria-controls="drawer"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/><path d="m19 13.5 1.3 1-.9 1.6-1.5-.5a7.8 7.8 0 0 1-1.4 1.1l.1 1.6-1.8.6-.8-1.4a7.7 7.7 0 0 1-1.8.2l-.8 1.4-1.8-.6.1-1.6a7.8 7.8 0 0 1-1.4-1.1l-1.5.5-.9-1.6 1.3-1a7.4 7.4 0 0 1 0-1.8l-1.3-1 .9-1.6 1.5.5A7.8 7.8 0 0 1 9.8 8l-.1-1.6 1.8-.6.8 1.4a7.7 7.7 0 0 1 1.8-.2l.8-1.4 1.8.6-.1 1.6a7.8 7.8 0 0 1 1.4 1.1l1.5-.5.9 1.6-1.3 1a7.4 7.4 0 0 1 0 1.8Z"/></svg><span data-i18n="settings">Réglages</span></button>
+  <button type="button" class="iconbtn" id="theme-btn" title="Basculer le thème" aria-label="Basculer le thème" aria-pressed="false"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"/></svg><span data-i18n="theme">Thème</span></button>
+  <button type="button" class="iconbtn" id="settings-btn" title="Préférences" aria-label="Préférences" aria-expanded="false" aria-controls="drawer"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/><path d="m19 13.5 1.3 1-.9 1.6-1.5-.5a7.8 7.8 0 0 1-1.4 1.1l.1 1.6-1.8.6-.8-1.4a7.7 7.7 0 0 1-1.8.2l-.8 1.4-1.8-.6.1-1.6a7.8 7.8 0 0 1-1.4-1.1l-1.5.5-.9-1.6 1.3-1a7.4 7.4 0 0 1 0-1.8l-1.3-1 .9-1.6 1.5.5A7.8 7.8 0 0 1 9.8 8l-.1-1.6 1.8-.6.8 1.4a7.7 7.7 0 0 1 1.8-.2l.8-1.4 1.8.6-.1 1.6a7.8 7.8 0 0 1 1.4 1.1l1.5-.5.9 1.6-1.3 1a7.4 7.4 0 0 1 0 1.8Z"/></svg><span data-i18n="settings">Réglages</span></button>
   <span class="spacer"></span>
   <div class="hm"><div class="lab" data-i18n="btcusdt">BTC-PERP / USDC</div><div class="val num display" id="h-price">—</div></div>
   <div class="hm"><div class="lab" data-i18n="h24">24 heures</div><div class="val num" id="h-change">—</div></div>
@@ -64,7 +64,7 @@
   </button>
 </section>
 
-<section class="truth-rail" aria-label="Contrat d'état du cockpit">
+<section class="truth-rail system-rail" aria-label="Contrat d'état du cockpit">
   <article class="truth-node truth-paper">
     <span class="truth-wire" aria-hidden="true"></span>
     <span class="truth-label">Mode opératoire</span>
@@ -94,7 +94,7 @@
 <main id="dashboard-content" aria-labelledby="view-monitor" tabindex="-1">
 <div id="alert" role="alert" aria-live="assertive"><span class="ic" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><path d="m12 3 9 17H3L12 3Z"/><path d="M12 9v5m0 3h.01"/></svg></span><span id="alert-msg"></span></div>
 
-<section class="tiles" id="top-tiles">
+<section class="tiles metric-strip" id="top-tiles" aria-label="Indicateurs de la vue active">
   <div class="card tile hero" data-view-tile="equity">
     <div class="eyebrow" data-i18n="equity_total">Équity totale</div>
     <div><span class="val num" id="t-equity">—</span><span class="delta num" id="t-delta" style="display:none"></span></div>
@@ -120,27 +120,27 @@
   </div>
 </section>
 
-<div class="grid" id="board">
-    <div class="card focus-card performance" data-card="performance_brief">
-      <h2 data-i18n="performance_snapshot">Synthèse de performance</h2>
+<div class="grid decision-board" id="board">
+    <div class="card focus-card performance performance-command" data-card="performance_brief">
+      <div class="panel-title-row"><h2 data-i18n="performance_snapshot">Synthèse de performance</h2><span class="panel-kind">RÉALISÉ</span></div>
       <div class="focus-intro" data-i18n="performance_snapshot_note">Le bilan réalisé, sans bruit opérationnel.</div>
       <div class="focus-grid" id="performance-brief"><div class="empty" style="grid-column:1/-1">Chargement…</div></div>
     </div>
 
-    <div class="card focus-card risk" data-card="risk_radar">
-      <h2 data-i18n="risk_radar">Radar de risque</h2>
+    <div class="card focus-card risk risk-command" data-card="risk_radar">
+      <div class="panel-title-row"><h2 data-i18n="risk_radar">Radar de risque</h2><span class="panel-kind panel-kind-risk">LIVE</span></div>
       <div class="focus-intro" data-i18n="risk_radar_note">Ce qui peut réellement dégrader le portefeuille maintenant.</div>
       <div class="focus-grid" id="risk-radar"><div class="empty" style="grid-column:1/-1">Chargement…</div></div>
     </div>
 
-    <div class="card focus-card monitor" data-card="monitor_pulse">
-      <h2 data-i18n="monitor_pulse">Pulse opérationnel</h2>
+    <div class="card focus-card monitor monitor-command" data-card="monitor_pulse">
+      <div class="panel-title-row"><h2 data-i18n="monitor_pulse">Pulse opérationnel</h2><span class="panel-kind panel-kind-health">SANTÉ</span></div>
       <div class="focus-intro" data-i18n="monitor_pulse_note">Les quatre signaux qui comptent pendant la surveillance.</div>
       <div class="ops-grid" id="monitor-pulse"><div class="empty" style="grid-column:1/-1">Chargement…</div></div>
     </div>
 
-    <div class="card" data-card="chart">
-      <h2 data-i18n="cards.chart">Courbe d’équity</h2>
+    <div class="card performance-stage" data-card="chart">
+      <div class="stage-heading"><div><h2 data-i18n="cards.chart">Courbe d’équity</h2><p>Équity et drawdown sur le même horizon réalisé.</p></div><span class="stage-tag">PERFORMANCE</span></div>
       <div class="controls">
         <div class="chips" id="range">
           <button class="chip" data-r="24" aria-pressed="false">24 h</button>
@@ -165,9 +165,13 @@
       </div>
     </div>
 
-    <div class="card" data-card="price">
+    <div class="card market-panel" data-card="price">
+      <div class="market-panel-head">
+        <div><span class="market-symbol">BTC-PERP / USDC</span><h2>Contexte marché <span id="market-price-panel" class="num">—</span></h2></div>
+        <div class="market-readouts"><span>24 h <strong id="market-change-panel" class="num">—</strong></span><span>Régime <strong id="market-regime-panel">N/A</strong></span><span>Funding <strong id="market-funding-panel" class="num">—</strong></span></div>
+      </div>
       <div class="card-head">
-      <h2>BTC-PERP / USDC · Hyperliquid · 1 h <span style="color:var(--muted);font-weight:500;font-size:11.5px" id="pos-note">— aucune position ouverte</span></h2>
+      <span class="market-subline">Hyperliquid · 1 h <span id="pos-note">— aucune position ouverte</span></span>
         <span class="chips" id="prange">
           <button class="chip" data-n="48" aria-pressed="false">2 j</button>
           <button class="chip" data-n="96" aria-pressed="false">4 j</button>
@@ -194,7 +198,7 @@
       </details>
     </div>
 
-    <div class="card" data-card="events">
+    <div class="card event-panel" data-card="events">
       <div class="card-head">
         <h2>Journal des événements</h2>
         <span class="chips" id="evfilter">
@@ -206,22 +210,30 @@
       <div id="events" tabindex="0" aria-label="Journal des événements défilable"><div class="empty">Chargement…</div></div>
     </div>
 
-    <div class="card" data-card="trend">
-      <h2>Moteur Trend <span style="color:var(--muted);font-weight:600">4x</span> <span class="estate" id="trend-state"><span class="dot"></span>—</span></h2>
-      <div class="eequity num" id="trend-eq">—</div>
-      <div class="esub">ensemble Donchian 20 / 55 / 100 · futures · <span id="trend-guard">—</span>
-        <span class="beat num" id="trend-beat"></span></div>
-      <div class="decision-context" id="trend-decision-context" data-tone="unknown">
-        <div><span class="decision-label" data-i18n="decision_current">Décision actuelle</span><strong id="trend-decision">UNKNOWN</strong></div>
-        <span class="decision-detail" id="trend-decision-detail">Régime 4 h indisponible — aucune direction confirmée.</span>
+    <div class="card trend-hero-panel" data-card="trend">
+      <div class="trend-hero-topline"><div><span class="trend-engine-label">MOTEUR TREND · 4×</span><span class="estate" id="trend-state"><span class="dot"></span>—</span></div><span class="trend-hero-guard" id="trend-guard">—</span></div>
+      <div class="trend-hero-grid">
+        <div class="decision-context decision-hero" id="trend-decision-context" data-tone="unknown">
+          <div class="decision-core"><span class="decision-label" data-i18n="decision_current">Décision actuelle</span><strong id="trend-decision">UNKNOWN</strong><span class="decision-detail" id="trend-decision-detail">Régime 4 h indisponible — aucune direction confirmée.</span></div>
+          <div class="decision-vector" aria-hidden="true"><span class="vector-line"></span><span class="vector-point"></span></div>
+          <div class="decision-next"><span>Prochaine clôture 4 h</span><strong class="num" id="trend-next-boundary">N/A</strong><small id="trend-next-countdown">frontière planifiée · aucune action garantie</small></div>
+        </div>
+        <div class="decision-matrix" aria-label="Matrice décisionnelle Trend">
+          <div><span>Régime EMA</span><strong id="trend-regime-visual">N/A</strong></div>
+          <div><span>Distance Donchian</span><strong id="trend-donchian-visual" class="num">N/A</strong></div>
+          <div><span>ATR exposé</span><strong>N/A</strong><small>non exposé par l’API</small></div>
+          <div><span>ADX exposé</span><strong>N/A</strong><small>non exposé par l’API</small></div>
+          <div><span>Risque aux stops</span><strong id="trend-risk-visual" class="num">N/A</strong></div>
+          <div><span>Protection</span><strong id="trend-protection">—</strong><small id="trend-protection-mode">N/A</small></div>
+        </div>
       </div>
       <div class="engine-summary trend-summary" id="trend-overview">
         <div class="summary-item"><span>Slots ouverts</span><strong class="num" id="trend-open-slots">—</strong><small id="trend-open-detail">—</small></div>
         <div class="summary-item"><span>Exposition</span><strong class="num" id="trend-total-notional">—</strong><small>notionnel estimé · prix observé</small></div>
         <div class="summary-item"><span>PnL latent estimé</span><strong class="num" id="trend-total-upnl">—</strong><small id="trend-total-upnl-pct">% du notionnel d’entrée</small></div>
-        <div class="summary-item"><span>Protection</span><strong id="trend-protection">—</strong><small>mode v6 : <span id="trend-protection-mode">N/A</span></small></div>
+        <div class="summary-item"><span>Équity Trend</span><strong class="num" id="trend-eq">—</strong><small><span id="trend-beat"></span></small></div>
       </div>
-      <div class="trend-next-line"><span>Prochaine clôture 4 h</span><strong class="num" id="trend-next-boundary">N/A</strong><span id="trend-next-countdown">frontière planifiée · aucune action garantie</span></div>
+      <div class="position-visuals" id="position-visuals" aria-live="polite"><div class="empty">Position et protection en attente…</div></div>
       <div class="table-wrap position-table-wrap">
       <table class="position-table">
         <thead><tr><th>Slot</th><th>Position</th><th>Prix</th><th>PnL latent</th><th>Stop / protection</th></tr></thead>
@@ -319,7 +331,7 @@
       <div class="metrics-grid" id="metrics"><div class="empty" style="grid-column:1/-1" data-i18n="collecting">Collecte en cours…</div></div>
     </div>
 
-    <div class="card" data-card="exposure">
+    <div class="card exposure-panel" data-card="exposure">
       <h2 data-i18n="exposure_title">Exposition</h2>
       <span class="sr-only" id="exp-val">—</span>
       <div class="exposure-primary">

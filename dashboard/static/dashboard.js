@@ -7,7 +7,7 @@ const esc = value => String(value ?? "").replace(
 
 // ── préférences persistées ─────────────────────────────────
 const PREFS_DEFAULT = {
-  lang: "fr", currency: "usd", accent: "#2a78d6", range: 0, refresh: 30000,
+  lang: "fr", currency: "usd", accent: "", range: 0, refresh: 30000,
   notif: false, notifPos: true, ddAlert: 12, view: "monitor",
   hidden: {}, // { cardKey: true }
 };
@@ -241,7 +241,16 @@ function swapText(element, next) {
 }
 
 // ── couleur d'accent ───────────────────────────────────────
-function applyAccent() { document.documentElement.style.setProperty("--s1", PREFS.accent); }
+// The empty/default preference deliberately defers to the theme token: the
+// dark and light palettes each carry a contrast-qualified primary accent.
+const LEGACY_DEFAULT_ACCENT = "#2a78d6";
+function applyAccent() {
+  if (!PREFS.accent || PREFS.accent === LEGACY_DEFAULT_ACCENT) {
+    document.documentElement.style.removeProperty("--s1");
+    return;
+  }
+  document.documentElement.style.setProperty("--s1", PREFS.accent);
+}
 
 const VIEW_CARDS = {
   monitor: new Set(["monitor_pulse", "price", "events", "trend", "carry", "exposure", "readiness"]),
@@ -333,9 +342,12 @@ async function refreshSummary() {
     const s = await response.json();
     if (requestSequence !== summaryRequestSequence) return;
     btcPrice = s.btc.price; if (s.fx) fx = s.fx; lastSummary = s; lastSummaryUpdatedAt = Date.now();
-    $("h-price").textContent = s.btc.price ? s.btc.price.toLocaleString(LOCALE(), {maximumFractionDigits:0}) + " $" : "—";
+  $("h-price").textContent = s.btc.price ? s.btc.price.toLocaleString(LOCALE(), {maximumFractionDigits:0}) + " $" : "—";
   $("h-change").textContent = fmtPct(s.btc.change24h); cls($("h-change"), s.btc.change24h);
   $("h-funding").textContent = fmtPct(s.funding.annualized, 1); cls($("h-funding"), s.funding.annualized);
+  if ($("market-price-panel")) $("market-price-panel").textContent = s.btc.price ? fmt$(s.btc.price, 0) : "N/A";
+  if ($("market-change-panel")) $("market-change-panel").textContent = fmtPct(s.btc.change24h);
+  if ($("market-funding-panel")) $("market-funding-panel").textContent = fmtPct(s.funding.annualized, 1);
 
   $("t-equity").textContent = fmt$(s.totals.equity);
   const d = $("t-delta");
@@ -432,7 +444,13 @@ async function refreshSummary() {
     const next = summary.health && summary.health.next_bar_ts;
     $("trend-next-boundary").textContent = fmtTimeUTC(next);
     $("trend-next-countdown").textContent = next ? "dans " + cdText(next) + " · aucune action garantie" : "N/A";
+    const stopProfile = trendStopProfile(summary);
+    const risk = summary.totals && summary.totals.equity
+      ? fmt$(stopProfile.risk, 0) + " · " + fmtPct(stopProfile.risk / summary.totals.equity, 1)
+      : stopProfile.positions.length ? fmt$(stopProfile.risk, 0) : "N/A";
+    if ($("trend-risk-visual")) $("trend-risk-visual").textContent = risk;
     renderTrendDecisionContext(summary);
+    renderPositionVisuals(trend.slots || []);
   }
 
   renderTrendOverview(s);
@@ -475,6 +493,40 @@ async function refreshSummary() {
       event.target.closest(".slot-detail-toggle") || tr.querySelector(".slot-detail-toggle")
     );
   });
+
+  function renderPositionVisuals(slots) {
+    const root = $("position-visuals");
+    if (!root) return;
+    const visible = slots.filter(slot => slot && (slot.state === "LONG" || slot.state === "SHORT")
+      && Number.isFinite(Number(slot.entry)) && Number.isFinite(Number(slot.market_price))
+      && Number.isFinite(Number(slot.stop)));
+    if (!visible.length) {
+      root.innerHTML = '<div class="position-visual-empty"><span>POSITIONS / PROTECTION</span><strong>Aucune position Trend ouverte</strong><small>Les rails entrée · prix · stop apparaissent lorsqu’une position observable est active.</small></div>';
+      return;
+    }
+    const num = value => Number(value).toLocaleString(LOCALE(), {maximumFractionDigits: 0});
+    root.innerHTML = visible.map(slot => {
+      const values = [Number(slot.entry), Number(slot.market_price), Number(slot.stop)];
+      const low = Math.min(...values), high = Math.max(...values);
+      const span = Math.max(high - low, Math.max(Math.abs(high) * .012, 1));
+      const at = value => Math.max(5, Math.min(95, ((Number(value) - low + span * .12) / (span * 1.24)) * 100));
+      const side = slot.state === "SHORT" ? "short" : "long";
+      const pnl = Number(slot.upnl || 0);
+      const pnlText = (pnl >= 0 ? "+" : "") + fmt$(pnl, 0);
+      const protection = slot.protection_status === "ACTIVE" || slot.protection_status === "REPLACEMENT_PENDING"
+        ? "PROTÉGÉ" : slot.protection_status === "UNSAFE" ? "NON PROTÉGÉ" : "INCONNU";
+      return `<article class="position-rail" data-side="${side}">
+        <div class="position-rail-head"><div><span>${esc(slot.name.replace("trend_ls_", "Donchian "))}</span><strong>${slot.state}</strong></div><div><strong class="num ${pnl >= 0 ? "up" : "down"}">${pnlText}</strong><small>${protection}</small></div></div>
+        <div class="position-track" aria-label="${esc(slot.name)} : entrée ${num(slot.entry)}, prix observé ${num(slot.market_price)}, stop ${num(slot.stop)}">
+          <span class="track-line"></span><span class="track-zone"></span>
+          <span class="track-marker marker-stop" style="left:${at(slot.stop).toFixed(2)}%"><i></i><b>STOP</b><em class="num">${num(slot.stop)}</em></span>
+          <span class="track-marker marker-entry" style="left:${at(slot.entry).toFixed(2)}%"><i></i><b>ENTRÉE</b><em class="num">${num(slot.entry)}</em></span>
+          <span class="track-marker marker-price" style="left:${at(slot.market_price).toFixed(2)}%"><i></i><b>PRIX</b><em class="num">${num(slot.market_price)}</em></span>
+        </div>
+        <div class="position-rail-foot"><span>Qty <strong class="num">${Number(slot.qty).toFixed(3)}</strong></span><span>Notionnel <strong class="num">${fmt$(slot.notional, 0)}</strong></span><span>${slot.stop_distance_pct == null ? "Distance stop N/A" : `Stop ${percentNA(slot.stop_distance_pct, 1)}`}</span></div>
+      </article>`;
+    }).join("");
+  }
   renderExposureHealth(s);
   renderViewFocus(s);
   renderCockpitStatus(s);
@@ -722,11 +774,20 @@ function renderRiskRadar(s) {
       : "";
   const margin = profile.nearest == null ? "—" : fmtPct(profile.nearest, 1);
   const marginTone = profile.nearest != null && profile.nearest < .01 ? "crit" : profile.nearest != null && profile.nearest < .03 ? "warn" : "";
+  const riskRatio = s.totals.equity ? profile.risk / s.totals.equity : null;
+  const ddRatio = m.cur_dd == null ? null : Math.abs(m.cur_dd);
+  const exposureRatio = s.totals.gross_equity_ratio;
+  const incidents = (health.open_incidents || []).length;
+  const gauge = (label, value, note, tone = "", fraction = null, scale = "") => {
+    const width = fraction == null || !Number.isFinite(Number(fraction)) ? 0 : Math.max(0, Math.min(100, Number(fraction) * 100));
+    return `<article class="risk-measure ${tone}" data-tone="${tone || "neutral"}"><div class="risk-measure-copy"><span>${label}</span><strong class="num">${value}</strong><small>${note}</small></div><div class="risk-measure-track" aria-hidden="true"><i style="width:${width.toFixed(1)}%"></i></div>${scale ? `<em>${scale}</em>` : ""}</article>`;
+  };
   $("risk-radar").innerHTML =
-    focusMetric(t("performance_dd"), fmtDrawdown(m.cur_dd, 1), m.max_dd == null ? "—" : `max ${fmtDrawdown(m.max_dd, 1)}`, m.cur_dd < -0.08 ? "crit" : m.cur_dd < -0.04 ? "warn" : "") +
-    focusMetric(t("risk_stop"), fmt$(profile.risk, 0), profile.positions.length ? `${profile.positions.length} position${profile.positions.length > 1 ? "s" : ""} trend` : t("risk_no_stop"), profile.risk > s.totals.equity * .03 ? "warn" : "") +
-    focusMetric(t("risk_margin"), margin, profile.nearest == null ? t("risk_no_position") : `${profile.positions.length} stop${profile.positions.length > 1 ? "s" : ""} actif${profile.positions.length > 1 ? "s" : ""}`, marginTone) +
-    focusMetric(t("risk_policy"), protection, `${t("risk_leverage")} · ${fmtNum(lev, 2)}×`, protectionTone || (lev > 1.5 ? "crit" : lev > 1.05 ? "warn" : ""));
+    gauge(t("performance_dd"), fmtDrawdown(m.cur_dd, 1), m.max_dd == null ? "max N/A" : `maximum observé ${fmtDrawdown(m.max_dd, 1)}`, m.cur_dd < -0.08 ? "crit" : m.cur_dd < -0.04 ? "warn" : "", ddRatio == null ? null : ddRatio / .10, "échelle descriptive 10 %") +
+    gauge(t("risk_stop"), fmt$(profile.risk, 0), profile.positions.length ? `${profile.positions.length} position${profile.positions.length > 1 ? "s" : ""} Trend · risque calculé aux stops` : t("risk_no_stop"), riskRatio != null && riskRatio > .03 ? "warn" : "", riskRatio == null ? null : riskRatio / .10, riskRatio == null ? "N/A" : `${fmtPct(riskRatio, 1)} de l’équity`) +
+    gauge(t("risk_margin"), margin, profile.nearest == null ? t("risk_no_position") : `${profile.positions.length} stop${profile.positions.length > 1 ? "s" : ""} actif${profile.positions.length > 1 ? "s" : ""}`, marginTone, profile.nearest == null ? null : Math.min(profile.nearest / .10, 1), "distance observée") +
+    gauge("Exposition brute", s.totals.gross_equity_ratio == null ? "N/A" : `${fmtNum(s.totals.gross_equity_ratio, 2)}×`, s.totals.portfolio_gross_notional == null ? "notionnel indisponible" : fmt$(s.totals.portfolio_gross_notional, 0), lev > 1.5 ? "crit" : lev > 1.05 ? "warn" : "", exposureRatio == null ? null : exposureRatio / 2, "échelle descriptive 2×") +
+    gauge(t("risk_policy"), protection, incidents ? `${incidents} incident${incidents > 1 ? "s" : ""} actif${incidents > 1 ? "s" : ""}` : `${t("risk_leverage")} · ${fmtNum(lev, 2)}×`, protectionTone, protectionTone === "crit" ? 1 : protectionTone === "warn" ? .6 : .22, "état opérationnel");
 }
 
 function renderMonitorPulse(s) {
@@ -1134,6 +1195,21 @@ function renderTrendDecisionContext(summary = lastSummary, priceData = pcData) {
   const active = states.length ? states.join(" / ") : regime ? `${regime} ${PREFS.lang === "en" ? "allowed" : "autorisé"}` : t("decision_unknown");
   value.textContent = active;
   root.dataset.tone = active === t("decision_unknown") ? "unknown" : slots.length ? "position" : regime.toLowerCase();
+  if ($("trend-regime-visual")) $("trend-regime-visual").textContent = regime ? (regime === "LONG" ? "BULL" : "BEAR") : "UNKNOWN";
+  if ($("market-regime-panel")) $("market-regime-panel").textContent = regime ? (regime === "LONG" ? "BULL" : "BEAR") : "UNKNOWN";
+  const currentPrice = Number(summary && summary.btc && summary.btc.price || 0);
+  const activeChannels = priceData && Array.isArray(priceData.channels)
+    ? priceData.channels.map(channel => {
+      const values = regime === "SHORT" ? channel.low : channel.high;
+      return Array.isArray(values) ? [...values].reverse().find(item => Number.isFinite(Number(item))) : null;
+    }).filter(item => item != null)
+    : [];
+  const nearest = activeChannels.length && currentPrice
+    ? activeChannels.reduce((best, item) => Math.abs(item - currentPrice) < Math.abs(best - currentPrice) ? item : best)
+    : null;
+  if ($("trend-donchian-visual")) {
+    $("trend-donchian-visual").textContent = nearest == null ? "N/A" : fmtPct((currentPrice - nearest) / currentPrice, 1);
+  }
   if (!regime) {
     detail.textContent = t("decision_unavailable");
   } else if (slots.length) {
@@ -1811,10 +1887,10 @@ function checkAlerts(s) {
 }
 
 // ── panneau de préférences ─────────────────────────────────
-const ACCENTS = ["#2a78d6","#149467","#c88800","#6b4de0","#d03b3b","#0ca3a3"];
+const ACCENTS = ["", "#149467", "#c88800", "#6b4de0", "#d03b3b", "#0ca3a3"];
 function buildDrawer() {
   const acc = $("pref-accent");
-  acc.innerHTML = ACCENTS.map(c => `<button type="button" class="sw-dot ${c===PREFS.accent?"on":""}" data-c="${c}" style="background:${c}" aria-label="Accent ${c}" aria-pressed="${c===PREFS.accent}"></button>`).join("");
+  acc.innerHTML = ACCENTS.map(c => `<button type="button" class="sw-dot ${c===PREFS.accent?"on":""}" data-c="${c}" style="background:${c || "linear-gradient(135deg,#63c8dc 0 50%,#087d96 50% 100%)"}" aria-label="${c ? `Accent ${c}` : "Accent du thème"}" aria-pressed="${c===PREFS.accent}"></button>`).join("");
   acc.querySelectorAll(".sw-dot").forEach(d => d.onclick = () => {
     PREFS.accent = d.dataset.c; savePrefs(); applyAccent(); buildDrawer(); redrawAll();
   });
