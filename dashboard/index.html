@@ -13,24 +13,30 @@
 </head>
 <body data-view="monitor">
 <!--
-  THESIS: Make the next trading decision legible as one control surface, refusing an undifferentiated wall of reporting cards.
-  OWN-WORLD: A dark-first decision board: seam-divided instrument planes, ranked signal fields, and semantic color used only for operational truth.
-  STORY: An operator first verifies PAPER, freshness and safety; then reads Trend intent, position protection, market context and the precise evidence behind risk.
-  FIRST VIEWPORT: A system rail leads to a dominant Trend decision hero; the market instrument is its peer, while positions and events form secondary operating modules.
-  FORM: Decision board / flight-control cross-check, grounded candidate 5, seed 7809c6e7; the six-pack challenger donates a deliberate criticality order without borrowing its costume.
-  FINISH: unreviewed is unfinished; this build ends with the finish review, the verdict, and reproducible visual evidence.
+  THESIS: Turn the dashboard into an operator workspace: one navigation rail, one working canvas, and a different primary task for Monitor, Performance and Risk.
+  OWN-WORLD: A dark-first operations desk with a persistent state rail, quiet analytical canvas, and semantic light only where a condition changes the operator's judgement.
+  STORY: The operator chooses a task, sees its dominant decision surface, then opens supporting evidence without reading a wall of equally weighted cards.
+  FIRST VIEWPORT: A left rail anchors mode, navigation and trust; Monitor uses Trend as the working canvas with market and event evidence beside it, not beneath it.
+  FORM: Operator workspace with a depth-axis discipline, surface candidate 6, seed 627597ff; the creator-bench challenger donates tactile navigation hierarchy without its material costume.
+  FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance.
 -->
 <canvas id="fx" aria-hidden="true"></canvas>
+<div class="workspace-shell">
+<aside class="workspace-rail" aria-label="Navigation de l'espace opérateur">
+  <div class="workspace-brand"><div class="logo">₿</div><div><strong>TANDEM</strong><span>OPERATOR WORKSPACE</span></div></div>
+  <span class="workspace-mode"><i></i>PAPER · LECTURE SEULE</span>
+  <nav class="workspace-nav" id="dashboard-view" role="tablist" aria-label="Espaces du dashboard">
+    <button class="workspace-tab" id="view-monitor" role="tab" data-view="monitor" aria-controls="dashboard-content" data-i18n="view_monitor"><span>01</span>Surveillance</button>
+    <button class="workspace-tab" id="view-performance" role="tab" data-view="performance" aria-controls="dashboard-content" data-i18n="view_performance"><span>02</span>Performance</button>
+    <button class="workspace-tab" id="view-risk" role="tab" data-view="risk" aria-controls="dashboard-content" data-i18n="view_risk"><span>03</span>Risque</button>
+  </nav>
+  <div class="workspace-rail-note"><span>CADENCE</span><strong>4 H · CAUSAL</strong><small>La clôture décide. Le dashboard observe.</small></div>
+</aside>
+<section class="workspace-canvas">
 <a class="skip-link" href="#dashboard-content">Aller au contenu principal</a>
 
-<header>
-  <div class="brand">
-    <div class="logo">₿</div>
-    <div>
-      <h1>TANDEM</h1>
-      <div class="sub">Portefeuille systématique · 60 % trend 4x · 40 % carry 3x</div>
-    </div>
-  </div>
+<header class="workspace-header">
+  <div class="workspace-context"><span>BTCQUANT / PAPER</span><strong>Market &amp; decision desk</strong></div>
   <span class="mode"><span class="blink"></span><span data-i18n="paper">PAPER TRADING</span></span>
   <button type="button" class="iconbtn" id="theme-btn" title="Basculer le thème" aria-label="Basculer le thème" aria-pressed="false"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"/></svg><span data-i18n="theme">Thème</span></button>
   <button type="button" class="iconbtn" id="settings-btn" title="Préférences" aria-label="Préférences" aria-expanded="false" aria-controls="drawer"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/><path d="m19 13.5 1.3 1-.9 1.6-1.5-.5a7.8 7.8 0 0 1-1.4 1.1l.1 1.6-1.8.6-.8-1.4a7.7 7.7 0 0 1-1.8.2l-.8 1.4-1.8-.6.1-1.6a7.8 7.8 0 0 1-1.4-1.1l-1.5.5-.9-1.6 1.3-1a7.4 7.4 0 0 1 0-1.8l-1.3-1 .9-1.6 1.5.5A7.8 7.8 0 0 1 9.8 8l-.1-1.6 1.8-.6.8 1.4a7.7 7.7 0 0 1 1.8-.2l.8-1.4 1.8.6-.1 1.6a7.8 7.8 0 0 1 1.4 1.1l1.5-.5.9 1.6-1.3 1a7.4 7.4 0 0 1 0 1.8Z"/></svg><span data-i18n="settings">Réglages</span></button>
@@ -41,15 +47,6 @@
 </header>
 
 <section class="cockpitbar" aria-label="Vue et état du portefeuille">
-  <div class="view-control">
-    <span class="eyebrow" data-i18n="workspace">Vue</span>
-    <div class="chips view-tabs" id="dashboard-view" role="tablist" aria-label="Vue du dashboard">
-      <span class="view-indicator" aria-hidden="true"></span>
-      <button class="chip" id="view-monitor" role="tab" data-view="monitor" aria-controls="dashboard-content" data-i18n="view_monitor">Surveillance</button>
-      <button class="chip" id="view-performance" role="tab" data-view="performance" aria-controls="dashboard-content" data-i18n="view_performance">Performance</button>
-      <button class="chip" id="view-risk" role="tab" data-view="risk" aria-controls="dashboard-content" data-i18n="view_risk">Risque</button>
-    </div>
-  </div>
   <div class="cockpit-status" id="cockpit-status" data-status="good" role="status" aria-live="polite">
     <span class="status-signal"></span>
     <div class="status-copy"><span class="status-title" id="status-title">Initialisation…</span><span class="status-detail" id="status-detail"></span></div>
@@ -62,6 +59,13 @@
     </span>
     <span class="t-text-swap" id="refresh-label">Actualiser</span>
   </button>
+</section>
+
+<section class="workspace-brief" aria-live="polite">
+  <div data-brief="monitor"><span>Surveillance</span><h2>Décision, marché, protection.</h2><p>Lire l’intention Trend avant les détails d’exposition.</p></div>
+  <div data-brief="performance"><span>Performance</span><h2>Résultat réalisé, puis attribution.</h2><p>La courbe explique le résultat ; les modules apportent la preuve.</p></div>
+  <div data-brief="risk"><span>Risque</span><h2>Ce qui peut dégrader le portefeuille.</h2><p>Stops, drawdown et protection passent avant les métriques de confort.</p></div>
+  <div class="workspace-brief-rule" aria-hidden="true"></div>
 </section>
 
 <section class="truth-rail system-rail" aria-label="Contrat d'état du cockpit">
@@ -378,6 +382,8 @@
     </div>
 </div>
 </main>
+</section>
+</div>
 
 <!-- ── panneau de préférences ─────────────────────────────── -->
 <div class="drawer-backdrop" id="drawer-bd" hidden></div>
