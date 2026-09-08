@@ -211,15 +211,6 @@ function setPressed(container, predicate) {
   });
 }
 
-function updateViewIndicator() {
-  const tabs = $("dashboard-view");
-  const active = tabs && tabs.querySelector('[role="tab"][aria-selected="true"]');
-  const indicator = tabs && tabs.querySelector(".view-indicator");
-  if (!active || !indicator) return;
-  indicator.style.width = active.offsetWidth + "px";
-  indicator.style.transform = `translateX(${active.offsetLeft - 3}px)`;
-}
-
 const textSwapFrames = new WeakMap();
 function swapText(element, next) {
   if (!element) return;
@@ -285,7 +276,6 @@ function applyDashboardView() {
   });
   setPressed("#unit", button => button.dataset.u === unit);
   requestAnimationFrame(() => {
-    updateViewIndicator();
     if (typeof drawChart === "function") drawChart();
     if (typeof drawPChart === "function") drawPChart();
   });
@@ -306,14 +296,14 @@ document.querySelectorAll("#dashboard-view [data-view]").forEach(button => butto
   if (PREFS.view === "performance") setChartUnit("pct");
 });
 $("dashboard-view").addEventListener("keydown", event => {
-  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
   const tabs = [...$("dashboard-view").querySelectorAll('[role="tab"]')];
   const current = tabs.indexOf(document.activeElement);
   if (current < 0) return;
   event.preventDefault();
   const next = event.key === "Home" ? 0
     : event.key === "End" ? tabs.length - 1
-      : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+      : (current + (["ArrowRight", "ArrowDown"].includes(event.key) ? 1 : -1) + tabs.length) % tabs.length;
   tabs[next].focus();
   tabs[next].click();
 });
@@ -506,10 +496,18 @@ async function refreshSummary() {
     }
     const num = value => Number(value).toLocaleString(LOCALE(), {maximumFractionDigits: 0});
     root.innerHTML = visible.map(slot => {
-      const values = [Number(slot.entry), Number(slot.market_price), Number(slot.stop)];
-      const low = Math.min(...values), high = Math.max(...values);
-      const span = Math.max(high - low, Math.max(Math.abs(high) * .012, 1));
-      const at = value => Math.max(5, Math.min(95, ((Number(value) - low + span * .12) / (span * 1.24)) * 100));
+    const values = [Number(slot.entry), Number(slot.market_price), Number(slot.stop)];
+    const low = Math.min(...values), high = Math.max(...values);
+    const span = Math.max(high - low, Math.max(Math.abs(high) * .012, 1));
+    const at = value => Math.max(5, Math.min(95, ((Number(value) - low + span * .12) / (span * 1.24)) * 100));
+    const markerPositions = { stop: at(slot.stop), entry: at(slot.entry), price: at(slot.market_price) };
+    const crowded = Object.values(markerPositions).some((position, index, all) =>
+      all.some((other, otherIndex) => index !== otherIndex && Math.abs(position - other) < 14)
+    );
+    const labelShift = kind => {
+      if (!crowded) return 0;
+      return kind === "stop" ? -20 : kind === "price" ? 20 : 0;
+    };
       const side = slot.state === "SHORT" ? "short" : "long";
       const pnl = Number(slot.upnl || 0);
       const pnlText = (pnl >= 0 ? "+" : "") + fmt$(pnl, 0);
@@ -519,9 +517,9 @@ async function refreshSummary() {
         <div class="position-rail-head"><div><span>${esc(slot.name.replace("trend_ls_", "Donchian "))}</span><strong>${slot.state}</strong></div><div><strong class="num ${pnl >= 0 ? "up" : "down"}">${pnlText}</strong><small>${protection}</small></div></div>
         <div class="position-track" aria-label="${esc(slot.name)} : entrée ${num(slot.entry)}, prix observé ${num(slot.market_price)}, stop ${num(slot.stop)}">
           <span class="track-line"></span><span class="track-zone"></span>
-          <span class="track-marker marker-stop" style="left:${at(slot.stop).toFixed(2)}%"><i></i><b>STOP</b><em class="num">${num(slot.stop)}</em></span>
-          <span class="track-marker marker-entry" style="left:${at(slot.entry).toFixed(2)}%"><i></i><b>ENTRÉE</b><em class="num">${num(slot.entry)}</em></span>
-          <span class="track-marker marker-price" style="left:${at(slot.market_price).toFixed(2)}%"><i></i><b>PRIX</b><em class="num">${num(slot.market_price)}</em></span>
+          <span class="track-marker marker-stop" style="left:${markerPositions.stop.toFixed(2)}%;--label-shift:${labelShift("stop")}px"><i></i><b>STOP</b><em class="num">${num(slot.stop)}</em></span>
+          <span class="track-marker marker-entry" style="left:${markerPositions.entry.toFixed(2)}%;--label-shift:${labelShift("entry")}px"><i></i><b>ENTRÉE</b><em class="num">${num(slot.entry)}</em></span>
+          <span class="track-marker marker-price" style="left:${markerPositions.price.toFixed(2)}%;--label-shift:${labelShift("price")}px"><i></i><b>PRIX</b><em class="num">${num(slot.market_price)}</em></span>
         </div>
         <div class="position-rail-foot"><span>Qty <strong class="num">${Number(slot.qty).toFixed(3)}</strong></span><span>Notionnel <strong class="num">${fmt$(slot.notional, 0)}</strong></span><span>${slot.stop_distance_pct == null ? "Distance stop N/A" : `Stop ${percentNA(slot.stop_distance_pct, 1)}`}</span></div>
       </article>`;
@@ -1983,7 +1981,7 @@ function setRefreshState(state) {
     check.dataset.state = "out";
   }
 }
-window.addEventListener("resize", () => { drawChart(); drawSpark(); drawYearly(); updateViewIndicator(); });
+window.addEventListener("resize", () => { drawChart(); drawSpark(); drawYearly(); });
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawChart(); drawSpark(); drawYearly(); });
 // PWA/onglet remis au premier plan : rafraîchir tout de suite plutôt que
 // d'afficher des données figées jusqu'au prochain tick (et remettre le timer

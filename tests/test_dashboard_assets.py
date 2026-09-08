@@ -146,7 +146,7 @@ def test_dashboard_interactions_are_accessible_and_fail_closed(monkeypatch):
     assert 'class="skip-link" href="#dashboard-content"' in html
     assert '<main id="dashboard-content"' in html
     assert 'id="alert" role="alert"' in html
-    assert 'class="view-indicator" aria-hidden="true"' in html
+    assert 'class="workspace-nav" id="dashboard-view" role="tablist"' in html
     assert 'id="refresh-btn"' in html
     assert 'id="drawer" role="dialog" aria-modal="true"' in html
     assert (
@@ -162,11 +162,11 @@ def test_dashboard_interactions_are_accessible_and_fail_closed(monkeypatch):
     assert "overflow-x:clip" not in css
     assert "overflow-x:hidden" not in css
     assert ".mode .blink, .fresh-dot" in css
-    assert ".view-indicator" in css
+    assert ".workspace-tab" in css
     assert ".t-text-swap" in css
     assert ".t-success-check" in css
 
-    assert '"ArrowLeft", "ArrowRight", "Home", "End"' in javascript
+    assert '"ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"' in javascript
     assert "function openLayer(panel, backdrop, trigger)" in javascript
     assert "function closeLayer(panel, backdrop)" in javascript
     assert "if (!backdrop.hidden)" not in javascript
