@@ -263,6 +263,8 @@ def test_v41_visual_qa_keeps_panels_content_led_and_events_structured(monkeypatc
     )
 
     assert "--workspace-rail:224px" in css
+    assert ".system-rail { position:fixed; z-index:5; top:280px;" in css
+    assert ".system-rail { top:280px; grid-template-columns:1fr; }" in css
     assert 'body[data-view="risk"] .risk-command { min-height:0;' in css
     assert ".risk-measure-track { position:static;" in css
     assert ".event-panel .event-meta" in css
