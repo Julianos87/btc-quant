@@ -25,6 +25,8 @@ Scope: dashboard/reporting read-only only.
 | VIS-009 | P2 | Performance secondary metrics were visually nested and uneven. | Compact metric strip and content-driven breakdown/yearly modules. |
 | VIS-010 | P2 | Market chart and labels had disproportionate vertical rhythm. | Chart uses bounded responsive height and compact readouts. |
 | VIS-011 | P2 | Long event content and narrow rail markers needed containment proof. | Browser stress checks confirm both remain inside their containers. |
+| VIS-012 | P1 | Trust rail covered the active Risk tab in the desktop sidebar. | Rail starts below the complete navigation stack at `top:280px`. |
+| VIS-013 | P1 | Fixed trust rail floated left of the sidebar because it ignored the responsive body gutter. | Shared `--workspace-gutter` anchors the rail to the workspace content at desktop and 1024 px. |
 
 ## Browser evidence
 
@@ -54,4 +56,4 @@ This campaign does not deploy. Screenshots use a deterministic loopback fixture 
 
 The dominant visual defects are resolved: Risk is no longer oversized, secondary panels follow their content, FLAT/UNKNOWN semantics are clear, typography is more deliberate, and desktop/mobile containment is evidenced. No P1 or P2 visual defect remains reproducible in the tested matrix.
 
-Follow-up left-rail review found VIS-012; it is corrected and rechecked at 1440 and 1024 px. Final defect count: 12 found, 12 fixed.
+Follow-up left-rail review found VIS-012 and VIS-013; both are corrected and rechecked at 1440 and 1024 px. Final defect count: 13 found, 13 fixed.
