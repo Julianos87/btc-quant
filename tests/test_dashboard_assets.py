@@ -278,3 +278,15 @@ def test_v41_visual_qa_keeps_panels_content_led_and_events_structured(monkeypatc
     assert 'class="slotclick is-flat"' in javascript
     assert 'class="event-meta"' in javascript
     assert "const active = !operational" in javascript
+
+
+def test_postdeploy_layout_avoids_cross_column_row_cavities(monkeypatch):
+    monkeypatch.setattr(dashboard, "AUTH_TOKEN", None)
+    css = (dashboard.ROOT / "dashboard" / "static" / "dashboard.css").read_text(encoding="utf-8")
+
+    assert '"pulse price"\n      "exposure price"\n      "carry carry"' in css
+    assert '"metrics metrics"\n      "conformity breakdown"\n      "yearly breakdown"' in css
+    assert '"radar radar"\n      "trend trend"\n      "chart exposure"\n      "price carry"' in css
+    assert (
+        'body[data-view="performance"] [data-card="metrics"] .metric {\n    min-height:78px;' in css
+    )
