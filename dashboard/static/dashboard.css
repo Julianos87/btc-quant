@@ -1143,7 +1143,7 @@
   .workspace-brief h2 { max-width:660px; margin:7px 0 5px; color:var(--ink); font-size:clamp(24px,3vw,38px); letter-spacing:-.04em; line-height:1; }
   .workspace-brief p { margin:0; color:var(--muted); font-size:12px; }
   .workspace-brief-rule { justify-self:end; width:min(280px,70%); height:1px; background:linear-gradient(90deg,transparent,var(--s1)); }
-  .system-rail { position:fixed; z-index:5; top:224px; left:15px; display:grid; width:calc(var(--workspace-rail) - 30px); margin:0; padding:0; overflow:visible; border:0; border-radius:0; background:transparent; box-shadow:none; }
+  .system-rail { position:fixed; z-index:5; top:280px; left:15px; display:grid; width:calc(var(--workspace-rail) - 30px); margin:0; padding:0; overflow:visible; border:0; border-radius:0; background:transparent; box-shadow:none; }
   .system-rail .truth-node { min-height:auto; padding:10px 5px; border-right:0; border-bottom:1px solid var(--grid); background:transparent !important; }
   .system-rail .truth-node:last-child { border-bottom:0; }
   .system-rail .truth-label { font-size:9px; }
@@ -1425,7 +1425,7 @@
   .cockpitbar { gap:10px; margin-block:11px 9px; }
   .cockpit-status, .data-freshness, .refresh-action { min-height:40px; }
   .status-detail, .data-freshness { font-size:11px; }
-  .system-rail { grid-template-columns:1fr; }
+  .system-rail { top:280px; grid-template-columns:1fr; }
   .system-rail .truth-node { display:grid; min-height:50px; gap:1px; }
   .system-rail .truth-node strong { line-height:1.2; }
   .system-rail .truth-node small { font-size:10px; line-height:1.35; }

@@ -54,3 +54,4 @@ This campaign does not deploy. Screenshots use a deterministic loopback fixture 
 
 The dominant visual defects are resolved: Risk is no longer oversized, secondary panels follow their content, FLAT/UNKNOWN semantics are clear, typography is more deliberate, and desktop/mobile containment is evidenced. No P1 or P2 visual defect remains reproducible in the tested matrix.
 
+Follow-up left-rail review found VIS-012; it is corrected and rechecked at 1440 and 1024 px. Final defect count: 12 found, 12 fixed.
