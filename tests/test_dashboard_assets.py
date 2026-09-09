@@ -253,3 +253,20 @@ def test_v3_decision_board_exposes_only_observed_position_and_risk_context(monke
     assert ".market-panel" in css
     assert "@media (max-width:430px)" in css
     assert "overflow-x:hidden" not in css
+
+
+def test_v41_visual_qa_keeps_panels_content_led_and_events_structured(monkeypatch):
+    monkeypatch.setattr(dashboard, "AUTH_TOKEN", None)
+    css = (dashboard.ROOT / "dashboard" / "static" / "dashboard.css").read_text(encoding="utf-8")
+    javascript = (dashboard.ROOT / "dashboard" / "static" / "dashboard.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "--workspace-rail:224px" in css
+    assert 'body[data-view="risk"] .risk-command { min-height:0;' in css
+    assert ".risk-measure-track { position:static;" in css
+    assert ".event-panel .event-meta" in css
+    assert ".monitor-command .ops-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }" in css
+    assert 'class="slotclick is-flat"' in javascript
+    assert 'class="event-meta"' in javascript
+    assert "const active = !operational" in javascript

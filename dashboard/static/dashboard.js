@@ -449,6 +449,15 @@ async function refreshSummary() {
     const arrow = sl.state === "LONG" ? "▲ " : sl.state === "SHORT" ? "▼ " : sl.state === "UNKNOWN" ? "? " : "";
     const f = v => v == null || !Number.isFinite(Number(v)) ? "N/A" : Number(v).toLocaleString(LOCALE(), {maximumFractionDigits: 2});
     const money = v => v == null || !Number.isFinite(Number(v)) ? "N/A" : fmt$(v, 0);
+    if (sl.state === "FLAT") {
+      return `<tr class="slotclick is-flat" data-name="${esc(sl.name)}" title="Voir les détails">
+        <td class="slot-cell"><button type="button" class="slot-detail-toggle" id="slot-detail-${esc(sl.name)}" aria-haspopup="dialog" aria-label="Détails ${esc(sl.name)}"><strong class="position-primary">${esc(sl.name).replace("trend_ls_", "Donchian ")}</strong><small class="position-secondary">Surveillance active</small></button></td>
+        <td class="position-cell"><span class="badge flat">FLAT</span><small class="position-secondary">Aucune position ouverte</small></td>
+        <td class="price-cell"><span class="cell-label">Statut</span><strong>En attente de signal</strong><small class="position-secondary">aucun prix d’entrée à comparer</small></td>
+        <td class="pnl-cell"><strong>—</strong><small class="position-secondary">aucun PnL latent</small></td>
+        <td class="protection-cell"><span class="badge flat">Aucune protection requise</span><small class="position-secondary">un stop est créé uniquement avec une position</small></td>
+      </tr>`;
+    }
     const pnl = money(sl.upnl);
     const pnlCls = sl.upnl > 0 ? "up" : sl.upnl < 0 ? "down" : "";
     const stopPct = sl.stop_distance_pct;
@@ -853,8 +862,8 @@ function renderEvents() {
   $("events").innerHTML = evs.length ? evs.map(e => {
     const lvl = e.level === "ERROR" ? "err" : e.level === "WARNING" ? "warn" : "info";
     return `<div class="ev ${lvl}"><span class="lvl"></span>
-      <span class="ts num">${e.ts.slice(5, 16)}</span>
-      <span class="src" style="color:var(${e.source === "trend" ? "--s2" : "--s3"})">${esc(e.source)}</span>
+      <span class="event-meta"><span class="ts num">${e.ts.slice(5, 16)}</span>
+      <span class="src" style="color:var(${e.source === "trend" ? "--s2" : "--s3"})">${esc(e.source)}</span></span>
       <span class="msg">${esc(e.msg)}</span></div>`;
   }).join("") : '<div class="empty">Aucun événement — les moteurs sont en veille, c’est normal.</div>';
 }
@@ -1189,8 +1198,15 @@ function renderTrendDecisionContext(summary = lastSummary, priceData = pcData) {
   const operational = trend.alive === true && trend.freshness === "FRESH";
   const regimeKnown = operational && priceData && (priceData.regime_up === true || priceData.regime_up === false);
   const regime = regimeKnown ? (priceData.regime_up ? "LONG" : "SHORT") : null;
-  const states = [...new Set(slots.map(slot => slot.state).filter(state => state === "LONG" || state === "SHORT"))];
-  const active = states.length ? states.join(" / ") : regime ? `${regime} ${PREFS.lang === "en" ? "allowed" : "autorisé"}` : t("decision_unknown");
+  const states = operational
+    ? [...new Set(slots.map(slot => slot.state).filter(state => state === "LONG" || state === "SHORT"))]
+    : [];
+  // A stale/unavailable engine may still carry a last observed slot. That
+  // observation is useful in the position table, but it must never be shown
+  // as a current executable decision in the dominant Trend surface.
+  const active = !operational
+    ? t("decision_unknown")
+    : states.length ? states.join(" / ") : regime ? `${regime} ${PREFS.lang === "en" ? "allowed" : "autorisé"}` : t("decision_unknown");
   value.textContent = active;
   root.dataset.tone = active === t("decision_unknown") ? "unknown" : slots.length ? "position" : regime.toLowerCase();
   if ($("trend-regime-visual")) $("trend-regime-visual").textContent = regime ? (regime === "LONG" ? "BULL" : "BEAR") : "UNKNOWN";
