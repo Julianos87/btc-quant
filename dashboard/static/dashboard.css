@@ -1104,7 +1104,7 @@
      Monitor, Performance and Risk deliberately no longer read as the same
      card grid with a different active tab. */
   body { padding:0; background:var(--page); }
-  :root { --workspace-rail:224px; --v4-space-1:6px; --v4-space-2:10px; --v4-space-3:14px; --v4-space-4:18px; --v4-space-5:24px; }
+  :root { --workspace-rail:224px; --workspace-gutter:clamp(14px,3vw,48px); --v4-space-1:6px; --v4-space-2:10px; --v4-space-3:14px; --v4-space-4:18px; --v4-space-5:24px; }
   .workspace-shell { display:grid; grid-template-columns:var(--workspace-rail) minmax(0,1fr); min-height:100vh; }
   .workspace-rail { position:sticky; top:0; align-self:start; display:flex; flex-direction:column; height:100vh; padding:22px 15px 18px; border-right:1px solid var(--grid); background:color-mix(in srgb,var(--surface) 92%,var(--page)); }
   .workspace-brand { display:flex; align-items:center; gap:11px; padding:0 5px 22px; color:var(--ink); }
@@ -1143,7 +1143,7 @@
   .workspace-brief h2 { max-width:660px; margin:7px 0 5px; color:var(--ink); font-size:clamp(24px,3vw,38px); letter-spacing:-.04em; line-height:1; }
   .workspace-brief p { margin:0; color:var(--muted); font-size:12px; }
   .workspace-brief-rule { justify-self:end; width:min(280px,70%); height:1px; background:linear-gradient(90deg,transparent,var(--s1)); }
-  .system-rail { position:fixed; z-index:5; top:280px; left:15px; display:grid; width:calc(var(--workspace-rail) - 30px); margin:0; padding:0; overflow:visible; border:0; border-radius:0; background:transparent; box-shadow:none; }
+  .system-rail { position:fixed; z-index:5; top:280px; left:calc(var(--workspace-gutter) + 15px); display:grid; width:calc(var(--workspace-rail) - 30px); margin:0; padding:0; overflow:visible; border:0; border-radius:0; background:transparent; box-shadow:none; }
   .system-rail .truth-node { min-height:auto; padding:10px 5px; border-right:0; border-bottom:1px solid var(--grid); background:transparent !important; }
   .system-rail .truth-node:last-child { border-bottom:0; }
   .system-rail .truth-label { font-size:9px; }
@@ -1197,7 +1197,7 @@
     :root { --workspace-rail:208px; }
     .workspace-shell { grid-template-columns:208px minmax(0,1fr); }
     .workspace-rail { padding-inline:12px; }
-    .system-rail { left:12px; width:184px; }
+    .system-rail { left:calc(var(--workspace-gutter) + 12px); width:184px; }
     .workspace-canvas { padding-inline:22px; }
     footer { margin-left:208px; padding-inline:22px; }
     .decision-board, body[data-view] .decision-board { grid-template-columns:1fr !important; grid-template-areas:none !important; }
@@ -1247,7 +1247,7 @@
   }
   :root[data-theme="light"] .chip { color:#40585c; transition:none; }
   :root[data-theme="light"] .view-tabs .chip.on { color:#fff; background:#087d96; }
-  body { padding-inline:clamp(14px,3vw,48px); background:var(--page); font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; letter-spacing:0; }
+  body { padding-inline:var(--workspace-gutter); background:var(--page); font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; letter-spacing:0; }
   body::before { background:radial-gradient(70rem 32rem at 4% -12%,rgba(99,200,220,.09),transparent 61%),radial-gradient(46rem 28rem at 100% 0,rgba(79,210,157,.055),transparent 64%); animation:none; }
   body::after { display:none; }
   .num { font-family:ui-monospace,"SFMono-Regular",Consolas,monospace; }
