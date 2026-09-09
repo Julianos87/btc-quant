@@ -1533,3 +1533,100 @@
     .decision-hero #trend-decision { font-size:42px; }
     .event-panel #events { max-height:300px; }
   }
+
+  /* Post-deployment visual balance. Keep rows content-led: a tall instrument
+     must not reserve an empty rectangle below a shorter neighbour. */
+  body[data-view="monitor"] .decision-board {
+    grid-template-columns:minmax(0,1.08fr) minmax(390px,.92fr);
+    grid-template-areas:
+      "trend trend"
+      "pulse price"
+      "exposure price"
+      "carry carry"
+      "events events"
+      "readiness readiness";
+  }
+  body[data-view="monitor"] .market-panel { align-self:stretch; }
+  body[data-view="monitor"] .monitor-command,
+  body[data-view="monitor"] .exposure-panel { align-self:start; }
+  body[data-view="monitor"] [data-card="carry"] { width:100%; }
+
+  body[data-view="performance"] .decision-board {
+    grid-template-columns:minmax(0,1.35fr) minmax(360px,.65fr);
+    grid-template-areas:
+      "brief brief"
+      "chart chart"
+      "metrics metrics"
+      "conformity breakdown"
+      "yearly breakdown"
+      "trades trades"
+      "readiness readiness";
+  }
+  body[data-view="performance"] [data-card="metrics"] .metrics-grid {
+    grid-template-columns:repeat(4,minmax(0,1fr));
+  }
+  body[data-view="performance"] [data-card="metrics"] .metric {
+    min-height:78px;
+    display:flex;
+    flex-direction:column;
+    justify-content:center;
+  }
+  body[data-view="performance"] [data-card="breakdown"] { align-self:stretch; }
+  body[data-view="performance"] [data-card="breakdown"] .records {
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+  body[data-view="performance"] [data-card="yearly"] .yearly-chart {
+    height:clamp(220px,18vw,270px);
+  }
+
+  body[data-view="risk"] .decision-board {
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    grid-template-areas:
+      "radar radar"
+      "trend trend"
+      "chart exposure"
+      "price carry"
+      "events events"
+      "readiness readiness";
+  }
+  body[data-view="risk"] .risk-command { width:100%; }
+
+  /* Legibility and optical alignment on the real production payload. */
+  .workspace-brand span { font-size:9px; }
+  .workspace-tab { font-size:12.5px; }
+  .workspace-mode,
+  .workspace-rail-note small,
+  .system-rail .truth-label,
+  .system-rail .truth-node small { font-size:10px; }
+  .system-rail .truth-node strong { font-size:11.5px; }
+  .focus-intro,
+  .stage-heading p,
+  .market-subline,
+  .card-note,
+  .technical-note { font-size:11.5px; line-height:1.45; }
+  .monitor-command .ops-note,
+  .risk-measure-copy small,
+  .summary-item small { font-size:10.5px; }
+  .event-panel .ev { line-height:1.5; }
+
+  @media (max-width:1120px) {
+    body[data-view] .decision-board {
+      grid-template-columns:minmax(0,1fr) !important;
+      grid-template-areas:none !important;
+    }
+    body[data-view] .decision-board > .card { grid-area:auto !important; }
+    body[data-view="performance"] [data-card="breakdown"] { align-self:start; }
+  }
+  @media (max-width:780px) {
+    body[data-view="performance"] [data-card="metrics"] .metrics-grid {
+      grid-template-columns:1fr 1fr;
+    }
+    body[data-view="performance"] [data-card="breakdown"] .records {
+      grid-template-columns:1fr 1fr;
+    }
+  }
+  @media (max-width:430px) {
+    body[data-view="performance"] [data-card="breakdown"] .records {
+      grid-template-columns:1fr;
+    }
+  }
