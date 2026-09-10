@@ -27,6 +27,7 @@ from btcquant.console import enable_utf8_output
 enable_utf8_output()
 
 from btcquant.execution.state_store import StateStore
+from btcquant.execution.operational_state_reader import OperationalStateReader
 from btcquant.execution.health import execution_health
 
 
@@ -39,10 +40,11 @@ def main() -> None:
 
     store = StateStore(args.database, initialize=False, read_only=True)
     print(f"Base       : {args.database}")
-    print(f"Intégrité  : {'OK' if store.integrity_check() else 'ERREUR'}")
+    operational = OperationalStateReader(store.path)
+    print(f"Intégrité  : {'OK' if operational.integrity_check() else 'ERREUR'}")
     for engine in ("trend", "carry"):
         state = store.load_engine_state(engine)
-        age = store.engine_age_seconds(engine)
+        age = operational.engine_age_seconds(engine)
         print(
             f"{engine:10}: {'présent' if state else 'absent'}, âge {age:.0f} s"
             if age is not None
@@ -93,7 +95,7 @@ def main() -> None:
         print("\nDétail JSON des ordres à réconcilier :")
         print(json.dumps(unresolved, indent=2, ensure_ascii=False))
 
-    incidents = store.read_incidents(open_only=True)
+    incidents = operational.read_incidents(open_only=True)
     if incidents:
         print("\nIncidents ouverts :")
         print(json.dumps(incidents, indent=2, ensure_ascii=False))

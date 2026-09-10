@@ -33,6 +33,7 @@ from btcquant.execution.state_contract import (
     validate_trend_state,
 )
 from btcquant.execution.state_store import SCHEMA_VERSION, StateStore
+from btcquant.execution.operational_state_reader import OperationalStateReader
 from btcquant.observability import SafetyStatus
 from btcquant.risk import RiskConfig
 from btcquant.strategies.base import Position, Strategy
@@ -213,7 +214,7 @@ def test_software_valid_stop_is_protected(tmp_path: Path) -> None:
     assert health.slot_protection == (("trend_ls_20", SOFTWARE_STOP_ACTIVE),)
     assert execution_safety_health(store, engines=("trend",)).status == SafetyStatus.PASS
     assert notifications == []
-    assert store.read_incidents(open_only=True) == []
+    assert OperationalStateReader(store.path).read_incidents(open_only=True) == []
 
 
 @pytest.mark.parametrize(
@@ -316,7 +317,7 @@ def test_exchange_numeric_stop_without_order_is_unprotected(tmp_path: Path) -> N
     assert any(item["kind"] == "unprotected_position" for item in notifications)
     assert any(
         item["severity"] == "CRITICAL" and item["kind"] == "unprotected_position"
-        for item in store.read_incidents(open_only=True)
+        for item in OperationalStateReader(store.path).read_incidents(open_only=True)
     )
 
 
@@ -511,7 +512,7 @@ def test_first_cycle_above_stop_preserves_position_and_persists_software(
     assert len(store.read_orders("trend")) == before_orders
     open_unprotected = [
         item
-        for item in store.read_incidents(open_only=True)
+        for item in OperationalStateReader(store.path).read_incidents(open_only=True)
         if item["fingerprint"] == "execution:trend:unprotected_position"
     ]
     assert open_unprotected == []
@@ -593,7 +594,7 @@ def test_false_positive_incident_resolves_after_software_checkpoint(tmp_path: Pa
     runner, source, store = _seed_open_runner(tmp_path)
     before = next(
         item
-        for item in store.read_incidents(open_only=True)
+        for item in OperationalStateReader(store.path).read_incidents(open_only=True)
         if item["fingerprint"] == "execution:trend:unprotected_position"
     )
     assert before["status"] != "RESOLVED"
@@ -602,13 +603,13 @@ def test_false_positive_incident_resolves_after_software_checkpoint(tmp_path: Pa
     sync_execution_incidents(store, health)
     remaining = [
         item
-        for item in store.read_incidents(open_only=True)
+        for item in OperationalStateReader(store.path).read_incidents(open_only=True)
         if item["fingerprint"] == "execution:trend:unprotected_position"
     ]
     assert remaining == []
     resolved = [
         item
-        for item in store.read_incidents()
+        for item in OperationalStateReader(store.path).read_incidents()
         if item["fingerprint"] == "execution:trend:unprotected_position"
     ]
     assert resolved and resolved[0]["status"] == "RESOLVED"
@@ -635,7 +636,7 @@ def test_invalid_software_stop_keeps_incident_open(tmp_path: Path) -> None:
     sync_execution_incidents(store, health)
     open_items = [
         item
-        for item in store.read_incidents(open_only=True)
+        for item in OperationalStateReader(store.path).read_incidents(open_only=True)
         if item["fingerprint"] == "execution:trend:unprotected_position"
     ]
     assert open_items

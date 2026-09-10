@@ -15,6 +15,7 @@ import pandas as pd
 
 from btcquant.config import load_config, portfolio_from_config
 from btcquant.execution.health import execution_health
+from btcquant.execution.operational_state_reader import OperationalStateReader
 from btcquant.execution.state_store import StateStore
 from btcquant.notify import notify
 from btcquant.reporting.analytics import combined_equity, deposits_total
@@ -169,7 +170,7 @@ def main() -> None:
                 f"fill {fill_ratio}, rejet {rejection_rate}, "
                 f"slippage p95 {slippage}"
             )
-        incidents = store.read_incidents(open_only=True)
+        incidents = OperationalStateReader(store.path).read_incidents(open_only=True)
         if incidents:
             lines.append(f"⚠ Incidents ouverts : {len(incidents)}")
             lines.extend(f"  · {item['message']}" for item in incidents[:5])

@@ -13,6 +13,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
 from .historical_state_reader import HistoricalStateReader
+from .operational_state_reader import OperationalStateReader
 from .quality_metrics import percentile, slippages_bps
 from .state_store import StateStore
 
@@ -142,10 +143,11 @@ def evaluate_service_readiness(
 
     try:
         store = StateStore(database_path, initialize=False, read_only=True)
-        checks["database"] = bool(store.integrity_check())
+        operational = OperationalStateReader(store.path)
+        checks["database"] = bool(operational.integrity_check())
         if not checks["database"]:
             reasons.append("DATABASE_CORRUPT")
-        incidents = store.read_incidents(open_only=True)
+        incidents = operational.read_incidents(open_only=True)
         applicable_incidents = [
             item for item in incidents if _incident_applies_to_service_profile(item, cfg)
         ]
@@ -163,8 +165,8 @@ def evaluate_service_readiness(
         elif safety_health.status.value == "UNKNOWN":
             reasons.append("EXECUTION_SAFETY_UNKNOWN")
         for engine in ("trend", "carry"):
-            age = store.engine_age_seconds(engine, now=current)
-            observed_at = store.engine_updated_at(engine)
+            age = operational.engine_age_seconds(engine, now=current)
+            observed_at = operational.engine_updated_at(engine)
             limit = SERVICE_ENGINE_MAX_AGE_SECONDS[engine]
             status = (
                 Freshness.UNAVAILABLE.value
@@ -597,7 +599,7 @@ def _build_active_checks(
             _freshness_check(
                 f"{engine}_freshness",
                 f"Fraîcheur moteur {engine}",
-                store.engine_age_seconds(engine, now=current),
+                OperationalStateReader(store.path).engine_age_seconds(engine, now=current),
                 _freshness_limit(policy, engine),
             )
             for engine in required_engines
@@ -649,7 +651,7 @@ def evaluate_readiness(
     trades = [item for item in history.read_trades() if _parse_datetime(item["exit_ts"]) >= started]
     incidents = [
         item
-        for item in store.read_incidents(open_only=True)
+        for item in OperationalStateReader(store.path).read_incidents(open_only=True)
         if item.get("engine") is None or item.get("engine") in required_engines
     ]
 
@@ -700,7 +702,7 @@ def evaluate_readiness(
         bool((store.load_engine_state(engine) or {}).get("halted")) for engine in required_engines
     )
 
-    integrity_ok = store.integrity_check()
+    integrity_ok = OperationalStateReader(store.path).integrity_check()
     checks = _build_active_checks(
         store,
         current,

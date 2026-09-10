@@ -33,6 +33,7 @@ from btcquant.carry import (
     funding_slot,
 )
 from btcquant.execution.carry_runner import CarryRunner
+from btcquant.execution.operational_state_reader import OperationalStateReader
 
 
 class StubVenue:
@@ -158,7 +159,10 @@ def test_drawdown_halt_closes_the_position_and_stops_the_engine(tmp_path):
 
     assert runner.halted
     assert not runner.in_position, "un kill-switch doit fermer au tick courant"
-    incidents = {item["fingerprint"] for item in runner.store.read_incidents(open_only=True)}
+    incidents = {
+        item["fingerprint"]
+        for item in OperationalStateReader(runner.store.path).read_incidents(open_only=True)
+    }
     assert "execution:carry:kill_switch" in incidents
 
 

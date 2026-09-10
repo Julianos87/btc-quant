@@ -24,6 +24,7 @@ from .state_contract import (
     VALID_STOP_PROTECTION_MODES,
 )
 from .state_store import StateStore
+from .operational_state_reader import OperationalStateReader
 
 
 @dataclass(frozen=True)
@@ -241,7 +242,7 @@ def execution_safety_health(
         health_by_engine = {engine: execution_health(store, engine, now=now) for engine in engines}
         open_critical = tuple(
             str(item["fingerprint"])
-            for item in store.read_incidents(open_only=True)
+            for item in OperationalStateReader(store.path).read_incidents(open_only=True)
             if item.get("severity") == "CRITICAL"
             and str(item.get("fingerprint", "")).startswith("execution:")
         )

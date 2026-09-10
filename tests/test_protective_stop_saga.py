@@ -10,6 +10,7 @@ import pytest
 from btcquant.execution.broker import Broker, BrokerOrderResult, BrokerOrderSnapshot, Fill
 from btcquant.execution.errors import ReconciliationRequired
 from btcquant.execution.order_state import ExternalOrderState
+from btcquant.execution.operational_state_reader import OperationalStateReader
 from btcquant.execution.runner import LiveRunner, StrategySlot
 from btcquant.risk import RiskConfig
 from btcquant.strategies.base import Position, Strategy
@@ -446,7 +447,7 @@ def test_unconfirmed_placement_stops_runner_then_recovers(tmp_path):
         )
 
     assert runner.store.read_orders("trend")[1]["status"] == "PENDING"
-    assert runner.store.read_incidents(open_only=True)[0]["kind"] == (
+    assert OperationalStateReader(runner.store.path).read_incidents(open_only=True)[0]["kind"] == (
         "protective_stop_transition_pending"
     )
 
@@ -454,7 +455,7 @@ def test_unconfirmed_placement_stops_runner_then_recovers(tmp_path):
     restarted, restarted_slot = _restarted_runner(database, broker)
 
     assert restarted_slot.stop_order_id == "remote-stop-1"
-    assert restarted.store.read_incidents(open_only=True) == []
+    assert OperationalStateReader(restarted.store.path).read_incidents(open_only=True) == []
 
 
 def test_crash_after_confirmation_resumes_only_the_cancel(tmp_path):
@@ -631,7 +632,7 @@ def test_cancel_timeout_stops_then_restart_completes(tmp_path):
         runner._resume_stop_transition(slot)
 
     assert slot.stop_transition is not None
-    assert runner.store.read_incidents(open_only=True)[0]["kind"] == (
+    assert OperationalStateReader(runner.store.path).read_incidents(open_only=True)[0]["kind"] == (
         "protective_stop_transition_pending"
     )
 
@@ -640,4 +641,4 @@ def test_cancel_timeout_stops_then_restart_completes(tmp_path):
 
     assert restarted_slot.stop_transition is None
     assert restarted_slot.stop_order_id is None
-    assert restarted.store.read_incidents(open_only=True) == []
+    assert OperationalStateReader(restarted.store.path).read_incidents(open_only=True) == []

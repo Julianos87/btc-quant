@@ -20,6 +20,7 @@ from typing import Any
 from ..config import load_config, runtime_execution_from_config
 from .external_capability_profile import hyperliquid_testnet_trend_ioc_v1
 from .readiness import paper_maturity_status, require_passed_qualification
+from .operational_state_reader import OperationalStateReader
 from .state_store import SCHEMA_VERSION, StateStore
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -230,7 +231,9 @@ def _testnet_order_state(path: Path) -> tuple[bool, str]:
     store = StateStore(path, initialize=False, read_only=True)
     unresolved = store.unresolved_orders("trend")
     critical = [
-        item for item in store.read_incidents(open_only=True) if item.get("severity") == "CRITICAL"
+        item
+        for item in OperationalStateReader(store.path).read_incidents(open_only=True)
+        if item.get("severity") == "CRITICAL"
     ]
     return not unresolved and not critical, f"orders={len(unresolved)},critical={len(critical)}"
 
@@ -241,12 +244,13 @@ def _paper_health(path: Path) -> tuple[bool, str]:
     try:
         store = StateStore(path, initialize=False, read_only=True)
         unresolved = store.unresolved_orders("trend")
+        operational = OperationalStateReader(store.path)
         critical = [
             item
-            for item in store.read_incidents(open_only=True)
+            for item in operational.read_incidents(open_only=True)
             if item.get("severity") == "CRITICAL"
         ]
-        healthy = store.integrity_check() and not unresolved and not critical
+        healthy = operational.integrity_check() and not unresolved and not critical
         return healthy, f"unresolved={len(unresolved)},critical={len(critical)}"
     except (FileNotFoundError, sqlite3.Error, ValueError):
         return False, "database_unavailable"

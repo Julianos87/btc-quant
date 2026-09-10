@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import sqlite3
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+
+from .readonly_state_db import open_state_db_readonly
 
 
 class HistoricalStateReader:
@@ -17,21 +16,8 @@ class HistoricalStateReader:
         if not self.path.exists():
             raise FileNotFoundError(self.path)
 
-    @contextmanager
-    def _connect(self) -> Iterator[sqlite3.Connection]:
-        uri = f"{self.path.resolve().as_uri()}?mode=ro"
-        connection = sqlite3.connect(uri, uri=True, timeout=15.0)
-        try:
-            connection.row_factory = sqlite3.Row
-            connection.execute("PRAGMA query_only = ON")
-            connection.execute("PRAGMA foreign_keys = ON")
-            connection.execute("PRAGMA busy_timeout = 15000")
-            yield connection
-        finally:
-            connection.close()
-
     def read_equity(self, engine: str) -> list[dict[str, Any]]:
-        with self._connect() as connection:
+        with open_state_db_readonly(self.path) as connection:
             rows = connection.execute(
                 """
                 SELECT ts, equity FROM equity_samples
@@ -42,11 +28,11 @@ class HistoricalStateReader:
         return [dict(row) for row in rows]
 
     def read_trades(self) -> list[dict[str, Any]]:
-        with self._connect() as connection:
+        with open_state_db_readonly(self.path) as connection:
             rows = connection.execute("SELECT * FROM trades ORDER BY exit_ts").fetchall()
         return [dict(row) for row in rows]
 
     def read_flows(self) -> list[dict[str, Any]]:
-        with self._connect() as connection:
+        with open_state_db_readonly(self.path) as connection:
             rows = connection.execute("SELECT * FROM flows ORDER BY ts").fetchall()
         return [dict(row) for row in rows]

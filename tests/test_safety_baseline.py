@@ -21,6 +21,7 @@ from btcquant.execution.order_state import ExternalOrderState
 from btcquant.execution.reconcile import reconcile
 from btcquant.execution.runner import LiveRunner, ReconciliationRequired, StrategySlot
 from btcquant.execution.state_store import StateStore
+from btcquant.execution.operational_state_reader import OperationalStateReader
 from btcquant.risk import RiskConfig
 from btcquant.strategies.base import Position, Strategy
 
@@ -263,7 +264,9 @@ def test_partial_exchange_stop_fails_closed_and_persists_block(tmp_path):
     assert runner.reconciliation_required
     assert slot.position is not None
     assert slot.position.qty == pytest.approx(2.0)
-    assert runner.store.read_incidents(open_only=True)[0]["kind"] == ("protective_order_uncertain")
+    assert OperationalStateReader(runner.store.path).read_incidents(open_only=True)[0]["kind"] == (
+        "protective_order_uncertain"
+    )
     with pytest.raises(ReconciliationRequired, match="démarrage interdit"):
         _runner(tmp_path, broker)
 
@@ -385,7 +388,7 @@ def test_periodic_position_reconciliation_is_bounded_and_fail_closed(tmp_path):
         runner._maybe_reconcile_position()
 
     assert runner.reconciliation_required is True
-    incidents = runner.store.read_incidents(open_only=True)
+    incidents = OperationalStateReader(runner.store.path).read_incidents(open_only=True)
     assert incidents[0]["kind"] == "position_reconciliation_required"
 
 
