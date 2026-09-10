@@ -13,9 +13,11 @@ from pathlib import Path
 
 from btcquant.config import (
     build_strategies,
+    costs_from_config,
     execution_config_from_config,
     load_config,
     risk_from_config,
+    runtime_execution_from_config,
 )
 from btcquant.domain import ExecutionSimulator
 from btcquant.execution import CcxtBroker, PaperBroker
@@ -46,7 +48,8 @@ def main() -> None:
     )
     cfg = load_config(args.config)
     risk = risk_from_config(cfg)
-    exec_cfg = cfg["execution"]
+    costs = costs_from_config(cfg)
+    exec_cfg = runtime_execution_from_config(cfg)
 
     strategies = build_strategies(cfg)
     markets = {market for _, _, market in strategies}
@@ -57,23 +60,25 @@ def main() -> None:
         )
     market = markets.pop()
 
-    mode = exec_cfg["mode"]
+    mode = exec_cfg.mode
     broker: Broker
     if mode == "paper":
-        fee = cfg["costs"]["perp_fee_rate"] if market == "perp" else cfg["costs"]["fee_rate"]
+        fee = costs.perp_fee_rate if market == "perp" else costs.fee_rate
+        if fee is None:
+            raise SystemExit("Configuration invalide : fee rate absent pour le marché sélectionné")
         broker = PaperBroker(simulator=ExecutionSimulator(execution_config_from_config(cfg, fee)))
     elif mode == "testnet":
-        live_exchange = exec_cfg.get("live_exchange")
+        live_exchange, live_symbol = exec_cfg.require_live_venue()
         if live_exchange != "hyperliquid" or market != "perp":
             raise SystemExit("SÉCURITÉ : seul Hyperliquid testnet perp est autorisé pour trend.")
         broker = CcxtBroker(
             "hyperliquid",
-            exec_cfg.get("live_symbol", "BTC/USDC:USDC"),
+            live_symbol,
             testnet=True,
             market="perp",
             leverage=1,
             qualification_state_path=ROOT
-            / exec_cfg.get("qualification_state_file", "state/btcquant.db"),
+            / (exec_cfg.qualification_state_file or "state/btcquant.db"),
         )
     else:  # protégé aussi par load_config, défense en profondeur
         raise SystemExit("SÉCURITÉ : l'argent réel reste désactivé.")
@@ -82,6 +87,7 @@ def main() -> None:
         StrategySlot(strategy, fraction, risk.initial_capital * fraction)
         for strategy, fraction, _ in strategies
     ]
+    exchange_id, symbol = exec_cfg.venue_or(cfg["exchange"], cfg["symbol"])
     runner = LiveRunner(
         slots=slots,
         broker=broker,
@@ -89,19 +95,19 @@ def main() -> None:
         # venue live séparée de la venue backtest : les runners consomment
         # Hyperliquid (execution.live_exchange), le backtest reste sur les
         # données Binance téléchargées (exchange:)
-        exchange_id=exec_cfg.get("live_exchange", cfg["exchange"]),
-        symbol=exec_cfg.get("live_symbol", cfg["symbol"]),
-        state_file=ROOT / exec_cfg["state_file"],
+        exchange_id=exchange_id,
+        symbol=symbol,
+        state_file=ROOT / exec_cfg.require_state_file(),
         legacy_state_file=(
-            ROOT / exec_cfg["legacy_state_file"] if exec_cfg.get("legacy_state_file") else None
+            ROOT / exec_cfg.legacy_state_file if exec_cfg.legacy_state_file else None
         ),
-        poll_buffer_seconds=exec_cfg.get("poll_buffer_seconds", 20),
+        poll_buffer_seconds=exec_cfg.poll_buffer_seconds,
         # perp : funding simulé par barre comme dans le backtest (taux live,
         # repli sur la constante de config si l'API funding est muette)
-        funding_rate_8h=cfg["costs"].get("funding_rate_8h", 0.0) if market == "perp" else 0.0,
+        funding_rate_8h=(costs.funding_rate_8h or 0.0) if market == "perp" else 0.0,
         venue=Venue(
-            exec_cfg.get("live_exchange", cfg["exchange"]),
-            exec_cfg.get("live_symbol", cfg["symbol"]),
+            exchange_id,
+            symbol,
             testnet=mode == "testnet",
         ),
         clock=SystemClock(),

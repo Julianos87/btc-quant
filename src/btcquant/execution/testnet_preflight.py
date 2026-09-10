@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ..config import load_config
+from ..config import load_config, runtime_execution_from_config
 from .external_capability_profile import hyperliquid_testnet_trend_ioc_v1
 from .readiness import paper_maturity_status, require_passed_qualification
 from .state_store import SCHEMA_VERSION, StateStore
@@ -207,17 +207,17 @@ def _secret_format(env_path: Path) -> tuple[bool, str]:
 
 def _testnet_config_check(config_path: Path, root: Path) -> tuple[bool, str]:
     config = load_config(config_path)
-    execution = config["execution"]
-    state_file = Path(str(execution["state_file"]))
+    execution = runtime_execution_from_config(config)
+    state_file = Path(execution.require_state_file())
     state_path = state_file if state_file.is_absolute() else root / state_file
     paper_path = root / "state" / "btcquant.db"
     valid = (
         config["environment"] == "testnet"
         and config["exchange"] == "hyperliquid"
-        and execution["mode"] == "testnet"
-        and execution["testnet"] is True
-        and execution["live_exchange"] == "hyperliquid"
-        and execution["api_url"] == "https://api.hyperliquid-testnet.xyz"
+        and execution.mode == "testnet"
+        and execution.testnet is True
+        and execution.live_exchange == "hyperliquid"
+        and execution.api_url == "https://api.hyperliquid-testnet.xyz"
         and state_path.resolve() != paper_path.resolve()
         and state_path.resolve().parent == (root / "state").resolve()
     )

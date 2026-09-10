@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import FrozenInstanceError
+import math
 from pathlib import Path
 
 import pytest
 import yaml
 
 from btcquant.config import (
+    CostsConfig,
     HYPERLIQUID_TESTNET_API_URL,
     carry_policy_from_config,
+    costs_from_config,
     load_config,
     portfolio_from_config,
+    risk_from_config,
+    runtime_execution_from_config,
 )
 from btcquant.risk import RiskConfig
 from btcquant.strategies.trend_ls import TrendLS
@@ -85,6 +91,97 @@ def test_environment_profiles_use_distinct_state_databases():
         "testnet",
     }
     assert len({profile["execution"]["state_file"] for profile in profiles.values()}) == 3
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "environments/dev/config.yaml",
+        "environments/paper/config.yaml",
+        "environments/testnet/config.yaml",
+    ],
+)
+def test_critical_typed_config_values_match_valid_yaml(filename):
+    config = load_config(ROOT / filename)
+    costs = costs_from_config(config)
+    risk = risk_from_config(config)
+    execution = runtime_execution_from_config(config)
+
+    assert costs.fee_rate == config["costs"].get("fee_rate", 0.0)
+    assert costs.slippage_bps == config["costs"].get("slippage_bps", 0.0)
+    assert costs.perp_fee_rate == config["costs"].get("perp_fee_rate")
+    assert costs.funding_rate_8h == config["costs"].get("funding_rate_8h")
+    for field in (
+        "initial_capital",
+        "risk_per_trade",
+        "max_position_pct",
+        "vol_target_annual",
+        "max_drawdown_halt",
+        "daily_loss_limit",
+        "max_leverage",
+    ):
+        assert getattr(risk, field) == config["risk"].get(field, getattr(RiskConfig(), field))
+    assert execution.mode == config["execution"].get("mode", "paper")
+    assert execution.testnet == config["execution"].get("testnet", False)
+    assert execution.state_file == config["execution"].get("state_file")
+    assert execution.poll_buffer_seconds == config["execution"].get("poll_buffer_seconds", 20)
+
+
+def test_critical_config_contracts_are_immutable():
+    costs = CostsConfig(fee_rate=0.001, slippage_bps=5.0)
+    execution = runtime_execution_from_config(_base_config())
+
+    with pytest.raises(FrozenInstanceError):
+        setattr(costs, "fee" + "_rate", 0.002)
+    with pytest.raises(FrozenInstanceError):
+        setattr(execution, "mo" + "de", "testnet")
+
+
+@pytest.mark.parametrize(
+    ("section", "key", "value", "message"),
+    [
+        ("risk", "max_daily_los", 0.01, "max_daily_los"),
+        ("costs", "fee_rte", 0.001, "fee_rte"),
+        ("execution", "poll_buffer_second", 20, "poll_buffer_second"),
+    ],
+)
+def test_unknown_critical_config_keys_fail_closed(tmp_path, section, key, value, message):
+    config = deepcopy(_base_config())
+    config[section][key] = value
+
+    with pytest.raises(ValueError, match=message):
+        load_config(_write(tmp_path, config))
+
+
+@pytest.mark.parametrize(
+    ("section", "key", "value", "message"),
+    [
+        ("risk", "risk_per_trade", True, "risk.risk_per_trade"),
+        ("risk", "risk_per_trade", math.nan, "risk.risk_per_trade"),
+        ("risk", "risk_per_trade", math.inf, "risk.risk_per_trade"),
+        ("risk", "initial_capital", None, "risk.initial_capital"),
+        ("costs", "fee_rate", "0.001", "costs.fee_rate"),
+        ("costs", "fee_rate", math.nan, "costs.fee_rate"),
+        ("execution", "testnet", "false", "execution.testnet"),
+        ("execution", "testnet", 1, "execution.testnet"),
+        ("execution", "poll_buffer_seconds", 2.7, "poll_buffer_seconds"),
+    ],
+)
+def test_invalid_critical_yaml_types_fail_closed(tmp_path, section, key, value, message):
+    config = deepcopy(_base_config())
+    config[section][key] = value
+
+    with pytest.raises((TypeError, ValueError), match=message):
+        load_config(_write(tmp_path, config))
+
+
+@pytest.mark.parametrize("simulation", [[], ""])
+def test_invalid_simulation_container_no_longer_becomes_implicit_defaults(tmp_path, simulation):
+    config = deepcopy(_base_config())
+    config["execution"]["simulation"] = simulation
+
+    with pytest.raises(TypeError, match="execution.simulation"):
+        load_config(_write(tmp_path, config))
 
 
 def _base_config():
