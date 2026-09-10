@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
+from .historical_state_reader import HistoricalStateReader
 from .quality_metrics import percentile, slippages_bps
 from .state_store import StateStore
 
@@ -323,6 +324,7 @@ def paper_maturity_status(
     policy = ReadinessPolicy(**campaign["policy"])
     started = _parse_datetime(campaign["started_at"])
     required_engines = set(policy.required_engines)
+    history = HistoricalStateReader(store.path)
     orders = [
         item
         for item in store.read_orders()
@@ -331,7 +333,7 @@ def paper_maturity_status(
         and item.get("order_type") != "STOP"
         and item.get("status") in TERMINAL_STATUSES
     ]
-    trades = [item for item in store.read_trades() if _parse_datetime(item["exit_ts"]) >= started]
+    trades = [item for item in history.read_trades() if _parse_datetime(item["exit_ts"]) >= started]
     observation_age_days = max(0.0, (current - started).total_seconds() / 86400)
     earliest = started + timedelta(days=policy.min_observation_days)
     time_met = observation_age_days >= policy.min_observation_days
@@ -626,6 +628,7 @@ def evaluate_readiness(
     policy = ReadinessPolicy(**campaign["policy"])
     started = _parse_datetime(campaign["started_at"])
     required_engines = tuple(policy.required_engines)
+    history = HistoricalStateReader(store.path)
     if not required_engines:
         raise ValueError("La qualification doit exiger au moins un moteur")
     orders = [
@@ -643,7 +646,7 @@ def evaluate_readiness(
         if item["status"] in ("PENDING", "UNBALANCED")
         or (item["status"] == "OPEN" and item["order_type"] != "STOP")
     ]
-    trades = [item for item in store.read_trades() if _parse_datetime(item["exit_ts"]) >= started]
+    trades = [item for item in history.read_trades() if _parse_datetime(item["exit_ts"]) >= started]
     incidents = [
         item
         for item in store.read_incidents(open_only=True)
@@ -653,7 +656,7 @@ def evaluate_readiness(
     elapsed_days = max(0.0, (current - started).total_seconds() / 86400)
     equity_timestamps = {
         engine: _equity_timestamps(
-            store,
+            history,
             engine,
             started,
             current,
@@ -686,7 +689,7 @@ def evaluate_readiness(
     partial_rate = partial_count / len(terminal) if terminal else None
     p95_slippage = percentile(slippages_bps(terminal), 0.95)
     max_drawdown = _max_portfolio_drawdown(
-        store,
+        history,
         started,
         current,
         required_engines,
@@ -797,7 +800,7 @@ def _freshness_limit(policy: ReadinessPolicy, engine: str) -> float:
 
 
 def _equity_timestamps(
-    store: StateStore,
+    history: HistoricalStateReader,
     engine: str,
     start: datetime,
     end: datetime,
@@ -806,7 +809,7 @@ def _equity_timestamps(
     earliest = start - timedelta(seconds=freshness_seconds)
     return sorted(
         timestamp
-        for row in store.read_equity(engine)
+        for row in history.read_equity(engine)
         if earliest <= (timestamp := _parse_datetime(row["ts"])) <= end
     )
 
@@ -869,7 +872,7 @@ def _covered_equity_days(
 
 
 def _max_portfolio_drawdown(
-    store: StateStore,
+    history: HistoricalStateReader,
     start: datetime,
     end: datetime,
     engines: tuple[str, ...],
@@ -878,7 +881,7 @@ def _max_portfolio_drawdown(
     samples: dict[str, list[tuple[datetime, float]]] = {}
     for engine in engines:
         values: list[tuple[datetime, float]] = []
-        for row in store.read_equity(engine):
+        for row in history.read_equity(engine):
             timestamp = _parse_datetime(row["ts"])
             if start <= timestamp <= end:
                 values.append((timestamp, float(row["equity"])))
@@ -889,7 +892,7 @@ def _max_portfolio_drawdown(
             _parse_datetime(flow["ts"]),
             sum(float(flow[f"{engine}_flow"]) for engine in engines),
         )
-        for flow in store.read_flows()
+        for flow in history.read_flows()
         if start <= _parse_datetime(flow["ts"]) <= end
     )
     equities: list[float] = []

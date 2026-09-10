@@ -30,6 +30,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from btcquant.backtest.engine import BacktestEngine
 from btcquant.domain.execution import ExecutionConfig, ExecutionSimulator
 from btcquant.execution.broker import PaperBroker
+from btcquant.execution.historical_state_reader import HistoricalStateReader
 from btcquant.execution.runner import LiveRunner, StrategySlot
 from btcquant.risk import RiskConfig
 from btcquant.strategies.base import Position, Strategy
@@ -252,7 +253,7 @@ def _runner_trades(runner) -> list[tuple]:
                 "reason": row["reason"],
             }
         )
-        for row in runner.store.read_trades()
+        for row in HistoricalStateReader(runner.store.path).read_trades()
     ]
 
 
@@ -296,7 +297,9 @@ def test_both_engines_reach_the_same_equity(tmp_path, monkeypatch):
     runner = run_runner(frame, ScriptedStrategy(**SCENARIO), tmp_path, monkeypatch)
 
     closed_pnl = sum(trade.pnl for trade in backtest.trades if trade.exit_reason != "end_of_data")
-    runner_pnl = sum(float(row["pnl"]) for row in runner.store.read_trades())
+    runner_pnl = sum(
+        float(row["pnl"]) for row in HistoricalStateReader(runner.store.path).read_trades()
+    )
     assert runner_pnl == pytest.approx(closed_pnl, abs=1e-8)
 
 
@@ -310,7 +313,10 @@ def test_position_sizing_is_identical_on_both_paths(tmp_path, monkeypatch):
     runner = run_runner(frame, ScriptedStrategy(**SCENARIO), tmp_path, monkeypatch)
 
     backtest_qty = [round(trade.qty, 12) for trade in backtest.trades]
-    runner_qty = [round(float(row["qty"]), 12) for row in runner.store.read_trades()]
+    runner_qty = [
+        round(float(row["qty"]), 12)
+        for row in HistoricalStateReader(runner.store.path).read_trades()
+    ]
     common = min(len(backtest_qty), len(runner_qty))
     assert common > 0
     assert runner_qty[:common] == backtest_qty[:common]

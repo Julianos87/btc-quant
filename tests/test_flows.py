@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "dashboard"))
 
 import app as dash  # dashboard/app.py
+from btcquant.execution.historical_state_reader import HistoricalStateReader
 from btcquant.execution.state_store import StateStore
 from btcquant.execution.readiness import ReadinessPolicy, start_campaign
 from btcquant.entrypoints import digest, rebalance
@@ -118,7 +119,7 @@ def test_rebalance_deposit_logs_flow(tmp_path, monkeypatch, capsys):
     assert carry["peak_equity"] == pytest.approx(4040.0)
     assert carry["day_start_equity"] == pytest.approx(4040.0)
 
-    flows = pd.DataFrame(store.read_flows())
+    flows = pd.DataFrame(HistoricalStateReader(store.path).read_flows())
     assert len(flows) == 1  # apport seul : allocation à la cible, pas de transfert
     row = flows.iloc[0]
     assert row["kind"] == "deposit"
@@ -134,7 +135,9 @@ def test_rebalance_transfer_logs_zero_sum_flow(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["rebalance.py", "--apply"])
     reb.main()
 
-    flows = pd.DataFrame(StateStore(tmp_path / "btcquant.db").read_flows())
+    database = tmp_path / "btcquant.db"
+    StateStore(database)
+    flows = pd.DataFrame(HistoricalStateReader(database).read_flows())
     assert list(flows["kind"]) == ["rebalance"]
     assert flows["trend_flow"].iloc[0] + flows["carry_flow"].iloc[0] == pytest.approx(0.0)
 
@@ -204,7 +207,7 @@ def test_rebalance_transfer_is_deferred_while_a_position_is_open(
     assert trend is not None and carry is not None
     assert sum(slot["cash"] for slot in trend["slots"].values()) == pytest.approx(7200.0)
     assert carry["equity"] == pytest.approx(2800.0)
-    assert store.read_flows() == []
+    assert HistoricalStateReader(store.path).read_flows() == []
     assert f"Position ouverte ({engine})" in capsys.readouterr().out
 
 
@@ -241,7 +244,7 @@ def test_deposit_is_queued_without_resizing_an_open_carry_position(
     assert len(pending) == 1
     assert pending[0]["deposit_id"] == "test:queued-deposit"
     assert pending[0]["amount"] == pytest.approx(100.0)
-    assert store.read_flows() == []
+    assert HistoricalStateReader(store.path).read_flows() == []
     assert "Total des apports en attente" in capsys.readouterr().out
 
 
@@ -282,7 +285,7 @@ def test_pending_deposit_is_applied_once_both_engines_are_flat(tmp_path, monkeyp
     deposits = store.read_deposits(status="APPLIED")
     assert len(deposits) == 1
     assert deposits[0]["deposit_id"] == "test:apply-later"
-    flows = store.read_flows()
+    flows = HistoricalStateReader(store.path).read_flows()
     assert len(flows) == 1
     assert flows[0]["kind"] == "deposit"
     assert flows[0]["trend_flow"] == pytest.approx(60.0)
@@ -344,7 +347,9 @@ def test_duplicate_applied_deposit_id_is_ignored_without_doubling_equity(
     assert carry["equity"] == pytest.approx(4040.0)
     assert store.read_deposits(status="PENDING") == []
     assert len(store.read_deposits(status="APPLIED")) == 1
-    deposit_flows = [flow for flow in store.read_flows() if flow["kind"] == "deposit"]
+    deposit_flows = [
+        flow for flow in HistoricalStateReader(store.path).read_flows() if flow["kind"] == "deposit"
+    ]
     assert len(deposit_flows) == 1
 
 

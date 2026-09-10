@@ -6181,27 +6181,6 @@ class StateStore:
                 (engine, ts or utc_now(), equity),
             )
 
-    def read_equity(self, engine: str) -> list[dict[str, Any]]:
-        with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT ts, equity FROM equity_samples
-                WHERE engine = ? ORDER BY ts
-                """,
-                (engine,),
-            ).fetchall()
-        return [dict(row) for row in rows]
-
-    def read_trades(self) -> list[dict[str, Any]]:
-        with self._connect() as connection:
-            rows = connection.execute("SELECT * FROM trades ORDER BY exit_ts").fetchall()
-        return [dict(row) for row in rows]
-
-    def read_flows(self) -> list[dict[str, Any]]:
-        with self._connect() as connection:
-            rows = connection.execute("SELECT * FROM flows ORDER BY ts").fetchall()
-        return [dict(row) for row in rows]
-
     def engine_age_seconds(
         self,
         engine: str,

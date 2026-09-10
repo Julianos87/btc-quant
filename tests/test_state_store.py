@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from btcquant.execution.errors import AccountingIdentityCollision, MigrationRequiredError
 
+from btcquant.execution.historical_state_reader import HistoricalStateReader
 from btcquant.execution.order_state import ExternalOrderState, LocalOrderState
 from btcquant.execution.state_store import StateStore
 
@@ -72,9 +73,10 @@ def test_legacy_csv_journals_are_imported_once(tmp_path):
 
     assert first == {"equity": 1, "trades": 1, "flows": 1}
     assert second == {"equity": 0, "trades": 0, "flows": 0}
-    assert len(store.read_equity("trend")) == 1
-    assert len(store.read_trades()) == 1
-    assert len(store.read_flows()) == 1
+    history = HistoricalStateReader(store.path)
+    assert len(history.read_equity("trend")) == 1
+    assert len(history.read_trades()) == 1
+    assert len(history.read_flows()) == 1
 
 
 def test_checkpoint_rolls_back_state_positions_and_event(tmp_path, monkeypatch):
@@ -111,7 +113,7 @@ def test_applied_deposit_rolls_back_with_engine_states(tmp_path, monkeypatch):
         )
 
     assert store.load_engine_state("trend") is None
-    assert store.read_flows() == []
+    assert HistoricalStateReader(store.path).read_flows() == []
     pending = store.read_deposits(status="PENDING")
     assert len(pending) == 1
     assert pending[0]["deposit_id"] == "monthly:2026-08"
@@ -178,7 +180,7 @@ def test_order_fill_position_and_trade_commit_atomically(tmp_path):
 
     assert store.read_orders("trend")[0]["status"] == "FILLED"
     assert store.load_engine_state("trend") == flat
-    assert store.read_trades()[0]["pnl"] == pytest.approx(20.0)
+    assert HistoricalStateReader(store.path).read_trades()[0]["pnl"] == pytest.approx(20.0)
 
 
 def test_order_checkpoint_failure_leaves_order_pending(tmp_path, monkeypatch):
@@ -202,7 +204,7 @@ def test_order_checkpoint_failure_leaves_order_pending(tmp_path, monkeypatch):
 
     assert store.read_orders("trend")[0]["status"] == "PENDING"
     assert store.load_engine_state("trend") is None
-    assert store.read_trades() == []
+    assert HistoricalStateReader(store.path).read_trades() == []
 
 
 def test_rebalance_commits_both_states_and_flows_together(tmp_path):
@@ -220,7 +222,10 @@ def test_rebalance_commits_both_states_and_flows_together(tmp_path):
 
     assert store.load_engine_state("trend") == trend
     assert store.load_engine_state("carry") == carry
-    assert [row["kind"] for row in store.read_flows()] == ["deposit", "rebalance"]
+    assert [row["kind"] for row in HistoricalStateReader(store.path).read_flows()] == [
+        "deposit",
+        "rebalance",
+    ]
     assert store.integrity_check()
 
 
@@ -264,7 +269,7 @@ def test_concurrent_equity_writes_are_serialized(tmp_path):
     with ThreadPoolExecutor(max_workers=8) as pool:
         list(pool.map(write, range(40)))
 
-    rows = store.read_equity("trend")
+    rows = HistoricalStateReader(store.path).read_equity("trend")
     assert len(rows) == 40
     assert {row["equity"] for row in rows} == {float(index) for index in range(40)}
     assert store.integrity_check()
@@ -652,7 +657,7 @@ def test_compact_equity_keeps_five_minute_buckets_before_cutoff(tmp_path):
     before, after = store.compact_equity("trend", "2026-01-01T12:00:00+00:00", min_rows=1)
 
     assert before == 13
-    remaining = [row["ts"] for row in store.read_equity("trend")]
+    remaining = [row["ts"] for row in HistoricalStateReader(store.path).read_equity("trend")]
     assert "2026-01-02T00:00:00+00:00" in remaining
     old = [ts for ts in remaining if ts.startswith("2026-01-01")]
     assert old == [
