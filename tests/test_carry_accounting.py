@@ -27,6 +27,7 @@ from btcquant.carry import (  # noqa: E402
     smooth_funding_events,
 )
 from btcquant.execution.carry_runner import CarryRunner  # noqa: E402
+from btcquant.execution.operational_state_reader import OperationalStateReader  # noqa: E402
 
 
 class _Venue:
@@ -337,7 +338,10 @@ def test_missing_funding_is_fail_closed_and_survives_restart(tmp_path: Path) -> 
     assert runner.accounting_uncertain
     assert runner.accounting_uncertainty_reason
     assert runner.equity == pytest.approx(initial_equity)
-    assert runner.store.read_incidents(open_only=True)[0]["severity"] == "CRITICAL"
+    assert (
+        OperationalStateReader(runner.store.path).read_incidents(open_only=True)[0]["severity"]
+        == "CRITICAL"
+    )
 
     revived = _runner(tmp_path, funding)
     assert revived.accounting_uncertain

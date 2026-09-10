@@ -12,6 +12,7 @@ from btcquant.execution.health import (
     sync_execution_incidents,
 )
 from btcquant.execution.state_store import StateStore
+from btcquant.execution.operational_state_reader import OperationalStateReader
 
 
 def add_order(
@@ -119,7 +120,9 @@ def test_incidents_are_deduplicated_resolved_and_reopened(tmp_path):
     assert any(item["kind"] == "unbalanced_orders" for item in first_notifications)
     assert second_notifications == []
     incident = next(
-        item for item in store.read_incidents(open_only=True) if item["kind"] == "unbalanced_orders"
+        item
+        for item in OperationalStateReader(store.path).read_incidents(open_only=True)
+        if item["kind"] == "unbalanced_orders"
     )
     assert incident["occurrences"] == 2
 
@@ -135,7 +138,8 @@ def test_incidents_are_deduplicated_resolved_and_reopened(tmp_path):
         ),
     )
     assert not any(
-        item["kind"] == "unbalanced_orders" for item in store.read_incidents(open_only=True)
+        item["kind"] == "unbalanced_orders"
+        for item in OperationalStateReader(store.path).read_incidents(open_only=True)
     )
 
     store.complete_order(order_id, status="UNBALANCED", filled_qty=0.5, price=100.0)
@@ -166,7 +170,7 @@ def test_nominal_paper_soak_window_remains_stable(tmp_path):
     assert health.partial_rate == 0.0
     assert health.average_slippage_bps == pytest.approx(5.0)
     assert notifications == []
-    assert store.read_incidents(open_only=True) == []
+    assert OperationalStateReader(store.path).read_incidents(open_only=True) == []
 
 
 def test_position_without_confirmed_stop_is_a_critical_incident(tmp_path):
@@ -191,7 +195,7 @@ def test_position_without_confirmed_stop_is_a_critical_incident(tmp_path):
     assert any(item["kind"] == "unprotected_position" for item in notifications)
     assert any(
         item["severity"] == "CRITICAL" and item["kind"] == "unprotected_position"
-        for item in store.read_incidents(open_only=True)
+        for item in OperationalStateReader(store.path).read_incidents(open_only=True)
     )
 
 
@@ -252,7 +256,7 @@ def test_isolated_loop_failure_does_not_raise_an_incident(tmp_path):
 
     runner._record_loop_failure(RuntimeError("réseau"), LOOP_FAILURES_BEFORE_INCIDENT - 1)
 
-    assert not runner.store.read_incidents(open_only=True)
+    assert not OperationalStateReader(runner.store.path).read_incidents(open_only=True)
 
 
 def test_repeated_loop_failures_open_an_incident_naming_the_cause(tmp_path):
@@ -266,7 +270,7 @@ def test_repeated_loop_failures_open_an_incident_naming_the_cause(tmp_path):
         TypeError("checkpoint non sérialisable"), LOOP_FAILURES_BEFORE_INCIDENT
     )
 
-    incidents = runner.store.read_incidents(open_only=True)
+    incidents = OperationalStateReader(runner.store.path).read_incidents(open_only=True)
     assert [item["fingerprint"] for item in incidents] == ["execution:trend:loop_failure"]
     assert "checkpoint non sérialisable" in incidents[0]["message"]
     assert messages and "checkpoint non sérialisable" in messages[0]

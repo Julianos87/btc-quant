@@ -24,6 +24,7 @@ from btcquant.execution.carry_cutover import (
 from btcquant.execution.carry_runner import CarryRunner
 from btcquant.execution.instance_lock import EngineInstanceLock
 from btcquant.execution.state_store import SCHEMA_VERSION, StateStore
+from btcquant.execution.operational_state_reader import OperationalStateReader
 
 ROOT = Path(__file__).resolve().parents[1]
 PAPER_CONFIG = ROOT / "environments" / "paper" / "config.yaml"
@@ -462,7 +463,7 @@ def test_post_cutover_runner_starts_flat_without_uncertainty(tmp_path: Path) -> 
     assert runner.equity == EXACT_EQUITY
     incidents = [
         incident
-        for incident in runner.store.read_incidents()
+        for incident in OperationalStateReader(runner.store.path).read_incidents()
         if incident["engine"] == "carry" and incident["status"] == "OPEN"
     ]
     assert incidents == []

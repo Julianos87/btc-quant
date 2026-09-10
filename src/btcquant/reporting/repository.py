@@ -10,6 +10,7 @@ from typing import Any
 import pandas as pd
 
 from btcquant.execution.historical_state_reader import HistoricalStateReader
+from btcquant.execution.operational_state_reader import OperationalStateReader
 from btcquant.execution.state_store import StateStore
 
 
@@ -79,9 +80,7 @@ class ReportingRepository:
 
         if self.database.exists():
             try:
-                return StateStore(
-                    self.database, initialize=False, read_only=True
-                ).engine_age_seconds(engine)
+                return OperationalStateReader(self.database).engine_age_seconds(engine)
             except Exception as exc:
                 raise ReportingReadError(f"horodatage SQLite illisible pour {engine}") from exc
         return self.age_seconds(legacy_path) if legacy_path is not None else None

@@ -6119,27 +6119,6 @@ class StateStore:
             )
         return cursor.rowcount > 0
 
-    def read_incidents(
-        self,
-        *,
-        open_only: bool = False,
-        engine: str | None = None,
-    ) -> list[dict[str, Any]]:
-        clauses: list[str] = []
-        params: list[str] = []
-        if open_only:
-            clauses.append("status = 'OPEN'")
-        if engine is not None:
-            clauses.append("engine = ?")
-            params.append(engine)
-        query = "SELECT * FROM incidents"
-        if clauses:
-            query += " WHERE " + " AND ".join(clauses)
-        query += " ORDER BY last_seen DESC, id DESC"
-        with self._connect() as connection:
-            rows = connection.execute(query, tuple(params)).fetchall()
-        return [dict(row) for row in rows]
-
     def record_trade(self, trade: dict[str, Any]) -> None:
         with self._transaction() as connection:
             connection.execute(
@@ -6180,38 +6159,6 @@ class StateStore:
                 """,
                 (engine, ts or utc_now(), equity),
             )
-
-    def engine_age_seconds(
-        self,
-        engine: str,
-        *,
-        now: datetime | None = None,
-    ) -> float | None:
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT updated_at FROM engine_state WHERE engine = ?", (engine,)
-            ).fetchone()
-        if row is None:
-            return None
-        updated = datetime.fromisoformat(row["updated_at"])
-        return ((now or datetime.now(UTC)) - updated).total_seconds()
-
-    def engine_updated_at(self, engine: str) -> datetime | None:
-        """Return the persisted engine timestamp without filesystem inference."""
-
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT updated_at FROM engine_state WHERE engine = ?", (engine,)
-            ).fetchone()
-        if row is None:
-            return None
-        parsed = datetime.fromisoformat(str(row["updated_at"]))
-        return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
-
-    def integrity_check(self) -> bool:
-        with self._connect() as connection:
-            row = connection.execute("PRAGMA integrity_check").fetchone()
-        return bool(row and row[0] == "ok")
 
     def start_qualification_campaign(
         self,

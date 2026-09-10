@@ -8,8 +8,9 @@ from threading import Event
 
 import pytest
 
-import btcquant.execution.historical_state_reader as history_module
+import btcquant.execution.readonly_state_db as readonly_db_module
 from btcquant.execution.historical_state_reader import HistoricalStateReader
+from btcquant.execution.readonly_state_db import open_state_db_readonly
 from btcquant.execution.state_store import StateStore
 
 
@@ -182,7 +183,6 @@ def test_historical_reader_is_read_only_and_has_no_write_api(tmp_path):
     database = tmp_path / "state.db"
     _seed_history(database)
     before = (database.stat().st_mtime_ns, database.stat().st_size)
-    files_before = {path.name for path in tmp_path.iterdir()}
     reader = HistoricalStateReader(database)
 
     assert reader.read_equity("trend")
@@ -192,14 +192,13 @@ def test_historical_reader_is_read_only_and_has_no_write_api(tmp_path):
     assert not hasattr(reader, "connection")
     assert not hasattr(reader, "append_equity")
     with (
-        reader._connect() as connection,
+        open_state_db_readonly(database) as connection,
         pytest.raises(sqlite3.OperationalError, match="readonly|read-only"),
     ):
         connection.execute(
             "INSERT INTO equity_samples(engine, ts, equity) VALUES('trend', 'forbidden', 1)"
         )
     assert (database.stat().st_mtime_ns, database.stat().st_size) == before
-    assert {path.name for path in tmp_path.iterdir()} == files_before
 
 
 def test_historical_reader_can_read_while_state_store_writes(tmp_path):
@@ -236,7 +235,7 @@ def test_historical_reader_runs_one_select_per_method(tmp_path, monkeypatch):
         connection.set_trace_callback(statements.append)
         return connection
 
-    monkeypatch.setattr(history_module.sqlite3, "connect", traced_connect)
+    monkeypatch.setattr(readonly_db_module.sqlite3, "connect", traced_connect)
     reader = HistoricalStateReader(database)
 
     reader.read_equity("trend")

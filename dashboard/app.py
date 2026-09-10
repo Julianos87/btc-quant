@@ -52,6 +52,7 @@ from btcquant.execution.readiness import (
 )
 from btcquant.execution.shadow import ShadowStore
 from btcquant.execution.state_store import StateStore
+from btcquant.execution.operational_state_reader import OperationalStateReader
 from btcquant.observability import (
     BoundedReadCache,
     CachePolicy,
@@ -196,9 +197,10 @@ def prometheus_metrics():
     if database.exists():
         try:
             store = StateStore(database, initialize=False, read_only=True)
-            database_available = bool(store.integrity_check())
+            operational_reader = OperationalStateReader(database)
+            database_available = bool(operational_reader.integrity_check())
             metrics["btcquant_trading_db_available"] = int(database_available)
-            incidents = store.read_incidents(open_only=True)
+            incidents = operational_reader.read_incidents(open_only=True)
             metrics["btcquant_open_incidents"] = len(incidents)
             metrics["btcquant_open_critical_incidents"] = sum(
                 item["severity"] == "CRITICAL" for item in incidents
@@ -767,6 +769,7 @@ def summary():
     initial_total = INITIAL_CAPITAL
     database = STATE / "btcquant.db"
     store = StateStore(database, initialize=False, read_only=True) if database.exists() else None
+    operational_reader = OperationalStateReader(database) if database.exists() else None
     accounting_status = (
         "FRESH"
         if accounting_available
@@ -774,8 +777,12 @@ def summary():
         if database.exists()
         else "SOURCE_UNAVAILABLE"
     )
-    trend_observed_at = store.engine_updated_at("trend") if store is not None else None
-    carry_observed_at = store.engine_updated_at("carry") if store is not None else None
+    trend_observed_at = (
+        operational_reader.engine_updated_at("trend") if operational_reader is not None else None
+    )
+    carry_observed_at = (
+        operational_reader.engine_updated_at("carry") if operational_reader is not None else None
+    )
     state_price_temporal = temporal_skew(
         {"state": trend_observed_at, "price": price_snapshot.observed_at},
         max_skew_seconds=TEMPORAL_SKEW_MAX_SECONDS,
@@ -1204,7 +1211,8 @@ def summary():
             engine: health.to_dict() for engine, health in safety.engines.items()
         }
         operational["execution_safety"] = safety.to_dict()
-        operational["open_incidents"] = store.read_incidents(open_only=True)
+        assert operational_reader is not None
+        operational["open_incidents"] = operational_reader.read_incidents(open_only=True)
 
     source_observations = {
         "price": price_snapshot.observed_at,
@@ -1425,7 +1433,7 @@ def operations():
         ), 503
     try:
         store = StateStore(database, initialize=False, read_only=True)
-        incidents = store.read_incidents()
+        incidents = OperationalStateReader(database).read_incidents()
         for incident in incidents:
             incident["context"] = json.loads(incident["context"])
         execution = {

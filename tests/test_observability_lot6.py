@@ -16,6 +16,7 @@ from btcquant.execution.readiness import (
 )
 from btcquant.execution.shadow import ShadowStore
 from btcquant.execution.state_store import StateStore
+from btcquant.execution.operational_state_reader import OperationalStateReader
 from btcquant.observability import (
     BoundedReadCache,
     CachePolicy,
@@ -131,7 +132,7 @@ def test_read_only_state_store_cannot_initialize_or_write(tmp_path: Path) -> Non
     before = hashlib.sha256(database.read_bytes()).hexdigest()
     read_store = StateStore(database, initialize=False, read_only=True)
     assert read_store.load_engine_state("trend") == {"slots": {}}
-    assert read_store.integrity_check()
+    assert OperationalStateReader(read_store.path).integrity_check()
     with pytest.raises(sqlite3.OperationalError):
         with read_store._transaction() as connection:
             connection.execute("UPDATE metadata SET value = value WHERE key = 'schema_version'")
@@ -277,9 +278,7 @@ def test_watchdog_read_failure_records_unknown_incident(tmp_path: Path, monkeypa
     )
     monkeypatch.setattr(watchdog, "notify", lambda _message: None)
     watchdog.main(["--database", str(database), "--service", "test-engine"])
-    incidents = StateStore(database, initialize=False, read_only=True).read_incidents(
-        open_only=True
-    )
+    incidents = OperationalStateReader(database).read_incidents(open_only=True)
     assert any(item["kind"] == "watchdog_check_failed" for item in incidents)
 
 
@@ -507,9 +506,7 @@ def test_watchdog_unknown_read_does_not_resolve_active_incident(
     )
     monkeypatch.setattr(watchdog, "notify", lambda _message: None)
     watchdog.main(["--database", str(database), "--service", "test-engine"])
-    incidents = StateStore(database, initialize=False, read_only=True).read_incidents(
-        open_only=True
-    )
+    incidents = OperationalStateReader(database).read_incidents(open_only=True)
     assert any(item["fingerprint"] == "engine:trend:stale" for item in incidents)
 
 
@@ -558,9 +555,7 @@ def test_optional_carry_is_not_a_watchdog_critical_failure(tmp_path: Path, monke
     StateStore(database).save_engine_state("trend", {"slots": {}})
     watchdog.main(["--database", str(database)])
     assert not any("carry" in message.lower() for message in messages)
-    incidents = StateStore(database, initialize=False, read_only=True).read_incidents(
-        open_only=True
-    )
+    incidents = OperationalStateReader(database).read_incidents(open_only=True)
     assert not any(item["engine"] == "carry" for item in incidents)
 
 

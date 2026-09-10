@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 from btcquant.execution.shadow import ShadowStore
 from btcquant.execution.state_store import StateStore
+from btcquant.execution.operational_state_reader import OperationalStateReader
 from btcquant.entrypoints import watchdog
 
 
@@ -40,7 +41,9 @@ def test_watchdog_deduplicates_and_resolves_execution_alerts(tmp_path, monkeypat
     assert len(messages) == 1
     assert "UNBALANCED" in messages[0]
     incident = next(
-        item for item in store.read_incidents(open_only=True) if item["kind"] == "unbalanced_orders"
+        item
+        for item in OperationalStateReader(store.path).read_incidents(open_only=True)
+        if item["kind"] == "unbalanced_orders"
     )
     assert incident["occurrences"] == 2
 
@@ -49,7 +52,8 @@ def test_watchdog_deduplicates_and_resolves_execution_alerts(tmp_path, monkeypat
 
     assert messages == [messages[0]]
     assert not any(
-        item["kind"] == "unbalanced_orders" for item in store.read_incidents(open_only=True)
+        item["kind"] == "unbalanced_orders"
+        for item in OperationalStateReader(store.path).read_incidents(open_only=True)
     )
 
 
@@ -98,7 +102,10 @@ def test_watchdog_monitors_the_carry_engine(tmp_path, monkeypatch):
 
     watchdog.main(["--database", str(tmp_path / "btcquant.db")])
 
-    fingerprints = {item["fingerprint"] for item in store.read_incidents(open_only=True)}
+    fingerprints = {
+        item["fingerprint"]
+        for item in OperationalStateReader(store.path).read_incidents(open_only=True)
+    }
     assert "engine:carry:stale" in fingerprints
     assert any("carry" in message for message in messages)
 
@@ -115,7 +122,10 @@ def test_watchdog_resolves_the_carry_alert_once_the_engine_writes(tmp_path, monk
     store.save_engine_state("carry", {"equity": 4000.0, "in_position": False})
     watchdog.main(["--database", str(tmp_path / "btcquant.db")])
 
-    fingerprints = {item["fingerprint"] for item in store.read_incidents(open_only=True)}
+    fingerprints = {
+        item["fingerprint"]
+        for item in OperationalStateReader(store.path).read_incidents(open_only=True)
+    }
     assert "engine:carry:stale" not in fingerprints
 
 
@@ -144,7 +154,7 @@ def test_watchdog_alerts_once_for_stale_shadow_then_resolves(tmp_path, monkeypat
     assert "shadow" in messages[0].lower()
     assert any(
         item["fingerprint"] == "shadow:market_data_stale"
-        for item in store.read_incidents(open_only=True)
+        for item in OperationalStateReader(store.path).read_incidents(open_only=True)
     )
 
     shadow.record_success(datetime.now(UTC))
@@ -152,7 +162,7 @@ def test_watchdog_alerts_once_for_stale_shadow_then_resolves(tmp_path, monkeypat
 
     assert not any(
         item["fingerprint"] == "shadow:market_data_stale"
-        for item in store.read_incidents(open_only=True)
+        for item in OperationalStateReader(store.path).read_incidents(open_only=True)
     )
 
 
@@ -174,21 +184,21 @@ def test_watchdog_check_failed_resolves_and_reopens_after_recovery(tmp_path, mon
     watchdog.main(args)
     assert any(
         item["fingerprint"] == "watchdog:trend:check_failed"
-        for item in store.read_incidents(open_only=True)
+        for item in OperationalStateReader(store.path).read_incidents(open_only=True)
     )
 
     failing["value"] = False
     watchdog.main(args)
     assert not any(
         item["fingerprint"] == "watchdog:trend:check_failed"
-        for item in store.read_incidents(open_only=True)
+        for item in OperationalStateReader(store.path).read_incidents(open_only=True)
     )
 
     failing["value"] = True
     watchdog.main(args)
     assert any(
         item["fingerprint"] == "watchdog:trend:check_failed"
-        for item in store.read_incidents(open_only=True)
+        for item in OperationalStateReader(store.path).read_incidents(open_only=True)
     )
 
 
@@ -216,9 +226,7 @@ def test_shadow_check_failed_resolves_after_success(tmp_path, monkeypatch):
     watchdog.main(args)
     incident = next(
         item
-        for item in StateStore(database, initialize=False, read_only=True).read_incidents(
-            open_only=True
-        )
+        for item in OperationalStateReader(database).read_incidents(open_only=True)
         if item["fingerprint"] == "watchdog:shadow:check_failed"
     )
     assert incident["severity"] == "WARNING"
@@ -227,9 +235,7 @@ def test_shadow_check_failed_resolves_after_success(tmp_path, monkeypatch):
     watchdog.main(args)
     assert not any(
         item["fingerprint"] == "watchdog:shadow:check_failed"
-        for item in StateStore(database, initialize=False, read_only=True).read_incidents(
-            open_only=True
-        )
+        for item in OperationalStateReader(database).read_incidents(open_only=True)
     )
 
 
@@ -253,9 +259,7 @@ def test_required_shadow_read_failure_is_critical(tmp_path, monkeypatch):
             str(shadow_database),
         ]
     )
-    incidents = StateStore(database, initialize=False, read_only=True).read_incidents(
-        open_only=True
-    )
+    incidents = OperationalStateReader(database).read_incidents(open_only=True)
     incident = next(
         item for item in incidents if item["fingerprint"] == "watchdog:shadow:check_failed"
     )
@@ -280,14 +284,16 @@ def test_profile_required_to_optional_does_not_leave_stale_incident_blocking(tmp
         message="carry stale while required",
     )
     assert any(
-        item["fingerprint"] == "engine:carry:stale" for item in store.read_incidents(open_only=True)
+        item["fingerprint"] == "engine:carry:stale"
+        for item in OperationalStateReader(store.path).read_incidents(open_only=True)
     )
 
     monkeypatch.setenv("BTCQUANT_REQUIRED_ENGINES", "trend")
     watchdog.main(["--database", str(database)])
 
     assert any(
-        item["fingerprint"] == "engine:carry:stale" for item in store.read_incidents(open_only=True)
+        item["fingerprint"] == "engine:carry:stale"
+        for item in OperationalStateReader(store.path).read_incidents(open_only=True)
     )
     readiness = evaluate_service_readiness(
         database,
@@ -321,7 +327,7 @@ def test_profile_optional_does_not_resolve_execution_safety_incident(tmp_path, m
 
     assert any(
         item["fingerprint"] == "execution:carry:unprotected"
-        for item in store.read_incidents(open_only=True)
+        for item in OperationalStateReader(store.path).read_incidents(open_only=True)
     )
     readiness = evaluate_service_readiness(
         database,

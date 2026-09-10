@@ -23,6 +23,7 @@ from btcquant.execution.external_evidence import (
 )
 from btcquant.execution.order_state import ExternalOrderState
 from btcquant.execution.state_store import SCHEMA_VERSION, StateStore
+from btcquant.execution.operational_state_reader import OperationalStateReader
 
 RAW_A = "a" * 64
 RAW_B = "b" * 64
@@ -652,7 +653,7 @@ def test_schema_v6_to_v8_is_additive_preserves_orders_and_checks_integrity(tmp_p
     assert {"external_order_observations", "external_fills"} <= tables
     assert migrated.read_order_by_intent("pre-v7-order")["id"] == order_id
     assert foreign_keys == []
-    assert migrated.integrity_check()
+    assert OperationalStateReader(migrated.path).integrity_check()
     StateStore(database)
 
 

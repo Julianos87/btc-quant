@@ -18,6 +18,7 @@ from pathlib import Path
 from btcquant.execution.health import execution_health, sync_execution_incidents
 from btcquant.backup import assert_writer_recovery_clear
 from btcquant.execution.readiness import service_component_profile
+from btcquant.execution.operational_state_reader import OperationalStateReader
 from btcquant.execution.shadow import ShadowStore
 from btcquant.execution.state_store import StateStore
 from btcquant.notify import notify
@@ -142,7 +143,7 @@ def main(argv: list[str] | None = None) -> None:
     for engine, max_age, service in checks:
         fingerprint = f"engine:{engine}:stale"
         try:
-            age = store.engine_age_seconds(engine)
+            age = OperationalStateReader(store.path).engine_age_seconds(engine)
             health = execution_health(store, engine)
             store.resolve_incident(f"watchdog:{engine}:check_failed")
         except Exception as error:

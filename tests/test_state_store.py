@@ -12,6 +12,7 @@ from btcquant.execution.errors import AccountingIdentityCollision, MigrationRequ
 from btcquant.execution.historical_state_reader import HistoricalStateReader
 from btcquant.execution.order_state import ExternalOrderState, LocalOrderState
 from btcquant.execution.state_store import StateStore
+from btcquant.execution.operational_state_reader import OperationalStateReader
 
 
 def _trend_state(cash: float = 1_000.0) -> dict:
@@ -48,7 +49,7 @@ def test_legacy_json_migration_is_one_shot(tmp_path):
     assert store.load_engine_state("trend") == _trend_state()
     events = store.read_events("trend")
     assert [event["event_type"] for event in events] == ["legacy_json_migrated"]
-    assert store.integrity_check()
+    assert OperationalStateReader(store.path).integrity_check()
 
 
 def test_legacy_csv_journals_are_imported_once(tmp_path):
@@ -94,7 +95,7 @@ def test_checkpoint_rolls_back_state_positions_and_event(tmp_path, monkeypatch):
 
     assert store.load_engine_state("trend") == original
     assert len(store.read_events()) == event_count
-    assert store.integrity_check()
+    assert OperationalStateReader(store.path).integrity_check()
 
 
 def test_applied_deposit_rolls_back_with_engine_states(tmp_path, monkeypatch):
@@ -226,7 +227,7 @@ def test_rebalance_commits_both_states_and_flows_together(tmp_path):
         "deposit",
         "rebalance",
     ]
-    assert store.integrity_check()
+    assert OperationalStateReader(store.path).integrity_check()
 
 
 def test_engine_state_is_replayable_from_hashed_events(tmp_path):
@@ -272,7 +273,7 @@ def test_concurrent_equity_writes_are_serialized(tmp_path):
     rows = HistoricalStateReader(store.path).read_equity("trend")
     assert len(rows) == 40
     assert {row["equity"] for row in rows} == {float(index) for index in range(40)}
-    assert store.integrity_check()
+    assert OperationalStateReader(store.path).integrity_check()
 
 
 def test_schema_v1_is_migrated_with_execution_observability(tmp_path):
@@ -319,7 +320,7 @@ def test_schema_v1_is_migrated_with_execution_observability(tmp_path):
     } <= columns
     assert version == "14"
     assert store.read_deposits() == []
-    assert store.read_incidents() == []
+    assert OperationalStateReader(store.path).read_incidents() == []
 
 
 def test_existing_legacy_database_requires_explicit_migration(tmp_path):
@@ -441,7 +442,7 @@ def test_schema_v4_migration_is_idempotent_and_never_invents_market_terminality(
     assert version == "14"
     assert indexes["idx_orders_logical_order_key"][2] == 1
     assert indexes["idx_orders_logical_order_key"][4] == 1
-    assert store.integrity_check()
+    assert OperationalStateReader(store.path).integrity_check()
 
 
 def test_schema_migration_rejects_wrongly_named_non_unique_index_and_rolls_back(tmp_path):
