@@ -5,6 +5,7 @@ from __future__ import annotations
 import multiprocessing
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,7 @@ from btcquant.execution.errors import (
     ReconciliationRequired,
 )
 from btcquant.execution.instance_lock import EngineInstanceLock
-from btcquant.execution.order_service import OrderExecutionService
+from btcquant.execution.order_service import OrderExecutionService, SubmitMarketCommand
 from btcquant.execution.order_state import (
     ExternalOrderState,
     FinancialTransitionType,
@@ -115,10 +116,25 @@ def _test_application_plan(**kwargs):
 def _supply_durable_plan(monkeypatch):
     original = OrderExecutionService.submit_market
 
-    def wrapped(self, **kwargs):
-        if "application_plan" not in kwargs:
-            kwargs["application_plan"] = _test_application_plan(**kwargs)
-        return original(self, **kwargs)
+    def wrapped(self, command: SubmitMarketCommand):
+        if command.application_plan is None:
+            command = replace(
+                command,
+                application_plan=_test_application_plan(
+                    engine=command.engine,
+                    slot=command.slot,
+                    side=command.side,
+                    qty=command.qty,
+                    reference_price=command.reference_price,
+                    reason=command.reason,
+                    decision_checkpoint=command.decision_checkpoint,
+                    transition_type=command.transition_type,
+                    position_generation=command.position_generation,
+                    transition_sequence=command.transition_sequence,
+                    reduce_only=command.reduce_only,
+                ),
+            )
+        return original(self, command)
 
     monkeypatch.setattr(OrderExecutionService, "submit_market", wrapped)
 
@@ -210,14 +226,16 @@ def _reserve_with_plan(store: StateStore, identity: LogicalOrderIdentity):
 
 def _submit(service: OrderExecutionService, *, checkpoint: str = "2026-08-09T16:00:00Z"):
     return service.submit_market(
-        engine="trend",
-        slot="trend_ls_55",
-        side="BUY",
-        qty=1.0,
-        reference_price=100.0,
-        reason="entry",
-        decision_checkpoint=checkpoint,
-        transition_type=FinancialTransitionType.ENTER_LONG,
+        SubmitMarketCommand(
+            engine="trend",
+            slot="trend_ls_55",
+            side="BUY",
+            qty=1.0,
+            reference_price=100.0,
+            reason="entry",
+            decision_checkpoint=checkpoint,
+            transition_type=FinancialTransitionType.ENTER_LONG,
+        )
     )
 
 

@@ -38,6 +38,99 @@ class SubmittedOrder:
     broker_result: BrokerOrderResult | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class SubmitMarketCommand:
+    """Immutable internal contract for one durable MARKET submission.
+
+    The command deliberately carries the complete business intent.  It keeps
+    coupled order, identity and financial-plan fields together so callers do
+    not pass a long sequence of independently named primitives.
+    """
+
+    engine: str
+    slot: str
+    side: str
+    qty: float
+    reference_price: float
+    reason: str
+    decision_checkpoint: str
+    transition_type: FinancialTransitionType | str
+    position_generation: str | None = None
+    transition_sequence: int = 0
+    reduce_only: bool = False
+    available_volume: float | None = None
+    volatility_annual: float | None = None
+    application_plan: FinancialApplicationPlan | None = None
+
+    def validate(
+        self,
+    ) -> tuple[str, FinancialTransitionType, str, float, float]:
+        """Validate the command without mutating it or performing I/O."""
+
+        if not isinstance(self.side, str):
+            raise ValueError(f"Côté d'ordre invalide : {self.side!r}")
+        normalized_side = self.side.strip().upper()
+        if normalized_side not in {"BUY", "SELL"}:
+            raise ValueError(f"Côté d'ordre invalide : {self.side!r}")
+        normalized_transition = FinancialTransitionType(self.transition_type)
+        if self.application_plan is None:
+            raise ValueError("Un plan financier durable est obligatoire avant soumission MARKET")
+        if not isinstance(self.reason, str) or not self.reason.strip():
+            raise ValueError("reason doit être non vide")
+        normalized_reason = self.reason.strip()
+        if not isinstance(self.reduce_only, bool):
+            raise ValueError("reduce_only doit être bool")
+        try:
+            normalized_qty = float(self.qty)
+            normalized_reference_price = float(self.reference_price)
+        except (TypeError, ValueError) as error:
+            raise ValueError("qty et reference_price doivent être numériques") from error
+        if (
+            isinstance(self.qty, bool)
+            or not math.isfinite(normalized_qty)
+            or not math.isclose(
+                self.application_plan.requested_qty,
+                normalized_qty,
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+        ):
+            raise ValueError("Le plan financier ne correspond pas à la quantité soumise")
+        if (
+            isinstance(self.reference_price, bool)
+            or not math.isfinite(normalized_reference_price)
+            or not math.isclose(
+                self.application_plan.reference_price,
+                normalized_reference_price,
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+        ):
+            raise ValueError("Le plan financier ne correspond pas au prix de référence soumis")
+        if self.application_plan.side != normalized_side:
+            raise ValueError("Le plan financier ne correspond pas au côté soumis")
+        if self.application_plan.reason != normalized_reason:
+            raise ValueError("Le plan financier ne correspond pas à la raison soumise")
+        if self.application_plan.reduce_only != self.reduce_only:
+            raise ValueError("Le plan financier ne correspond pas à reduce_only")
+        expected_entry_side = {
+            FinancialTransitionType.ENTER_LONG: "BUY",
+            FinancialTransitionType.ENTER_SHORT: "SELL",
+        }.get(normalized_transition)
+        if expected_entry_side is not None and normalized_side != expected_entry_side:
+            raise ValueError(
+                f"{normalized_transition.value} exige le côté {expected_entry_side}, "
+                f"pas {normalized_side}"
+            )
+        return (
+            normalized_side,
+            normalized_transition,
+            normalized_reason,
+            normalized_qty,
+            normalized_reference_price,
+        )
+
+
 class OrderExecutionService:
     def __init__(
         self,
@@ -137,87 +230,26 @@ class OrderExecutionService:
         response = accessor()
         return response if isinstance(response, Mapping) else None
 
-    def submit_market(
-        self,
-        *,
-        engine: str,
-        slot: str,
-        side: str,
-        qty: float,
-        reference_price: float,
-        reason: str,
-        decision_checkpoint: str,
-        transition_type: FinancialTransitionType | str,
-        position_generation: str | None = None,
-        transition_sequence: int = 0,
-        reduce_only: bool = False,
-        available_volume: float | None = None,
-        volatility_annual: float | None = None,
-        application_plan: FinancialApplicationPlan | None = None,
-    ) -> SubmittedOrder:
-        if not isinstance(side, str):
-            raise ValueError(f"Côté d'ordre invalide : {side!r}")
-        normalized_side = side.strip().upper()
-        if normalized_side not in {"BUY", "SELL"}:
-            raise ValueError(f"Côté d'ordre invalide : {side!r}")
-        normalized_transition = FinancialTransitionType(transition_type)
-        if application_plan is None:
-            raise ValueError("Un plan financier durable est obligatoire avant soumission MARKET")
-        if not isinstance(reason, str) or not reason.strip():
-            raise ValueError("reason doit être non vide")
-        normalized_reason = reason.strip()
-        if not isinstance(reduce_only, bool):
-            raise ValueError("reduce_only doit être bool")
-        try:
-            normalized_qty = float(qty)
-            normalized_reference_price = float(reference_price)
-        except (TypeError, ValueError) as error:
-            raise ValueError("qty et reference_price doivent être numériques") from error
-        if (
-            isinstance(qty, bool)
-            or not math.isfinite(normalized_qty)
-            or not math.isclose(
-                application_plan.requested_qty,
-                normalized_qty,
-                rel_tol=0.0,
-                abs_tol=1e-12,
-            )
-        ):
-            raise ValueError("Le plan financier ne correspond pas à la quantité soumise")
-        if (
-            isinstance(reference_price, bool)
-            or not math.isfinite(normalized_reference_price)
-            or not math.isclose(
-                application_plan.reference_price,
-                normalized_reference_price,
-                rel_tol=0.0,
-                abs_tol=1e-12,
-            )
-        ):
-            raise ValueError("Le plan financier ne correspond pas au prix de référence soumis")
-        if application_plan.side != normalized_side:
-            raise ValueError("Le plan financier ne correspond pas au côté soumis")
-        if application_plan.reason != normalized_reason:
-            raise ValueError("Le plan financier ne correspond pas à la raison soumise")
-        if application_plan.reduce_only != reduce_only:
-            raise ValueError("Le plan financier ne correspond pas à reduce_only")
-        expected_entry_side = {
-            FinancialTransitionType.ENTER_LONG: "BUY",
-            FinancialTransitionType.ENTER_SHORT: "SELL",
-        }.get(normalized_transition)
-        if expected_entry_side is not None and normalized_side != expected_entry_side:
-            raise ValueError(
-                f"{normalized_transition.value} exige le côté {expected_entry_side}, "
-                f"pas {normalized_side}"
-            )
-        attempt_sequence = transition_sequence
+    def submit_market(self, command: SubmitMarketCommand) -> SubmittedOrder:
+        """Submit one validated immutable MARKET command."""
+
+        (
+            normalized_side,
+            normalized_transition,
+            _normalized_reason,
+            _normalized_qty,
+            _normalized_reference_price,
+        ) = command.validate()
+        application_plan = command.application_plan
+        assert application_plan is not None
+        attempt_sequence = command.transition_sequence
         while True:
             identity = LogicalOrderIdentity(
-                engine=engine,
-                slot=slot,
-                decision_checkpoint=decision_checkpoint,
+                engine=command.engine,
+                slot=command.slot,
+                decision_checkpoint=command.decision_checkpoint,
                 transition_type=normalized_transition,
-                position_generation=position_generation,
+                position_generation=command.position_generation,
                 transition_sequence=attempt_sequence,
             )
             if application_plan.identity != identity:
@@ -257,8 +289,8 @@ class OrderExecutionService:
                 application_plan.reference_price,
                 client_order_id=intent_id,
                 reduce_only=application_plan.reduce_only,
-                available_volume=available_volume,
-                volatility_annual=volatility_annual,
+                available_volume=command.available_volume,
+                volatility_annual=command.volatility_annual,
             )
         except Exception as error:
             ambiguous = self.broker.external_execution
@@ -266,7 +298,7 @@ class OrderExecutionService:
             self._persist_external_submission_response(
                 order_id=order_id,
                 intent_id=intent_id,
-                engine=engine,
+                engine=command.engine,
                 side=normalized_side,
                 raw_payload=self._last_external_submission_response(),
                 structured_error=f"{type(error).__name__}: {error}",
@@ -292,7 +324,7 @@ class OrderExecutionService:
         self._persist_external_submission_response(
             order_id=order_id,
             intent_id=intent_id,
-            engine=engine,
+            engine=command.engine,
             side=normalized_side,
             raw_payload=result.raw_response,
         )

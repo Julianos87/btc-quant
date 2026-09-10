@@ -47,7 +47,7 @@ from .errors import ReconciliationRequired
 from .external_settlement_runtime import ExternalSettlementRuntime
 from .funding_service import FundingService
 from .instance_lock import EngineInstanceLock
-from .order_service import OrderExecutionService, SubmittedOrder
+from .order_service import OrderExecutionService, SubmittedOrder, SubmitMarketCommand
 from .paper_execution_evidence import (
     PaperExecutionEvidenceContext,
     build_paper_execution_evidence,
@@ -1045,20 +1045,22 @@ class LiveRunner:
                 entry_stop_price=entry_stop_price,
             )
         submitted = self.order_service.submit_market(
-            engine="trend",
-            slot=slot.strategy.name,
-            side=side,
-            qty=qty,
-            reference_price=ref_price,
-            reason=reason,
-            decision_checkpoint=decision_checkpoint,
-            transition_type=transition_type,
-            position_generation=position_generation,
-            transition_sequence=slot.financial_transition_seq,
-            reduce_only=reduce_only,
-            available_volume=available_volume,
-            volatility_annual=volatility_annual,
-            application_plan=application_plan,
+            SubmitMarketCommand(
+                engine="trend",
+                slot=slot.strategy.name,
+                side=side,
+                qty=qty,
+                reference_price=ref_price,
+                reason=reason,
+                decision_checkpoint=decision_checkpoint,
+                transition_type=transition_type,
+                position_generation=position_generation,
+                transition_sequence=slot.financial_transition_seq,
+                reduce_only=reduce_only,
+                available_volume=available_volume,
+                volatility_annual=volatility_annual,
+                application_plan=application_plan,
+            )
         )
         if not submitted.is_terminal:
             # La barre/décision est checkpointée, mais aucun fill encore actif

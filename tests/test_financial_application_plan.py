@@ -15,7 +15,11 @@ from btcquant.execution.errors import (
     MigrationRequiredError,
     ReconciliationRequired,
 )
-from btcquant.execution.order_service import OrderExecutionService, SubmittedOrder
+from btcquant.execution.order_service import (
+    OrderExecutionService,
+    SubmittedOrder,
+    SubmitMarketCommand,
+)
 from btcquant.execution.financial_application_plan import (
     FinancialApplicationPlan,
     canonical_json,
@@ -334,14 +338,16 @@ def test_broker_is_not_called_without_a_durable_plan(tmp_path: Path) -> None:
     broker = CountingBroker()
     with pytest.raises(ValueError, match="plan financier durable"):
         OrderExecutionService(StateStore(tmp_path / "state.db"), broker).submit_market(
-            engine="trend",
-            slot="slot",
-            side="BUY",
-            qty=1.0,
-            reference_price=100.0,
-            reason="entry",
-            decision_checkpoint="2026-08-31T11:00:00Z",
-            transition_type=FinancialTransitionType.ENTER_LONG,
+            SubmitMarketCommand(
+                engine="trend",
+                slot="slot",
+                side="BUY",
+                qty=1.0,
+                reference_price=100.0,
+                reason="entry",
+                decision_checkpoint="2026-08-31T11:00:00Z",
+                transition_type=FinancialTransitionType.ENTER_LONG,
+            )
         )
     assert broker.calls == 0
 
@@ -624,8 +630,9 @@ def test_runner_pyramid_builds_a_long_add_plan_with_buy_side(
     )
     captured: dict[str, object] = {}
 
-    def submit(**kwargs):
-        plan = kwargs["application_plan"]
+    def submit(command: SubmitMarketCommand):
+        plan = command.application_plan
+        assert plan is not None
         captured["plan"] = plan
         return SubmittedOrder(
             fill=Fill(price=104.0, qty=0.1, fee=0.0, broker_order_id="paper-1"),
@@ -740,18 +747,20 @@ def test_legacy_order_without_plan_remains_fail_closed(tmp_path: Path) -> None:
         FinancialApplicationPlanConflict, match="LEGACY_APPLICATION_CONTEXT_INCOMPLETE"
     ):
         OrderExecutionService(store, broker).submit_market(
-            engine="trend",
-            slot=plan.identity.slot,
-            side=plan.side,
-            qty=plan.requested_qty,
-            reference_price=plan.reference_price,
-            reason=plan.reason,
-            decision_checkpoint=plan.identity.decision_checkpoint,
-            transition_type=plan.identity.transition_type,
-            position_generation=plan.identity.position_generation,
-            transition_sequence=plan.identity.transition_sequence,
-            reduce_only=plan.reduce_only,
-            application_plan=plan,
+            SubmitMarketCommand(
+                engine="trend",
+                slot=plan.identity.slot,
+                side=plan.side,
+                qty=plan.requested_qty,
+                reference_price=plan.reference_price,
+                reason=plan.reason,
+                decision_checkpoint=plan.identity.decision_checkpoint,
+                transition_type=plan.identity.transition_type,
+                position_generation=plan.identity.position_generation,
+                transition_sequence=plan.identity.transition_sequence,
+                reduce_only=plan.reduce_only,
+                application_plan=plan,
+            )
         )
     assert legacy.acquired is True
     assert broker.calls == 0
