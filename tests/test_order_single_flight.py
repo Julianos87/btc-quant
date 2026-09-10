@@ -20,6 +20,7 @@ from btcquant.execution.errors import (
     EngineInstanceAlreadyRunning,
     FinancialTransitionAlreadyReserved,
     InvalidOrderStateTransition,
+    ReconciliationRequired,
 )
 from btcquant.execution.instance_lock import EngineInstanceLock
 from btcquant.execution.order_service import OrderExecutionService
@@ -239,6 +240,37 @@ def test_external_open_order_is_not_rejected_or_terminal_locally(tmp_path):
     assert order["external_state"] == ExternalOrderState.OPEN
     assert order["remaining_qty"] == pytest.approx(1.0)
     assert store.unresolved_orders("trend") == [order]
+
+
+def test_malformed_external_quantity_stays_ambiguous_and_cannot_retry(tmp_path):
+    class MissingFilledExchange(_OpenExchange):
+        def create_order(self, _symbol, _order_type, _side, qty, _price, _params):
+            return {
+                "id": "accepted-but-malformed",
+                "status": "closed",
+                "amount": qty,
+                "average": 100.0,
+                "fees": [],
+            }
+
+    broker = object.__new__(CcxtBroker)
+    broker.exchange = MissingFilledExchange()
+    broker.exchange_id = "binance"
+    broker.environment = "testnet"
+    broker.account_scope = "account"
+    broker.symbol = "BTC/USDT"
+    store = StateStore(tmp_path / "state.db")
+    service = OrderExecutionService(store, broker)
+
+    with pytest.raises(ReconciliationRequired, match="résultat externe ambigu"):
+        _submit(service)
+
+    order = store.read_orders("trend")[0]
+    assert order["local_state"] == LocalOrderState.PENDING_RECONCILIATION
+    assert order["external_state"] == ExternalOrderState.UNKNOWN
+    assert order["filled_qty"] == 0.0
+    with pytest.raises(FinancialTransitionAlreadyReserved):
+        _submit(service)
 
 
 @pytest.mark.parametrize(

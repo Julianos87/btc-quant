@@ -19,7 +19,6 @@ def test_ccxt_adapter_normalizes_long_and_short_positions():
         fetch_positions=lambda _symbols: [
             {"contracts": 2.0, "side": "long"},
             {"contracts": 0.75, "side": "short"},
-            {"contracts": None, "side": "long"},
         ]
     )
 

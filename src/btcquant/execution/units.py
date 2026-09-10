@@ -29,6 +29,15 @@ def exchange_float(value: object, *, name: str, positive: bool = False) -> float
     return float(decimal_value(value, name=name, positive=positive))
 
 
+def nonnegative_exchange_float(value: object, *, name: str) -> float:
+    """Parse one venue-authoritative number without inventing a missing zero."""
+
+    number = exchange_float(value, name=name)
+    if number < 0:
+        raise ValueError(f"{name} doit être positif ou nul")
+    return number
+
+
 def decimal_notional(qty: object, price: object) -> Decimal:
     return decimal_value(qty, name="qty", positive=True) * decimal_value(
         price,

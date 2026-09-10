@@ -41,6 +41,7 @@ from .external_submission_commitment import (
     AuthoritativeSubmissionFillCommitment,
     ExternalSubmissionOutcome,
     ExternalSubmissionResponse,
+    consistent_fill_commitment,
 )
 from .errors import ReconciliationRequired
 from .state_store import StateStore
@@ -91,16 +92,7 @@ def _parse_timestamp(value: object, field: str) -> datetime:
 def _commitment(
     responses: Sequence[ExternalSubmissionResponse],
 ) -> AuthoritativeSubmissionFillCommitment | None:
-    commitments = [
-        response.commitment
-        for response in responses
-        if getattr(response, "outcome", None) == ExternalSubmissionOutcome.FILLED_COMMITMENT
-        and isinstance(getattr(response, "commitment", None), AuthoritativeSubmissionFillCommitment)
-    ]
-    if not commitments:
-        return None
-    first = commitments[0]
-    return first if all(item == first for item in commitments[1:]) else None
+    return consistent_fill_commitment(responses)
 
 
 class ExternalSettlementRuntime:

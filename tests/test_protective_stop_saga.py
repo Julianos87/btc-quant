@@ -166,6 +166,8 @@ class CancelRaceBroker(SagaBroker):
                 "amount": 1.0,
                 "filled": 0.4,
                 "remaining": 0.6,
+                "average": 90.0,
+                "fees": [],
             }
         if self.lookup_status == "CANCELED":
             return {
@@ -182,6 +184,7 @@ class CancelRaceBroker(SagaBroker):
             "filled": 1.0,
             "remaining": 0.0,
             "average": 90.0,
+            "fees": [],
         }
 
 
