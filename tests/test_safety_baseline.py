@@ -53,7 +53,14 @@ class RecordingBroker(Broker):
 
     def __init__(self, fills: list[Fill], stop: dict | None = None) -> None:
         self.fills = fills
-        self.stop = stop or {"id": "existing-stop", "status": "open", "amount": 2.0}
+        self.stop = stop or {
+            "id": "existing-stop",
+            "status": "open",
+            "amount": 2.0,
+            "filled": 0.0,
+            "remaining": 2.0,
+            "fees": [],
+        }
         self.cancelled: list[str] = []
         self.placed: list[tuple[float, float, int]] = []
 
@@ -242,6 +249,7 @@ def test_partial_exchange_stop_fails_closed_and_persists_block(tmp_path):
             "filled": 0.75,
             "remaining": 1.25,
             "average": 90.0,
+            "fees": [],
         },
     )
     runner, slot = _runner(tmp_path, broker)
@@ -300,6 +308,7 @@ def test_stop_filled_while_offline_is_materialized_before_reconciliation(tmp_pat
             "filled": 2.0,
             "remaining": 0.0,
             "average": 89.0,
+            "fee": {"cost": 0.0},
         },
     )
     broker.supports_position_reconciliation = True
@@ -315,6 +324,30 @@ def test_stop_filled_while_offline_is_materialized_before_reconciliation(tmp_pat
 
     assert slot.position is None
     assert runner.store.read_trades()[0]["reason"] == "stop_exchange"
+
+
+def test_stop_filled_without_fee_evidence_fails_closed(tmp_path):
+    broker = RecordingBroker(
+        [],
+        {
+            "id": "existing-stop",
+            "status": "closed",
+            "amount": 2.0,
+            "filled": 2.0,
+            "remaining": 0.0,
+            "average": 89.0,
+        },
+    )
+    runner, slot = _runner(tmp_path, broker)
+    slot.position = _position()
+    slot.stop_order_id = "existing-stop"
+
+    with pytest.raises(ReconciliationRequired):
+        runner._monitor_exchange_stops()
+
+    assert runner.reconciliation_required is True
+    assert slot.position is not None
+    assert runner.store.read_trades() == []
 
 
 def test_reconciliation_errors_fail_closed():

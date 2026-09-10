@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -438,6 +438,27 @@ class ExternalSubmissionResponse:
             "commitment": self.commitment.to_payload() if self.commitment else None,
         }
         return payload
+
+
+def consistent_fill_commitment(
+    responses: Sequence[ExternalSubmissionResponse],
+) -> AuthoritativeSubmissionFillCommitment | None:
+    """Return the single consistent durable fill commitment, without I/O.
+
+    Missing commitments and conflicting durable responses both remain
+    unresolved (`None`); this helper does not authorize retry or settlement.
+    """
+
+    commitments = [
+        response.commitment
+        for response in responses
+        if getattr(response, "outcome", None) == ExternalSubmissionOutcome.FILLED_COMMITMENT
+        and isinstance(getattr(response, "commitment", None), AuthoritativeSubmissionFillCommitment)
+    ]
+    if not commitments:
+        return None
+    first = commitments[0]
+    return first if all(item == first for item in commitments[1:]) else None
 
 
 def _filled_status_payload(raw_payload: Mapping[str, Any]) -> Mapping[str, Any] | None:

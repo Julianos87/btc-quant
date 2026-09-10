@@ -32,7 +32,7 @@ from .broker import Broker, BrokerOrderResult, BrokerOrderSnapshot, Fill
 from .order_state import ExternalOrderState
 from .resilience import RetryPolicy
 from .safety import require_live_execution_enabled
-from .units import decimal_notional, decimal_value, exchange_float
+from .units import decimal_notional, decimal_value, exchange_float, nonnegative_exchange_float
 from .venue import _assert_hyperliquid_testnet_endpoint
 
 log = logging.getLogger(__name__)
@@ -167,28 +167,46 @@ class CcxtBroker(Broker):
         ):
             raise ValueError(f"Notionnel {notional} sous le minimum exchange ({min_cost})")
 
-    def _fill_from_order(self, order: dict, fallback_price: float) -> Fill:
-        price = order.get("average") or order.get("price") or fallback_price
+    def _fill_from_order(self, order: Mapping[str, Any], fallback_price: float) -> Fill:
+        if not isinstance(order, Mapping):
+            raise ValueError("order CCXT doit être un mapping")
+        if "filled" not in order or order["filled"] is None:
+            raise ValueError("order.filled absent : quantité exécutée inconnue")
+        qty = nonnegative_exchange_float(order["filled"], name="order.filled")
+        price = order.get("average")
+        if price is None:
+            price = order.get("price")
+        if qty > 0 and price is None:
+            raise ValueError("order.average/price absent pour un fill positif")
+        price = fallback_price if price is None else price
         # qty = quantité RÉELLEMENT exécutée, jamais la quantité demandée :
         # retomber sur `amount` fabriquerait une position fantôme si l'ordre
         # n'a pas (encore) été rempli. filled=0 → Fill.qty=0, l'appelant gère.
-        qty = order.get("filled") or 0.0
         fee = 0.0
-        for f in order.get("fees") or []:
-            fee += f.get("cost") or 0.0
-        if not fee and order.get("fee"):
-            fee = order["fee"].get("cost") or 0.0
+        fees = order.get("fees")
+        single_fee = order.get("fee")
+        if fees is not None:
+            if not isinstance(fees, list):
+                raise ValueError("order.fees doit être une liste CCXT")
+            for index, item in enumerate(fees):
+                if not isinstance(item, Mapping) or item.get("cost") is None:
+                    raise ValueError(f"order.fees[{index}].cost absent ou invalide")
+                fee += exchange_float(item["cost"], name=f"order.fees[{index}].cost")
+        if not fee and single_fee is not None:
+            if not isinstance(single_fee, Mapping) or single_fee.get("cost") is None:
+                raise ValueError("order.fee.cost absent ou invalide")
+            fee = exchange_float(single_fee["cost"], name="order.fee.cost")
         broker_order_id = str(order["id"]) if order.get("id") is not None else None
         return Fill(
-            price=float(price),
-            qty=float(qty),
-            fee=float(fee),
+            price=exchange_float(price, name="order fill price", positive=qty > 0),
+            qty=qty,
+            fee=fee,
             broker_order_id=broker_order_id,
         )
 
     def _result_from_order(
         self,
-        order: dict,
+        order: Mapping[str, Any],
         fallback_price: float,
         requested_qty: float,
     ) -> BrokerOrderResult:
@@ -196,9 +214,12 @@ class CcxtBroker(Broker):
 
         fill = self._fill_from_order(order, fallback_price)
         raw_status = str(order.get("status") or "").lower()
-        exchange_requested = float(order.get("amount") or requested_qty)
-        if exchange_requested <= 0:
-            exchange_requested = requested_qty
+        amount_raw = order.get("amount")
+        exchange_requested = (
+            requested_qty
+            if amount_raw is None
+            else exchange_float(amount_raw, name="order.amount", positive=True)
+        )
         remaining_raw = order.get("remaining")
         remaining_is_explicit = remaining_raw is not None
         if remaining_raw is None:
@@ -208,7 +229,7 @@ class CcxtBroker(Broker):
                 else 0.0
             )
         else:
-            remaining = max(0.0, float(remaining_raw))
+            remaining = nonnegative_exchange_float(remaining_raw, name="order.remaining")
 
         if raw_status == "closed":
             status = (
@@ -384,12 +405,11 @@ class CcxtBroker(Broker):
             order = self._with_retries(self.exchange.fetch_order, external_id, self.symbol, params)
         except ccxt.OrderNotFound:
             return None
-        requested = float(order.get("amount") or 0.0)
-        if requested <= 0:
-            requested = max(
-                float(order.get("filled") or 0.0) + float(order.get("remaining") or 0.0),
-                1e-12,
-            )
+        if not isinstance(order, Mapping):
+            raise ValueError("fetch_order doit retourner un mapping CCXT")
+        if order.get("amount") is None:
+            raise ValueError("order.amount absent : quantité demandée inconnue")
+        requested = exchange_float(order["amount"], name="order.amount", positive=True)
         result = self._result_from_order(
             order,
             float(order.get("price") or 0.0),
@@ -518,15 +538,28 @@ class CcxtBroker(Broker):
     def free_quote_balance(self) -> float | None:
         balance = self._with_retries(self.exchange.fetch_balance)
         quote = self.symbol.split("/")[1].split(":")[0]
-        return float(balance.get("free", {}).get(quote, 0.0))
+        if not isinstance(balance, Mapping):
+            raise ValueError("balance CCXT doit être un mapping")
+        free = balance.get("free")
+        if not isinstance(free, Mapping) or free.get(quote) is None:
+            raise ValueError(f"balance libre {quote} absente : valeur inconnue")
+        return nonnegative_exchange_float(free[quote], name=f"balance libre {quote}")
 
     def net_position(self, symbol: str) -> float:
         positions = self._with_retries(self.exchange.fetch_positions, [symbol])
+        if not isinstance(positions, list):
+            raise ValueError("positions CCXT doit être une liste")
         remote_net = 0.0
-        for position in positions:
-            qty = float(position.get("contracts") or 0.0)
+        for index, position in enumerate(positions):
+            if not isinstance(position, Mapping) or position.get("contracts") is None:
+                raise ValueError(f"position[{index}].contracts absent ou invalide")
+            qty = nonnegative_exchange_float(
+                position["contracts"], name=f"position[{index}].contracts"
+            )
             side = position.get("side")
-            remote_net += qty if side == "long" else -qty if side == "short" else 0.0
+            if side not in {"long", "short"}:
+                raise ValueError(f"position[{index}].side absent ou invalide")
+            remote_net += qty if side == "long" else -qty
         return remote_net
 
     def _wait_closed(self, order: dict, timeout_s: float = 30.0) -> dict:

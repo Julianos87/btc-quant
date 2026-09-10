@@ -217,6 +217,29 @@ def test_enter_recomposes_vwap_and_signed_fee() -> None:
 
 
 @pytest.mark.parametrize(
+    ("multiple", "accepted"),
+    [(0.999, True), (1.0, True), (1.001, False)],
+)
+def test_settlement_quantity_tolerance_boundary_is_unchanged(
+    multiple: float, accepted: bool
+) -> None:
+    """The shared quantity rule accepts through the boundary, never above it."""
+
+    plan = _plan(FinancialTransitionType.ENTER_LONG, side="BUY", direction=1)
+    tolerance = 1e-9
+    settlement = _settlement(plan, (_fill(quantity=1.0 + multiple * tolerance),))
+
+    if accepted:
+        result = calculate_financial_order_settlement(settlement, plan)
+        assert result.quantity == pytest.approx(1.0 + multiple * tolerance)
+    else:
+        with pytest.raises(
+            FinancialSettlementError, match="FINANCIAL_SETTLEMENT_QUANTITY_EXCEEDS_PLAN"
+        ):
+            calculate_financial_order_settlement(settlement, plan)
+
+
+@pytest.mark.parametrize(
     ("transition", "direction", "side", "reason", "reduce_only"),
     [
         (FinancialTransitionType.ADD, 1, "BUY", "pyramid", False),

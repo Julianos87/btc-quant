@@ -23,6 +23,7 @@ from .external_submission_commitment import (
     AuthoritativeSubmissionFillCommitment,
     ExternalSubmissionResponse,
     ExternalSubmissionOutcome,
+    consistent_fill_commitment,
 )
 from .financial_order_settlement import FinancialSettlementError
 from .order_state import LocalOrderState
@@ -93,18 +94,7 @@ class ExternalSettlementStartupRecovery:
     def _commitment(
         responses: Sequence[ExternalSubmissionResponse],
     ) -> AuthoritativeSubmissionFillCommitment | None:
-        commitments = [
-            response.commitment
-            for response in responses
-            if getattr(response, "outcome", None) == ExternalSubmissionOutcome.FILLED_COMMITMENT
-            and isinstance(
-                getattr(response, "commitment", None), AuthoritativeSubmissionFillCommitment
-            )
-        ]
-        if not commitments:
-            return None
-        first = commitments[0]
-        return first if all(item == first for item in commitments[1:]) else None
+        return consistent_fill_commitment(responses)
 
     def recover(
         self,

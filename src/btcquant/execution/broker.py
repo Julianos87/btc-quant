@@ -22,6 +22,7 @@ from ..domain.execution import (
     OrderSide,
 )
 from .order_state import ExternalOrderState
+from .units import exchange_float, nonnegative_exchange_float
 
 log = logging.getLogger(__name__)
 
@@ -204,13 +205,23 @@ class Broker(ABC):
         """Normalise les statuts et quantités d'un stop renvoyé par l'exchange."""
 
         raw = self.stop_status(order_id)
+        if not isinstance(raw, Mapping):
+            raise ValueError("stop order CCXT doit être un mapping")
         raw_status = str(raw.get("status") or "").lower()
-        requested = float(raw.get("amount") or 0.0)
-        filled = float(raw.get("filled") or 0.0)
+        if raw.get("amount") is None:
+            raise ValueError("stop order.amount absent : quantité demandée inconnue")
+        if raw.get("filled") is None:
+            raise ValueError("stop order.filled absent : quantité exécutée inconnue")
+        requested = exchange_float(raw["amount"], name="stop order.amount", positive=True)
+        filled = nonnegative_exchange_float(raw["filled"], name="stop order.filled")
         remaining_raw = raw.get("remaining")
         remaining = (
-            float(remaining_raw) if remaining_raw is not None else max(0.0, requested - filled)
+            nonnegative_exchange_float(remaining_raw, name="stop order.remaining")
+            if remaining_raw is not None
+            else max(0.0, requested - filled)
         )
+        if filled > requested + max(1e-9, requested * 1e-9):
+            raise ValueError("stop order.filled dépasse order.amount")
         if raw_status in ("canceled", "cancelled", "rejected", "expired") and filled <= 1e-9:
             # Une terminalité sans fill ne conserve aucun reste actif, même
             # si l'adaptateur n'a pas fourni le champ remaining.
@@ -227,17 +238,36 @@ class Broker(ABC):
             status = "OPEN"
         else:
             status = "UNKNOWN"
-        fee = sum(float(item.get("cost") or 0.0) for item in raw.get("fees") or [])
-        if not fee and raw.get("fee"):
-            fee = float(raw["fee"].get("cost") or 0.0)
+        fees = raw.get("fees")
+        single_fee = raw.get("fee")
+        fee = 0.0
+        if fees is not None:
+            if not isinstance(fees, list):
+                raise ValueError("stop order.fees doit être une liste CCXT")
+            for index, item in enumerate(fees):
+                if not isinstance(item, Mapping) or item.get("cost") is None:
+                    raise ValueError(f"stop order.fees[{index}].cost absent ou invalide")
+                fee += exchange_float(item["cost"], name=f"stop order.fees[{index}].cost")
+        if not fee and single_fee is not None:
+            if not isinstance(single_fee, Mapping) or single_fee.get("cost") is None:
+                raise ValueError("stop order.fee.cost absent ou invalide")
+            fee = exchange_float(single_fee["cost"], name="stop order.fee.cost")
+        if filled > 0 and fees is None and single_fee is None:
+            raise ValueError("stop order fee evidence absente pour un fill positif")
         average = raw.get("average")
+        if filled > 0 and average is None:
+            raise ValueError("stop order.average absent pour un fill positif")
         return ProtectiveOrderSnapshot(
             broker_order_id=str(raw.get("id") or order_id),
             status=status,
             requested_qty=requested,
             filled_qty=filled,
             remaining_qty=remaining,
-            average_price=float(average) if average is not None else None,
+            average_price=(
+                exchange_float(average, name="stop order.average", positive=True)
+                if average is not None
+                else None
+            ),
             fee=fee,
         )
 

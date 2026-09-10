@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -396,6 +397,29 @@ def test_external_startup_recovery_blocks_missing_submission_commitment(tmp_path
     )
     assert acquirer.calls == 0
     assert store.read_orders("trend")[0]["local_state"] == "PENDING_RECONCILIATION"
+
+
+def test_external_startup_recovery_rejects_context_binding_mismatch(tmp_path: Path) -> None:
+    store, _context_value, acquirer, persisted = _prepared(tmp_path, persist_commitment=True)
+    recovery = ExternalSettlementStartupRecovery(store)
+
+    def mismatched_context(_order, commitment):
+        context = _context(persisted, commitment)
+        return replace(context, local_order_id=persisted.local_order_id + 1)
+
+    report = recovery.recover(
+        "trend",
+        context_factory=mismatched_context,
+        acquirer=acquirer,
+        observed_at=OBSERVED,
+    )
+
+    assert report.finalized_order_ids == ()
+    assert report.manual_order_ids == (persisted.local_order_id,)
+    assert report.blocking_reasons == (
+        (persisted.local_order_id, "submission commitment binding conflict"),
+    )
+    assert report.can_start is False
 
 
 def test_external_finalization_rolls_back_on_baseexception(
