@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError, replace
 from types import SimpleNamespace
 
 import pytest
 
 from btcquant.execution.broker import Broker, BrokerOrderResult, Fill, PaperBroker
 from btcquant.execution.errors import ReconciliationRequired
-from btcquant.execution.order_service import OrderExecutionService
+from btcquant.execution.order_service import OrderExecutionService, SubmitMarketCommand
 from btcquant.execution.external_submission_commitment import ExternalSubmissionOutcome
 from btcquant.execution.order_state import (
     ExternalOrderState,
@@ -98,12 +99,49 @@ def _test_application_plan(**kwargs):
 def _supply_durable_plan(monkeypatch):
     original = OrderExecutionService.submit_market
 
-    def wrapped(self, **kwargs):
-        if "application_plan" not in kwargs:
-            kwargs["application_plan"] = _test_application_plan(**kwargs)
-        return original(self, **kwargs)
+    def wrapped(self, command: SubmitMarketCommand):
+        if command.application_plan is None:
+            command = replace(
+                command,
+                application_plan=_test_application_plan(
+                    engine=command.engine,
+                    slot=command.slot,
+                    side=command.side,
+                    qty=command.qty,
+                    reference_price=command.reference_price,
+                    reason=command.reason,
+                    decision_checkpoint=command.decision_checkpoint,
+                    transition_type=command.transition_type,
+                    position_generation=command.position_generation,
+                    transition_sequence=command.transition_sequence,
+                    reduce_only=command.reduce_only,
+                ),
+            )
+        return original(self, command)
 
     monkeypatch.setattr(OrderExecutionService, "submit_market", wrapped)
+
+
+def _submit_market(service: OrderExecutionService, **kwargs):
+    return service.submit_market(SubmitMarketCommand(**kwargs))
+
+
+def test_submit_market_command_is_immutable_and_validates_before_io() -> None:
+    command = SubmitMarketCommand(
+        engine="trend",
+        slot="slot",
+        side="BUY",
+        qty=1.0,
+        reference_price=100.0,
+        reason="entry",
+        decision_checkpoint="checkpoint",
+        transition_type=FinancialTransitionType.ENTER_LONG,
+    )
+
+    with pytest.raises(FrozenInstanceError):
+        command.qty = 2.0  # type: ignore[misc]
+    with pytest.raises(ValueError, match="plan financier durable"):
+        command.validate()
 
 
 class StubBroker(PaperBroker):
@@ -145,7 +183,8 @@ def test_result_uses_explicit_external_state_and_intent_is_stable(tmp_path, resu
     broker = StubBroker(result)
     service = OrderExecutionService(store, broker)
 
-    result = service.submit_market(
+    result = _submit_market(
+        service,
         engine="trend",
         slot="strategy",
         side="BUY",
@@ -172,7 +211,8 @@ def test_paper_error_is_failed_but_external_ambiguity_stays_pending(tmp_path):
     store = StateStore(tmp_path / "state.db")
     paper = StubBroker(TimeoutError("offline"))
     with pytest.raises(TimeoutError):
-        OrderExecutionService(store, paper).submit_market(
+        _submit_market(
+            OrderExecutionService(store, paper),
             engine="trend",
             slot="paper",
             side="BUY",
@@ -187,7 +227,8 @@ def test_paper_error_is_failed_but_external_ambiguity_stays_pending(tmp_path):
     external.external_execution = True
     external.supports_order_lookup = True
     with pytest.raises(ReconciliationRequired, match="résultat externe ambigu"):
-        OrderExecutionService(store, external).submit_market(
+        _submit_market(
+            OrderExecutionService(store, external),
             engine="trend",
             slot="external",
             side="BUY",
@@ -211,7 +252,8 @@ def test_paper_error_is_failed_but_external_ambiguity_stays_pending(tmp_path):
         1.0,
         0.0,
     )
-    retried = OrderExecutionService(store, paper).submit_market(
+    retried = _submit_market(
+        OrderExecutionService(store, paper),
         engine="trend",
         slot="paper",
         side="BUY",
@@ -241,7 +283,8 @@ def test_invalid_or_incoherent_side_is_rejected_before_reservation(tmp_path, sid
     )
 
     with pytest.raises(ValueError):
-        OrderExecutionService(store, broker).submit_market(
+        _submit_market(
+            OrderExecutionService(store, broker),
             engine="trend",
             slot="slot",
             side=side,
@@ -272,7 +315,8 @@ def test_external_broker_cannot_inherit_a_client_id_dropping_fallback(tmp_path):
     broker = LegacyExternalBroker()
 
     with pytest.raises(ReconciliationRequired, match="résultat externe ambigu"):
-        OrderExecutionService(store, broker).submit_market(
+        _submit_market(
+            OrderExecutionService(store, broker),
             engine="trend",
             slot="slot",
             side="BUY",
@@ -304,7 +348,8 @@ def test_broker_response_persistence_failure_stops_fail_closed(tmp_path, monkeyp
     )
 
     with pytest.raises(ReconciliationRequired, match="réponse broker non persistée"):
-        OrderExecutionService(store, broker).submit_market(
+        _submit_market(
+            OrderExecutionService(store, broker),
             engine="trend",
             slot="external",
             side="BUY",
@@ -332,7 +377,8 @@ def test_ambiguous_error_persistence_failure_stops_fail_closed(tmp_path, monkeyp
     )
 
     with pytest.raises(ReconciliationRequired, match="impossibilité de persister"):
-        OrderExecutionService(store, broker).submit_market(
+        _submit_market(
+            OrderExecutionService(store, broker),
             engine="trend",
             slot="external",
             side="BUY",
@@ -375,7 +421,7 @@ def test_submission_plan_must_match_all_broker_arguments_before_reservation(tmp_
     call = {**base, "application_plan": plan}
     call[field] = value
     with pytest.raises(ValueError, match="plan financier"):
-        OrderExecutionService(StateStore(tmp_path / "state.db"), broker).submit_market(**call)
+        _submit_market(OrderExecutionService(StateStore(tmp_path / "state.db"), broker), **call)
     assert broker.intent_id is None
     assert StateStore(tmp_path / "state.db").read_orders("trend") == []
 
@@ -421,7 +467,8 @@ def test_external_submission_response_is_durable_before_legacy_observation(tmp_p
         return original_observation(*args, **kwargs)
 
     monkeypatch.setattr(store, "record_order_observation", checked_observation)
-    submitted = OrderExecutionService(store, broker).submit_market(
+    submitted = _submit_market(
+        OrderExecutionService(store, broker),
         engine="trend",
         slot="external",
         side="BUY",
@@ -474,7 +521,8 @@ def test_structured_external_ioc_error_is_persisted_when_broker_raises(tmp_path)
     broker = StructuredErrorBroker()
 
     with pytest.raises(ReconciliationRequired, match="résultat externe ambigu"):
-        OrderExecutionService(store, broker).submit_market(
+        _submit_market(
+            OrderExecutionService(store, broker),
             engine="trend",
             slot="external",
             side="BUY",
