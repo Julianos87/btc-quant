@@ -11,7 +11,7 @@ import threading
 from dataclasses import replace
 from pathlib import Path
 
-from btcquant.config import carry_policy_from_config, load_config
+from btcquant.config import carry_policy_from_config, load_config, runtime_execution_from_config
 from btcquant.execution.carry_runner import CarryRunner
 from btcquant.execution.venue import Venue
 
@@ -75,13 +75,14 @@ def main() -> None:
             args.borrow_rate if args.borrow_rate is not None else configured_policy.borrow_rate_ann
         ),
     )
-    execution = cfg["execution"]
+    execution = runtime_execution_from_config(cfg)
+    live_exchange, live_symbol = execution.require_live_venue()
     runner = CarryRunner(
         policy=policy,
-        state_file=ROOT / execution["state_file"],
+        state_file=ROOT / execution.require_state_file(),
         legacy_state_file=ROOT / "state" / "carry_state.json",
         live_broker=None,
-        venue=Venue(execution["live_exchange"], execution["live_symbol"]),
+        venue=Venue(live_exchange, live_symbol),
     )
     stop_event = threading.Event()
 

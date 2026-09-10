@@ -1,11 +1,18 @@
-"""Chargement des profils YAML d'environnement vers les objets du système."""
+"""Chargement des profils YAML d'environnement vers les objets du système.
+
+Les sections runtime critiques ``costs``, ``risk`` et ``execution`` sont
+validées via des contrats immuables et refusent les clés inconnues. Les
+stratégies et la recherche restent volontairement des mappings dynamiques :
+ajouter un champ runtime exige donc de l'ajouter au contrat et à sa liste de
+clés autorisées, plutôt que de le consommer directement depuis le YAML.
+"""
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 
@@ -19,6 +26,107 @@ MARKETS = {"spot", "perp"}
 
 HYPERLIQUID_MAINNET_API_URL = "https://api.hyperliquid.xyz"
 HYPERLIQUID_TESTNET_API_URL = "https://api.hyperliquid-testnet.xyz"
+_COST_KEYS = {"fee_rate", "perp_fee_rate", "funding_rate_8h", "slippage_bps"}
+_RISK_KEYS = {
+    "initial_capital",
+    "risk_per_trade",
+    "max_position_pct",
+    "vol_target_annual",
+    "max_drawdown_halt",
+    "daily_loss_limit",
+    "max_leverage",
+}
+_RUNTIME_EXECUTION_KEYS = {
+    "mode",
+    "testnet",
+    "state_file",
+    "legacy_state_file",
+    "qualification_state_file",
+    "poll_buffer_seconds",
+    "simulation",
+    "live_exchange",
+    "live_symbol",
+    "api_url",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class CostsConfig:
+    """Validated cost inputs; absent optional venue-specific rates stay absent."""
+
+    fee_rate: float = 0.0
+    slippage_bps: float = 0.0
+    perp_fee_rate: float | None = None
+    funding_rate_8h: float | None = None
+
+    def __post_init__(self) -> None:
+        for field in ("fee_rate", "slippage_bps", "perp_fee_rate", "funding_rate_8h"):
+            value = getattr(self, field)
+            if value is None and field in {"perp_fee_rate", "funding_rate_8h"}:
+                continue
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or value < 0
+            ):
+                raise ValueError(f"costs.{field} doit être un nombre fini positif ou nul")
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeExecutionConfig:
+    """Validated runtime-only execution settings, distinct from simulation settings."""
+
+    mode: Literal["paper", "testnet"] = "paper"
+    testnet: bool = False
+    state_file: str | None = None
+    legacy_state_file: str | None = None
+    qualification_state_file: str | None = None
+    poll_buffer_seconds: int = 20
+    live_exchange: str | None = None
+    live_symbol: str | None = None
+    api_url: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.mode not in {"paper", "testnet"}:
+            raise ValueError("Safety Baseline : execution.mode doit valoir 'paper' ou 'testnet'")
+        if not isinstance(self.testnet, bool):
+            raise TypeError("execution.testnet doit être un booléen")
+        if isinstance(self.poll_buffer_seconds, bool) or not isinstance(
+            self.poll_buffer_seconds, int
+        ):
+            raise TypeError("execution.poll_buffer_seconds doit être un entier")
+        if self.poll_buffer_seconds < 0:
+            raise ValueError("execution.poll_buffer_seconds doit être positif ou nul")
+        for field in (
+            "state_file",
+            "legacy_state_file",
+            "qualification_state_file",
+            "live_exchange",
+            "live_symbol",
+            "api_url",
+        ):
+            value = getattr(self, field)
+            if value is not None and not isinstance(value, str):
+                raise TypeError(f"execution.{field} doit être une chaîne ou null")
+
+    def require_state_file(self) -> str:
+        if not self.state_file:
+            raise ValueError("execution.state_file est obligatoire au démarrage runtime")
+        return self.state_file
+
+    def require_live_venue(self) -> tuple[str, str]:
+        if not self.live_exchange or not self.live_symbol:
+            raise ValueError(
+                "execution.live_exchange et execution.live_symbol sont obligatoires "
+                "au démarrage runtime"
+            )
+        return self.live_exchange, self.live_symbol
+
+    def venue_or(self, exchange: str, symbol: str) -> tuple[str, str]:
+        """Preserve the historical paper fallback to the data venue/symbol."""
+
+        return self.live_exchange or exchange, self.live_symbol or symbol
 
 
 @dataclass(frozen=True)
@@ -55,8 +163,13 @@ def load_config(path: str | Path = "environments/dev/config.yaml") -> dict[str, 
     return payload
 
 
-def _finite_non_negative(name: str, value: Any) -> None:
-    if not isinstance(value, (int, float)) or not math.isfinite(float(value)) or value < 0:
+def _finite_non_negative(name: str, value: object) -> None:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or value < 0
+    ):
         raise ValueError(f"{name} doit être un nombre fini positif ou nul")
 
 
@@ -72,28 +185,58 @@ def _validate_required_profile(cfg: dict[str, Any]) -> str:
     return environment
 
 
-def _validate_costs(costs: dict[str, Any]) -> None:
-    for key in ("fee_rate", "perp_fee_rate", "funding_rate_8h", "slippage_bps"):
-        if key in costs:
-            _finite_non_negative(f"costs.{key}", costs[key])
+def _unknown_keys(section: str, raw: dict[str, Any], allowed: set[str]) -> None:
+    unknown = sorted(set(raw) - allowed)
+    if unknown:
+        raise ValueError(f"{section} : clé(s) inconnue(s) {unknown}")
 
 
-def _validate_execution_profile(environment: str, execution: dict[str, Any]) -> None:
-    mode = execution.get("mode", "paper")
-    if mode not in {"paper", "testnet"}:
-        raise ValueError("Safety Baseline : execution.mode doit valoir 'paper' ou 'testnet'")
-    if mode == "testnet":
+def costs_from_config(cfg: dict[str, Any]) -> CostsConfig:
+    raw = cfg.get("costs")
+    if not isinstance(raw, dict):
+        raise ValueError("Section obligatoire absente ou invalide : costs")
+    _unknown_keys("costs", raw, _COST_KEYS)
+    for key, value in raw.items():
+        _finite_non_negative(f"costs.{key}", value)
+    return CostsConfig(
+        fee_rate=raw.get("fee_rate", 0.0),
+        slippage_bps=raw.get("slippage_bps", 0.0),
+        perp_fee_rate=raw.get("perp_fee_rate"),
+        funding_rate_8h=raw.get("funding_rate_8h"),
+    )
+
+
+def runtime_execution_from_config(cfg: dict[str, Any]) -> RuntimeExecutionConfig:
+    raw = cfg.get("execution")
+    if not isinstance(raw, dict):
+        raise ValueError("Section obligatoire absente ou invalide : execution")
+    _unknown_keys("execution", raw, _RUNTIME_EXECUTION_KEYS)
+    return RuntimeExecutionConfig(
+        mode=raw.get("mode", "paper"),
+        testnet=raw.get("testnet", False),
+        state_file=raw.get("state_file"),
+        legacy_state_file=raw.get("legacy_state_file"),
+        qualification_state_file=raw.get("qualification_state_file"),
+        poll_buffer_seconds=raw.get("poll_buffer_seconds", 20),
+        live_exchange=raw.get("live_exchange"),
+        live_symbol=raw.get("live_symbol"),
+        api_url=raw.get("api_url"),
+    )
+
+
+def _validate_execution_profile(environment: str, execution: RuntimeExecutionConfig) -> None:
+    if execution.mode == "testnet":
         if environment != "testnet":
             raise ValueError("execution.mode testnet exige environment: testnet")
-        if execution.get("testnet") is not True:
+        if execution.testnet is not True:
             raise ValueError("Safety Baseline : le mode testnet exige execution.testnet: true")
-        if execution.get("live_exchange") != "hyperliquid":
+        if execution.live_exchange != "hyperliquid":
             raise ValueError("Safety Baseline : seul le testnet Hyperliquid est autorisé")
-        if execution.get("api_url") != HYPERLIQUID_TESTNET_API_URL:
+        if execution.api_url != HYPERLIQUID_TESTNET_API_URL:
             raise ValueError(
                 "Safety Baseline : le testnet Hyperliquid exige son endpoint API testnet explicite"
             )
-        live_symbol = execution.get("live_symbol")
+        live_symbol = execution.live_symbol
         if not isinstance(live_symbol, str) or not live_symbol.endswith(":USDC"):
             raise ValueError("Le testnet Hyperliquid exige un perpétuel coté en USDC")
     elif environment == "testnet":
@@ -132,11 +275,12 @@ def _validate_tandem_capital(cfg: dict[str, Any], risk: RiskConfig) -> None:
 
 def _validate_config(cfg: dict[str, Any]) -> None:
     environment = _validate_required_profile(cfg)
-    _validate_costs(cfg["costs"])
-    _validate_execution_profile(environment, cfg["execution"])
+    costs = costs_from_config(cfg)
+    execution = runtime_execution_from_config(cfg)
+    _validate_execution_profile(environment, execution)
     _validate_strategies(cfg["strategies"])
     risk = risk_from_config(cfg)
-    execution_config_from_config(cfg, float(cfg["costs"].get("fee_rate", 0.0)))
+    execution_config_from_config(cfg, costs.fee_rate)
     _validate_tandem_capital(cfg, risk)
 
 
@@ -164,7 +308,19 @@ def _validate_strategy_params(name: str, spec: dict[str, Any]) -> None:
 
 
 def risk_from_config(cfg: dict[str, Any]) -> RiskConfig:
-    r = cfg.get("risk", {})
+    r = cfg.get("risk")
+    if not isinstance(r, dict):
+        raise ValueError("Section obligatoire absente ou invalide : risk")
+    _unknown_keys("risk", r, _RISK_KEYS)
+    for key, value in r.items():
+        if key in {"vol_target_annual", "daily_loss_limit"} and value is None:
+            continue
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+        ):
+            raise ValueError(f"risk.{key} doit être un nombre fini ou null si optionnel")
     return RiskConfig(
         initial_capital=r.get("initial_capital", 10_000.0),
         risk_per_trade=r.get("risk_per_trade", 0.0075),
@@ -220,7 +376,12 @@ def execution_config_from_config(
     unique ; les autres paramètres sont optionnels et désactivés par défaut.
     """
 
-    raw_simulation = cfg.get("execution", {}).get("simulation") or {}
+    raw_execution = cfg.get("execution", {})
+    if not isinstance(raw_execution, dict):
+        raise TypeError("execution doit être un mapping YAML")
+    raw_simulation = raw_execution.get("simulation")
+    if raw_simulation is None:
+        raw_simulation = {}
     if not isinstance(raw_simulation, dict):
         raise TypeError("execution.simulation doit être un mapping YAML")
     simulation = dict(raw_simulation)

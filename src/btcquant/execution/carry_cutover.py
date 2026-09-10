@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from ..backup import RecoveryRequired, assert_writer_recovery_clear
-from ..config import load_config
+from ..config import load_config, runtime_execution_from_config
 from ..deployment import inspect_sqlite
 from .errors import EngineInstanceAlreadyRunning
 from .instance_lock import EngineInstanceLock
@@ -66,11 +66,8 @@ def require_paper_carry_config(config_path: str | Path) -> dict[str, Any]:
 
     cfg = load_config(config_path)
     environment = cfg.get("environment")
-    raw_execution = cfg.get("execution")
-    if not isinstance(raw_execution, dict):
-        raise CutoverRefused("CUTOVER_BLOCKED: section execution absente")
-    execution = raw_execution
-    mode = execution.get("mode", "paper")
+    execution = runtime_execution_from_config(cfg)
+    mode = execution.mode
     # Le profil paper de production porte encore `execution.testnet: true`
     # comme reliquat de baseline ; le critère opératoire est le mode.
     if environment != "paper" or mode != "paper":
@@ -78,8 +75,6 @@ def require_paper_carry_config(config_path: str | Path) -> dict[str, Any]:
             f"CUTOVER_BLOCKED: configuration non paper "
             f"(environment={environment!r}, execution.mode={mode!r})"
         )
-    if execution.get("live") is True or mode == "live":
-        raise CutoverRefused("CUTOVER_BLOCKED: configuration live")
     return cfg
 
 
