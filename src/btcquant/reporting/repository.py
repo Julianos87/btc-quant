@@ -9,6 +9,7 @@ from typing import Any
 
 import pandas as pd
 
+from btcquant.execution.historical_state_reader import HistoricalStateReader
 from btcquant.execution.state_store import StateStore
 
 
@@ -94,9 +95,7 @@ class ReportingRepository:
 
         if self.database.exists():
             try:
-                rows = StateStore(self.database, initialize=False, read_only=True).read_equity(
-                    engine
-                )
+                rows = HistoricalStateReader(self.database).read_equity(engine)
                 if rows:
                     frame = pd.DataFrame(rows)
                     index = pd.to_datetime(frame["ts"], utc=True, format="ISO8601")
@@ -130,7 +129,7 @@ class ReportingRepository:
     def read_trades(self) -> pd.DataFrame:
         if self.database.exists():
             try:
-                rows = StateStore(self.database, initialize=False, read_only=True).read_trades()
+                rows = HistoricalStateReader(self.database).read_trades()
                 if rows:
                     return pd.DataFrame(rows).drop(columns=["id"], errors="ignore")
             except Exception as exc:
@@ -149,7 +148,7 @@ class ReportingRepository:
     def read_flows(self) -> pd.DataFrame:
         if self.database.exists():
             try:
-                rows = StateStore(self.database, initialize=False, read_only=True).read_flows()
+                rows = HistoricalStateReader(self.database).read_flows()
                 if rows:
                     frame = pd.DataFrame(rows).drop(columns=["id"], errors="ignore")
                     frame["ts"] = pd.to_datetime(frame["ts"], utc=True, format="ISO8601")

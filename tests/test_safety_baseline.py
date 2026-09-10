@@ -15,6 +15,7 @@ from btcquant.execution.carry_contract import (
 )
 from btcquant.execution.carry_runner import CarryRunner
 from btcquant.execution.ccxt_broker import CcxtBroker
+from btcquant.execution.historical_state_reader import HistoricalStateReader
 from btcquant.carry import funding_event_id
 from btcquant.execution.order_state import ExternalOrderState
 from btcquant.execution.reconcile import reconcile
@@ -293,7 +294,7 @@ def test_full_exchange_stop_is_materialized_atomically(tmp_path):
     assert order["order_type"] == "STOP"
     assert order["status"] == "FILLED"
     assert order["broker_order_id"] == "existing-stop"
-    trade = runner.store.read_trades()[0]
+    trade = HistoricalStateReader(runner.store.path).read_trades()[0]
     assert trade["qty"] == pytest.approx(2.0)
     assert trade["pnl"] == pytest.approx(-22.3)
 
@@ -323,7 +324,7 @@ def test_stop_filled_while_offline_is_materialized_before_reconciliation(tmp_pat
     runner.run_forever(stop_event)
 
     assert slot.position is None
-    assert runner.store.read_trades()[0]["reason"] == "stop_exchange"
+    assert HistoricalStateReader(runner.store.path).read_trades()[0]["reason"] == "stop_exchange"
 
 
 def test_stop_filled_without_fee_evidence_fails_closed(tmp_path):
@@ -347,7 +348,7 @@ def test_stop_filled_without_fee_evidence_fails_closed(tmp_path):
 
     assert runner.reconciliation_required is True
     assert slot.position is not None
-    assert runner.store.read_trades() == []
+    assert HistoricalStateReader(runner.store.path).read_trades() == []
 
 
 def test_reconciliation_errors_fail_closed():

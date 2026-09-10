@@ -17,6 +17,7 @@ from btcquant.execution.health import (
     software_stop_contract_valid,
     sync_execution_incidents,
 )
+from btcquant.execution.historical_state_reader import HistoricalStateReader
 from btcquant.execution.runner import LiveRunner, StrategySlot
 from btcquant.execution.state_contract import (
     EXCHANGE_STOP_CONFIRMED,
@@ -546,7 +547,7 @@ def test_first_cycle_stop_hit_exits_before_due_bar(tmp_path: Path) -> None:
     assert "bars" in order
     assert runner.slots[0].position is None
     assert all(open_during is False for open_during in bar_saw_open)
-    trades = store.read_trades() if hasattr(store, "read_trades") else []
+    trades = HistoricalStateReader(store.path).read_trades()
     reasons = [item.get("reason") for item in trades] if trades else []
     if reasons:
         assert "stop" in reasons

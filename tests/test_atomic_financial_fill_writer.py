@@ -16,6 +16,7 @@ from btcquant.execution.financial_fill_application import (
     FinancialFillApplicationError,
 )
 from btcquant.execution.financial_application_plan import canonical_json
+from btcquant.execution.historical_state_reader import HistoricalStateReader
 from btcquant.execution.order_state import ExternalOrderState, FinancialTransitionType
 from btcquant.execution.paper_execution_evidence import (
     PaperExecutionEvidenceContext,
@@ -198,7 +199,7 @@ def test_exit_writer_inserts_one_trade_without_finalizing_order(tmp_path: Path) 
     )
     assert result.trade_inserted is True
     assert _counts(store, persisted.local_order_id) == (1, 1, 1, 1)
-    trade = store.read_trades()[0]
+    trade = HistoricalStateReader(store.path).read_trades()[0]
     assert trade["exit_ts"] == result.application.result.trade_payload["exit_ts"]
     assert trade["pnl"] == pytest.approx(result.application.result.trade_payload["pnl"])
     assert store.read_orders("trend")[0]["local_state"] == "PENDING_RECONCILIATION"
@@ -493,7 +494,7 @@ def test_full_exit_progressive_fills_preserve_stop_metadata(tmp_path: Path) -> N
     assert slot["entry_fee"] == pytest.approx(0.0)
     assert slot["cash"] == pytest.approx(1_000.04)
     assert slot["stop_order_id"] == "stop-1"
-    assert len(store.read_trades()) == 2
+    assert len(HistoricalStateReader(store.path).read_trades()) == 2
     assert _counts(store, persisted.local_order_id) == (2, 2, 2, 1)
     assert store.read_orders("trend")[0]["local_state"] == "PENDING_RECONCILIATION"
 
@@ -1007,7 +1008,7 @@ def test_concurrent_exit_duplicate_inserts_one_trade(tmp_path: Path) -> None:
     state = store.load_engine_state("trend")
     assert state is not None
     assert state["slots"]["slot"]["position"] is None
-    assert len(store.read_trades()) == 1
+    assert len(HistoricalStateReader(store.path).read_trades()) == 1
     assert len(store.read_financial_fill_application_chain(persisted.local_order_id)) == 1
 
 
