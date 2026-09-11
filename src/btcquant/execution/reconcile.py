@@ -10,6 +10,7 @@ interdit au runner de démarrer.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 
 from ..notify import notify
@@ -17,7 +18,9 @@ from .broker import Broker
 
 log = logging.getLogger(__name__)
 
-TOLERANCE_BTC = 1e-5
+# Historical safety cap, not an economic tolerance. A venue/instrument
+# policy can only narrow this cap; it can never widen the accepted region.
+LEGACY_MAX_POSITION_RECONCILIATION_TOLERANCE = 1e-5
 
 
 @dataclass(frozen=True)
@@ -27,9 +30,51 @@ class PositionReconciliationReport:
     ok: bool
     supported: bool
     local_net: float | None = None
+
     remote_net: float | None = None
     reason: str = ""
     context: dict[str, object] | None = None
+
+
+def _position_tolerance(
+    broker: Broker,
+    symbol: str,
+) -> tuple[float | None, dict[str, object]]:
+    """Return a conservative, broker-provided position comparison policy."""
+
+    try:
+        quantum = broker.position_quantity_quantum(symbol)
+    except Exception as error:
+        return None, {
+            "policy_source": "broker.position_quantity_quantum",
+            "policy_status": "error",
+            "policy_error": f"{type(error).__name__}: {error}",
+        }
+    if quantum is None:
+        return None, {
+            "policy_source": "broker.position_quantity_quantum",
+            "policy_status": "unavailable",
+        }
+    if isinstance(quantum, bool) or not isinstance(quantum, (int, float)):
+        return None, {
+            "policy_source": "broker.position_quantity_quantum",
+            "policy_status": "invalid",
+            "policy_error": "quantum must be a finite positive number",
+        }
+    if not math.isfinite(quantum) or quantum <= 0:
+        return None, {
+            "policy_source": "broker.position_quantity_quantum",
+            "policy_status": "invalid",
+            "policy_error": "quantum must be a finite positive number",
+        }
+    tolerance = min(LEGACY_MAX_POSITION_RECONCILIATION_TOLERANCE, quantum)
+    return tolerance, {
+        "policy_source": "broker.position_quantity_quantum",
+        "policy_status": "available",
+        "quantity_quantum": quantum,
+        "legacy_max_tolerance": LEGACY_MAX_POSITION_RECONCILIATION_TOLERANCE,
+        "effective_tolerance": tolerance,
+    }
 
 
 def inspect_position_reconciliation(
@@ -83,13 +128,23 @@ def inspect_position_reconciliation(
         )
 
     diff = local_net - remote_net
-    if abs(diff) <= TOLERANCE_BTC:
+    if diff == 0:
         return PositionReconciliationReport(
             ok=True,
             supported=True,
             local_net=local_net,
             remote_net=remote_net,
             reason="position_equal",
+        )
+    tolerance, policy_context = _position_tolerance(broker, symbol)
+    if tolerance is not None and abs(diff) < tolerance:
+        return PositionReconciliationReport(
+            ok=True,
+            supported=True,
+            local_net=local_net,
+            remote_net=remote_net,
+            reason="position_equal",
+            context={"symbol": symbol, "diff": diff, **policy_context},
         )
     return PositionReconciliationReport(
         ok=False,
@@ -100,7 +155,8 @@ def inspect_position_reconciliation(
         context={
             "symbol": symbol,
             "diff": diff,
-            "tolerance": TOLERANCE_BTC,
+            "tolerance": tolerance,
+            **policy_context,
         },
     )
 
@@ -132,7 +188,7 @@ def reconcile(broker: Broker, slots: list, symbol: str) -> bool:
         diff = (report.context or {}).get("diff")
         msg = (
             f"⚠ RÉCONCILIATION : écart détecté ! État local "
-            f"{report.local_net:+.6f} BTC, exchange {report.remote_net:+.6f} BTC "
+            f"{report.local_net:+.6f} {symbol}, exchange {report.remote_net:+.6f} {symbol} "
             f"(diff {diff:+.6f}). Vérifier manuellement avant de laisser trader."
         )
     log.error(msg)
