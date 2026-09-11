@@ -292,6 +292,18 @@ class Broker(ABC):
 
         raise NotImplementedError("Ce broker ne prend pas en charge la réconciliation")
 
+    def position_quantity_quantum(self, symbol: str) -> float | None:
+        """Quantum local de quantité pour la réconciliation de position.
+
+        None signifie que le broker ne peut pas prouver un quantum
+        instrumenté sans inférer une valeur. La réconciliation doit alors
+        rester fermée pour tout écart non nul. Cette méthode est purement
+        locale et ne doit pas déclencher de lecture réseau.
+        """
+
+        del symbol
+        return None
+
 
 class PaperBroker(Broker):
     """Adaptateur paper autour du simulateur d'exécution commun."""

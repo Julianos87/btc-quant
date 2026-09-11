@@ -479,3 +479,66 @@ def test_protective_positive_fill_keeps_missing_fee_fail_closed():
         ProtectiveFeeBroker(
             {"status": "closed", "amount": 0.01, "filled": 0.01, "average": 50_000.0}
         ).protective_order_snapshot("stop-1")
+
+
+class LocalMarketMetadataExchange:
+    def __init__(self, *, mode, amount, contract=False, contract_size=None):
+        self.precisionMode = mode
+        self.market_calls = 0
+        market = {"precision": {"amount": amount}, "contract": contract}
+        if contract_size is not None:
+            market["contractSize"] = contract_size
+        self.markets = {"BTC/USDC:USDC": market}
+
+    def market(self, _symbol):
+        self.market_calls += 1
+        raise AssertionError("position policy must use already-loaded local metadata")
+
+
+@pytest.mark.parametrize(
+    ("mode", "amount", "expected"),
+    [
+        (ccxt.DECIMAL_PLACES, 6, 1e-6),
+        (ccxt.TICK_SIZE, "0.000001", 1e-6),
+    ],
+)
+def test_position_quantity_quantum_uses_proven_ccxt_local_semantics(mode, amount, expected):
+    exchange = LocalMarketMetadataExchange(mode=mode, amount=amount)
+    broker = _quantization_broker(exchange)
+
+    assert broker.position_quantity_quantum("BTC/USDC:USDC") == pytest.approx(expected)
+    assert exchange.market_calls == 0
+
+
+def test_significant_digits_do_not_invent_a_fixed_position_quantum():
+    exchange = LocalMarketMetadataExchange(mode=ccxt.SIGNIFICANT_DIGITS, amount=6)
+    broker = _quantization_broker(exchange)
+
+    assert broker.position_quantity_quantum("BTC/USDC:USDC") is None
+
+
+@pytest.mark.parametrize("amount", [None, 0, -1, float("nan"), float("inf"), True, "invalid"])
+def test_invalid_ccxt_quantity_metadata_is_not_used_as_quantum(amount):
+    exchange = LocalMarketMetadataExchange(mode=ccxt.TICK_SIZE, amount=amount)
+    broker = _quantization_broker(exchange)
+
+    assert broker.position_quantity_quantum("BTC/USDC:USDC") is None
+
+
+def test_contract_size_must_be_proven_before_using_contract_quantum():
+    exchange = LocalMarketMetadataExchange(
+        mode=ccxt.TICK_SIZE,
+        amount="0.001",
+        contract=True,
+        contract_size="0.001",
+    )
+    broker = _quantization_broker(exchange)
+
+    assert broker.position_quantity_quantum("BTC/USDC:USDC") is None
+
+
+def test_malformed_contract_flag_fails_closed():
+    exchange = LocalMarketMetadataExchange(mode=ccxt.TICK_SIZE, amount="0.001", contract="true")
+    broker = _quantization_broker(exchange)
+
+    assert broker.position_quantity_quantum("BTC/USDC:USDC") is None

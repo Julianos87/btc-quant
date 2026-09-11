@@ -17,6 +17,7 @@ Sécurité et fiabilité :
 
 from __future__ import annotations
 
+from decimal import Decimal
 import hashlib
 import logging
 import os
@@ -27,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 import ccxt
+from ccxt.base.decimal_to_precision import DECIMAL_PLACES, SIGNIFICANT_DIGITS, TICK_SIZE
 
 from .broker import Broker, BrokerOrderResult, BrokerOrderSnapshot, Fill
 from .order_state import ExternalOrderState
@@ -581,6 +583,66 @@ class CcxtBroker(Broker):
                 raise ValueError(f"position[{index}].side absent ou invalide")
             remote_net += qty if side == "long" else -qty
         return remote_net
+
+    def position_quantity_quantum(self, symbol: str) -> float | None:
+        """Return a proven local quantity quantum, or None conservatively.
+
+        CCXT precision.amount is decimal places, significant digits, or
+        a real tick size depending on precisionMode. Only the first and
+        third modes provide a fixed quantum for position reconciliation. The
+        market table is already loaded during broker construction; using the
+        in-memory mapping avoids any extra exchange request.
+        """
+
+        markets = getattr(self.exchange, "markets", None)
+        if not isinstance(markets, Mapping):
+            return None
+        market = markets.get(symbol)
+        if not isinstance(market, Mapping):
+            return None
+
+        contract_flags = [market.get(key) for key in ("contract", "swap", "future", "option")]
+        if any(value is not None and not isinstance(value, bool) for value in contract_flags):
+            return None
+        is_contract = any(value is True for value in contract_flags)
+        if is_contract:
+            contract_size = market.get("contractSize")
+            try:
+                if (
+                    contract_size is None
+                    or decimal_value(
+                        contract_size,
+                        name="contractSize",
+                    )
+                    != 1
+                ):
+                    return None
+            except ValueError:
+                return None
+
+        precision = market.get("precision")
+        if not isinstance(precision, Mapping) or precision.get("amount") is None:
+            return None
+        amount_precision = precision["amount"]
+        mode = getattr(self.exchange, "precisionMode", None)
+        try:
+            if mode == TICK_SIZE:
+                return exchange_float(
+                    amount_precision,
+                    name="quantum de quantité",
+                    positive=True,
+                )
+
+            if mode == DECIMAL_PLACES:
+                digits = decimal_value(amount_precision, name="précision de quantité")
+                if digits < 0 or digits != digits.to_integral_value():
+                    return None
+                return float(Decimal(1).scaleb(-int(digits)))
+        except (ArithmeticError, ValueError, OverflowError):
+            return None
+        if mode == SIGNIFICANT_DIGITS:
+            return None
+        return None
 
     def _wait_closed(self, order: dict, timeout_s: float = 30.0) -> dict:
         """Attend un statut terminal sans en déduire l'issue financière."""
