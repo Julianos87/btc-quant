@@ -117,6 +117,19 @@ def _validate_optional_risk_baselines(raw: Mapping[str, Any], engine: str) -> No
             _finite_number(raw[key], f"{engine}.{key}", positive=True)
 
 
+def _validate_optional_finite_fields(
+    raw: Mapping[str, Any],
+    fields: tuple[str, ...],
+    *,
+    prefix: str,
+) -> None:
+    """Validate financial facts that old checkpoints may legitimately omit."""
+
+    for field in fields:
+        if field in raw and raw[field] is not None:
+            _finite_number(raw[field], f"{prefix}.{field}")
+
+
 def validate_trend_state(payload: object) -> TrendStatePayload:
     raw = _mapping(payload, "trend")
     slots = raw.get("slots")
@@ -153,6 +166,19 @@ def validate_trend_state(payload: object) -> TrendStatePayload:
             missing = sorted(required - pos.keys())
             if missing:
                 raise ValueError(f"État trend invalide : {name}.position incomplet {missing}")
+            _validate_optional_finite_fields(
+                pos,
+                (
+                    "entry_price",
+                    "qty",
+                    "stop_price",
+                    "best_close",
+                    "initial_qty",
+                    "last_add_price",
+                ),
+                prefix=f"trend.{name}.position",
+            )
+        _validate_optional_finite_fields(slot, ("entry_fee",), prefix=f"trend.{name}")
     _validate_optional_risk_baselines(raw, "trend")
     return cast(TrendStatePayload, payload)
 
@@ -162,5 +188,20 @@ def validate_carry_state(payload: object) -> CarryStatePayload:
     _finite_number(raw.get("equity"), "carry.equity")
     if not isinstance(raw.get("in_position"), bool):
         raise ValueError("État carry invalide : in_position absent ou non booléen")
+    _validate_optional_finite_fields(
+        raw,
+        (
+            "qty",
+            "spot_qty",
+            "perp_qty",
+            "entry_equity",
+            "entry_price",
+            "spot_notional",
+            "perp_notional",
+            "borrow_principal",
+            "funding_notional_price",
+        ),
+        prefix="carry",
+    )
     _validate_optional_risk_baselines(raw, "carry")
     return cast(CarryStatePayload, payload)
