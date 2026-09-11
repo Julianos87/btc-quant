@@ -1570,6 +1570,22 @@ class StateStore:
                 f"Checkpoint non sérialisable ({error}) ; champs en cause : {culprits}"
             ) from error
 
+    @staticmethod
+    def _checkpoint_json(payload: Any) -> str:
+        """Serialize one engine checkpoint without accepting non-finite JSON.
+
+        This deliberately remains narrower than ``_json``: generic event
+        payload semantics stay unchanged, while durable engine checkpoints
+        cannot encode NaN or infinity.
+        """
+
+        serialized = StateStore._json(payload)
+        try:
+            candidate = json.loads(serialized)
+            return json.dumps(candidate, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+        except ValueError as error:
+            raise ValueError(f"Checkpoint financier invalide : {error}") from error
+
     @classmethod
     def _state_event(
         cls,
@@ -1605,7 +1621,7 @@ class StateStore:
         reconciliation writer below; there is no inferred "safe" condition.
         """
 
-        candidate = json.loads(self._json(payload))
+        candidate = json.loads(self._checkpoint_json(payload))
         if not isinstance(candidate, dict):
             raise ValueError("État engine invalide : objet JSON attendu")
         if allow_reconciliation_clear:
