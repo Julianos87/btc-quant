@@ -537,3 +537,36 @@ def test_structured_external_ioc_error_is_persisted_when_broker_raises(tmp_path)
     assert len(responses) == 1
     assert responses[0].outcome == ExternalSubmissionOutcome.DETERMINISTIC_IOC_NO_MATCH
     assert responses[0].raw_payload["info"]["response"]["type"] == "order"
+
+
+def test_external_signed_fee_reaches_durable_order_before_normal_reconciliation(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    broker = StubBroker(
+        BrokerOrderResult(
+            Fill(50_000.0, 0.01, -0.01, broker_order_id="venue-order"),
+            ExternalOrderState.FILLED,
+            0.01,
+            0.0,
+            raw_response={"id": "venue-order", "status": "closed"},
+        )
+    )
+    broker.external_execution = True
+
+    submitted = _submit_market(
+        OrderExecutionService(store, broker),
+        engine="trend",
+        slot="signed-fee",
+        side="BUY",
+        qty=0.01,
+        reference_price=50_000.0,
+        reason="entry",
+        decision_checkpoint="signed-fee-checkpoint",
+        transition_type=FinancialTransitionType.ENTER_LONG,
+    )
+
+    order = store.read_orders("trend")[0]
+    assert submitted.fill.fee == -0.01
+    assert order["fee"] == -0.01
+    assert order["external_state"] == ExternalOrderState.FILLED
+    assert order["local_state"] == LocalOrderState.PENDING_RECONCILIATION
+    assert store.unresolved_orders("trend") == [order]

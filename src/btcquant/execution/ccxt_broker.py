@@ -183,16 +183,18 @@ class CcxtBroker(Broker):
         # retomber sur `amount` fabriquerait une position fantôme si l'ordre
         # n'a pas (encore) été rempli. filled=0 → Fill.qty=0, l'appelant gère.
         fee = 0.0
-        fees = order.get("fees")
+        detailed_fees = order.get("fees")
         single_fee = order.get("fee")
-        if fees is not None:
-            if not isinstance(fees, list):
+        if detailed_fees is not None:
+            if not isinstance(detailed_fees, list):
                 raise ValueError("order.fees doit être une liste CCXT")
-            for index, item in enumerate(fees):
+            for index, item in enumerate(detailed_fees):
                 if not isinstance(item, Mapping) or item.get("cost") is None:
                     raise ValueError(f"order.fees[{index}].cost absent ou invalide")
                 fee += exchange_float(item["cost"], name=f"order.fees[{index}].cost")
-        if not fee and single_fee is not None:
+        # Une liste détaillée non vide est autoritative, même si fees et
+        # rebates s'annulent exactement. Une liste vide autorise le fallback.
+        if not detailed_fees and single_fee is not None:
             if not isinstance(single_fee, Mapping) or single_fee.get("cost") is None:
                 raise ValueError("order.fee.cost absent ou invalide")
             fee = exchange_float(single_fee["cost"], name="order.fee.cost")

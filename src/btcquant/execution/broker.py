@@ -54,10 +54,15 @@ class BrokerOrderResult:
             ("requested_qty", self.requested_qty),
             ("remaining_qty", self.remaining_qty),
             ("filled_qty", self.fill.qty),
-            ("fee", self.fill.fee),
         ):
             if not math.isfinite(value) or value < 0:
                 raise ValueError(f"{name} doit être un nombre fini positif ou nul")
+        if (
+            isinstance(self.fill.fee, bool)
+            or not isinstance(self.fill.fee, (int, float))
+            or not math.isfinite(self.fill.fee)
+        ):
+            raise ValueError("fee doit être un nombre fini signé")
         if self.requested_qty <= 0:
             raise ValueError("requested_qty doit être strictement positive")
         tolerance = max(1e-9, self.requested_qty * 1e-9)
@@ -238,21 +243,23 @@ class Broker(ABC):
             status = "OPEN"
         else:
             status = "UNKNOWN"
-        fees = raw.get("fees")
+        detailed_fees = raw.get("fees")
         single_fee = raw.get("fee")
         fee = 0.0
-        if fees is not None:
-            if not isinstance(fees, list):
+        if detailed_fees is not None:
+            if not isinstance(detailed_fees, list):
                 raise ValueError("stop order.fees doit être une liste CCXT")
-            for index, item in enumerate(fees):
+            for index, item in enumerate(detailed_fees):
                 if not isinstance(item, Mapping) or item.get("cost") is None:
                     raise ValueError(f"stop order.fees[{index}].cost absent ou invalide")
                 fee += exchange_float(item["cost"], name=f"stop order.fees[{index}].cost")
-        if not fee and single_fee is not None:
+        # Detailed records remain authoritative even when fees and rebates net to zero.
+        # An empty list means no detailed record and permits the singular fallback.
+        if not detailed_fees and single_fee is not None:
             if not isinstance(single_fee, Mapping) or single_fee.get("cost") is None:
                 raise ValueError("stop order.fee.cost absent ou invalide")
             fee = exchange_float(single_fee["cost"], name="stop order.fee.cost")
-        if filled > 0 and fees is None and single_fee is None:
+        if filled > 0 and detailed_fees is None and single_fee is None:
             raise ValueError("stop order fee evidence absente pour un fill positif")
         average = raw.get("average")
         if filled > 0 and average is None:

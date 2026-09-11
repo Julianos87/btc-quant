@@ -625,6 +625,16 @@ def test_fallback_keys_are_deterministic_and_json_order_independent(tmp_path):
     assert first.fill_key.startswith("fill-")
 
 
+def test_signed_zero_fee_has_one_economic_identity(tmp_path):
+    order_id = _order(StateStore(tmp_path / "signed-zero.db"))
+    positive_zero = _fill(order_id, venue_fill_id=None, fee=0.0, fee_asset="USDC")
+    negative_zero = _fill(order_id, venue_fill_id=None, fee=-0.0, fee_asset="USDC")
+
+    assert negative_zero.fee == 0.0
+    assert math.copysign(1.0, negative_zero.fee) == 1.0
+    assert negative_zero.fill_key == positive_zero.fill_key
+
+
 def test_schema_v6_to_v8_is_additive_preserves_orders_and_checks_integrity(tmp_path):
     database = tmp_path / "v6.db"
     current = StateStore(database)

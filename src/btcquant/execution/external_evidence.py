@@ -81,7 +81,9 @@ def _finite_signed(value: float, field: str) -> float:
     normalized = float(value)
     if not math.isfinite(normalized):
         raise InvalidExternalObservation(f"{field} doit être fini")
-    return normalized
+    # IEEE negative zero has no distinct economic meaning and must not create
+    # a different canonical fill identity from an observed positive zero.
+    return 0.0 if normalized == 0 else normalized
 
 
 def _canonical_payload(payload: dict[str, Any]) -> str:
