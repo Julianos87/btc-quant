@@ -35,6 +35,173 @@ class StopExchange:
         return {"id": "stop-1"}
 
 
+class QuantizationExchange:
+    def __init__(
+        self,
+        *,
+        normalized_amount="0.01",
+        normalized_price="50000.0",
+        min_amount=None,
+        min_cost=None,
+    ):
+        self.normalized_amount = normalized_amount
+        self.normalized_price = normalized_price
+        self.min_amount = min_amount
+        self.min_cost = min_cost
+        self.amount_inputs = []
+        self.price_inputs = []
+        self.created = None
+
+    def amount_to_precision(self, symbol, qty):
+        self.amount_inputs.append((symbol, qty))
+        return self.normalized_amount
+
+    def price_to_precision(self, symbol, price):
+        self.price_inputs.append((symbol, price))
+        return self.normalized_price
+
+    def market(self, _symbol):
+        return {
+            "limits": {
+                "amount": {"min": self.min_amount},
+                "cost": {"min": self.min_cost},
+            }
+        }
+
+    def create_order(self, symbol, order_type, side, qty, price, params):
+        self.created = (symbol, order_type, side, qty, price, params)
+        return {
+            "id": "venue-1",
+            "status": "closed",
+            "amount": qty,
+            "filled": qty,
+            "remaining": 0.0,
+            "average": 50_000.0,
+            "fees": [],
+        }
+
+
+def _quantization_broker(exchange, *, exchange_id="binance"):
+    broker = object.__new__(CcxtBroker)
+    broker.exchange = exchange
+    broker.exchange_id = exchange_id
+    broker.symbol = "BTC/USDC:USDC"
+    broker.market_kind = "perp"
+    return broker
+
+
+@pytest.mark.parametrize(
+    ("requested", "normalized"),
+    [
+        (0.01, "0.01"),
+        (0.009999, "0.009"),
+        (0.010001, "0.01"),
+        (0.01234567, "0.012"),
+    ],
+)
+def test_amount_quantization_returns_the_exact_ccxt_normalized_quantity(requested, normalized):
+    exchange = QuantizationExchange(normalized_amount=normalized)
+    broker = _quantization_broker(exchange)
+
+    assert broker._round_qty(requested) == float(normalized)
+    assert exchange.amount_inputs == [(broker.symbol, requested)]
+
+
+@pytest.mark.parametrize(
+    "requested", [0.0, -0.01, -0.0, math.nan, math.inf, -math.inf, True, None, "invalid"]
+)
+def test_invalid_requested_quantity_fails_before_ccxt_quantization(requested):
+    exchange = QuantizationExchange()
+    broker = _quantization_broker(exchange)
+
+    with pytest.raises(ValueError, match="quantité demandée"):
+        broker._round_qty(requested)
+
+    assert exchange.amount_inputs == []
+
+
+@pytest.mark.parametrize("normalized", ["0", "-0.0", "nan", "inf", "invalid", True])
+def test_invalid_or_zero_normalized_quantity_fails_before_submission(normalized):
+    exchange = QuantizationExchange(normalized_amount=normalized)
+    broker = _quantization_broker(exchange)
+
+    with pytest.raises(ValueError, match="quantité normalisée"):
+        broker._market_order("buy", 0.0001, 50_000.0, "intent-zero")
+
+    assert exchange.created is None
+
+
+@pytest.mark.parametrize(
+    "requested", [0.0, -1.0, math.nan, math.inf, -math.inf, True, None, "invalid"]
+)
+def test_invalid_stop_price_fails_before_ccxt_quantization(requested):
+    exchange = QuantizationExchange()
+    broker = _quantization_broker(exchange)
+
+    with pytest.raises(ValueError, match="prix stop demandé"):
+        broker._round_price(requested, name="prix stop")
+
+    assert exchange.price_inputs == []
+
+
+@pytest.mark.parametrize("normalized", ["0", "-0.0", "nan", "inf", "invalid", True])
+def test_invalid_normalized_stop_price_fails_closed(normalized):
+    exchange = QuantizationExchange(normalized_price=normalized)
+    broker = _quantization_broker(exchange)
+
+    with pytest.raises(ValueError, match="prix stop normalisé"):
+        broker._round_price(50_000.0, name="prix stop")
+
+    assert exchange.created is None
+
+
+def test_minimum_amount_is_checked_after_quantization_before_submission():
+    exchange = QuantizationExchange(normalized_amount="0.009", min_amount="0.01")
+    broker = _quantization_broker(exchange)
+
+    with pytest.raises(ValueError, match="Quantité .* sous le minimum exchange"):
+        broker._market_order("buy", 0.009999, 50_000.0, "intent-min-amount")
+
+    assert exchange.created is None
+
+
+def test_exact_minimum_amount_is_submitted():
+    exchange = QuantizationExchange(normalized_amount="0.01", min_amount="0.01")
+    broker = _quantization_broker(exchange)
+
+    result = broker._market_order("buy", 0.010009, 50_000.0, "intent-exact-min")
+
+    assert exchange.created is not None
+    assert exchange.created[3] == 0.01
+    assert result.requested_qty == 0.01
+    assert result.fill.qty == 0.01
+
+
+def test_min_notional_uses_submitted_not_requested_quantity():
+    exchange = QuantizationExchange(normalized_amount="1.0", min_cost="10.0")
+    broker = _quantization_broker(exchange)
+
+    # Requested notional is 1.009 * 9.99 > 10, submitted notional is 9.99.
+    with pytest.raises(ValueError, match="Notionnel .* sous le minimum exchange"):
+        broker._market_order("buy", 1.009, 9.99, "intent-min-cost")
+
+    assert exchange.created is None
+
+
+def test_stop_uses_normalized_quantity_and_tick_price_exactly():
+    exchange = QuantizationExchange(
+        normalized_amount="0.01", normalized_price="49999.5", min_amount="0.01"
+    )
+    broker = _quantization_broker(exchange, exchange_id="hyperliquid")
+
+    broker.place_stop(0.010009, 49_999.56, client_order_id="stop-quantized")
+
+    assert exchange.created is not None
+    assert exchange.created[3] == 0.01
+    assert exchange.created[4] == 49_999.5
+    assert exchange.created[5]["stopLossPrice"] == 49_999.5
+
+
 def test_hyperliquid_cloid_is_stable_128_bit_hex():
     first = CcxtBroker._external_client_order_id("local-intent", "hyperliquid")
     second = CcxtBroker._external_client_order_id("local-intent", "hyperliquid")

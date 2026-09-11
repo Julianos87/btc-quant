@@ -63,6 +63,7 @@ def test_market_order_timeout_is_never_retried():
 
     broker.exchange = Exchange()
 
+    broker._check_min_quantity = lambda qty: None
     with pytest.raises(ccxt.RequestTimeout):
         broker._market_order("buy", 1.0, 100.0, "stable-intent")
 

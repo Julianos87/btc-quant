@@ -150,11 +150,31 @@ class CcxtBroker(Broker):
         return f"btcquant-{tag}-{int(time.time())}-{self._order_seq}"
 
     def _round_qty(self, qty: float) -> float:
+        requested = exchange_float(qty, name="quantité demandée", positive=True)
         return exchange_float(
-            self.exchange.amount_to_precision(self.symbol, qty),
+            self.exchange.amount_to_precision(self.symbol, requested),
             name="quantité normalisée",
             positive=True,
         )
+
+    def _round_price(self, price: float, *, name: str) -> float:
+        requested = exchange_float(price, name=f"{name} demandé", positive=True)
+        return exchange_float(
+            self.exchange.price_to_precision(self.symbol, requested),
+            name=f"{name} normalisé",
+            positive=True,
+        )
+
+    def _check_min_quantity(self, qty: float) -> None:
+        market = self.exchange.market(self.symbol)
+        min_amount = (market.get("limits", {}).get("amount") or {}).get("min")
+        normalized = decimal_value(qty, name="quantité soumise", positive=True)
+        if min_amount is not None and normalized < decimal_value(
+            min_amount,
+            name="quantité minimale",
+            positive=True,
+        ):
+            raise ValueError(f"Quantité {normalized} sous le minimum exchange ({min_amount})")
 
     def _check_min_notional(self, qty: float, price: float) -> None:
         market = self.exchange.market(self.symbol)
@@ -312,12 +332,14 @@ class CcxtBroker(Broker):
         reduce_only: bool = False,
     ) -> BrokerOrderResult:
         qty = self._round_qty(qty)
-        self._check_min_notional(qty, ref_price)
         exchange_id = getattr(self, "exchange_id", "binance")
+        price = ref_price if exchange_id == "hyperliquid" else None
         if client_order_id is None:
             raise ValueError(
                 "Un ordre market externe exige un client_order_id réservé par OrderExecutionService"
             )
+        self._check_min_quantity(qty)
+        self._check_min_notional(qty, ref_price)
         self.exchange.last_json_response = None
         local_intent = client_order_id
         external_client_id = self._external_client_order_id(local_intent, exchange_id)
@@ -327,7 +349,6 @@ class CcxtBroker(Broker):
             params["reduceOnly"] = True
         # Ne jamais rejouer create_order après un timeout ambigu : le runner
         # garde l'intention PENDING et la rapproche via clientOrderId.
-        price = ref_price if exchange_id == "hyperliquid" else None
         order = self.exchange.create_order(self.symbol, "market", side, qty, price, params)
         order = self._wait_closed(order)
         result = self._result_from_order(order, ref_price, qty)
@@ -443,12 +464,9 @@ class CcxtBroker(Broker):
         Short (direction=-1): rachète si le prix monte au stop (futures).
         """
         qty = self._round_qty(qty)
+        self._check_min_quantity(qty)
         side = "sell" if direction == 1 else "buy"
-        stop_price = exchange_float(
-            self.exchange.price_to_precision(self.symbol, stop_price),
-            name="prix stop normalisé",
-            positive=True,
-        )
+        stop_price = self._round_price(stop_price, name="prix stop")
         exchange_id = getattr(self, "exchange_id", "binance")
         local_intent = client_order_id or self._client_order_id("stop")
         external_client_id = self._external_client_order_id(local_intent, exchange_id)
