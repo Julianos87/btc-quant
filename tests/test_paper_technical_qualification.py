@@ -8,7 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from btcquant.deployment import build_release_manifest, sha256_file, write_release_manifest
+from btcquant.deployment import (
+    REQUIRED_VALIDATION_CHECKS,
+    build_release_manifest,
+    sha256_file,
+    write_release_manifest,
+)
 from btcquant.execution.paper_technical_qualification import (
     QualificationFailed,
     QualificationProbes,
@@ -23,6 +28,29 @@ SHA = "a" * 40
 TREE = "b" * 40
 
 
+def _write_validation_attestation(release: Path) -> None:
+    payload = {
+        "format_version": 1,
+        "validation_protocol_version": 1,
+        "status": "PASS",
+        "git_sha": SHA,
+        "git_tree": TREE,
+        "schema_version_required": SCHEMA_VERSION,
+        "created_at": "2026-09-12T00:00:00+00:00",
+        "validation_environment": {
+            "kind": "ephemeral_dev_validation_venv",
+            "python_version": "3.12.0",
+            "runtime_dev_tools_included": False,
+            "live_state_visible": False,
+            "runtime_symlinks_created_after_validation": True,
+        },
+        "checks": {name: {"status": "PASS"} for name in REQUIRED_VALIDATION_CHECKS},
+    }
+    (release / "release-validation.json").write_text(
+        json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+    )
+
+
 def _root(tmp_path: Path) -> Path:
     runtime = tmp_path / "runtime"
     release = runtime / "releases" / SHA
@@ -35,6 +63,7 @@ def _root(tmp_path: Path) -> Path:
         ROOT / "environments/paper/config.yaml",
         release / "environments/paper/config.yaml",
     )
+    _write_validation_attestation(release)
     write_release_manifest(
         release,
         build_release_manifest(
@@ -44,6 +73,7 @@ def _root(tmp_path: Path) -> Path:
             origin="github.com/Julianos87/btc-quant.git",
             python_version="3.12",
             uv_version="0.11",
+            require_validation_attestation=True,
         ),
     )
     (runtime / "current").symlink_to(release)
@@ -125,6 +155,18 @@ def test_inspection_never_writes(tmp_path):
     assert _qualification_count(database) == 0
 
 
+def test_valid_attestation_does_not_run_runtime_dev_tools(tmp_path):
+    runtime = _root(tmp_path)
+    probes = replace(
+        _probes(),
+        run=lambda command, cwd: pytest.fail(
+            f"runtime validation tool unexpectedly executed: {command} in {cwd}"
+        ),
+    )
+    evidence = collect_paper_technical_evidence(runtime, probes=probes)
+    assert evidence["full_test_results"]["source"] == "release-validation.json"
+
+
 def test_cli_contract_has_no_manual_pass_or_release_identity_flags() -> None:
     source = (ROOT / "src/btcquant/entrypoints/paper_qualification.py").read_text(encoding="utf-8")
     for forbidden in (
@@ -145,7 +187,7 @@ def test_cli_contract_has_no_manual_pass_or_release_identity_flags() -> None:
         ("missing_manifest", "RELEASE_MANIFEST_MISMATCH"),
         ("wrong_tree", "RELEASE_MANIFEST_MISMATCH"),
         ("wrong_environment", "ENVIRONMENT_NOT_PAPER"),
-        ("test_failure", "TEST_QUALIFICATION_FAILED"),
+        ("missing_attestation", "RELEASE_MANIFEST_MISMATCH"),
         ("health_failure", "HEALTH_FAILED"),
         ("readiness_failure", "READINESS_FAILED"),
         ("service_failure", "HEALTH_FAILED"),
@@ -169,8 +211,8 @@ def test_failed_evidence_never_writes_qualification(tmp_path, mutation, reason):
         manifest = json.loads(manifest_path.read_text())
         manifest["config_file_sha256"] = sha256_file(config)
         manifest_path.write_text(json.dumps(manifest))
-    elif mutation == "test_failure":
-        probes = _probes(failed_command="pytest -q")
+    elif mutation == "missing_attestation":
+        (release / "release-validation.json").unlink()
     elif mutation == "health_failure":
         probes = replace(
             probes,

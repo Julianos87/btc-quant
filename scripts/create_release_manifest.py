@@ -27,6 +27,7 @@ def main() -> int:
         origin=args.origin,
         python_version=args.python_version,
         uv_version=args.uv_version,
+        require_validation_attestation=True,
     )
     path = write_release_manifest(args.release, manifest)
     print(json.dumps({"manifest": str(path), "git_sha": args.git_sha}, sort_keys=True))

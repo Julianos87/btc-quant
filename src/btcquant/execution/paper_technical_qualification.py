@@ -22,6 +22,7 @@ from typing import Any
 from btcquant.config import load_config, runtime_execution_from_config
 from btcquant.deployment import (
     DeploymentProtocolError,
+    load_validation_attestation,
     sha256_file,
     validate_release_manifest,
 )
@@ -148,7 +149,9 @@ def _active_release(root: Path) -> tuple[Path, dict[str, Any]]:
         "release directory is not a SHA",
     )
     try:
-        manifest = dict(validate_release_manifest(release, release.name))
+        manifest = dict(
+            validate_release_manifest(release, release.name, require_validation_attestation=True)
+        )
     except DeploymentProtocolError as error:
         raise QualificationFailed("RELEASE_MANIFEST_MISMATCH", str(error)) from error
     tree = manifest.get("git_tree")
@@ -264,43 +267,30 @@ def _database_evidence(
 
 
 def _fixed_test_evidence(
-    release: Path, probes: QualificationProbes
+    release: Path, manifest: Mapping[str, Any]
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    python = str(release / "venv/bin/python")
-    checks = (
-        ("full_suite", (python, "-m", "pytest", "-q")),
-        ("ruff", (str(release / "venv/bin/ruff"), "check", ".")),
-        ("format", (str(release / "venv/bin/ruff"), "format", "--check", ".")),
-        ("mypy", (str(release / "venv/bin/mypy"), "src/btcquant")),
-    )
-    results: dict[str, Any] = {}
-    for name, command in checks:
-        try:
-            result = dict(probes.run(command, release))
-        except (OSError, TypeError, ValueError, subprocess.SubprocessError) as error:
-            raise QualificationFailed("TEST_QUALIFICATION_FAILED", name) from error
-        _require(result.get("status") == "PASS", "TEST_QUALIFICATION_FAILED", name)
-        results[name] = result
-    rollback_command = (
-        python,
-        "-m",
-        "pytest",
-        "-q",
-        "tests/test_deployment_protocol.py",
-        "tests/test_security_hardening.py",
-    )
+    """Use the immutable build attestation; never run dev tools in runtime venv."""
+
     try:
-        rollback = dict(probes.run(rollback_command, release))
-    except (OSError, TypeError, ValueError, subprocess.SubprocessError) as error:
-        raise QualificationFailed("TEST_QUALIFICATION_FAILED", "rollback protocol") from error
-    _require(
-        rollback.get("status") == "PASS",
-        "TEST_QUALIFICATION_FAILED",
-        "rollback protocol",
-    )
+        attestation = load_validation_attestation(release, manifest)
+    except DeploymentProtocolError as error:
+        raise QualificationFailed("TEST_QUALIFICATION_FAILED", str(error)) from error
+    checks = attestation.get("checks")
+    if not isinstance(checks, dict):
+        raise QualificationFailed("TEST_QUALIFICATION_FAILED", "validation checks missing")
     return (
-        {"status": "PASS", "checks": results},
-        {"status": "PASS", "kind": "isolated_protocol_tests", "result": rollback},
+        {
+            "status": "PASS",
+            "source": "release-validation.json",
+            "validation_protocol_version": attestation["validation_protocol_version"],
+            "checks": checks,
+        },
+        {
+            "status": "PASS",
+            "kind": "build_validation_attestation",
+            "source": "release-validation.json",
+            "check": "protocol_tests",
+        },
     )
 
 
@@ -350,7 +340,7 @@ def collect_paper_technical_evidence(
         raise QualificationFailed(
             "DB_INTEGRITY_FAILED", "PAPER database evidence unavailable"
         ) from error
-    full_tests, rollback = _fixed_test_evidence(release, probes)
+    full_tests, rollback = _fixed_test_evidence(release, manifest)
     runtime = _runtime_evidence(probes, safety)
     backups = sorted(
         (root / "backups").glob("*.tar.gz.enc"),

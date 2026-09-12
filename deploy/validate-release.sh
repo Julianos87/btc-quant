@@ -84,6 +84,15 @@ run_isolated "${VALIDATION_ENV}/bin/python" scripts/check_baseline_provenance.py
 run_isolated "${VALIDATION_ENV}/bin/pip-audit" -r requirements.txt --disable-pip \
   --progress-spinner off --cache-dir "${PIP_AUDIT_CACHE}" --timeout 15 -s osv
 
+run_isolated "${VALIDATION_ENV}/bin/pytest" -q -p no:cacheprovider \
+  tests/test_deployment_protocol.py tests/test_security_hardening.py
+for tool in pytest ruff mypy; do
+  if [ -e "${RELEASE}/venv/bin/${tool}" ]; then
+    echo "Outil de développement présent dans le venv runtime : ${tool}" >&2
+    exit 1
+  fi
+done
+
 # No validation artifact is allowed to be published with the release.
 for transient in .validation-venv .pytest_cache .mypy_cache .ruff_cache .coverage .uv-cache .hypothesis; do
   if [ -e "${RELEASE}/${transient}" ]; then

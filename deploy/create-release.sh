@@ -135,6 +135,65 @@ env \
     "${STAGING}/venv/bin/python" -c \
     "import dashboard.app; from btcquant.config import load_config; load_config('environments/paper/config.yaml')"
 )
+SCHEMA_VERSION="$(${STAGING}/venv/bin/python -c \
+  'from btcquant.execution.state_store import SCHEMA_VERSION; print(SCHEMA_VERSION)')"
+PYTHON_VERSION="$(${STAGING}/venv/bin/python -c \
+  'import platform; print(platform.python_version())')"
+# Validation has completed successfully and the import smoke passed. Only the
+# official release builder can now create this attestation from the SHA/tree it
+# derived and verified against the source checkout above.
+"${STAGING}/venv/bin/python" - \
+  "${STAGING}/release-validation.json" "${RELEASE_ID}" "${GIT_TREE}" \
+  "${SCHEMA_VERSION}" "${PYTHON_VERSION}" <<'PY'
+from __future__ import annotations
+
+import json
+import os
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+
+destination = Path(sys.argv[1])
+git_sha, git_tree, schema_version, python_version = sys.argv[2:]
+checks = {
+    name: {"status": "PASS"}
+    for name in (
+        "full_suite",
+        "ruff",
+        "format",
+        "mypy",
+        "node_syntax",
+        "shell_syntax",
+        "dependency_export",
+        "sbom",
+        "provenance",
+        "pip_audit",
+        "protocol_tests",
+        "live_state_isolation",
+        "runtime_no_dev_tools",
+    )
+}
+payload = {
+    "format_version": 1,
+    "validation_protocol_version": 1,
+    "status": "PASS",
+    "git_sha": git_sha,
+    "git_tree": git_tree,
+    "schema_version_required": int(schema_version),
+    "created_at": datetime.now(UTC).isoformat(),
+    "validation_environment": {
+        "kind": "ephemeral_dev_validation_venv",
+        "python_version": python_version,
+        "runtime_dev_tools_included": False,
+        "live_state_visible": False,
+        "runtime_symlinks_created_after_validation": True,
+    },
+    "checks": checks,
+}
+temporary = destination.with_name(f".{destination.name}.tmp.{os.getpid()}")
+temporary.write_text(json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+os.replace(temporary, destination)
+PY
 # Tests may have created a real state/ directory under staging. Remove any
 # leftover before installing the runtime symlinks required after activation.
 for runtime_link in state backups data backups-repo; do
