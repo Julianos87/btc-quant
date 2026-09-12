@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
+import tarfile
 import shutil
 import sqlite3
 from dataclasses import replace
@@ -18,6 +22,7 @@ from btcquant.execution.paper_technical_qualification import (
     QualificationFailed,
     QualificationProbes,
     collect_paper_technical_evidence,
+    _verify_backup,
     record_paper_technical_evidence,
 )
 from btcquant.execution.state_store import SCHEMA_VERSION, StateStore
@@ -129,6 +134,128 @@ def _domain_counts(database: Path) -> dict[str, int]:
                 "events",
             )
         }
+
+
+def _encrypted_backup_fixture(tmp_path: Path, password: str) -> tuple[Path, Path]:
+    payload = tmp_path / "backup-payload" / "state"
+    payload.mkdir(parents=True)
+    StateStore(payload / "btcquant.db")
+
+    plaintext = tmp_path / "state.tar.gz"
+    with tarfile.open(plaintext, "w:gz") as bundle:
+        bundle.add(payload, arcname="state")
+
+    archive = tmp_path / "state.tar.gz.enc"
+    environment = os.environ.copy()
+    environment["BACKUP_ENCRYPTION_KEY"] = password
+    encrypted = subprocess.run(
+        [
+            "openssl",
+            "enc",
+            "-aes-256-cbc",
+            "-pbkdf2",
+            "-iter",
+            "200000",
+            "-salt",
+            "-in",
+            str(plaintext),
+            "-out",
+            str(archive),
+            "-pass",
+            "env:BACKUP_ENCRYPTION_KEY",
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert encrypted.returncode == 0, encrypted.stderr
+
+    release = tmp_path / "release"
+    (release / "venv/bin").mkdir(parents=True)
+    (release / "scripts").mkdir()
+    (release / "venv/bin/python").symlink_to(sys.executable)
+    shutil.copy2(ROOT / "scripts/verify_backup.py", release / "scripts/verify_backup.py")
+    return archive, release
+
+
+def test_backup_verifier_fails_closed_without_credential(tmp_path, monkeypatch):
+    archive, release = _encrypted_backup_fixture(tmp_path, "dummy-correct-key")
+    monkeypatch.delenv("BACKUP_ENCRYPTION_KEY", raising=False)
+
+    def unexpected_subprocess(*args, **kwargs):
+        pytest.fail(f"verifier must not run without a credential: {args}, {kwargs}")
+
+    monkeypatch.setattr(
+        "btcquant.execution.paper_technical_qualification.subprocess.run",
+        unexpected_subprocess,
+    )
+    result = _verify_backup(archive, release)
+    assert result == {"status": "FAIL", "reason": "credential_unavailable"}
+
+
+@pytest.mark.parametrize("value", ["", "   "])
+def test_backup_verifier_rejects_empty_credential(tmp_path, monkeypatch, value):
+    archive, release = _encrypted_backup_fixture(tmp_path, "dummy-correct-key")
+    monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", value)
+    result = _verify_backup(archive, release)
+    assert result == {"status": "FAIL", "reason": "credential_unavailable"}
+
+
+def test_backup_verifier_receives_only_minimal_environment(tmp_path, monkeypatch):
+    archive, release = _encrypted_backup_fixture(tmp_path, "dummy-correct-key")
+    monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", "dummy-correct-key")
+    monkeypatch.setenv("HYPERLIQUID_PRIVATE_KEY", "unrelated-secret")
+    observed: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        observed["command"] = command
+        observed["env"] = kwargs["env"]
+        return subprocess.CompletedProcess(command, 0, '{"integrity":"ok"}', "")
+
+    monkeypatch.setattr("btcquant.execution.paper_technical_qualification.subprocess.run", fake_run)
+    result = _verify_backup(archive, release)
+    assert result == {"integrity": "ok"}
+    assert observed["env"] == {
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "BACKUP_ENCRYPTION_KEY": "dummy-correct-key",
+    }
+    assert "unrelated-secret" not in str(observed["command"])
+    assert "dummy-correct-key" not in str(observed["command"])
+
+
+def test_backup_verifier_rejects_secret_in_verifier_output(tmp_path, monkeypatch):
+    archive, release = _encrypted_backup_fixture(tmp_path, "dummy-correct-key")
+    key = "dummy-correct-key"
+    monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", key)
+
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(command, 0, f'{{"key":"{key}"}}', "")
+
+    monkeypatch.setattr("btcquant.execution.paper_technical_qualification.subprocess.run", fake_run)
+    result = _verify_backup(archive, release)
+
+    assert result == {"status": "FAIL", "reason": "credential_in_verifier_output"}
+    assert key not in json.dumps(result)
+
+
+def test_backup_verifier_decrypts_valid_encrypted_backup_with_dummy_key(tmp_path, monkeypatch):
+    archive, release = _encrypted_backup_fixture(tmp_path, "dummy-correct-key")
+    monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", "dummy-correct-key")
+    result = _verify_backup(archive, release)
+    assert result["integrity"] == "ok"
+    assert result["restart_safe"] is True
+    assert result["schema_version"] == SCHEMA_VERSION
+
+
+def test_backup_verifier_rejects_wrong_key_without_secret_leak(tmp_path, monkeypatch):
+    archive, release = _encrypted_backup_fixture(tmp_path, "dummy-correct-key")
+    wrong_key = "dummy-wrong-key"
+    monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", wrong_key)
+    result = _verify_backup(archive, release)
+    assert result["status"] == "FAIL"
+    assert wrong_key not in json.dumps(result)
 
 
 def test_happy_path_collects_derived_evidence_and_records_only_qualification(tmp_path):

@@ -1391,3 +1391,26 @@ def test_update_quiesces_writers_before_migration():
     stop = update.index("stop_all_writer_processes", migration_mode)
     migration = update.index('bash "${TARGET}/deploy/migrate.sh"')
     assert stop < migration
+
+
+def test_paper_qualification_units_are_manual_and_least_privilege():
+    inspect = Path("deploy/btcquant-paper-qualification-inspect.service").read_text(
+        encoding="utf-8"
+    )
+    record = Path("deploy/btcquant-paper-qualification-record.service").read_text(encoding="utf-8")
+
+    for unit, action in ((inspect, "inspect"), (record, "record")):
+        assert "Type=oneshot" in unit
+        assert "User=btcquant" in unit
+        assert "EnvironmentFile=-/opt/btcquant/.env" in unit
+        assert "Environment=BTCQUANT_ROOT=/opt/btcquant" in unit
+        assert f"ExecStart=/opt/btcquant/current/venv/bin/btcquant-qualify-paper {action}" in unit
+        assert "NoNewPrivileges=true" in unit
+        assert "PrivateTmp=true" in unit
+        assert "ProtectSystem=strict" in unit
+        assert "CapabilityBoundingSet=" in unit
+        assert "WantedBy=" not in unit
+        assert "OnCalendar=" not in unit
+
+    assert "ReadWritePaths=" not in inspect
+    assert "ReadWritePaths=/opt/btcquant/state" in record

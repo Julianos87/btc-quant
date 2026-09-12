@@ -98,7 +98,29 @@ def _service_active(unit: str) -> bool:
     )
 
 
+def _backup_verifier_environment() -> dict[str, str] | None:
+    """Return the verifier's allow-listed environment, or ``None`` if absent.
+
+    The qualification process may receive the canonical backup credential from
+    its operator runner, but the verifier must not inherit unrelated process
+    secrets. In particular, the credential is passed through the environment
+    contract expected by OpenSSL and never appears in argv or evidence.
+    """
+
+    key = os.environ.get("BACKUP_ENCRYPTION_KEY")
+    if key is None or not key.strip():
+        return None
+    return {
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "BACKUP_ENCRYPTION_KEY": key,
+    }
+
+
 def _verify_backup(archive: Path, release: Path) -> Mapping[str, Any]:
+    environment = _backup_verifier_environment()
+    if environment is None:
+        return {"status": "FAIL", "reason": "credential_unavailable"}
     result = subprocess.run(
         [
             str(release / "venv/bin/python"),
@@ -106,10 +128,13 @@ def _verify_backup(archive: Path, release: Path) -> Mapping[str, Any]:
             str(archive),
         ],
         text=True,
+        env=environment,
         capture_output=True,
         timeout=180,
         check=False,
     )
+    if environment["BACKUP_ENCRYPTION_KEY"] in result.stdout:
+        return {"status": "FAIL", "reason": "credential_in_verifier_output"}
     if result.returncode != 0:
         return {"status": "FAIL", "reason": "verification_failed"}
     try:

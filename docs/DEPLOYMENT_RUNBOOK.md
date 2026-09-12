@@ -251,23 +251,36 @@ ordres non résolus, incidents, backup, services et payloads health/readiness.
 Il n'accepte aucun SHA, chemin d'attestation ni booléen PASS fourni par
 l'opérateur.
 
+La voie opératoire officielle charge la source de secret canonique
+`/opt/btcquant/.env` via deux services oneshot explicites. Les services ne sont
+ni activés ni planifiés par timer : l'opérateur déclenche séparément
+l'inspection puis, après revue de son résultat, l'enregistrement. Le processus
+tourne sous `btcquant`; l'inspection n'a aucun `ReadWritePaths` d'état, tandis
+que l'enregistrement ne peut écrire que `/opt/btcquant/state`.
+
 Inspection sans écriture :
 
+
 ```bash
-sudo -u btcquant /opt/btcquant/current/venv/bin/btcquant-qualify-paper inspect
+sudo systemctl start --wait btcquant-paper-qualification-inspect.service
+sudo journalctl -u btcquant-paper-qualification-inspect.service -n 100 --no-pager
 ```
 
 Après revue de l'artifact JSON PASS, une autorisation opératoire séparée est
 requise pour relancer tous les contrôles et écrire le record durable :
 
 ```bash
-sudo -u btcquant /opt/btcquant/current/venv/bin/btcquant-qualify-paper record
+sudo systemctl start --wait btcquant-paper-qualification-record.service
+sudo journalctl -u btcquant-paper-qualification-record.service -n 100 --no-pager
 ```
 
-Ne jamais appeler directement
-`StateStore.record_paper_technical_qualification` pour une qualification
-opérateur. Le record technique ne qualifie ni la maturité PAPER, ni le TESTNET,
-et ne crée aucun marqueur d'activation.
+Chaque invocation recollecte les preuves, notamment la dernière sauvegarde
+chiffrée; le record ne réutilise donc jamais le résultat d'une inspection
+précédente. L'appel direct du CLI reste réservé aux tests/local isolés et doit
+échouer fermé si son environnement ne fournit pas le credential de sauvegarde.
+Ne jamais appeler directement `StateStore.record_paper_technical_qualification`
+pour une qualification opérateur. Le record technique ne qualifie ni la
+maturité PAPER, ni le TESTNET, et ne crée aucun marqueur d'activation.
 
 ## Portail P1 Hyperliquid testnet
 
