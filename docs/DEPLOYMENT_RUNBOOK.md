@@ -239,10 +239,17 @@ au moins 30 jours de données avant d'interpréter la qualification proxy.
 ## Qualification technique PAPER evidence-driven
 
 La qualification technique d'une release active se fait exclusivement avec le
-producteur officiel. Il dérive le SHA et le tree du manifeste immutable actif,
-relance ses contrôles locaux isolés, vérifie la DB PAPER, le backup, les
-services et les payloads health/readiness. Il n'accepte aucun SHA ni booléen
-PASS fourni par l'opérateur.
+producteur officiel. Le pipeline de build exécute auparavant la validation
+hermétique dans un venv temporaire avec les dépendances de développement et
+publie `release-validation.json`, une attestation PASS liée au SHA/tree/schema
+et hashée dans le manifeste immutable. Le venv runtime est volontairement
+construit avec `--no-dev` : il ne contient donc pas pytest, Ruff ou mypy.
+
+À l'exécution, le producteur vérifie cette attestation via le manifeste actif
+et collecte à nouveau les preuves runtime fraîches : DB PAPER, intégrité,
+ordres non résolus, incidents, backup, services et payloads health/readiness.
+Il n'accepte aucun SHA, chemin d'attestation ni booléen PASS fourni par
+l'opérateur.
 
 Inspection sans écriture :
 

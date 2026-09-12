@@ -10,6 +10,7 @@ import pytest
 
 from btcquant.deployment import (
     DeploymentAlreadyRunning,
+    REQUIRED_VALIDATION_CHECKS,
     DeploymentProtocolError,
     atomic_switch_release,
     backup_sqlite_database,
@@ -23,6 +24,7 @@ from btcquant.deployment import (
     migration_rollback_disposition,
     open_database_handle_failures,
     restore_sqlite_database,
+    sha256_file,
     validate_canonical_repository,
     validate_release_manifest,
     writer_quiescence_failures,
@@ -46,6 +48,29 @@ def _release(root, name: str):
     config.mkdir(parents=True)
     (config / "config.yaml").write_text("exchange: hyperliquid\n", encoding="utf-8")
     return release
+
+
+def _write_validation_attestation(release: Path, sha: str, tree: str) -> None:
+    payload = {
+        "format_version": 1,
+        "validation_protocol_version": 1,
+        "status": "PASS",
+        "git_sha": sha,
+        "git_tree": tree,
+        "schema_version_required": SCHEMA_VERSION,
+        "created_at": "2026-09-12T00:00:00+00:00",
+        "validation_environment": {
+            "kind": "ephemeral_dev_validation_venv",
+            "python_version": "3.12.0",
+            "runtime_dev_tools_included": False,
+            "live_state_visible": False,
+            "runtime_symlinks_created_after_validation": True,
+        },
+        "checks": {name: {"status": "PASS"} for name in REQUIRED_VALIDATION_CHECKS},
+    }
+    (release / "release-validation.json").write_text(
+        json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+    )
 
 
 def test_deployment_lock_is_non_blocking(tmp_path):
@@ -127,6 +152,107 @@ def test_manifest_is_complete_and_secret_free(tmp_path):
             origin="origin",
             python_version="3.12.0",
             uv_version="0.11.0",
+        )
+
+
+def test_v2_manifest_requires_and_binds_validation_attestation(tmp_path):
+    release = _release(tmp_path, "a" * 40)
+    tree = "b" * 40
+    _write_validation_attestation(release, "a" * 40, tree)
+    manifest = build_release_manifest(
+        release,
+        git_sha="a" * 40,
+        git_tree=tree,
+        origin="https://github.com/example/btc-quant.git",
+        python_version="3.12.0",
+        uv_version="0.11.0",
+        require_validation_attestation=True,
+    )
+    from btcquant.deployment import write_release_manifest
+
+    write_release_manifest(release, manifest)
+    assert validate_release_manifest(release, "a" * 40)["manifest_format_version"] == 2
+
+    payload = json.loads((release / "release-validation.json").read_text())
+    payload["status"] = "FAIL"
+    (release / "release-validation.json").write_text(
+        json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+    )
+    with pytest.raises(DeploymentProtocolError):
+        validate_release_manifest(release, "a" * 40)
+
+
+@pytest.mark.parametrize(
+    "mutation", ["status", "git_sha", "git_tree", "schema", "check", "bytes", "missing"]
+)
+def test_v2_manifest_rejects_attestation_tampering(tmp_path, mutation):
+    release = _release(tmp_path, "a" * 40)
+    _write_validation_attestation(release, "a" * 40, "b" * 40)
+    manifest = build_release_manifest(
+        release,
+        git_sha="a" * 40,
+        git_tree="b" * 40,
+        origin="origin",
+        python_version="3.12.0",
+        uv_version="0.11.0",
+        require_validation_attestation=True,
+    )
+    from btcquant.deployment import write_release_manifest
+
+    write_release_manifest(release, manifest)
+    attestation = release / "release-validation.json"
+    if mutation == "missing":
+        attestation.unlink()
+    elif mutation == "bytes":
+        attestation.write_bytes(attestation.read_bytes() + b" \n")
+    else:
+        payload = json.loads(attestation.read_text())
+        if mutation == "status":
+            payload["status"] = "FAIL"
+        elif mutation == "git_sha":
+            payload["git_sha"] = "c" * 40
+        elif mutation == "git_tree":
+            payload["git_tree"] = "c" * 40
+        elif mutation == "schema":
+            payload["schema_version_required"] = SCHEMA_VERSION - 1
+        else:
+            payload["checks"]["full_suite"]["status"] = "FAIL"
+        attestation.write_text(json.dumps(payload, sort_keys=True, indent=2) + "\n")
+        manifest["validation_attestation_sha256"] = sha256_file(attestation)
+        write_release_manifest(release, manifest)
+    with pytest.raises(DeploymentProtocolError):
+        validate_release_manifest(release, "a" * 40)
+
+
+def test_producer_compatible_validation_rejects_missing_attestation(tmp_path):
+    release = _release(tmp_path, "a" * 40)
+    manifest = build_release_manifest(
+        release,
+        git_sha="a" * 40,
+        git_tree="b" * 40,
+        origin="origin",
+        python_version="3.12.0",
+        uv_version="0.11.0",
+    )
+    from btcquant.deployment import write_release_manifest
+
+    write_release_manifest(release, manifest)
+    with pytest.raises(DeploymentProtocolError, match="Attestation de validation requise"):
+        validate_release_manifest(release, "a" * 40, require_validation_attestation=True)
+
+
+def test_v2_manifest_rejects_cross_release_attestation(tmp_path):
+    release = _release(tmp_path, "a" * 40)
+    _write_validation_attestation(release, "c" * 40, "b" * 40)
+    with pytest.raises(DeploymentProtocolError):
+        build_release_manifest(
+            release,
+            git_sha="a" * 40,
+            git_tree="b" * 40,
+            origin="origin",
+            python_version="3.12.0",
+            uv_version="0.11.0",
+            require_validation_attestation=True,
         )
 
 
@@ -257,6 +383,8 @@ def test_deployment_scripts_expose_fail_closed_guards():
     assert "validate-release.sh" in create
     assert "release-manifest.json" in create
     assert create.index("validate-release.sh") < create.index("ln -s ../../state")
+    assert "release-validation.json" in create
+    assert create.index("release-validation.json") < create.index("ln -s ../../state")
     assert create.index("load_config('environments/paper/config.yaml')") < create.index(
         "ln -s ../../state"
     )
@@ -1115,7 +1243,9 @@ def test_validate_release_isolates_and_cleans_validation_artifacts(tmp_path):
         #!/usr/bin/env bash
         set -euo pipefail
         case " $* " in *" -p no:cacheprovider "*) ;; *) exit 11 ;; esac
-        case "$COVERAGE_FILE" in "$RELEASE"/*|"") exit 12 ;; esac
+        if [ -n "${COVERAGE_FILE:-}" ]; then
+          case "$COVERAGE_FILE" in "$RELEASE"/*|"") exit 12 ;; esac
+        fi
         if [ -n "${BTCQUANT_ROOT:-}" ] || [ -n "${BTCQUANT_CURRENT:-}" ] \
           || [ -n "${BTCQUANT_DATABASE:-}" ] || [ -n "${BTCQUANT_CLONE:-}" ] \
           || [ -n "${GIT_DIR:-}" ] || [ -n "${GIT_WORK_TREE:-}" ] \
@@ -1124,10 +1254,13 @@ def test_validate_release_isolates_and_cleans_validation_artifacts(tmp_path):
           printf 'runtime root leaked into pytest\\n' >&2
           exit 15
         fi
-        case "${HYPOTHESIS_STORAGE_DIRECTORY:-}" in
-          "$RELEASE"/*|"") exit 16 ;;
-        esac
-        touch "$COVERAGE_FILE"
+        if [ -n "${HYPOTHESIS_STORAGE_DIRECTORY:-}" ]; then
+          case "$HYPOTHESIS_STORAGE_DIRECTORY" in
+            "$RELEASE"/*|"") exit 16 ;; esac
+        fi
+        if [ -n "${COVERAGE_FILE:-}" ]; then
+          touch "$COVERAGE_FILE"
+        fi
         if [ "$FAKE_FAIL" = 1 ]; then exit 14; fi
         """,
     )
@@ -1214,11 +1347,12 @@ def test_validate_release_isolates_and_cleans_validation_artifacts(tmp_path):
     validation_env = Path((log_dir / "validation-env").read_text().strip())
     assert not validation_env.is_relative_to(release)
     assert not validation_env.parent.exists()
-    assert {
+    after = {
         path.relative_to(release): path.read_bytes()
         for path in release.rglob("*")
         if path.is_file()
-    } == before
+    }
+    assert after == before
     for transient in (
         ".validation-venv",
         ".pytest_cache",

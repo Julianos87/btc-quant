@@ -15,14 +15,34 @@ import re
 import sqlite3
 import subprocess
 import tomllib
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 REQUIRED_MANIFEST_FILES = ("release-manifest.json", "uv.lock", "pyproject.toml")
+MANIFEST_FORMAT_VERSION = 2
+VALIDATION_ATTESTATION_FORMAT_VERSION = 1
+VALIDATION_PROTOCOL_VERSION = 1
+VALIDATION_ATTESTATION_FILENAME = "release-validation.json"
+REQUIRED_VALIDATION_CHECKS = (
+    "full_suite",
+    "ruff",
+    "format",
+    "mypy",
+    "node_syntax",
+    "shell_syntax",
+    "dependency_export",
+    "sbom",
+    "provenance",
+    "pip_audit",
+    "protocol_tests",
+    "live_state_isolation",
+    "runtime_no_dev_tools",
+)
 
 # Services ayant un chemin d'écriture vers un état BTCQuant. Le gate de
 # migration traite aussi les bases secondaires comme des writers afin qu'aucun
@@ -444,6 +464,67 @@ def _hash_if_file(path: Path) -> str | None:
     return sha256_file(path) if path.is_file() else None
 
 
+def _read_validation_attestation(
+    release: str | Path, manifest: Mapping[str, object]
+) -> dict[str, object]:
+    """Validate and return the build-time validation attestation for a v2 manifest."""
+
+    release_path = Path(release)
+    if manifest.get("validation_attestation_file") != VALIDATION_ATTESTATION_FILENAME:
+        raise DeploymentProtocolError("Nom d'attestation de validation inattendu.")
+    expected_hash = manifest.get("validation_attestation_sha256")
+    if not isinstance(expected_hash, str) or SHA256_RE.fullmatch(expected_hash) is None:
+        raise DeploymentProtocolError("Hash d'attestation de validation invalide.")
+    path = release_path / VALIDATION_ATTESTATION_FILENAME
+    if not path.is_file() or sha256_file(path) != expected_hash:
+        raise DeploymentProtocolError("Hash d'attestation de validation invalide.")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise DeploymentProtocolError("Attestation de validation illisible.") from error
+    if not isinstance(payload, dict):
+        raise DeploymentProtocolError("Attestation de validation invalide.")
+    if payload.get("format_version") != VALIDATION_ATTESTATION_FORMAT_VERSION:
+        raise DeploymentProtocolError("Version d'attestation de validation inconnue.")
+    if payload.get("validation_protocol_version") != VALIDATION_PROTOCOL_VERSION:
+        raise DeploymentProtocolError("Protocole de validation inconnu.")
+    if payload.get("status") != "PASS":
+        raise DeploymentProtocolError("L'attestation de validation n'est pas PASS.")
+    if payload.get("git_sha") != manifest.get("git_sha"):
+        raise DeploymentProtocolError("SHA de l'attestation différent du manifeste.")
+    if payload.get("git_tree") != manifest.get("git_tree"):
+        raise DeploymentProtocolError("Tree de l'attestation différente du manifeste.")
+    if payload.get("schema_version_required") != manifest.get("schema_version_required"):
+        raise DeploymentProtocolError("Schéma de l'attestation différent du manifeste.")
+    checks = payload.get("checks")
+    if not isinstance(checks, dict):
+        raise DeploymentProtocolError("Checks de validation absents de l'attestation.")
+    for check_name in REQUIRED_VALIDATION_CHECKS:
+        check = checks.get(check_name)
+        if not isinstance(check, dict) or check.get("status") != "PASS":
+            raise DeploymentProtocolError(f"Check d'attestation non PASS: {check_name}")
+    environment = payload.get("validation_environment")
+    if not isinstance(environment, dict):
+        raise DeploymentProtocolError("Environnement de validation absent de l'attestation.")
+    if environment.get("live_state_visible") is not False:
+        raise DeploymentProtocolError("L'attestation n'établit pas l'isolation de l'état live.")
+    if environment.get("runtime_dev_tools_included") is not False:
+        raise DeploymentProtocolError("L'attestation viole le contrat runtime sans dev tools.")
+    if environment.get("runtime_symlinks_created_after_validation") is not True:
+        raise DeploymentProtocolError("L'ordre validation/symlinks n'est pas attesté.")
+    return payload
+
+
+def load_validation_attestation(
+    release: str | Path, manifest: Mapping[str, object]
+) -> dict[str, object]:
+    """Load a manifest-bound attestation after validating its complete contract."""
+
+    if manifest.get("manifest_format_version") != MANIFEST_FORMAT_VERSION:
+        raise DeploymentProtocolError("Le manifeste n'est pas producteur-compatible.")
+    return _read_validation_attestation(release, manifest)
+
+
 def _current_application_schema_version() -> int:
     """Return the schema contract implemented by this release."""
 
@@ -464,6 +545,7 @@ def build_release_manifest(
     uv_version: str,
     release_created_at: str | None = None,
     schema_version_required: int | None = None,
+    require_validation_attestation: bool = False,
 ) -> dict[str, object]:
     """Construit un manifeste sans lire de secret ni inclure de fichier secret."""
 
@@ -503,7 +585,8 @@ def build_release_manifest(
         application_version = str(project_metadata["project"]["version"])
     except (KeyError, OSError, tomllib.TOMLDecodeError) as error:
         raise DeploymentProtocolError("Version applicative absente du pyproject.toml") from error
-    return {
+    manifest: dict[str, object] = {
+        "manifest_format_version": MANIFEST_FORMAT_VERSION if require_validation_attestation else 1,
         "git_sha": git_sha,
         "git_tree": git_tree,
         "origin": origin,
@@ -518,6 +601,14 @@ def build_release_manifest(
         "schema_version_required": schema_version_required,
         "config_file_sha256": _hash_if_file(config),
     }
+    if require_validation_attestation:
+        attestation_hash = _hash_if_file(release_path / VALIDATION_ATTESTATION_FILENAME)
+        if attestation_hash is None:
+            raise DeploymentProtocolError("Attestation de validation absente de la release.")
+        manifest["validation_attestation_file"] = VALIDATION_ATTESTATION_FILENAME
+        manifest["validation_attestation_sha256"] = attestation_hash
+        _read_validation_attestation(release_path, manifest)
+    return manifest
 
 
 def write_release_manifest(release: str | Path, manifest: dict[str, object]) -> Path:
@@ -529,7 +620,12 @@ def write_release_manifest(release: str | Path, manifest: dict[str, object]) -> 
     return path
 
 
-def validate_release_manifest(release: str | Path, expected_sha: str) -> dict[str, object]:
+def validate_release_manifest(
+    release: str | Path,
+    expected_sha: str,
+    *,
+    require_validation_attestation: bool = False,
+) -> dict[str, object]:
     release_path = Path(release)
     validate_full_sha(expected_sha)
     manifest_path = release_path / "release-manifest.json"
@@ -543,6 +639,15 @@ def validate_release_manifest(release: str | Path, expected_sha: str) -> dict[st
         raise DeploymentProtocolError("Le manifeste doit être un objet JSON.")
     if manifest.get("git_sha") != expected_sha:
         raise DeploymentProtocolError("Le SHA du manifeste ne correspond pas à la release.")
+    manifest_version = manifest.get("manifest_format_version", 1)
+    if (
+        isinstance(manifest_version, bool)
+        or not isinstance(manifest_version, int)
+        or manifest_version not in (1, MANIFEST_FORMAT_VERSION)
+    ):
+        raise DeploymentProtocolError("Version de manifeste inconnue.")
+    if require_validation_attestation and manifest_version != MANIFEST_FORMAT_VERSION:
+        raise DeploymentProtocolError("Attestation de validation requise pour ce producteur.")
     expected_schema_version = _current_application_schema_version()
     if manifest.get("schema_version_required") != expected_schema_version:
         raise DeploymentProtocolError(
@@ -565,6 +670,8 @@ def validate_release_manifest(release: str | Path, expected_sha: str) -> dict[st
         expected_hash = manifest.get(field)
         if expected_hash is not None and (not path.is_file() or sha256_file(path) != expected_hash):
             raise DeploymentProtocolError(f"Hash de provenance invalide pour {filename}: {field}")
+    if manifest_version == MANIFEST_FORMAT_VERSION:
+        _read_validation_attestation(release_path, manifest)
     return manifest
 
 
