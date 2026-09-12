@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CLASS_A_PYTHON_RUNTIME = "A_python_runtime"
 CLASS_B_WRAPPER = "B_wrapper"
 CLASS_C_NO_RUNTIME_ROOT = "C_no_runtime_root"
+CLASS_C_READ_ONLY_PYTHON = "C_read_only_python"
 
 SERVICE_CLASSIFICATION: dict[str, str] = {
     "btcquant-dashboard.service": CLASS_A_PYTHON_RUNTIME,
@@ -34,6 +35,8 @@ SERVICE_CLASSIFICATION: dict[str, str] = {
     "btcquant-hyperliquid-testnet.service": CLASS_A_PYTHON_RUNTIME,
     "btcquant-hyperliquid-watchdog.service": CLASS_A_PYTHON_RUNTIME,
     "btcquant-backup.service": CLASS_A_PYTHON_RUNTIME,
+    "btcquant-paper-qualification-inspect.service": CLASS_C_READ_ONLY_PYTHON,
+    "btcquant-paper-qualification-record.service": CLASS_A_PYTHON_RUNTIME,
     "btcquant-rebalance.service": CLASS_B_WRAPPER,
     "btcquant-rebalance-pending.service": CLASS_B_WRAPPER,
 }
@@ -67,6 +70,7 @@ def test_exhaustive_service_inventory_has_zero_unclassified_units() -> None:
     assert set(SERVICE_CLASSIFICATION.values()) <= {
         CLASS_A_PYTHON_RUNTIME,
         CLASS_B_WRAPPER,
+        CLASS_C_READ_ONLY_PYTHON,
         CLASS_C_NO_RUNTIME_ROOT,
     }
 
@@ -114,6 +118,14 @@ def test_systemd_hardening_is_preserved() -> None:
             assert "NoNewPrivileges=true" in text
             assert "ProtectSystem=strict" in text
             assert "ProtectHome=true" in text
+            continue
+        if kind == CLASS_C_READ_ONLY_PYTHON:
+            for needle in A_PYTHON_HARDENING:
+                if needle == "ReadWritePaths=/opt/btcquant/state":
+                    continue
+                assert needle in text, f"{name} missing {needle}"
+            assert "ProtectHome=read-only" in text
+            assert "User=root" not in text, name
             continue
         for needle in A_PYTHON_HARDENING:
             assert needle in text, f"{name} missing {needle}"
@@ -227,7 +239,7 @@ def test_systemd_analyze_verify_source_units() -> None:
 
 def test_effective_environment_from_source_units_contains_runtime_root() -> None:
     for name, kind in SERVICE_CLASSIFICATION.items():
-        if kind != CLASS_A_PYTHON_RUNTIME:
+        if kind not in {CLASS_A_PYTHON_RUNTIME, CLASS_C_READ_ONLY_PYTHON}:
             continue
         env: dict[str, str] = {}
         for line in _service_text(name).splitlines():

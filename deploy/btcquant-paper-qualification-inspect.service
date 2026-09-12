@@ -1,0 +1,21 @@
+[Unit]
+Description=btcquant - inspect PAPER technical qualification evidence
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=btcquant
+WorkingDirectory=/opt/btcquant/current
+Environment=PYTHONIOENCODING=utf-8
+Environment=BTCQUANT_ROOT=/opt/btcquant
+EnvironmentFile=-/opt/btcquant/.env
+ExecStart=/opt/btcquant/current/venv/bin/btcquant-qualify-paper inspect
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+LockPersonality=true
