@@ -120,7 +120,7 @@
     "version": "hyperliquid-scoped-source-v1",
     "files": {
       "environments/testnet/config.yaml": "46dd7d30fbad2abbae6516b7dfb849fcec7eca3203de03c66b008d0f4f026427",
-      "pyproject.toml": "fe8c501df54b3d7c70d27cc41fe16ae0a1904ad920907e2dbf941f38d0cdf261",
+      "pyproject.toml": "67874f8a85af8d469563dc587980adeb2bd802fa1c6b1b19a55c458ad8ce8a0c",
       "src/btcquant/backtest/engine.py": "424c203ef3b87df3d8f2a133c7b4ac56f79868d783af4094c29053609060b5ad",
       "src/btcquant/backtest/metrics.py": "8f4226eeafde2201de96abe3c328093a4e9d43b50ea5d4aad61b222363335ad6",
       "src/btcquant/data.py": "b4757bd221edc27e04cc6beaf48ba70703d1dd772c60b2590063a4f7d7145774",
@@ -141,7 +141,7 @@
     },
     "pyproject": {
       "path": "pyproject.toml",
-      "sha256": "fe8c501df54b3d7c70d27cc41fe16ae0a1904ad920907e2dbf941f38d0cdf261"
+      "sha256": "67874f8a85af8d469563dc587980adeb2bd802fa1c6b1b19a55c458ad8ce8a0c"
     },
     "lock": {
       "path": "uv.lock",

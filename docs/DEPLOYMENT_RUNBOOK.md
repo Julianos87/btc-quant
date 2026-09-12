@@ -236,6 +236,32 @@ Le statut `SHADOW_PROXY_ONLY` est intentionnel : le market-through ne connaît
 pas la position dans la file et ne constitue donc pas un fill réel. Conserver
 au moins 30 jours de données avant d'interpréter la qualification proxy.
 
+## Qualification technique PAPER evidence-driven
+
+La qualification technique d'une release active se fait exclusivement avec le
+producteur officiel. Il dérive le SHA et le tree du manifeste immutable actif,
+relance ses contrôles locaux isolés, vérifie la DB PAPER, le backup, les
+services et les payloads health/readiness. Il n'accepte aucun SHA ni booléen
+PASS fourni par l'opérateur.
+
+Inspection sans écriture :
+
+```bash
+sudo -u btcquant /opt/btcquant/current/venv/bin/btcquant-qualify-paper inspect
+```
+
+Après revue de l'artifact JSON PASS, une autorisation opératoire séparée est
+requise pour relancer tous les contrôles et écrire le record durable :
+
+```bash
+sudo -u btcquant /opt/btcquant/current/venv/bin/btcquant-qualify-paper record
+```
+
+Ne jamais appeler directement
+`StateStore.record_paper_technical_qualification` pour une qualification
+opérateur. Le record technique ne qualifie ni la maturité PAPER, ni le TESTNET,
+et ne crée aucun marqueur d'activation.
+
 ## Portail P1 Hyperliquid testnet
 
 Le testnet ne doit être activé qu'après le `PASS` final de la campagne paper.
