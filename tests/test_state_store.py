@@ -5,12 +5,15 @@ from __future__ import annotations
 import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from threading import Event
+import time
 
 import pytest
 from btcquant.execution.errors import AccountingIdentityCollision, MigrationRequiredError
 
 from btcquant.execution.historical_state_reader import HistoricalStateReader
 from btcquant.execution.order_state import ExternalOrderState, LocalOrderState
+from btcquant.execution.readonly_state_db import open_state_db_readonly
 from btcquant.execution.state_store import StateStore
 from btcquant.execution.operational_state_reader import OperationalStateReader
 
@@ -95,6 +98,72 @@ def test_checkpoint_rolls_back_state_positions_and_event(tmp_path, monkeypatch):
 
     assert store.load_engine_state("trend") == original
     assert len(store.read_events()) == event_count
+    assert OperationalStateReader(store.path).integrity_check()
+
+
+def test_engine_state_projection_and_event_share_one_connection(tmp_path, monkeypatch):
+    store = StateStore(tmp_path / "btcquant.db")
+    connections: list[int] = []
+    original_sync = store._sync_positions
+    original_event = store._insert_event
+
+    def capture_sync(connection, *args, **kwargs):
+        connections.append(id(connection))
+        return original_sync(connection, *args, **kwargs)
+
+    def capture_event(connection, *args, **kwargs):
+        connections.append(id(connection))
+        return original_event(connection, *args, **kwargs)
+
+    monkeypatch.setattr(store, "_sync_positions", capture_sync)
+    monkeypatch.setattr(store, "_insert_event", capture_event)
+    store.save_engine_state("trend", {"slots": {}, "cash": 1000.0})
+
+    assert len(connections) == 2
+    assert connections[0] == connections[1]
+    assert store.load_engine_state("trend") == {"slots": {}, "cash": 1000.0}
+    assert len(store.read_events("trend")) == 1
+
+
+def test_engine_state_failure_after_event_rolls_back_all_coupled_writes(tmp_path, monkeypatch):
+    store = StateStore(tmp_path / "btcquant.db")
+
+    def fail_event(*args, **kwargs):
+        raise RuntimeError("simulated event failure")
+
+    monkeypatch.setattr(store, "_insert_event", fail_event)
+    with pytest.raises(RuntimeError, match="simulated event failure"):
+        store.save_engine_state("trend", {"slots": {}, "cash": 1000.0})
+
+    assert store.load_engine_state("trend") is None
+    with open_state_db_readonly(store.path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM positions").fetchone()[0] == 0
+    assert store.read_events("trend") == []
+    assert OperationalStateReader(store.path).integrity_check()
+
+
+def test_engine_state_write_waits_for_short_writer_contention(tmp_path):
+    store = StateStore(tmp_path / "btcquant.db")
+    acquired = Event()
+
+    def hold_writer_lock():
+        connection = sqlite3.connect(store.path, timeout=15.0)
+        try:
+            connection.execute("PRAGMA busy_timeout = 15000")
+            connection.execute("BEGIN IMMEDIATE")
+            acquired.set()
+            time.sleep(0.2)
+            connection.rollback()
+        finally:
+            connection.close()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(hold_writer_lock)
+        assert acquired.wait(timeout=2)
+        store.save_engine_state("trend", {"slots": {}, "cash": 1000.0})
+        future.result(timeout=2)
+
+    assert store.load_engine_state("trend") == {"slots": {}, "cash": 1000.0}
     assert OperationalStateReader(store.path).integrity_check()
 
 
