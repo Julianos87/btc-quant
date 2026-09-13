@@ -7,6 +7,7 @@ import sys
 import tarfile
 import shutil
 import sqlite3
+import threading
 from dataclasses import replace
 from pathlib import Path
 
@@ -18,9 +19,11 @@ from btcquant.deployment import (
     sha256_file,
     write_release_manifest,
 )
+from btcquant.execution import paper_technical_qualification as technical_qualification
 from btcquant.execution.paper_technical_qualification import (
     QualificationFailed,
     QualificationProbes,
+    _database_evidence,
     collect_paper_technical_evidence,
     _verify_backup,
     record_paper_technical_evidence,
@@ -503,3 +506,200 @@ def test_active_release_change_after_collection_prevents_record(tmp_path):
     with pytest.raises(QualificationFailed, match="RELEASE_MANIFEST_MISMATCH"):
         record_paper_technical_evidence(runtime, evidence)
     assert _qualification_count(runtime / "state/btcquant.db") == 0
+
+
+def _rollback_journal(database: Path) -> None:
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA journal_mode = DELETE")
+
+
+def test_database_evidence_reads_during_wal_begin_immediate_writer(tmp_path):
+    runtime = _root(tmp_path)
+    database = runtime / "state/btcquant.db"
+    writer = sqlite3.connect(database)
+    writer.execute("BEGIN IMMEDIATE")
+    try:
+        migration, safety = _database_evidence(database, SCHEMA_VERSION)
+    finally:
+        writer.rollback()
+        writer.close()
+    assert migration["status"] == "PASS"
+    assert migration["read_attempts"] == 1
+    assert migration["contention_recovered"] is False
+    assert safety["unresolved_orders"] == 0
+
+
+def test_database_evidence_waits_for_short_exclusive_lock(tmp_path):
+    runtime = _root(tmp_path)
+    database = runtime / "state/btcquant.db"
+    _rollback_journal(database)
+    ready = threading.Event()
+
+    def hold_lock() -> None:
+        connection = sqlite3.connect(database, timeout=1.0)
+        connection.execute("BEGIN EXCLUSIVE")
+        ready.set()
+        threading.Event().wait(0.1)
+        connection.rollback()
+        connection.close()
+
+    thread = threading.Thread(target=hold_lock)
+    thread.start()
+    assert ready.wait(1)
+    migration, _ = _database_evidence(database, SCHEMA_VERSION)
+    thread.join(1)
+    assert migration["status"] == "PASS"
+    assert migration["read_attempts"] == 1
+    assert migration["contention_recovered"] is False
+
+
+def test_database_evidence_reports_bounded_busy_exhaustion(tmp_path, monkeypatch):
+    runtime = _root(tmp_path)
+    database = runtime / "state/btcquant.db"
+    _rollback_journal(database)
+    writer = sqlite3.connect(database, timeout=1.0)
+    writer.execute("BEGIN EXCLUSIVE")
+    monkeypatch.setattr(technical_qualification, "_SQLITE_READ_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(technical_qualification, "_SQLITE_READ_BUSY_TIMEOUT_MS", 10)
+    monkeypatch.setattr(technical_qualification.time, "sleep", lambda seconds: None)
+    try:
+        with pytest.raises(QualificationFailed) as failure:
+            _database_evidence(database, SCHEMA_VERSION)
+    finally:
+        writer.rollback()
+        writer.close()
+    assert "DB_INTEGRITY_FAILED" in str(failure.value)
+    assert "sqlite_errorname=SQLITE_BUSY" in failure.value.detail
+    assert "sqlite_errorcode=5" in failure.value.detail
+    assert "attempts=3" in failure.value.detail
+
+
+def test_database_evidence_retries_locked_then_succeeds(monkeypatch):
+    calls = 0
+
+    class LockedError(sqlite3.OperationalError):
+        sqlite_errorcode = sqlite3.SQLITE_LOCKED
+        sqlite_errorname = "SQLITE_LOCKED"
+
+    def snapshot(database, expected_schema):
+        del database, expected_schema
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise LockedError("database table is locked")
+        return (
+            {
+                "status": "PASS",
+                "schema_version": SCHEMA_VERSION,
+                "required_schema_version": SCHEMA_VERSION,
+                "migration_required": False,
+                "integrity": "ok",
+                "foreign_key_errors": 0,
+            },
+            {
+                "unresolved_orders": 0,
+                "reconciliation_required_engines": 0,
+                "open_critical_incidents": 0,
+            },
+        )
+
+    monkeypatch.setattr(technical_qualification, "_database_evidence_once", snapshot)
+    monkeypatch.setattr(technical_qualification.time, "sleep", lambda seconds: None)
+    migration, _ = _database_evidence(Path("fixture.db"), SCHEMA_VERSION)
+    assert calls == 2
+    assert migration["read_attempts"] == 2
+    assert migration["contention_recovered"] is True
+
+
+@pytest.mark.parametrize(
+    ("code", "name"),
+    [
+        (sqlite3.SQLITE_CORRUPT, "SQLITE_CORRUPT"),
+        (sqlite3.SQLITE_NOTADB, "SQLITE_NOTADB"),
+        (sqlite3.SQLITE_IOERR, "SQLITE_IOERR"),
+        (sqlite3.SQLITE_CANTOPEN, "SQLITE_CANTOPEN"),
+    ],
+)
+def test_database_evidence_does_not_retry_non_contention_errors(monkeypatch, code, name):
+    calls = 0
+
+    class NonContentionError(sqlite3.DatabaseError):
+        sqlite_errorcode = code
+        sqlite_errorname = name
+
+    def snapshot(database, expected_schema):
+        del database, expected_schema
+        nonlocal calls
+        calls += 1
+        raise NonContentionError(name)
+
+    monkeypatch.setattr(technical_qualification, "_database_evidence_once", snapshot)
+    with pytest.raises(QualificationFailed) as failure:
+        _database_evidence(Path("fixture.db"), SCHEMA_VERSION)
+    assert calls == 1
+    assert f"sqlite_errorname={name}" in failure.value.detail
+    assert "attempts=1" in failure.value.detail
+
+
+def test_database_integrity_failure_is_not_retried(monkeypatch):
+    calls = 0
+
+    def snapshot(database, expected_schema):
+        del database, expected_schema
+        nonlocal calls
+        calls += 1
+        raise QualificationFailed("DB_INTEGRITY_FAILED", "integrity=not ok")
+
+    monkeypatch.setattr(technical_qualification, "_database_evidence_once", snapshot)
+    with pytest.raises(QualificationFailed, match="integrity=not ok"):
+        _database_evidence(Path("fixture.db"), SCHEMA_VERSION)
+    assert calls == 1
+
+
+def test_malformed_sqlite_fails_closed_without_retry(tmp_path):
+    runtime = _root(tmp_path)
+    database = runtime / "state/btcquant.db"
+    database.write_bytes(b"not sqlite")
+    with pytest.raises(QualificationFailed) as failure:
+        _database_evidence(database, SCHEMA_VERSION)
+    assert "sqlite_errorname=SQLITE_NOTADB" in failure.value.detail
+    assert "attempts=1" in failure.value.detail
+
+
+def test_database_evidence_uses_canonical_read_snapshot_contract(tmp_path, monkeypatch):
+    runtime = _root(tmp_path)
+    database = runtime / "state/btcquant.db"
+    real_connect = sqlite3.connect
+    observed: dict[str, object] = {}
+    statements: list[str] = []
+
+    class RecordingConnection:
+        def __init__(self, connection):
+            self.connection = connection
+
+        def execute(self, sql, parameters=()):
+            statements.append(sql)
+            return self.connection.execute(sql, parameters)
+
+        def rollback(self):
+            return self.connection.rollback()
+
+        def close(self):
+            return self.connection.close()
+
+    def connect(*args, **kwargs):
+        observed["args"] = args
+        observed.update(kwargs)
+        connection = real_connect(*args, **kwargs)
+        return RecordingConnection(connection)
+
+    monkeypatch.setattr(technical_qualification.sqlite3, "connect", connect)
+    migration, _ = _database_evidence(database, SCHEMA_VERSION)
+    assert migration["status"] == "PASS"
+    assert observed["timeout"] == 15.0
+    assert observed["uri"] is True
+    assert "mode=ro" in str(observed["args"][0])
+    assert "PRAGMA query_only = ON" in statements
+    assert "PRAGMA foreign_keys = ON" in statements
+    assert "PRAGMA busy_timeout = 15000" in statements
+    assert "BEGIN" in statements

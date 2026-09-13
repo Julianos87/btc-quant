@@ -13,6 +13,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import time
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -37,6 +38,9 @@ _REQUIRED_SERVICES = (
     "btcquant-shadow.service",
     "btcquant-dashboard.service",
 )
+_SQLITE_READ_TIMEOUT_SECONDS = 15.0
+_SQLITE_READ_BUSY_TIMEOUT_MS = 15_000
+_MAX_DATABASE_EVIDENCE_ATTEMPTS = 3
 
 
 class QualificationFailed(RuntimeError):
@@ -258,11 +262,49 @@ def _paper_database(root: Path, release: Path) -> Path:
     return database
 
 
-def _database_evidence(
+def _sqlite_error_code(error: sqlite3.Error) -> int | None:
+    code = getattr(error, "sqlite_errorcode", None)
+    return code if isinstance(code, int) else None
+
+
+def _sqlite_error_detail(error: sqlite3.Error, attempts: int) -> str:
+    code = _sqlite_error_code(error)
+    base_code = code & 0xFF if code is not None else None
+    name = getattr(error, "sqlite_errorname", None)
+    return (
+        f"sqlite_errorname={name if isinstance(name, str) else 'UNKNOWN'}, "
+        f"sqlite_errorcode={code if code is not None else 'UNKNOWN'}, "
+        f"sqlite_errorcode_base={base_code if base_code is not None else 'UNKNOWN'}, "
+        f"attempts={attempts}"
+    )
+
+
+def _is_busy_or_locked(error: sqlite3.Error) -> bool:
+    code = _sqlite_error_code(error)
+    base_code = code & 0xFF if code is not None else None
+    busy_code = getattr(sqlite3, "SQLITE_BUSY", 5)
+    locked_code = getattr(sqlite3, "SQLITE_LOCKED", 6)
+    name = getattr(error, "sqlite_errorname", None)
+    return base_code in {busy_code, locked_code} or name in {
+        "SQLITE_BUSY",
+        "SQLITE_LOCKED",
+    }
+
+
+def _database_evidence_once(
     database: Path, expected_schema: int
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
+    uri = f"file:{database}?mode=ro"
+    connection = sqlite3.connect(
+        uri,
+        uri=True,
+        timeout=_SQLITE_READ_TIMEOUT_SECONDS,
+    )
+    try:
         connection.execute("PRAGMA query_only = ON")
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute(f"PRAGMA busy_timeout = {_SQLITE_READ_BUSY_TIMEOUT_MS}")
+        connection.execute("BEGIN")
         schema_row = connection.execute(
             "SELECT value FROM metadata WHERE key='schema_version'"
         ).fetchone()
@@ -281,43 +323,70 @@ def _database_evidence(
             ).fetchone()[0]
         )
         states = connection.execute("SELECT engine, payload FROM engine_state").fetchall()
-    reconciliation = 0
-    for engine, raw in states:
+        reconciliation = 0
+        for engine, raw in states:
+            try:
+                state = json.loads(str(raw))
+            except json.JSONDecodeError as error:
+                raise QualificationFailed(
+                    "PENDING_RECONCILIATION", f"malformed engine state for {engine}"
+                ) from error
+            if not isinstance(state, dict) or state.get("reconciliation_required") is True:
+                reconciliation += 1
+        _require(
+            schema == expected_schema,
+            "DB_SCHEMA_MISMATCH",
+            f"observed={schema}, required={expected_schema}",
+        )
+        _require(
+            integrity == "ok" and not foreign_keys,
+            "DB_INTEGRITY_FAILED",
+            f"integrity={integrity}, foreign_key_errors={len(foreign_keys)}",
+        )
+        _require(unresolved == 0, "UNRESOLVED_ORDERS", str(unresolved))
+        _require(reconciliation == 0, "PENDING_RECONCILIATION", str(reconciliation))
+        _require(incidents == 0, "OPEN_CRITICAL_INCIDENT", str(incidents))
+        migration = {
+            "status": "PASS",
+            "schema_version": schema,
+            "required_schema_version": expected_schema,
+            "migration_required": False,
+            "integrity": integrity,
+            "foreign_key_errors": 0,
+        }
+        safety = {
+            "unresolved_orders": unresolved,
+            "reconciliation_required_engines": reconciliation,
+            "open_critical_incidents": incidents,
+        }
+        return migration, safety
+    finally:
+        connection.rollback()
+        connection.close()
+
+
+def _database_evidence(
+    database: Path, expected_schema: int
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    for attempt in range(1, _MAX_DATABASE_EVIDENCE_ATTEMPTS + 1):
         try:
-            state = json.loads(str(raw))
-        except json.JSONDecodeError as error:
-            raise QualificationFailed(
-                "PENDING_RECONCILIATION", f"malformed engine state for {engine}"
-            ) from error
-        if not isinstance(state, dict) or state.get("reconciliation_required") is True:
-            reconciliation += 1
-    _require(
-        schema == expected_schema,
-        "DB_SCHEMA_MISMATCH",
-        f"observed={schema}, required={expected_schema}",
-    )
-    _require(
-        integrity == "ok" and not foreign_keys,
-        "DB_INTEGRITY_FAILED",
-        f"integrity={integrity}, foreign_key_errors={len(foreign_keys)}",
-    )
-    _require(unresolved == 0, "UNRESOLVED_ORDERS", str(unresolved))
-    _require(reconciliation == 0, "PENDING_RECONCILIATION", str(reconciliation))
-    _require(incidents == 0, "OPEN_CRITICAL_INCIDENT", str(incidents))
-    migration = {
-        "status": "PASS",
-        "schema_version": schema,
-        "required_schema_version": expected_schema,
-        "migration_required": False,
-        "integrity": integrity,
-        "foreign_key_errors": 0,
-    }
-    safety = {
-        "unresolved_orders": unresolved,
-        "reconciliation_required_engines": reconciliation,
-        "open_critical_incidents": incidents,
-    }
-    return migration, safety
+            migration, safety = _database_evidence_once(database, expected_schema)
+            migration["read_attempts"] = attempt
+            migration["contention_recovered"] = attempt > 1
+            return migration, safety
+        except QualificationFailed:
+            raise
+        except sqlite3.Error as error:
+            if not _is_busy_or_locked(error):
+                raise QualificationFailed(
+                    "DB_INTEGRITY_FAILED", _sqlite_error_detail(error, attempt)
+                ) from error
+            if attempt == _MAX_DATABASE_EVIDENCE_ATTEMPTS:
+                raise QualificationFailed(
+                    "DB_INTEGRITY_FAILED", _sqlite_error_detail(error, attempt)
+                ) from error
+            time.sleep(0.1 * attempt)
+    raise AssertionError("database evidence retry loop exhausted unexpectedly")
 
 
 def _fixed_test_evidence(
