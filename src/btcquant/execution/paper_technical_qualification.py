@@ -7,6 +7,7 @@ immutable release, fixed local checks, the PAPER database, and runtime probes.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -152,6 +153,34 @@ def _verify_backup(archive: Path, release: Path) -> Mapping[str, Any]:
 
 
 DEFAULT_PROBES = QualificationProbes(_run, _get_json, _service_active, _verify_backup)
+
+
+CONFIG_IDENTITY_VERSION = 1
+
+
+def active_paper_release(root: Path) -> tuple[Path, dict[str, Any]]:
+    """Return the validated immutable PAPER release and its manifest."""
+
+    return _active_release(root.resolve(strict=True))
+
+
+def paper_config_identity(manifest: Mapping[str, Any], *, required_engines: Sequence[str]) -> str:
+    """Hash only non-secret configuration facts that affect PAPER maturity.
+
+    The immutable PAPER config is represented by the manifest's already
+    verified config hash. The required engine profile is included because it
+    is an explicit, non-secret deployment input and changes the campaign
+    population. Credentials, endpoint secrets and operator environment are
+    deliberately excluded.
+    """
+
+    payload = {
+        "version": CONFIG_IDENTITY_VERSION,
+        "manifest_config_file_sha256": manifest.get("config_file_sha256"),
+        "required_engines": list(required_engines),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _require(condition: bool, reason: str, detail: str) -> None:

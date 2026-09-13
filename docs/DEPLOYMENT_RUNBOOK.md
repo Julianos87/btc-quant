@@ -282,6 +282,31 @@ Ne jamais appeler directement `StateStore.record_paper_technical_qualification`
 pour une qualification opérateur. Le record technique ne qualifie ni la
 maturité PAPER, ni le TESTNET, et ne crée aucun marqueur d'activation.
 
+### Démarrage de la maturité PAPER v3
+
+Après la qualification technique, la maturité PAPER est démarrée uniquement par
+le chemin boundé suivant :
+
+```bash
+sudo systemctl start --wait btcquant-paper-maturity-start.service
+sudo journalctl -u btcquant-paper-maturity-start.service -n 100 --no-pager
+/opt/btcquant/current/venv/bin/btcquant-readiness paper-maturity-status --json
+```
+
+L'oneshot s'exécute sous `btcquant`, charge `/opt/btcquant/.env` uniquement pour
+la vérification du backup et n'est ni activé ni déclenché par timer. Il dérive
+la release active et la DB PAPER canonique; il refuse les bases arbitraires ou
+TESTNET, les qualifications techniques absentes/non correspondantes, les états
+non sûrs, un Trend non `FLAT`, un backup non vérifié et toute campagne déjà
+active. Le timestamp est généré par le processus. Aucun compteur ou date
+historique ne peut être fourni par l'opérateur.
+
+Le binding v3 est stocké dans le JSON `policy` existant, sans migration SQLite.
+Il couvre l'environnement, l'identifiant de la qualification technique, le SHA,
+l'arbre, le schéma, l'identité non secrète du fichier de configuration et les
+moteurs requis. Le statut et le preflight refusent une campagne liée à une
+release/configuration différente.
+
 ## Portail P1 Hyperliquid testnet
 
 Le testnet ne doit être activé qu'après le `PASS` final de la campagne paper.

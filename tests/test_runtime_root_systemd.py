@@ -37,6 +37,7 @@ SERVICE_CLASSIFICATION: dict[str, str] = {
     "btcquant-backup.service": CLASS_A_PYTHON_RUNTIME,
     "btcquant-paper-qualification-inspect.service": CLASS_C_READ_ONLY_PYTHON,
     "btcquant-paper-qualification-record.service": CLASS_A_PYTHON_RUNTIME,
+    "btcquant-paper-maturity-start.service": CLASS_A_PYTHON_RUNTIME,
     "btcquant-rebalance.service": CLASS_B_WRAPPER,
     "btcquant-rebalance-pending.service": CLASS_B_WRAPPER,
 }

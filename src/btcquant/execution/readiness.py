@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, time, timedelta
+from pathlib import Path
 from typing import Any
 
 from .historical_state_reader import HistoricalStateReader
@@ -17,7 +18,8 @@ from .operational_state_reader import OperationalStateReader
 from .quality_metrics import percentile, slippages_bps
 from .state_store import StateStore
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
+LEGACY_PROTOCOL_VERSIONS = frozenset({1, 2})
 TERMINAL_STATUSES = {"FILLED", "PARTIAL", "REJECTED", "FAILED", "CANCELED"}
 UNRESOLVED_STATUSES = {"PENDING", "OPEN", "UNBALANCED"}
 
@@ -288,22 +290,200 @@ def testnet_p1_policy() -> ReadinessPolicy:
     )
 
 
+def _decode_campaign_contract(
+    campaign: dict[str, Any],
+) -> tuple[ReadinessPolicy, dict[str, Any] | None]:
+    """Decode legacy flat policies and bound protocol-v3 policies centrally."""
+
+    raw = campaign.get("policy")
+    protocol = int(campaign.get("protocol_version", 0))
+    if not isinstance(raw, dict):
+        raise ValueError("Contrat de campagne malformé")
+    if protocol == PROTOCOL_VERSION:
+        nested = raw.get("policy")
+        binding = raw.get("binding")
+        if not isinstance(nested, dict) or not isinstance(binding, dict):
+            raise ValueError("Contrat PAPER v3 incomplet")
+        policy = dict(nested)
+        policy["required_engines"] = tuple(policy.get("required_engines", ()))
+        return ReadinessPolicy(**policy), dict(binding)
+    if protocol in LEGACY_PROTOCOL_VERSIONS:
+        policy = dict(raw)
+        policy["required_engines"] = tuple(policy.get("required_engines", ()))
+        return ReadinessPolicy(**policy), None
+    raise ValueError(f"Version de protocole de campagne inconnue: {protocol}")
+
+
+def _current_paper_binding(
+    store: StateStore,
+    campaign: dict[str, Any],
+    *,
+    root: Path | None,
+) -> dict[str, Any]:
+    """Return a read-only comparison of a v3 binding to current PAPER facts."""
+
+    protocol = int(campaign.get("protocol_version", 0))
+    if protocol != PROTOCOL_VERSION:
+        return {
+            "status": "UNBOUND_LEGACY",
+            "passed": False,
+            "reason_code": "PAPER_MATURITY_BINDING_MISMATCH",
+            "detail": "legacy campaign has no release/configuration binding",
+        }
+    try:
+        policy, binding = _decode_campaign_contract(campaign)
+        if binding is None:
+            raise ValueError("binding missing")
+        from .paper_technical_qualification import (
+            active_paper_release,
+            paper_config_identity,
+        )
+
+        resolved_root = (root or store.path.parent.parent).resolve(strict=True)
+        _release, manifest = active_paper_release(resolved_root)
+        profile = service_component_profile()
+        current_engines = tuple(profile.required)
+        current_config = paper_config_identity(manifest, required_engines=current_engines)
+        technical = store.latest_paper_technical_qualification_record()
+        technical_id = technical["id"] if technical is not None else None
+        payload = technical["payload"] if technical is not None else {}
+        comparisons = {
+            "environment": binding.get("environment") == "paper",
+            "release_sha": binding.get("release_sha") == manifest.get("git_sha"),
+            "release_tree": binding.get("release_tree") == manifest.get("git_tree"),
+            "schema_version": binding.get("schema_version")
+            == manifest.get("schema_version_required"),
+            "config_identity": binding.get("config_identity") == current_config,
+            "required_engines": tuple(binding.get("required_engines", ())) == current_engines,
+            "technical_qualification_id": technical_id is not None
+            and binding.get("technical_qualification_id") == technical_id,
+            "technical_qualification": bool(payload)
+            and payload.get("status") == "PAPER_TECHNICAL_QUALIFIED"
+            and payload.get("release_sha") == manifest.get("git_sha")
+            and payload.get("release_tree") == manifest.get("git_tree")
+            and payload.get("schema_version") == manifest.get("schema_version_required"),
+        }
+        passed = all(comparisons.values())
+        return {
+            "status": "PASS" if passed else "MISMATCH",
+            "passed": passed,
+            "reason_code": None if passed else "PAPER_MATURITY_BINDING_MISMATCH",
+            "detail": "bound PAPER release and technical qualification match"
+            if passed
+            else "release, config, or technical qualification binding differs",
+            "comparisons": comparisons,
+            "bound": dict(binding),
+            "current": {
+                "release_sha": manifest.get("git_sha"),
+                "release_tree": manifest.get("git_tree"),
+                "schema_version": manifest.get("schema_version_required"),
+                "config_identity": current_config,
+                "technical_qualification_id": technical_id,
+            },
+        }
+    except Exception as error:
+        return {
+            "status": "UNKNOWN",
+            "passed": False,
+            "reason_code": "PAPER_MATURITY_BINDING_MISMATCH",
+            "detail": "current PAPER binding could not be demonstrated",
+            "error_type": type(error).__name__,
+        }
+
+
+def start_paper_maturity_campaign(
+    root: Path,
+    *,
+    policy: ReadinessPolicy | None = None,
+    probes: Any = None,
+    now_factory: Any = None,
+) -> dict[str, Any]:
+    """Collect fresh PAPER evidence, then create one bound protocol-v3 row."""
+
+    from .paper_technical_qualification import (
+        DEFAULT_PROBES,
+        _paper_database,
+        active_paper_release,
+        collect_paper_technical_evidence,
+        paper_config_identity,
+    )
+
+    root = root.resolve(strict=True)
+    cfg = policy or ReadinessPolicy()
+    profile = service_component_profile()
+    if profile.reason_codes:
+        raise RuntimeError("Invalid PAPER required-engine profile")
+    cfg = ReadinessPolicy(**{**cfg.to_dict(), "required_engines": profile.required})
+    selected_probes = probes or DEFAULT_PROBES
+    evidence = collect_paper_technical_evidence(root, probes=selected_probes)
+    release, manifest = active_paper_release(root)
+    database = _paper_database(root, release)
+    store = StateStore(database, initialize=False)
+    technical = store.latest_paper_technical_qualification_record()
+    if technical is None or technical["payload"].get("status") != "PAPER_TECHNICAL_QUALIFIED":
+        raise RuntimeError("Aucune qualification technique PAPER PASS actuelle")
+    payload = technical["payload"]
+    if any(
+        payload.get(key) != evidence.get(key)
+        for key in ("release_sha", "release_tree", "schema_version")
+    ):
+        raise RuntimeError("La qualification technique ne correspond pas à la release active")
+    required_engines = tuple(cfg.required_engines)
+    if not required_engines:
+        raise RuntimeError("La policy PAPER doit exiger au moins un moteur")
+    binding = {
+        "environment": "paper",
+        "technical_qualification_id": technical["id"],
+        "release_sha": manifest["git_sha"],
+        "release_tree": manifest["git_tree"],
+        "schema_version": manifest["schema_version_required"],
+        "config_identity": paper_config_identity(manifest, required_engines=required_engines),
+        "config_identity_version": 1,
+        "required_engines": list(required_engines),
+    }
+    return store.start_bound_paper_maturity_campaign(
+        policy=cfg.to_dict(),
+        binding=binding,
+        required_engines=required_engines,
+        qualification_id=technical["id"],
+        now_factory=now_factory or (lambda: datetime.now(UTC).isoformat()),
+    )
+
+
+def _paper_status_safety(store: StateStore) -> dict[str, int]:
+    unresolved = sum(
+        1
+        for item in store.read_orders()
+        if item.get("local_state") != "TERMINAL"
+        and not (item.get("order_type") == "STOP" and item.get("status") == "OPEN")
+    )
+    incidents = OperationalStateReader(store.path).read_incidents(open_only=True)
+    critical = sum(item.get("severity") == "CRITICAL" for item in incidents)
+    reconciliation = 0
+    for engine in ("trend", "carry"):
+        state = store.load_engine_state(engine)
+        if isinstance(state, dict) and state.get("reconciliation_required") is True:
+            reconciliation += 1
+    return {
+        "unresolved_orders": unresolved,
+        "reconciliation_required": reconciliation,
+        "open_critical_incidents": critical,
+    }
+
+
 def paper_maturity_status(
     store: StateStore,
     *,
     now: datetime | None = None,
+    root: Path | None = None,
 ) -> dict[str, Any]:
-    """Return observed PAPER maturity without mutating state or predicting.
-
-    Technical qualification is deliberately not folded into this report.  A
-    deployment can therefore be technically sound while the independent
-    observation campaign is still below its policy thresholds.
-    """
+    """Return observed PAPER maturity without mutating state or predicting."""
 
     current = now or datetime.now(UTC)
     if current.tzinfo is None:
         current = current.replace(tzinfo=UTC)
     campaign = store.active_qualification_campaign() or store.latest_passed_qualification()
+    safety = _paper_status_safety(store)
     if campaign is None:
         policy = ReadinessPolicy()
         return {
@@ -311,6 +491,10 @@ def paper_maturity_status(
             "status": "NOT_STARTED",
             "qualified": False,
             "campaign_id": None,
+            "protocol_version": None,
+            "binding_status": "NOT_STARTED",
+            "reason_code": None,
+            **safety,
             "observation_age_days": 0.0,
             "required_observation_days": policy.min_observation_days,
             "time_criterion_met": False,
@@ -323,7 +507,7 @@ def paper_maturity_status(
             "required_closed_trades": policy.min_closed_trades,
         }
 
-    policy = ReadinessPolicy(**campaign["policy"])
+    policy, binding = _decode_campaign_contract(campaign)
     started = _parse_datetime(campaign["started_at"])
     required_engines = set(policy.required_engines)
     history = HistoricalStateReader(store.path)
@@ -351,13 +535,19 @@ def paper_maturity_status(
         )
         and len(trades) >= policy.min_closed_trades
     )
-    qualified = campaign.get("status") == "PASSED" and counters_met
+    binding_check = _current_paper_binding(store, campaign, root=root)
+    qualified = campaign.get("status") == "PASSED" and counters_met and binding_check["passed"]
     return {
         "kind": "PAPER_MATURITY_STATUS",
         "status": "PAPER_MATURITY_QUALIFIED" if qualified else "PAPER_MATURITY_IN_PROGRESS",
         "qualified": qualified,
         "campaign_id": int(campaign["id"]),
         "campaign_status": campaign.get("status"),
+        "protocol_version": int(campaign["protocol_version"]),
+        "binding_status": binding_check["status"],
+        "binding": binding_check,
+        "reason_code": binding_check.get("reason_code"),
+        **safety,
         "observation_age_days": round(observation_age_days, 6),
         "required_observation_days": policy.min_observation_days,
         "time_criterion_met": time_met,
@@ -387,7 +577,7 @@ class ReadinessCheck:
         }
 
 
-def start_campaign(
+def _start_campaign_for_test(
     store: StateStore,
     policy: ReadinessPolicy | None = None,
     *,
@@ -395,7 +585,7 @@ def start_campaign(
 ) -> dict[str, Any]:
     cfg = policy or ReadinessPolicy()
     return store.start_qualification_campaign(
-        protocol_version=PROTOCOL_VERSION,
+        protocol_version=2,
         policy=cfg.to_dict(),
         started_at=started_at,
     )
@@ -411,7 +601,7 @@ def _inactive_campaign_report(
     if passed_campaign is not None and isinstance(passed_campaign.get("final_report"), dict):
         final_report = dict(passed_campaign["final_report"])
         final_report["campaign_status"] = "PASSED"
-        policy = ReadinessPolicy(**passed_campaign["policy"])
+        policy, _binding = _decode_campaign_contract(passed_campaign)
         ended = _parse_datetime(passed_campaign["ended_at"])
         age_days = max(0.0, (current - ended).total_seconds() / 86400)
         checks = list(final_report["checks"])
@@ -490,9 +680,9 @@ def _build_active_checks(
         ReadinessCheck(
             "campaign",
             "Campagne de qualification",
-            int(campaign["protocol_version"]) == PROTOCOL_VERSION,
+            int(campaign["protocol_version"]) in (2, PROTOCOL_VERSION),
             f"#{campaign['id']} / v{campaign['protocol_version']}",
-            f"RUNNING / v{PROTOCOL_VERSION}",
+            f"RUNNING / v{PROTOCOL_VERSION} or legacy fixture",
             (
                 ""
                 if int(campaign["protocol_version"]) == PROTOCOL_VERSION
@@ -627,7 +817,7 @@ def evaluate_readiness(
     if campaign is None:
         return _inactive_campaign_report(store, current, persist=persist)
 
-    policy = ReadinessPolicy(**campaign["policy"])
+    policy, _binding = _decode_campaign_contract(campaign)
     started = _parse_datetime(campaign["started_at"])
     required_engines = tuple(policy.required_engines)
     history = HistoricalStateReader(store.path)
@@ -733,6 +923,10 @@ def finalize_campaign(store: StateStore, *, now: datetime | None = None) -> dict
     campaign = store.active_qualification_campaign()
     if campaign is None:
         raise RuntimeError("Aucune campagne de qualification active")
+    if int(campaign["protocol_version"]) == PROTOCOL_VERSION:
+        binding = _current_paper_binding(store, campaign, root=store.path.parent.parent)
+        if not binding["passed"]:
+            raise RuntimeError("Qualification refusée : PAPER maturity binding mismatch")
     report = evaluate_readiness(store, now=now, persist=True)
     if report["status"] != "PASS":
         raise RuntimeError("Qualification refusée : certains critères sont en échec")
@@ -753,10 +947,13 @@ def require_passed_qualification(store: StateStore) -> dict[str, Any]:
         raise RuntimeError("SÉCURITÉ : aucune campagne paper finalisée PASS ; testnet interdit")
     if int(campaign["protocol_version"]) != PROTOCOL_VERSION:
         raise RuntimeError("SÉCURITÉ : qualification réalisée avec un protocole obsolète")
+    binding = _current_paper_binding(store, campaign, root=store.path.parent.parent)
+    if not binding["passed"]:
+        raise RuntimeError("SÉCURITÉ : binding PAPER maturity invalide")
     report = campaign.get("final_report")
     if not isinstance(report, dict) or report.get("status") != "PASS":
         raise RuntimeError("SÉCURITÉ : preuve de qualification PASS absente")
-    policy = ReadinessPolicy(**campaign["policy"])
+    policy, _binding = _decode_campaign_contract(campaign)
     ended_at = _parse_datetime(campaign["ended_at"])
     age_days = (datetime.now(UTC) - ended_at).total_seconds() / 86400
     if age_days > policy.qualification_valid_days:

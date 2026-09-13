@@ -1,0 +1,247 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from btcquant.execution import paper_technical_qualification as technical
+from btcquant.execution.readiness import (
+    ReadinessPolicy,
+    paper_maturity_status,
+    start_paper_maturity_campaign,
+)
+from btcquant.execution.state_store import SCHEMA_VERSION, StateStore
+
+
+def _technical_evidence(sha: str, tree: str) -> dict[str, object]:
+    return {
+        "release_sha": sha,
+        "release_tree": tree,
+        "schema_version": SCHEMA_VERSION,
+        "status": "PASS",
+    }
+
+
+def _prepare_bound_fixture(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> tuple[Path, StateStore]:
+    root = tmp_path / "runtime"
+    database = root / "state" / "btcquant.db"
+    database.parent.mkdir(parents=True)
+    store = StateStore(database)
+    store.save_engine_state("trend", {"slots": {}, "halted": False})
+    sha = "a" * 40
+    tree = "b" * 40
+    evidence = _technical_evidence(sha, tree)
+    store.record_paper_technical_qualification(
+        release_sha=sha,
+        release_tree=tree,
+        schema_version=SCHEMA_VERSION,
+        full_test_results={"status": "PASS"},
+        staging_run={"status": "PASS"},
+        migration={"status": "PASS"},
+        rollback_rehearsal={"status": "PASS"},
+        production_health={"status": "PASS"},
+        backup_verification={"status": "PASS"},
+    )
+    release = root / "releases" / sha
+    release.mkdir(parents=True)
+    manifest = {
+        "git_sha": sha,
+        "git_tree": tree,
+        "schema_version_required": SCHEMA_VERSION,
+        "config_file_sha256": "c" * 64,
+    }
+    monkeypatch.setattr(technical, "active_paper_release", lambda _root: (release, manifest))
+    monkeypatch.setattr(technical, "_active_release", lambda _root: (release, manifest))
+    monkeypatch.setattr(technical, "_paper_database", lambda _root, _release: database)
+    monkeypatch.setattr(
+        technical,
+        "collect_paper_technical_evidence",
+        lambda _root, probes=None: dict(evidence),
+    )
+    return root, store
+
+
+def test_generic_v3_insert_is_closed_and_legacy_fixture_is_explicit(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.db")
+    with pytest.raises(RuntimeError, match="start_bound_paper_maturity_campaign"):
+        store.start_qualification_campaign(protocol_version=3, policy={})
+    legacy = store.start_qualification_campaign(
+        protocol_version=2, policy=ReadinessPolicy().to_dict()
+    )
+    assert legacy["protocol_version"] == 2
+
+
+def test_secure_paper_start_binds_release_qualification_and_config(
+    monkeypatch, tmp_path: Path
+) -> None:
+    root, store = _prepare_bound_fixture(monkeypatch, tmp_path)
+    campaign = start_paper_maturity_campaign(root, now_factory=lambda: "2026-09-13T10:00:00+00:00")
+
+    assert campaign["protocol_version"] == 3
+    assert campaign["started_at"] == "2026-09-13T10:00:00+00:00"
+    assert campaign["policy"]["binding"]["environment"] == "paper"
+    assert campaign["policy"]["binding"]["technical_qualification_id"] == 1
+    assert campaign["policy"]["binding"]["release_sha"] == "a" * 40
+    assert len(store.read_orders()) == 0
+
+
+def test_missing_technical_qualification_writes_no_campaign(monkeypatch, tmp_path: Path) -> None:
+    root, store = _prepare_bound_fixture(monkeypatch, tmp_path)
+    with store._transaction() as connection:
+        connection.execute("DELETE FROM readiness_reports")
+    with pytest.raises(RuntimeError, match="qualification technique"):
+        start_paper_maturity_campaign(root)
+    assert store.active_qualification_campaign() is None
+
+
+def test_unsafe_database_states_fail_closed_without_row_delta(monkeypatch, tmp_path: Path) -> None:
+    root, store = _prepare_bound_fixture(monkeypatch, tmp_path)
+    store.begin_order(
+        "trend", "strategy", "pending", "MARKET", "BUY", 1.0, "test", reference_price=100.0
+    )
+    with pytest.raises(RuntimeError, match="non résolus"):
+        start_paper_maturity_campaign(root)
+    assert store.active_qualification_campaign() is None
+
+
+def test_required_trend_must_be_flat(monkeypatch, tmp_path: Path) -> None:
+    root, store = _prepare_bound_fixture(monkeypatch, tmp_path)
+    store.save_engine_state(
+        "trend",
+        {
+            "slots": {"default": {"position": {"qty": 1.0}}},
+            "halted": False,
+        },
+    )
+    with pytest.raises(RuntimeError, match="Trend n'est pas FLAT"):
+        start_paper_maturity_campaign(root)
+    assert store.active_qualification_campaign() is None
+
+
+def test_duplicate_bound_start_is_rejected(monkeypatch, tmp_path: Path) -> None:
+    root, store = _prepare_bound_fixture(monkeypatch, tmp_path)
+    start_paper_maturity_campaign(root)
+    with pytest.raises(RuntimeError, match="déjà active"):
+        start_paper_maturity_campaign(root)
+    with store._read_connection(None) as connection:
+        count = connection.execute(
+            "SELECT COUNT(*) FROM qualification_campaigns WHERE status='RUNNING'"
+        ).fetchone()[0]
+    assert count == 1
+
+
+def test_binding_mismatch_blocks_maturity_status(monkeypatch, tmp_path: Path) -> None:
+    root, store = _prepare_bound_fixture(monkeypatch, tmp_path)
+    start_paper_maturity_campaign(root)
+    changed = {
+        "git_sha": "d" * 40,
+        "git_tree": "b" * 40,
+        "schema_version_required": 14,
+        "config_file_sha256": "c" * 64,
+    }
+    monkeypatch.setattr(
+        technical, "active_paper_release", lambda _root: (root / "releases" / ("a" * 40), changed)
+    )
+    status = paper_maturity_status(store, root=root)
+    assert status["qualified"] is False
+    assert status["reason_code"] == "PAPER_MATURITY_BINDING_MISMATCH"
+    assert status["binding_status"] == "MISMATCH"
+
+
+def test_legacy_campaign_is_readable_but_not_new_maturity_qualification(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.db")
+    campaign = store.start_qualification_campaign(
+        protocol_version=2, policy=ReadinessPolicy().to_dict()
+    )
+    status = paper_maturity_status(store)
+    assert campaign["protocol_version"] == 2
+    assert status["status"] == "PAPER_MATURITY_IN_PROGRESS"
+    assert status["binding_status"] == "UNBOUND_LEGACY"
+    assert status["reason_code"] == "PAPER_MATURITY_BINDING_MISMATCH"
+
+
+def test_config_identity_is_deterministic_and_secret_free() -> None:
+    manifest = {"config_file_sha256": "a" * 64}
+    first = technical.paper_config_identity(manifest, required_engines=("trend",))
+    second = technical.paper_config_identity(manifest, required_engines=("trend",))
+    assert first == second
+    assert len(first) == 64
+    assert "SECRET" not in json.dumps(manifest)
+
+
+def test_atomic_recheck_rejects_state_changed_after_fresh_collection(
+    monkeypatch, tmp_path: Path
+) -> None:
+    root, store = _prepare_bound_fixture(monkeypatch, tmp_path)
+    original = technical.collect_paper_technical_evidence
+
+    def collect_then_make_unsafe(_root: Path, probes=None):
+        store.begin_order(
+            "trend", "strategy", "race", "MARKET", "BUY", 1.0, "race", reference_price=100.0
+        )
+        return original(_root, probes=probes)
+
+    monkeypatch.setattr(technical, "collect_paper_technical_evidence", collect_then_make_unsafe)
+    with pytest.raises(RuntimeError, match="non résolus"):
+        start_paper_maturity_campaign(root)
+    assert store.active_qualification_campaign() is None
+
+
+def test_paper_cli_rejects_arbitrary_database(monkeypatch, tmp_path: Path) -> None:
+    from btcquant.entrypoints import readiness as entrypoint
+
+    root = tmp_path / "runtime"
+    root.mkdir()
+    monkeypatch.setattr(entrypoint, "ROOT", root)
+    monkeypatch.setattr(
+        entrypoint.sys,
+        "argv",
+        [
+            "btcquant-readiness",
+            "start",
+            "--profile",
+            "paper",
+            "--database",
+            str(root / "state" / "btcquant-testnet.db"),
+        ],
+    )
+    with pytest.raises(SystemExit, match="canonical PAPER database"):
+        entrypoint.main()
+
+
+def test_fresh_evidence_failure_leaves_campaign_table_unchanged(
+    monkeypatch, tmp_path: Path
+) -> None:
+    root, store = _prepare_bound_fixture(monkeypatch, tmp_path)
+    from btcquant.execution.paper_technical_qualification import QualificationFailed
+
+    def fail(_root: Path, probes=None):
+        raise QualificationFailed("BACKUP_VERIFICATION_FAILED", "fixture failure")
+
+    monkeypatch.setattr(technical, "collect_paper_technical_evidence", fail)
+    with pytest.raises(QualificationFailed, match="BACKUP_VERIFICATION_FAILED"):
+        start_paper_maturity_campaign(root)
+    assert store.active_qualification_campaign() is None
+
+
+def test_runtime_required_engine_change_invalidates_existing_binding(
+    monkeypatch, tmp_path: Path
+) -> None:
+    root, store = _prepare_bound_fixture(monkeypatch, tmp_path)
+    start_paper_maturity_campaign(root)
+    monkeypatch.setenv("BTCQUANT_REQUIRED_ENGINES", "carry")
+    status = paper_maturity_status(store, root=root)
+    assert status["qualified"] is False
+    assert status["reason_code"] == "PAPER_MATURITY_BINDING_MISMATCH"
+    assert status["binding"]["comparisons"]["required_engines"] is False
+
+
+def test_read_only_status_does_not_persist_a_report(monkeypatch, tmp_path: Path) -> None:
+    root, store = _prepare_bound_fixture(monkeypatch, tmp_path)
+    start_paper_maturity_campaign(root)
+    before = store.latest_readiness_report()
+    paper_maturity_status(store, root=root)
+    assert store.latest_readiness_report() == before

@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT / "dashboard"))
 import app as dash  # dashboard/app.py
 from btcquant.execution.historical_state_reader import HistoricalStateReader
 from btcquant.execution.state_store import StateStore
-from btcquant.execution.readiness import ReadinessPolicy, start_campaign
+from btcquant.execution.readiness import ReadinessPolicy, _start_campaign_for_test
 from btcquant.entrypoints import digest, rebalance
 
 
@@ -464,7 +464,7 @@ def test_analytics_funding_excludes_deposits(dash_state):
 def test_readiness_drawdown_unaffected(dash_state):
     store = StateStore(dash_state / "btcquant.db")
     store.migrate_legacy_journals(dash_state)
-    start_campaign(
+    _start_campaign_for_test(
         store,
         ReadinessPolicy(),
         started_at="2026-06-01T00:00:00+00:00",
