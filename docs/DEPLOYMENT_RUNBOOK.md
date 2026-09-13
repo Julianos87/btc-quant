@@ -282,6 +282,15 @@ Ne jamais appeler directement `StateStore.record_paper_technical_qualification`
 pour une qualification opérateur. Le record technique ne qualifie ni la
 maturité PAPER, ni le TESTNET, et ne crée aucun marqueur d'activation.
 
+La lecture SQLite de la preuve DB utilise une URI `mode=ro`, `query_only`, les
+foreign keys activées, un snapshot de lecture cohérent et les mêmes bornes
+15 secondes/15000 ms que `StateStore`. Une nouvelle lecture complète peut être
+tentée au plus trois fois uniquement pour les codes SQLite structurés
+`SQLITE_BUSY`/`SQLITE_LOCKED`; une intégrité non-`ok`, une violation FK, une
+corruption, une erreur I/O ou une base indisponible échoue immédiatement. En
+cas d'épuisement, le JSON conserve seulement le nom/code SQLite et le nombre
+d'essais, jamais des requêtes, lignes ou secrets.
+
 ### Démarrage de la maturité PAPER v3
 
 Après la qualification technique, la maturité PAPER est démarrée uniquement par
