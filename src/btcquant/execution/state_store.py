@@ -32,6 +32,7 @@ from .errors import (
     OrderIdentityCollision,
     ReconciliationRequired,
 )
+from .engine_state_repository import EngineStateRepository
 from .external_evidence import ExternalEvidenceSource, ExternalFill, ExternalOrderObservation
 from .external_submission_commitment import (
     IOC_NO_MATCH_ERROR,
@@ -200,6 +201,16 @@ class StateStore:
             schema_version=SCHEMA_VERSION,
             now=utc_now,
         )
+        self._engine_state_repository = EngineStateRepository(
+            connect=self._connect,
+            transaction=self._transaction,
+            encode_json=self._json,
+            checkpoint_payload=self._repository_checkpoint_payload,
+            sync_positions=self._repository_sync_positions,
+            insert_event=self._repository_insert_event,
+            state_event=self._repository_state_event,
+            now=utc_now,
+        )
         self._incident_repository = IncidentRepository(
             transaction=self._transaction,
             encode_json=self._json,
@@ -275,6 +286,59 @@ class StateStore:
             return
         with self._read_transaction() as owned_connection:
             yield owned_connection
+
+    def _repository_checkpoint_payload(
+        self,
+        connection: sqlite3.Connection,
+        engine: str,
+        payload: Mapping[str, Any],
+        *,
+        allow_reconciliation_clear: bool = False,
+    ) -> dict[str, Any]:
+        return self._checkpoint_payload(
+            connection,
+            engine,
+            payload,
+            allow_reconciliation_clear=allow_reconciliation_clear,
+        )
+
+    def _repository_sync_positions(
+        self,
+        connection: sqlite3.Connection,
+        engine: str,
+        payload: Mapping[str, Any],
+        now: str,
+    ) -> None:
+        self._sync_positions(connection, engine, payload, now)
+
+    def _repository_insert_event(
+        self,
+        connection: sqlite3.Connection,
+        engine: str,
+        event_type: str,
+        payload: dict[str, Any],
+        aggregate_type: str | None = None,
+        aggregate_id: str | None = None,
+        correlation_id: str | None = None,
+        ts: str | None = None,
+    ) -> int:
+        return self._insert_event(
+            connection,
+            engine,
+            event_type,
+            payload,
+            aggregate_type=aggregate_type,
+            aggregate_id=aggregate_id,
+            correlation_id=correlation_id,
+            ts=ts,
+        )
+
+    def _repository_state_event(
+        self,
+        state: Mapping[str, Any],
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._state_event(state, metadata)
 
     def _initialize(self) -> None:
         existing_version, has_schema = self._existing_schema()
@@ -1684,36 +1748,20 @@ class StateStore:
         event_aggregate_id: str | None = None,
         allow_reconciliation_clear: bool = False,
     ) -> None:
-        checkpoint = self._checkpoint_payload(
+        return self._engine_state_repository.save_in_transaction(
             connection,
             engine,
             payload,
+            now=now,
+            event_type=event_type,
+            event_payload=event_payload,
+            event_aggregate_type=event_aggregate_type,
+            event_aggregate_id=event_aggregate_id,
             allow_reconciliation_clear=allow_reconciliation_clear,
-        )
-        connection.execute(
-            """
-            INSERT INTO engine_state(engine, payload, updated_at) VALUES(?, ?, ?)
-            ON CONFLICT(engine) DO UPDATE SET
-                payload=excluded.payload, updated_at=excluded.updated_at
-            """,
-            (engine, self._json(checkpoint), now),
-        )
-        self._sync_positions(connection, engine, checkpoint, now)
-        self._insert_event(
-            connection,
-            engine,
-            event_type,
-            self._state_event(checkpoint, event_payload),
-            aggregate_type=event_aggregate_type or "engine",
-            aggregate_id=event_aggregate_id or engine,
         )
 
     def load_engine_state(self, engine: str) -> dict[str, Any] | None:
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT payload FROM engine_state WHERE engine = ?", (engine,)
-            ).fetchone()
-        return json.loads(row["payload"]) if row else None
+        return self._engine_state_repository.load(engine)
 
     @staticmethod
     def _validate_deposit(deposit_id: str, amount: float) -> tuple[str, float]:
@@ -1968,18 +2016,14 @@ class StateStore:
         event_aggregate_type: str | None = None,
         event_aggregate_id: str | None = None,
     ) -> None:
-        now = utc_now()
-        with self._transaction() as connection:
-            self._save_engine_state_in_transaction(
-                connection,
-                engine,
-                payload,
-                now=now,
-                event_type=event_type,
-                event_payload=event_payload,
-                event_aggregate_type=event_aggregate_type,
-                event_aggregate_id=event_aggregate_id,
-            )
+        self._engine_state_repository.save(
+            engine,
+            payload,
+            event_type=event_type,
+            event_payload=event_payload,
+            event_aggregate_type=event_aggregate_type,
+            event_aggregate_id=event_aggregate_id,
+        )
 
     def save_engine_state_after_reconciliation(
         self,
@@ -1999,49 +2043,13 @@ class StateStore:
         of resolution.
         """
 
-        if not isinstance(expected_state_sha256, str) or len(expected_state_sha256) != 64:
-            raise ValueError("expected_state_sha256 doit être un SHA-256 hexadécimal")
-        if any(character not in "0123456789abcdef" for character in expected_state_sha256):
-            raise ValueError("expected_state_sha256 doit être un SHA-256 hexadécimal")
-        if not isinstance(resolution, str) or not resolution.strip():
-            raise ValueError("resolution doit être non vide")
-        candidate = json.loads(self._json(payload))
-        if not isinstance(candidate, dict):
-            raise ValueError("État engine invalide : objet JSON attendu")
-        if candidate.get("reconciliation_required") is not False:
-            raise ValueError("La résolution qualifiée doit produire reconciliation_required=false")
-
-        now = utc_now()
-        with self._transaction() as connection:
-            row = connection.execute(
-                "SELECT payload FROM engine_state WHERE engine = ?", (engine,)
-            ).fetchone()
-            if row is None:
-                raise ReconciliationRequired(f"Moteur {engine} absent : résolution non qualifiable")
-            current = json.loads(row["payload"])
-            if not isinstance(current, dict):
-                raise ValueError("État engine durable invalide : objet JSON attendu")
-            if current.get("reconciliation_required") is not True:
-                raise ReconciliationRequired(
-                    f"Moteur {engine} sans verrou reconciliation_required à résoudre"
-                )
-            if sha256_json(current) != expected_state_sha256:
-                raise ReconciliationRequired(
-                    f"Moteur {engine} modifié depuis la preuve de réconciliation"
-                )
-            self._save_engine_state_in_transaction(
-                connection,
-                engine,
-                candidate,
-                now=now,
-                event_type="reconciliation_resolved",
-                event_payload={
-                    **(event_payload or {}),
-                    "resolution": resolution.strip(),
-                    "expected_state_sha256": expected_state_sha256,
-                },
-                allow_reconciliation_clear=True,
-            )
+        self._engine_state_repository.save_after_reconciliation(
+            engine,
+            payload,
+            expected_state_sha256=expected_state_sha256,
+            resolution=resolution,
+            event_payload=event_payload,
+        )
 
     def _insert_funding_ledger(
         self,
