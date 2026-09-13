@@ -83,6 +83,7 @@ from .external_settlement_finalization import (
     ExternalZeroEffectFinalizationResult,
     ExternalZeroEffectFinalizationStatus,
 )
+from .incident_repository import IncidentRepository
 from .paper_order_finalization import (
     PaperFinalizationDecision,
     PaperFinalizationStatus,
@@ -197,6 +198,11 @@ class StateStore:
             transaction=self._transaction,
             encode_json=self._json,
             schema_version=SCHEMA_VERSION,
+            now=utc_now,
+        )
+        self._incident_repository = IncidentRepository(
+            transaction=self._transaction,
+            encode_json=self._json,
             now=utc_now,
         )
         if not read_only:
@@ -6085,63 +6091,17 @@ class StateStore:
     ) -> dict[str, Any]:
         """Crée, réouvre ou actualise un incident sans dupliquer son identité."""
 
-        if severity not in ("WARNING", "CRITICAL"):
-            raise ValueError("severity doit valoir WARNING ou CRITICAL")
-        now = utc_now()
-        with self._transaction() as connection:
-            previous = connection.execute(
-                "SELECT status FROM incidents WHERE fingerprint = ?",
-                (fingerprint,),
-            ).fetchone()
-            connection.execute(
-                """
-                INSERT INTO incidents(
-                    fingerprint, engine, severity, kind, message, context,
-                    status, occurrences, first_seen, last_seen
-                ) VALUES(?, ?, ?, ?, ?, ?, 'OPEN', 1, ?, ?)
-                ON CONFLICT(fingerprint) DO UPDATE SET
-                    engine=excluded.engine,
-                    severity=excluded.severity,
-                    kind=excluded.kind,
-                    message=excluded.message,
-                    context=excluded.context,
-                    status='OPEN',
-                    occurrences=incidents.occurrences + 1,
-                    last_seen=excluded.last_seen,
-                    resolved_at=NULL
-                """,
-                (
-                    fingerprint,
-                    engine,
-                    severity,
-                    kind,
-                    message,
-                    self._json(context or {}),
-                    now,
-                    now,
-                ),
-            )
-            row = connection.execute(
-                "SELECT * FROM incidents WHERE fingerprint = ?",
-                (fingerprint,),
-            ).fetchone()
-        assert row is not None
-        result = dict(row)
-        result["is_new_or_reopened"] = previous is None or previous["status"] != "OPEN"
-        return result
+        return self._incident_repository.record_incident(
+            fingerprint,
+            severity=severity,
+            kind=kind,
+            message=message,
+            engine=engine,
+            context=context,
+        )
 
     def resolve_incident(self, fingerprint: str) -> bool:
-        now = utc_now()
-        with self._transaction() as connection:
-            cursor = connection.execute(
-                """
-                UPDATE incidents
-                SET status='RESOLVED', resolved_at=?
-                WHERE fingerprint=? AND status='OPEN'
-                """,
-                (now, fingerprint),
-            )
-        return cursor.rowcount > 0
+        return self._incident_repository.resolve_incident(fingerprint)
 
     def record_trade(self, trade: dict[str, Any]) -> None:
         with self._transaction() as connection:
