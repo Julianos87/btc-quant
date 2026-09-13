@@ -8,6 +8,7 @@ observation déjà commencée.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
@@ -55,6 +56,54 @@ class ServiceComponentProfile:
     reason_codes: tuple[str, ...] = ()
 
 
+_ALLOWED_ENGINE_NAMES = frozenset({"trend", "carry", "shadow"})
+_CANONICAL_ENV_FILENAME = ".env"
+
+
+def _profile_from_required_engines(configured: str | None) -> ServiceComponentProfile:
+    if configured is None:
+        return ServiceComponentProfile()
+    names = tuple(
+        dict.fromkeys(item.strip().lower() for item in configured.split(",") if item.strip())
+    )
+    if not names or any(item not in _ALLOWED_ENGINE_NAMES for item in names):
+        return ServiceComponentProfile(reason_codes=("INVALID_REQUIRED_ENGINE_PROFILE",))
+    optional = tuple(item for item in ("trend", "carry", "shadow") if item not in names)
+    return ServiceComponentProfile(required=names, optional=optional)
+
+
+def canonical_service_component_profile(root: Path) -> ServiceComponentProfile:
+    """Read only the canonical, non-secret engine setting from ``root/.env``.
+
+    Binding-sensitive PAPER paths must not derive identity from the caller's
+    ambient shell. This parser deliberately accepts one allow-listed key and
+    never evaluates, logs, hashes, or persists the rest of the environment.
+    An existing file without the optional key explicitly selects the standard
+    ``trend`` default; a missing/unreadable canonical file is not evidence.
+    """
+
+    path = root.resolve(strict=True) / _CANONICAL_ENV_FILENAME
+    configured: str | None = None
+    pattern = re.compile(r"^(?:export\s+)?BTCQUANT_REQUIRED_ENGINES\s*=\s*(.*?)\s*$")
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for line in handle:
+                candidate = line.strip()
+                if not candidate or candidate.startswith("#"):
+                    continue
+                match = pattern.match(candidate)
+                if match is None:
+                    continue
+                value = match.group(1)
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+                    value = value[1:-1]
+                configured = value
+                break
+    except OSError as error:
+        raise RuntimeError("Canonical PAPER runtime profile unavailable") from error
+    return _profile_from_required_engines(configured)
+
+
 def service_component_profile() -> ServiceComponentProfile:
     """Resolve one readiness profile for dashboard and operational probes.
 
@@ -64,17 +113,7 @@ def service_component_profile() -> ServiceComponentProfile:
     variable, which is configuration rather than a dashboard-local threshold.
     """
 
-    configured = os.environ.get("BTCQUANT_REQUIRED_ENGINES")
-    if not configured:
-        return ServiceComponentProfile()
-    names = tuple(
-        dict.fromkeys(item.strip().lower() for item in configured.split(",") if item.strip())
-    )
-    allowed = {"trend", "carry", "shadow"}
-    if not names or any(item not in allowed for item in names):
-        return ServiceComponentProfile(reason_codes=("INVALID_REQUIRED_ENGINE_PROFILE",))
-    optional = tuple(item for item in ("trend", "carry", "shadow") if item not in names)
-    return ServiceComponentProfile(required=names, optional=optional)
+    return _profile_from_required_engines(os.environ.get("BTCQUANT_REQUIRED_ENGINES"))
 
 
 SERVICE_ENGINE_MAX_AGE_SECONDS = {"trend": 600.0, "carry": 1200.0}
@@ -341,10 +380,15 @@ def _current_paper_binding(
 
         resolved_root = (root or store.path.parent.parent).resolve(strict=True)
         _release, manifest = active_paper_release(resolved_root)
-        profile = service_component_profile()
+        profile = canonical_service_component_profile(resolved_root)
         current_engines = tuple(profile.required)
         current_config = paper_config_identity(manifest, required_engines=current_engines)
-        technical = store.latest_paper_technical_qualification_record()
+        bound_id = binding.get("technical_qualification_id")
+        technical = (
+            store.paper_technical_qualification_record(bound_id)
+            if isinstance(bound_id, int) and not isinstance(bound_id, bool)
+            else None
+        )
         technical_id = technical["id"] if technical is not None else None
         payload = technical["payload"] if technical is not None else {}
         comparisons = {
@@ -378,6 +422,7 @@ def _current_paper_binding(
                 "release_tree": manifest.get("git_tree"),
                 "schema_version": manifest.get("schema_version_required"),
                 "config_identity": current_config,
+                "required_engines": list(current_engines),
                 "technical_qualification_id": technical_id,
             },
         }
@@ -410,7 +455,7 @@ def start_paper_maturity_campaign(
 
     root = root.resolve(strict=True)
     cfg = policy or ReadinessPolicy()
-    profile = service_component_profile()
+    profile = canonical_service_component_profile(root)
     if profile.reason_codes:
         raise RuntimeError("Invalid PAPER required-engine profile")
     cfg = ReadinessPolicy(**{**cfg.to_dict(), "required_engines": profile.required})
@@ -535,7 +580,11 @@ def paper_maturity_status(
         )
         and len(trades) >= policy.min_closed_trades
     )
-    binding_check = _current_paper_binding(store, campaign, root=root)
+    binding_check = _current_paper_binding(
+        store,
+        campaign,
+        root=(root or store.path.parent.parent).resolve(),
+    )
     qualified = campaign.get("status") == "PASSED" and counters_met and binding_check["passed"]
     return {
         "kind": "PAPER_MATURITY_STATUS",

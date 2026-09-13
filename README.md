@@ -497,9 +497,9 @@ par `--database`, une campagne v2 non liée et une date de départ opérateur so
 refusées.
 
 ```powershell
-btcquant-readiness start --profile paper
-btcquant-readiness paper-maturity-status --json
-btcquant-readiness finalize
+sudo systemctl start --wait btcquant-paper-maturity-start.service
+env BTCQUANT_ROOT=/opt/btcquant /opt/btcquant/current/venv/bin/btcquant-readiness paper-maturity-status --json
+env BTCQUANT_ROOT=/opt/btcquant /opt/btcquant/current/venv/bin/btcquant-readiness finalize
 ```
 
 La voie opérationnelle recommandée est l'oneshot manuel

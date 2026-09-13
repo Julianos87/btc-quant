@@ -29,6 +29,7 @@ def _prepare_bound_fixture(
     root = tmp_path / "runtime"
     database = root / "state" / "btcquant.db"
     database.parent.mkdir(parents=True)
+    (root / ".env").write_text("# non-secret deployment profile\nBTCQUANT_REQUIRED_ENGINES=trend\n")
     store = StateStore(database)
     store.save_engine_state("trend", {"slots": {}, "halted": False})
     sha = "a" * 40
@@ -232,11 +233,61 @@ def test_runtime_required_engine_change_invalidates_existing_binding(
 ) -> None:
     root, store = _prepare_bound_fixture(monkeypatch, tmp_path)
     start_paper_maturity_campaign(root)
-    monkeypatch.setenv("BTCQUANT_REQUIRED_ENGINES", "carry")
+    (root / ".env").write_text("BTCQUANT_REQUIRED_ENGINES=carry\n")
+    monkeypatch.delenv("BTCQUANT_REQUIRED_ENGINES", raising=False)
     status = paper_maturity_status(store, root=root)
     assert status["qualified"] is False
     assert status["reason_code"] == "PAPER_MATURITY_BINDING_MISMATCH"
     assert status["binding"]["comparisons"]["required_engines"] is False
+
+
+def test_binding_uses_canonical_profile_when_ambient_shell_diverges(
+    monkeypatch, tmp_path: Path
+) -> None:
+    root, store = _prepare_bound_fixture(monkeypatch, tmp_path)
+    start_paper_maturity_campaign(root)
+
+    monkeypatch.setenv("BTCQUANT_REQUIRED_ENGINES", "carry")
+    status = paper_maturity_status(store, root=root)
+    assert status["binding_status"] == "PASS"
+
+    (root / ".env").write_text("BTCQUANT_REQUIRED_ENGINES=carry\n")
+    monkeypatch.delenv("BTCQUANT_REQUIRED_ENGINES", raising=False)
+    status = paper_maturity_status(store, root=root)
+    assert status["binding_status"] == "MISMATCH"
+    assert status["reason_code"] == "PAPER_MATURITY_BINDING_MISMATCH"
+
+
+def test_missing_canonical_profile_fails_closed(monkeypatch, tmp_path: Path) -> None:
+    root, store = _prepare_bound_fixture(monkeypatch, tmp_path)
+    start_paper_maturity_campaign(root)
+    (root / ".env").unlink()
+    status = paper_maturity_status(store, root=root)
+    assert status["binding_status"] == "UNKNOWN"
+    assert status["qualified"] is False
+
+
+def test_same_release_reobservation_does_not_invalidate_bound_campaign(
+    monkeypatch, tmp_path: Path
+) -> None:
+    root, store = _prepare_bound_fixture(monkeypatch, tmp_path)
+    start_paper_maturity_campaign(root)
+    sha = "a" * 40
+    tree = "b" * 40
+    store.record_paper_technical_qualification(
+        release_sha=sha,
+        release_tree=tree,
+        schema_version=SCHEMA_VERSION,
+        full_test_results={"status": "PASS"},
+        staging_run={"status": "PASS"},
+        migration={"status": "PASS"},
+        rollback_rehearsal={"status": "PASS"},
+        production_health={"status": "PASS"},
+        backup_verification={"status": "PASS"},
+    )
+    status = paper_maturity_status(store, root=root)
+    assert status["binding_status"] == "PASS"
+    assert status["binding"]["comparisons"]["technical_qualification_id"] is True
 
 
 def test_read_only_status_does_not_persist_a_report(monkeypatch, tmp_path: Path) -> None:
@@ -245,3 +296,42 @@ def test_read_only_status_does_not_persist_a_report(monkeypatch, tmp_path: Path)
     before = store.latest_readiness_report()
     paper_maturity_status(store, root=root)
     assert store.latest_readiness_report() == before
+
+
+def test_relative_paper_database_resolution_is_root_relative(monkeypatch, tmp_path: Path) -> None:
+    from btcquant.entrypoints.readiness import _resolve_requested_database
+
+    root = tmp_path / "runtime"
+    unrelated = tmp_path / "unrelated"
+    root.mkdir()
+    unrelated.mkdir()
+    monkeypatch.chdir(unrelated)
+    assert (
+        _resolve_requested_database(root, "state/btcquant.db")
+        == (root / "state/btcquant.db").resolve()
+    )
+
+
+def test_relative_testnet_database_is_rejected_for_paper_cli(monkeypatch, tmp_path: Path) -> None:
+    from btcquant.entrypoints import readiness as entrypoint
+
+    root = tmp_path / "runtime"
+    root.mkdir()
+    monkeypatch.setattr(entrypoint, "ROOT", root)
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    monkeypatch.chdir(unrelated)
+    monkeypatch.setattr(
+        entrypoint.sys,
+        "argv",
+        [
+            "btcquant-readiness",
+            "start",
+            "--profile",
+            "paper",
+            "--database",
+            "state/btcquant-testnet.db",
+        ],
+    )
+    with pytest.raises(SystemExit, match="canonical PAPER database"):
+        entrypoint.main()

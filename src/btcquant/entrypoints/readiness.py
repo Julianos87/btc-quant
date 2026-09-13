@@ -22,6 +22,11 @@ from btcquant.execution.testnet_preflight import evaluate_testnet_preflight
 ROOT = Path(os.environ.get("BTCQUANT_ROOT", Path.cwd())).resolve()
 
 
+def _resolve_requested_database(root: Path, value: str) -> Path:
+    requested = Path(value)
+    return (requested if requested.is_absolute() else root / requested).resolve()
+
+
 def _print_report(report: dict) -> None:
     print(
         f"Qualification #{report['campaign_id'] or '—'} "
@@ -71,7 +76,7 @@ def main() -> None:
         raise SystemExit(0 if report["status"] == "PASS" else 2)
 
     canonical_database = (ROOT / "state/btcquant.db").resolve()
-    requested_database = Path(args.database).resolve()
+    requested_database = _resolve_requested_database(ROOT, args.database)
     if args.command == "paper-maturity-status":
         if requested_database != canonical_database:
             raise SystemExit("PAPER maturity status requires the canonical PAPER database")

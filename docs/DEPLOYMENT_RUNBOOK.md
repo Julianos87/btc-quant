@@ -290,11 +290,10 @@ le chemin boundé suivant :
 ```bash
 sudo systemctl start --wait btcquant-paper-maturity-start.service
 sudo journalctl -u btcquant-paper-maturity-start.service -n 100 --no-pager
-/opt/btcquant/current/venv/bin/btcquant-readiness paper-maturity-status --json
+env BTCQUANT_ROOT=/opt/btcquant /opt/btcquant/current/venv/bin/btcquant-readiness paper-maturity-status --json
 ```
 
-L'oneshot s'exécute sous `btcquant`, charge `/opt/btcquant/.env` uniquement pour
-la vérification du backup et n'est ni activé ni déclenché par timer. Il dérive
+L'oneshot s'exécute sous `btcquant`, charge `/opt/btcquant/.env` pour la vérification du backup et la lecture allow-listée du profil moteur non secret; il n'est ni activé ni déclenché par timer. Il dérive
 la release active et la DB PAPER canonique; il refuse les bases arbitraires ou
 TESTNET, les qualifications techniques absentes/non correspondantes, les états
 non sûrs, un Trend non `FLAT`, un backup non vérifié et toute campagne déjà
@@ -302,6 +301,7 @@ active. Le timestamp est généré par le processus. Aucun compteur ou date
 historique ne peut être fourni par l'opérateur.
 
 Le binding v3 est stocké dans le JSON `policy` existant, sans migration SQLite.
+Les chemins start, status, finalize et preflight lisent le seul champ non secret `BTCQUANT_REQUIRED_ENGINES` depuis `/opt/btcquant/.env`; ils n’utilisent pas la variable ambiante de l’opérateur et échouent fermés si cette source canonique est indisponible. Une nouvelle observation technique du même SHA/arbre reste compatible avec une campagne liée à sa ligne originale.
 Il couvre l'environnement, l'identifiant de la qualification technique, le SHA,
 l'arbre, le schéma, l'identité non secrète du fichier de configuration et les
 moteurs requis. Le statut et le preflight refusent une campagne liée à une
@@ -356,7 +356,7 @@ smoke terminaux, aucun incident ou ordre ambigu, au plus 5 % de rejets et un
 slippage p95 inférieur ou égal à 20 bps. Finalisation :
 
 ```bash
-sudo -u btcquant /opt/btcquant/current/venv/bin/btcquant-readiness finalize \
+sudo -u btcquant env BTCQUANT_ROOT=/opt/btcquant /opt/btcquant/current/venv/bin/btcquant-readiness finalize \
   --database /opt/btcquant/state/btcquant-testnet.db
 ```
 

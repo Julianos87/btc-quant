@@ -6315,19 +6315,9 @@ class StateStore:
                 raise RuntimeError("Une position PAPER n'est pas FLAT")
 
             qualification_row = None
-            rows = connection.execute(
-                "SELECT id, payload FROM readiness_reports WHERE status='PASS' ORDER BY id DESC"
-            ).fetchall()
-            for row in rows:
-                try:
-                    payload = json.loads(str(row["payload"]))
-                except (TypeError, json.JSONDecodeError):
-                    continue
-                if isinstance(payload, dict) and payload.get("kind") == (
-                    "PAPER_TECHNICAL_QUALIFICATION"
-                ):
-                    qualification_row = (int(row["id"]), payload)
-                    break
+            qualification_record = self.paper_technical_qualification_record(qualification_id)
+            if qualification_record is not None:
+                qualification_row = (qualification_record["id"], qualification_record["payload"])
             if qualification_row is None or qualification_row[0] != qualification_id:
                 raise RuntimeError("La qualification technique PAPER courante est absente")
             qualification_payload = qualification_row[1]
@@ -6527,6 +6517,29 @@ class StateStore:
                     "payload": payload,
                 }
         return None
+
+    def paper_technical_qualification_record(self, qualification_id: int) -> dict[str, Any] | None:
+        """Return one exact technical qualification row when it is a durable PASS."""
+
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT id, status, generated_at, payload FROM readiness_reports WHERE id = ?",
+                (qualification_id,),
+            ).fetchone()
+        if row is None or str(row["status"]) != "PASS":
+            return None
+        try:
+            payload = json.loads(str(row["payload"]))
+        except (TypeError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict) or payload.get("kind") != "PAPER_TECHNICAL_QUALIFICATION":
+            return None
+        return {
+            "id": int(row["id"]),
+            "status": str(row["status"]),
+            "generated_at": str(row["generated_at"]),
+            "payload": payload,
+        }
 
     def finish_qualification_campaign(
         self,
