@@ -5,7 +5,11 @@ import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from btcquant.execution.readiness import ReadinessPolicy, evaluate_readiness, start_campaign
+from btcquant.execution.readiness import (
+    ReadinessPolicy,
+    evaluate_readiness,
+    _start_campaign_for_test,
+)
 from btcquant.execution.state_store import StateStore
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -188,7 +192,9 @@ def test_groups_cover_known_lot6_keys_once() -> None:
 def test_readiness_invariant_unchanged_by_dashboard_pr(tmp_path: Path) -> None:
     store = StateStore(tmp_path / "state.db")
     now = datetime.now(UTC)
-    start_campaign(store, ReadinessPolicy(), started_at=(now - timedelta(days=2)).isoformat())
+    _start_campaign_for_test(
+        store, ReadinessPolicy(), started_at=(now - timedelta(days=2)).isoformat()
+    )
     store.save_engine_state("trend", {"slots": {}, "halted": False})
     report = evaluate_readiness(store, now=now, persist=False)
     snapshot = {

@@ -12,7 +12,7 @@ from btcquant.execution.readiness import (
     evaluate_readiness,
     finalize_campaign,
     require_passed_qualification,
-    start_campaign,
+    _start_campaign_for_test,
     testnet_p1_policy as p1_policy,
 )
 from btcquant.execution.state_store import StateStore
@@ -28,7 +28,7 @@ def _seed_healthy_campaign(store: StateStore, now: datetime) -> None:
         min_terminal_orders_per_engine=1,
     )
     started = now - timedelta(days=2)
-    start_campaign(
+    _start_campaign_for_test(
         store,
         policy,
         started_at=started.isoformat(),
@@ -85,8 +85,9 @@ def test_healthy_campaign_can_be_finalized_and_unlocks_qualification(tmp_path):
     final_report = finalize_campaign(store, now=now)
     assert final_report["status"] == "PASS"
     assert store.active_qualification_campaign() is None
-    assert require_passed_qualification(store)["status"] == "PASS"
-    with pytest.raises(RuntimeError, match="testnet non confirmé"):
+    with pytest.raises(RuntimeError, match="protocole obsolète"):
+        require_passed_qualification(store)
+    with pytest.raises(RuntimeError, match="qualification réalisée avec un protocole obsolète"):
         require_live_execution_enabled(testnet=True, state_path=store.path)
     with pytest.raises(RuntimeError, match="argent réel reste désactivée"):
         require_live_execution_enabled(testnet=False, state_path=store.path)
@@ -95,7 +96,7 @@ def test_healthy_campaign_can_be_finalized_and_unlocks_qualification(tmp_path):
     assert expired["status"] == "FAIL"
     assert expired["checks"][-1]["key"] == "qualification_age"
 
-    start_campaign(store, replace(ReadinessPolicy(), min_observation_days=1))
+    _start_campaign_for_test(store, replace(ReadinessPolicy(), min_observation_days=1))
     with pytest.raises(RuntimeError, match="nouvelle campagne est en cours"):
         require_passed_qualification(store)
 
@@ -153,12 +154,12 @@ def test_unresolved_order_blocks_campaign(tmp_path):
 def test_campaign_policy_is_snapshotted(tmp_path):
     store = StateStore(tmp_path / "state.db")
     policy = replace(ReadinessPolicy(), min_observation_days=12)
-    campaign = start_campaign(store, policy)
+    campaign = _start_campaign_for_test(store, policy)
 
     assert campaign["policy"]["min_observation_days"] == 12
     assert campaign["policy"]["required_engines"] == ["trend"]
     with pytest.raises(RuntimeError, match="déjà active"):
-        start_campaign(store, ReadinessPolicy())
+        _start_campaign_for_test(store, ReadinessPolicy())
 
 
 def test_uptime_uses_elapsed_time_not_daily_presence(tmp_path):
@@ -172,7 +173,7 @@ def test_uptime_uses_elapsed_time_not_daily_presence(tmp_path):
         min_terminal_orders_per_engine=0,
     )
     started = now - timedelta(days=1)
-    start_campaign(store, policy, started_at=started.isoformat())
+    _start_campaign_for_test(store, policy, started_at=started.isoformat())
     # Un seul point par date aurait satisfait l'ancien calcul.
     store.append_equity("trend", 1000.0, started.isoformat())
     store.append_equity("trend", 1000.0, now.isoformat())
@@ -200,7 +201,7 @@ def test_intraday_drawdown_is_not_hidden_by_daily_close(tmp_path):
         max_drawdown=-0.20,
     )
     started = now - timedelta(minutes=10)
-    start_campaign(store, policy, started_at=started.isoformat())
+    _start_campaign_for_test(store, policy, started_at=started.isoformat())
     store.append_equity("trend", 1000.0, started.isoformat())
     store.append_equity("trend", 700.0, (started + timedelta(minutes=5)).isoformat())
     store.append_equity("trend", 1000.0, now.isoformat())

@@ -470,7 +470,7 @@ cockpit du dashboard, le bilan quotidien et `scripts/inspect_state.py`.
 ### Qualification paper → testnet
 
 Le passage au testnet est maintenant un contrôle bloquant, pas une décision
-visuelle prise depuis le dashboard. Le protocole v2 impose notamment :
+visuelle prise depuis le dashboard. Le protocole de maturité v3 impose notamment :
 
 - 90 jours d'observation, 99,5 % de disponibilité temporelle et 95 % de jours
   dont les échantillons couvrent au moins 95 % du temps ;
@@ -489,11 +489,25 @@ Les seuils sont copiés dans SQLite au démarrage : une campagne conserve donc
 ses règles même si une future version du protocole change. Les rapports
 `PASS`/`FAIL` sont eux aussi historisés.
 
+Le démarrage PAPER v3 est une opération bornée : il dérive la release active,
+la qualification technique, l'identité de configuration non secrète et la base
+PAPER canonique, puis revalide intégrité/FK, ordres, réconciliation, incidents,
+backup, readiness et flatness Trend dans la transaction finale. Une DB fournie
+par `--database`, une campagne v2 non liée et une date de départ opérateur sont
+refusées.
+
 ```powershell
-btcquant-readiness start
-btcquant-readiness status
-btcquant-readiness finalize
+sudo systemctl start --wait btcquant-paper-maturity-start.service
+env BTCQUANT_ROOT=/opt/btcquant /opt/btcquant/current/venv/bin/btcquant-readiness paper-maturity-status --json
+env BTCQUANT_ROOT=/opt/btcquant /opt/btcquant/current/venv/bin/btcquant-readiness finalize
 ```
+
+La voie opérationnelle recommandée est l'oneshot manuel
+`btcquant-paper-maturity-start.service`, chargé par le mécanisme de déploiement
+mais non activé et sans timer. Les campagnes v2 historiques restent lisibles,
+mais ne peuvent pas satisfaire le nouveau portail de maturité. Un changement de
+SHA, d'arbre, de schéma ou d'identité de configuration invalide le binding et
+requiert une nouvelle qualification technique puis une nouvelle campagne.
 
 ### Campagne maker shadow mainnet
 

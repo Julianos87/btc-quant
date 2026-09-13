@@ -13,13 +13,18 @@ from btcquant.execution.readiness import (
     evaluate_readiness,
     finalize_campaign,
     paper_maturity_status,
-    start_campaign,
+    start_paper_maturity_campaign,
     testnet_p1_policy,
 )
 from btcquant.execution.state_store import StateStore
 from btcquant.execution.testnet_preflight import evaluate_testnet_preflight
 
 ROOT = Path(os.environ.get("BTCQUANT_ROOT", Path.cwd())).resolve()
+
+
+def _resolve_requested_database(root: Path, value: str) -> Path:
+    requested = Path(value)
+    return (requested if requested.is_absolute() else root / requested).resolve()
 
 
 def _print_report(report: dict) -> None:
@@ -70,9 +75,13 @@ def main() -> None:
                 print("  Reasons: " + ", ".join(report["reason_codes"]))
         raise SystemExit(0 if report["status"] == "PASS" else 2)
 
-    store = StateStore(ROOT / args.database)
+    canonical_database = (ROOT / "state/btcquant.db").resolve()
+    requested_database = _resolve_requested_database(ROOT, args.database)
     if args.command == "paper-maturity-status":
-        report = paper_maturity_status(store)
+        if requested_database != canonical_database:
+            raise SystemExit("PAPER maturity status requires the canonical PAPER database")
+        store = StateStore(canonical_database, initialize=False, read_only=True)
+        report = paper_maturity_status(store, root=ROOT)
         if args.json:
             print(json.dumps(report, ensure_ascii=True, indent=2))
         else:
@@ -82,10 +91,22 @@ def main() -> None:
                     print(f"  {key}: {value}")
         raise SystemExit(0 if report["qualified"] else 2)
     if args.command == "start":
-        policy = testnet_p1_policy() if args.profile == "testnet-p1" else None
-        started_campaign = start_campaign(store, policy)
+        if args.profile == "paper":
+            if requested_database != canonical_database:
+                raise SystemExit("PAPER maturity start requires the canonical PAPER database")
+            try:
+                started_campaign = start_paper_maturity_campaign(ROOT)
+            except Exception as error:
+                print(f"PAPER maturity start refused: {type(error).__name__}: {error}")
+                raise SystemExit(2) from error
+        else:
+            store = StateStore(ROOT / args.database)
+            started_campaign = store.start_qualification_campaign(
+                protocol_version=2, policy=testnet_p1_policy().to_dict()
+            )
         print(f"Campagne #{started_campaign['id']} démarrée le {started_campaign['started_at']}.")
         return
+    store = StateStore(ROOT / args.database)
     if args.command == "cancel":
         campaign = store.active_qualification_campaign()
         if campaign is None:

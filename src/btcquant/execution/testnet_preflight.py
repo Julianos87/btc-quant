@@ -700,7 +700,9 @@ def evaluate_testnet_preflight(
         qualification_reason,
     )
     try:
-        maturity = paper_maturity_status(StateStore(paper_db, initialize=False, read_only=True))
+        maturity = paper_maturity_status(
+            StateStore(paper_db, initialize=False, read_only=True), root=root_path
+        )
     except (FileNotFoundError, RuntimeError, ValueError, sqlite3.Error):
         maturity = {
             "kind": "PAPER_MATURITY_STATUS",
@@ -714,7 +716,7 @@ def evaluate_testnet_preflight(
         maturity_ok,
         maturity.get("status", "NOT_STARTED"),
         "independent PAPER maturity",
-        "PAPER_MATURITY_IN_PROGRESS" if not maturity_ok else None,
+        maturity.get("reason_code") or ("PAPER_MATURITY_IN_PROGRESS" if not maturity_ok else None),
         technical=False,
     )
 
@@ -905,7 +907,7 @@ def evaluate_testnet_preflight(
     checks_by_key = {item.key: item for item in checks}
     technical_ready = all(checks_by_key[key].passed for key in technical_keys)
     if not maturity_ok:
-        activation_blockers.append("PAPER_MATURITY_IN_PROGRESS")
+        activation_blockers.append(str(maturity.get("reason_code") or "PAPER_MATURITY_IN_PROGRESS"))
     if not secret_ok:
         activation_blockers.append("TESTNET_SECRET_PROVISIONING_REQUIRED")
     if not marker.is_file():

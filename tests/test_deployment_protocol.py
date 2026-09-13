@@ -1414,3 +1414,17 @@ def test_paper_qualification_units_are_manual_and_least_privilege():
 
     assert "ReadWritePaths=" not in inspect
     assert "ReadWritePaths=/opt/btcquant/state" in record
+
+
+def test_paper_maturity_start_unit_is_manual_and_bound_to_canonical_runner():
+    unit = Path("deploy/btcquant-paper-maturity-start.service").read_text(encoding="utf-8")
+    assert "Type=oneshot" in unit
+    assert "User=btcquant" in unit
+    assert "EnvironmentFile=-/opt/btcquant/.env" in unit
+    assert "Environment=BTCQUANT_ROOT=/opt/btcquant" in unit
+    assert (
+        "ExecStart=/opt/btcquant/current/venv/bin/btcquant-readiness start --profile paper" in unit
+    )
+    assert "ReadWritePaths=/opt/btcquant/state" in unit
+    assert "WantedBy=" not in unit
+    assert "OnCalendar=" not in unit

@@ -6183,8 +6183,10 @@ class StateStore:
         policy: dict[str, Any],
         started_at: str | None = None,
     ) -> dict[str, Any]:
-        """Démarre une campagne immuable ; une seule peut être active."""
+        """Start only a legacy fixture campaign; PAPER v3 uses the bound API."""
 
+        if int(protocol_version) >= 3:
+            raise RuntimeError("Le protocole PAPER v3 exige start_bound_paper_maturity_campaign")
         now = started_at or utc_now()
         with self._transaction() as connection:
             active = connection.execute(
@@ -6199,6 +6201,143 @@ class StateStore:
                 ) VALUES(?, 'RUNNING', ?, ?)
                 """,
                 (protocol_version, self._json(policy), now),
+            )
+            campaign_id = cursor.lastrowid
+        assert campaign_id is not None
+        return self.read_qualification_campaign(int(campaign_id))
+
+    def start_bound_paper_maturity_campaign(
+        self,
+        *,
+        policy: Mapping[str, Any],
+        binding: Mapping[str, Any],
+        required_engines: Sequence[str],
+        qualification_id: int,
+        now_factory: Any = utc_now,
+    ) -> dict[str, Any]:
+        """Atomically insert one fully bound PAPER maturity campaign.
+
+        The caller supplies only already-collected release/runtime evidence;
+        this method repeats every DB-local invariant while holding the write
+        transaction. It is deliberately the only protocol-v3 insert path.
+        """
+
+        if self.read_only:
+            raise RuntimeError("Un StateStore read-only ne peut pas démarrer PAPER maturity")
+        if binding.get("environment") != "paper":
+            raise ValueError("Une campagne PAPER doit être liée à l'environnement paper")
+        if not isinstance(qualification_id, int) or isinstance(qualification_id, bool):
+            raise ValueError("technical_qualification_id invalide")
+        if int(binding.get("technical_qualification_id", -1)) != qualification_id:
+            raise ValueError("Le binding de qualification est incohérent")
+        engines = tuple(dict.fromkeys(str(engine) for engine in required_engines))
+        if not engines or tuple(binding.get("required_engines", ())) != engines:
+            raise ValueError("Le binding des moteurs PAPER est incohérent")
+        if (
+            not isinstance(binding.get("release_sha"), str)
+            or re.fullmatch(r"[0-9a-f]{40}", binding["release_sha"]) is None
+            or not isinstance(binding.get("release_tree"), str)
+            or re.fullmatch(r"[0-9a-f]{40}", binding["release_tree"]) is None
+            or binding.get("schema_version") != SCHEMA_VERSION
+            or binding.get("config_identity_version") != 1
+            or re.fullmatch(r"[0-9a-f]{64}", str(binding.get("config_identity", ""))) is None
+        ):
+            raise ValueError("Le binding PAPER contient une identité invalide")
+
+        with self._transaction() as connection:
+            active = connection.execute(
+                "SELECT id FROM qualification_campaigns WHERE status='RUNNING'"
+            ).fetchone()
+            if active is not None:
+                raise RuntimeError(f"La campagne de qualification {active['id']} est déjà active")
+
+            schema_row = connection.execute(
+                "SELECT value FROM metadata WHERE key='schema_version'"
+            ).fetchone()
+            if schema_row is None or int(schema_row["value"]) != SCHEMA_VERSION:
+                raise RuntimeError("Le schéma PAPER n'est pas compatible")
+            integrity = connection.execute("PRAGMA integrity_check").fetchone()
+            if integrity is None or integrity[0] != "ok":
+                raise RuntimeError("L'intégrité SQLite PAPER n'est pas démontrée")
+            if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise RuntimeError("Les contraintes FK PAPER ne sont pas satisfaites")
+            unresolved = connection.execute(
+                "SELECT COUNT(*) FROM orders "
+                "WHERE local_state != 'TERMINAL' "
+                "AND NOT (order_type='STOP' AND status='OPEN')"
+            ).fetchone()[0]
+            if int(unresolved) != 0:
+                raise RuntimeError("Des ordres PAPER restent non résolus")
+            critical = connection.execute(
+                "SELECT COUNT(*) FROM incidents WHERE status='OPEN' AND severity='CRITICAL'"
+            ).fetchone()[0]
+            if int(critical) != 0:
+                raise RuntimeError("Un incident critique PAPER est ouvert")
+
+            state_rows = {
+                str(row["engine"]): row["payload"]
+                for row in connection.execute("SELECT engine, payload FROM engine_state")
+            }
+            for engine in engines:
+                raw = state_rows.get(engine)
+                if raw is None:
+                    raise RuntimeError(f"État moteur absent: {engine}")
+                try:
+                    state = json.loads(str(raw))
+                except json.JSONDecodeError as error:
+                    raise RuntimeError(f"État moteur malformé: {engine}") from error
+                if not isinstance(state, dict) or state.get("reconciliation_required") is True:
+                    raise RuntimeError(f"Réconciliation requise pour {engine}")
+                if engine == "trend":
+                    slots = state.get("slots")
+                    if not isinstance(slots, dict) or any(
+                        not isinstance(slot, dict)
+                        or "position" not in slot
+                        or slot.get("position") is not None
+                        for slot in slots.values()
+                    ):
+                        raise RuntimeError("Le moteur Trend n'est pas FLAT")
+                elif engine == "carry":
+                    if (
+                        state.get("execution_state") not in (None, "FLAT")
+                        or state.get("in_position", False) is not False
+                    ):
+                        raise RuntimeError("Le moteur Carry n'est pas FLAT")
+                else:
+                    raise RuntimeError(f"Moteur requis non supporté: {engine}")
+
+            placeholders = ",".join("?" for _ in engines)
+            position_rows = connection.execute(
+                f"SELECT engine, status FROM positions WHERE engine IN ({placeholders})",
+                engines,
+            ).fetchall()
+            if any(row["status"] != "FLAT" for row in position_rows):
+                raise RuntimeError("Une position PAPER n'est pas FLAT")
+
+            qualification_row = None
+            qualification_record = self.paper_technical_qualification_record(qualification_id)
+            if qualification_record is not None:
+                qualification_row = (qualification_record["id"], qualification_record["payload"])
+            if qualification_row is None or qualification_row[0] != qualification_id:
+                raise RuntimeError("La qualification technique PAPER courante est absente")
+            qualification_payload = qualification_row[1]
+            for key in ("release_sha", "release_tree", "schema_version"):
+                if qualification_payload.get(key) != binding.get(key):
+                    raise RuntimeError(f"Binding de qualification incohérent: {key}")
+
+            started_at = str(now_factory())
+            try:
+                parsed_started_at = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+            except (TypeError, ValueError) as error:
+                raise ValueError("started_at doit être ISO-8601") from error
+            if parsed_started_at.tzinfo is None:
+                raise ValueError("started_at doit inclure un fuseau explicite")
+            payload = {"policy": dict(policy), "binding": dict(binding)}
+            cursor = connection.execute(
+                "INSERT INTO qualification_campaigns("
+                "protocol_version, status, policy, started_at) "
+                "VALUES(3, 'RUNNING', ?, ?)",
+                (self._json(payload), started_at),
             )
             campaign_id = cursor.lastrowid
         assert campaign_id is not None
@@ -6352,9 +6491,16 @@ class StateStore:
     def latest_paper_technical_qualification(self) -> dict[str, Any] | None:
         """Return the newest durable PAPER technical qualification, if any."""
 
+        record = self.latest_paper_technical_qualification_record()
+        return record["payload"] if record else None
+
+    def latest_paper_technical_qualification_record(self) -> dict[str, Any] | None:
+        """Return the newest technical qualification together with its row id."""
+
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT payload FROM readiness_reports WHERE status='PASS' ORDER BY id DESC"
+                "SELECT id, status, generated_at, payload "
+                "FROM readiness_reports WHERE status='PASS' ORDER BY id DESC"
             ).fetchall()
         for row in rows:
             try:
@@ -6364,8 +6510,36 @@ class StateStore:
             if isinstance(payload, dict) and payload.get("kind") == (
                 "PAPER_TECHNICAL_QUALIFICATION"
             ):
-                return payload
+                return {
+                    "id": int(row["id"]),
+                    "status": str(row["status"]),
+                    "generated_at": str(row["generated_at"]),
+                    "payload": payload,
+                }
         return None
+
+    def paper_technical_qualification_record(self, qualification_id: int) -> dict[str, Any] | None:
+        """Return one exact technical qualification row when it is a durable PASS."""
+
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT id, status, generated_at, payload FROM readiness_reports WHERE id = ?",
+                (qualification_id,),
+            ).fetchone()
+        if row is None or str(row["status"]) != "PASS":
+            return None
+        try:
+            payload = json.loads(str(row["payload"]))
+        except (TypeError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict) or payload.get("kind") != "PAPER_TECHNICAL_QUALIFICATION":
+            return None
+        return {
+            "id": int(row["id"]),
+            "status": str(row["status"]),
+            "generated_at": str(row["generated_at"]),
+            "payload": payload,
+        }
 
     def finish_qualification_campaign(
         self,

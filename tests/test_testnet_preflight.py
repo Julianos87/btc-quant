@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 
 from btcquant.execution.external_capability_profile import hyperliquid_testnet_trend_ioc_v1
-from btcquant.execution.readiness import ReadinessPolicy, paper_maturity_status, start_campaign
+from btcquant.execution.readiness import (
+    ReadinessPolicy,
+    paper_maturity_status,
+    _start_campaign_for_test,
+)
 from btcquant.execution.state_store import SCHEMA_VERSION, StateStore
 from btcquant.execution.testnet_preflight import evaluate_testnet_preflight
 
@@ -189,7 +193,7 @@ def test_paper_maturity_status_is_observed_and_separate(tmp_path) -> None:
     assert before["qualified"] is False
     assert before["earliest_time_criterion"] is None
 
-    start_campaign(
+    _start_campaign_for_test(
         store,
         ReadinessPolicy(
             min_observation_days=90,
