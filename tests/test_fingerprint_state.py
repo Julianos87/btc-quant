@@ -53,7 +53,9 @@ def test_fingerprint_rejects_production_path() -> None:
 
 
 def test_fingerprint_rejects_database_outside_snapshot_roots(tmp_path: Path) -> None:
-    outside = Path("/home/ubuntu") / f".btcquant-fingerprint-{tmp_path.name}.db"
+    # The repository checkout is writable in CI and is deliberately outside
+    # the harness's approved temporary snapshot roots.
+    outside = Path.cwd() / f".btcquant-fingerprint-{tmp_path.name}.db"
     try:
         with sqlite3.connect(outside) as connection:
             connection.execute("CREATE TABLE marker(value TEXT)")
