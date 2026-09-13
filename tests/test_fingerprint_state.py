@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 
 from btcquant.execution.state_store import StateStore
-from scripts.fingerprint_state import fingerprint_database
+import scripts.fingerprint_state as fingerprint_state
+from scripts.fingerprint_state import _canonical_rows, fingerprint_database
 
 
 def _snapshot(tmp_path: Path) -> Path:
@@ -52,10 +53,11 @@ def test_fingerprint_rejects_production_path() -> None:
         fingerprint_database("/opt/btcquant/state/btcquant.db")
 
 
-def test_fingerprint_rejects_database_outside_snapshot_roots(tmp_path: Path) -> None:
-    # The repository checkout is writable in CI and is deliberately outside
-    # the harness's approved temporary snapshot roots.
-    outside = Path.cwd() / f".btcquant-fingerprint-{tmp_path.name}.db"
+def test_fingerprint_rejects_database_outside_snapshot_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(fingerprint_state, "SNAPSHOT_ROOTS", (tmp_path / "approved",))
+    outside = tmp_path / f"outside-{tmp_path.name}.db"
     try:
         with sqlite3.connect(outside) as connection:
             connection.execute("CREATE TABLE marker(value TEXT)")
@@ -64,6 +66,24 @@ def test_fingerprint_rejects_database_outside_snapshot_roots(tmp_path: Path) -> 
             fingerprint_database(outside)
     finally:
         outside.unlink(missing_ok=True)
+
+
+def test_canonical_rows_support_without_rowid_and_typed_values() -> None:
+    def build(rows: list[tuple[str, bytes | None, float]]) -> sqlite3.Connection:
+        connection = sqlite3.connect(":memory:")
+        connection.execute(
+            "CREATE TABLE sample(key TEXT PRIMARY KEY, payload BLOB, amount REAL) WITHOUT ROWID"
+        )
+        connection.executemany("INSERT INTO sample VALUES (?, ?, ?)", rows)
+        return connection
+
+    first = build([("b", None, 1.25), ("a", b"\x00\xff", 2.5)])
+    second = build([("a", b"\x00\xff", 2.5), ("b", None, 1.25)])
+    try:
+        assert _canonical_rows(first, "sample") == _canonical_rows(second, "sample")
+    finally:
+        first.close()
+        second.close()
 
 
 def test_fingerprint_fails_closed_on_corrupt_snapshot(tmp_path: Path) -> None:
