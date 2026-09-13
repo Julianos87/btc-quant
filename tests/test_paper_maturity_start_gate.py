@@ -90,6 +90,26 @@ def test_secure_paper_start_binds_release_qualification_and_config(
     assert len(store.read_orders()) == 0
 
 
+def test_bound_start_reads_qualification_on_its_atomic_connection(
+    monkeypatch, tmp_path: Path
+) -> None:
+    root, store = _prepare_bound_fixture(monkeypatch, tmp_path)
+    from btcquant.execution.qualification_repository import QualificationRepository
+
+    observed_connections = []
+    original = QualificationRepository.paper_technical_qualification_record
+
+    def capture(repository, qualification_id: int, *, connection=None):
+        observed_connections.append(connection)
+        return original(repository, qualification_id, connection=connection)
+
+    monkeypatch.setattr(QualificationRepository, "paper_technical_qualification_record", capture)
+    start_paper_maturity_campaign(root, now_factory=lambda: "2026-09-13T10:00:00+00:00")
+
+    assert len(observed_connections) == 1
+    assert observed_connections[0] is not None
+
+
 def test_missing_technical_qualification_writes_no_campaign(monkeypatch, tmp_path: Path) -> None:
     root, store = _prepare_bound_fixture(monkeypatch, tmp_path)
     with store._transaction() as connection:

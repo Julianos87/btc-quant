@@ -101,6 +101,7 @@ from .order_state import (
     LocalOrderState,
     LogicalOrderIdentity,
 )
+from .qualification_repository import QualificationRepository
 from .state_contract import validate_trend_state
 
 SCHEMA_VERSION = 14
@@ -191,6 +192,13 @@ class StateStore:
         self.path = Path(path)
         self.allow_migration = allow_migration
         self.read_only = read_only
+        self._qualification_repository = QualificationRepository(
+            connect=self._connect,
+            transaction=self._transaction,
+            encode_json=self._json,
+            schema_version=SCHEMA_VERSION,
+            now=utc_now,
+        )
         if not read_only:
             # Every production StateStore writer shares the restore gate.  This
             # central check covers runners, timers, watchdogs and qualification
@@ -6185,26 +6193,11 @@ class StateStore:
     ) -> dict[str, Any]:
         """Start only a legacy fixture campaign; PAPER v3 uses the bound API."""
 
-        if int(protocol_version) >= 3:
-            raise RuntimeError("Le protocole PAPER v3 exige start_bound_paper_maturity_campaign")
-        now = started_at or utc_now()
-        with self._transaction() as connection:
-            active = connection.execute(
-                "SELECT id FROM qualification_campaigns WHERE status = 'RUNNING'"
-            ).fetchone()
-            if active is not None:
-                raise RuntimeError(f"La campagne de qualification {active['id']} est déjà active")
-            cursor = connection.execute(
-                """
-                INSERT INTO qualification_campaigns(
-                    protocol_version, status, policy, started_at
-                ) VALUES(?, 'RUNNING', ?, ?)
-                """,
-                (protocol_version, self._json(policy), now),
-            )
-            campaign_id = cursor.lastrowid
-        assert campaign_id is not None
-        return self.read_qualification_campaign(int(campaign_id))
+        return self._qualification_repository.start_qualification_campaign(
+            protocol_version=protocol_version,
+            policy=policy,
+            started_at=started_at,
+        )
 
     def start_bound_paper_maturity_campaign(
         self,
@@ -6224,158 +6217,22 @@ class StateStore:
 
         if self.read_only:
             raise RuntimeError("Un StateStore read-only ne peut pas démarrer PAPER maturity")
-        if binding.get("environment") != "paper":
-            raise ValueError("Une campagne PAPER doit être liée à l'environnement paper")
-        if not isinstance(qualification_id, int) or isinstance(qualification_id, bool):
-            raise ValueError("technical_qualification_id invalide")
-        if int(binding.get("technical_qualification_id", -1)) != qualification_id:
-            raise ValueError("Le binding de qualification est incohérent")
-        engines = tuple(dict.fromkeys(str(engine) for engine in required_engines))
-        if not engines or tuple(binding.get("required_engines", ())) != engines:
-            raise ValueError("Le binding des moteurs PAPER est incohérent")
-        if (
-            not isinstance(binding.get("release_sha"), str)
-            or re.fullmatch(r"[0-9a-f]{40}", binding["release_sha"]) is None
-            or not isinstance(binding.get("release_tree"), str)
-            or re.fullmatch(r"[0-9a-f]{40}", binding["release_tree"]) is None
-            or binding.get("schema_version") != SCHEMA_VERSION
-            or binding.get("config_identity_version") != 1
-            or re.fullmatch(r"[0-9a-f]{64}", str(binding.get("config_identity", ""))) is None
-        ):
-            raise ValueError("Le binding PAPER contient une identité invalide")
-
-        with self._transaction() as connection:
-            active = connection.execute(
-                "SELECT id FROM qualification_campaigns WHERE status='RUNNING'"
-            ).fetchone()
-            if active is not None:
-                raise RuntimeError(f"La campagne de qualification {active['id']} est déjà active")
-
-            schema_row = connection.execute(
-                "SELECT value FROM metadata WHERE key='schema_version'"
-            ).fetchone()
-            if schema_row is None or int(schema_row["value"]) != SCHEMA_VERSION:
-                raise RuntimeError("Le schéma PAPER n'est pas compatible")
-            integrity = connection.execute("PRAGMA integrity_check").fetchone()
-            if integrity is None or integrity[0] != "ok":
-                raise RuntimeError("L'intégrité SQLite PAPER n'est pas démontrée")
-            if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
-                raise RuntimeError("Les contraintes FK PAPER ne sont pas satisfaites")
-            unresolved = connection.execute(
-                "SELECT COUNT(*) FROM orders "
-                "WHERE local_state != 'TERMINAL' "
-                "AND NOT (order_type='STOP' AND status='OPEN')"
-            ).fetchone()[0]
-            if int(unresolved) != 0:
-                raise RuntimeError("Des ordres PAPER restent non résolus")
-            critical = connection.execute(
-                "SELECT COUNT(*) FROM incidents WHERE status='OPEN' AND severity='CRITICAL'"
-            ).fetchone()[0]
-            if int(critical) != 0:
-                raise RuntimeError("Un incident critique PAPER est ouvert")
-
-            state_rows = {
-                str(row["engine"]): row["payload"]
-                for row in connection.execute("SELECT engine, payload FROM engine_state")
-            }
-            for engine in engines:
-                raw = state_rows.get(engine)
-                if raw is None:
-                    raise RuntimeError(f"État moteur absent: {engine}")
-                try:
-                    state = json.loads(str(raw))
-                except json.JSONDecodeError as error:
-                    raise RuntimeError(f"État moteur malformé: {engine}") from error
-                if not isinstance(state, dict) or state.get("reconciliation_required") is True:
-                    raise RuntimeError(f"Réconciliation requise pour {engine}")
-                if engine == "trend":
-                    slots = state.get("slots")
-                    if not isinstance(slots, dict) or any(
-                        not isinstance(slot, dict)
-                        or "position" not in slot
-                        or slot.get("position") is not None
-                        for slot in slots.values()
-                    ):
-                        raise RuntimeError("Le moteur Trend n'est pas FLAT")
-                elif engine == "carry":
-                    if (
-                        state.get("execution_state") not in (None, "FLAT")
-                        or state.get("in_position", False) is not False
-                    ):
-                        raise RuntimeError("Le moteur Carry n'est pas FLAT")
-                else:
-                    raise RuntimeError(f"Moteur requis non supporté: {engine}")
-
-            placeholders = ",".join("?" for _ in engines)
-            position_rows = connection.execute(
-                f"SELECT engine, status FROM positions WHERE engine IN ({placeholders})",
-                engines,
-            ).fetchall()
-            if any(row["status"] != "FLAT" for row in position_rows):
-                raise RuntimeError("Une position PAPER n'est pas FLAT")
-
-            qualification_row = None
-            qualification_record = self.paper_technical_qualification_record(qualification_id)
-            if qualification_record is not None:
-                qualification_row = (qualification_record["id"], qualification_record["payload"])
-            if qualification_row is None or qualification_row[0] != qualification_id:
-                raise RuntimeError("La qualification technique PAPER courante est absente")
-            qualification_payload = qualification_row[1]
-            for key in ("release_sha", "release_tree", "schema_version"):
-                if qualification_payload.get(key) != binding.get(key):
-                    raise RuntimeError(f"Binding de qualification incohérent: {key}")
-
-            started_at = str(now_factory())
-            try:
-                parsed_started_at = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
-            except (TypeError, ValueError) as error:
-                raise ValueError("started_at doit être ISO-8601") from error
-            if parsed_started_at.tzinfo is None:
-                raise ValueError("started_at doit inclure un fuseau explicite")
-            payload = {"policy": dict(policy), "binding": dict(binding)}
-            cursor = connection.execute(
-                "INSERT INTO qualification_campaigns("
-                "protocol_version, status, policy, started_at) "
-                "VALUES(3, 'RUNNING', ?, ?)",
-                (self._json(payload), started_at),
-            )
-            campaign_id = cursor.lastrowid
-        assert campaign_id is not None
-        return self.read_qualification_campaign(int(campaign_id))
+        return self._qualification_repository.start_bound_paper_maturity_campaign(
+            policy=policy,
+            binding=binding,
+            required_engines=required_engines,
+            qualification_id=qualification_id,
+            now_factory=now_factory,
+        )
 
     def read_qualification_campaign(self, campaign_id: int) -> dict[str, Any]:
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT * FROM qualification_campaigns WHERE id = ?",
-                (campaign_id,),
-            ).fetchone()
-        if row is None:
-            raise KeyError(f"Campagne de qualification introuvable : {campaign_id}")
-        result = dict(row)
-        result["policy"] = json.loads(result["policy"])
-        if result["final_report"]:
-            result["final_report"] = json.loads(result["final_report"])
-        return result
+        return self._qualification_repository.read_qualification_campaign(campaign_id)
 
     def active_qualification_campaign(self) -> dict[str, Any] | None:
-        with self._connect() as connection:
-            row = connection.execute(
-                """
-                SELECT id FROM qualification_campaigns
-                WHERE status = 'RUNNING' ORDER BY id DESC LIMIT 1
-                """
-            ).fetchone()
-        return self.read_qualification_campaign(int(row["id"])) if row else None
+        return self._qualification_repository.active_qualification_campaign()
 
     def latest_passed_qualification(self) -> dict[str, Any] | None:
-        with self._connect() as connection:
-            row = connection.execute(
-                """
-                SELECT id FROM qualification_campaigns
-                WHERE status = 'PASSED' ORDER BY id DESC LIMIT 1
-                """
-            ).fetchone()
-        return self.read_qualification_campaign(int(row["id"])) if row else None
+        return self._qualification_repository.latest_passed_qualification()
 
     def save_readiness_report(
         self,
@@ -6383,30 +6240,13 @@ class StateStore:
         *,
         campaign_id: int | None,
     ) -> int:
-        with self._transaction() as connection:
-            cursor = connection.execute(
-                """
-                INSERT INTO readiness_reports(
-                    campaign_id, protocol_version, status, generated_at, payload
-                ) VALUES(?, ?, ?, ?, ?)
-                """,
-                (
-                    campaign_id,
-                    int(report["protocol_version"]),
-                    str(report["status"]),
-                    str(report["generated_at"]),
-                    self._json(report),
-                ),
-            )
-        assert cursor.lastrowid is not None
-        return int(cursor.lastrowid)
+        return self._qualification_repository.save_readiness_report(
+            report,
+            campaign_id=campaign_id,
+        )
 
     def latest_readiness_report(self) -> dict[str, Any] | None:
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT payload FROM readiness_reports ORDER BY id DESC LIMIT 1"
-            ).fetchone()
-        return json.loads(row["payload"]) if row else None
+        return self._qualification_repository.latest_readiness_report()
 
     def record_paper_technical_qualification(
         self,
@@ -6433,113 +6273,33 @@ class StateStore:
 
         if self.read_only:
             raise RuntimeError("Un StateStore read-only ne peut pas qualifier PAPER")
-        for name, value in (("release_sha", release_sha), ("release_tree", release_tree)):
-            if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
-                raise ValueError(f"{name} must be a lowercase Git SHA")
-        if (
-            isinstance(schema_version, bool)
-            or not isinstance(schema_version, int)
-            or schema_version != SCHEMA_VERSION
-        ):
-            raise ValueError("technical qualification schema does not match the running schema")
-        evidence = {
-            "full_test_results": full_test_results,
-            "staging_run": staging_run,
-            "migration": migration,
-            "rollback_rehearsal": rollback_rehearsal,
-            "production_health": production_health,
-            "backup_verification": backup_verification,
-        }
-        for evidence_name, evidence_value in evidence.items():
-            if not isinstance(evidence_value, Mapping) or evidence_value.get("status") != "PASS":
-                raise ValueError(f"{evidence_name} must be a structured PASS record")
-        timestamp = qualified_at or utc_now()
-        try:
-            parsed_timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-        except (AttributeError, TypeError, ValueError) as error:
-            raise ValueError("qualified_at must be an ISO-8601 timestamp") from error
-        if parsed_timestamp.tzinfo is None:
-            raise ValueError("qualified_at must include an explicit timezone")
-        payload = {
-            "kind": "PAPER_TECHNICAL_QUALIFICATION",
-            "qualification_version": 1,
-            "release_sha": release_sha,
-            "release_tree": release_tree,
-            "schema_version": schema_version,
-            "full_test_results": dict(full_test_results),
-            "staging_run": dict(staging_run),
-            "migration": dict(migration),
-            "rollback_rehearsal": dict(rollback_rehearsal),
-            "production_health": dict(production_health),
-            "backup_verification": dict(backup_verification),
-            "status": "PAPER_TECHNICAL_QUALIFIED",
-            "qualified_at": parsed_timestamp.astimezone(UTC).isoformat(),
-            "protocol_version": 1,
-        }
-        with self._transaction() as connection:
-            cursor = connection.execute(
-                """
-                INSERT INTO readiness_reports(
-                    campaign_id, protocol_version, status, generated_at, payload
-                ) VALUES(NULL, ?, 'PASS', ?, ?)
-                """,
-                (1, payload["qualified_at"], self._json(payload)),
-            )
-        assert cursor.lastrowid is not None
-        return int(cursor.lastrowid)
+        return self._qualification_repository.record_paper_technical_qualification(
+            release_sha=release_sha,
+            release_tree=release_tree,
+            schema_version=schema_version,
+            full_test_results=full_test_results,
+            staging_run=staging_run,
+            migration=migration,
+            rollback_rehearsal=rollback_rehearsal,
+            production_health=production_health,
+            backup_verification=backup_verification,
+            qualified_at=qualified_at,
+        )
 
     def latest_paper_technical_qualification(self) -> dict[str, Any] | None:
         """Return the newest durable PAPER technical qualification, if any."""
 
-        record = self.latest_paper_technical_qualification_record()
-        return record["payload"] if record else None
+        return self._qualification_repository.latest_paper_technical_qualification()
 
     def latest_paper_technical_qualification_record(self) -> dict[str, Any] | None:
         """Return the newest technical qualification together with its row id."""
 
-        with self._connect() as connection:
-            rows = connection.execute(
-                "SELECT id, status, generated_at, payload "
-                "FROM readiness_reports WHERE status='PASS' ORDER BY id DESC"
-            ).fetchall()
-        for row in rows:
-            try:
-                payload = json.loads(str(row["payload"]))
-            except (TypeError, json.JSONDecodeError):
-                continue
-            if isinstance(payload, dict) and payload.get("kind") == (
-                "PAPER_TECHNICAL_QUALIFICATION"
-            ):
-                return {
-                    "id": int(row["id"]),
-                    "status": str(row["status"]),
-                    "generated_at": str(row["generated_at"]),
-                    "payload": payload,
-                }
-        return None
+        return self._qualification_repository.latest_paper_technical_qualification_record()
 
     def paper_technical_qualification_record(self, qualification_id: int) -> dict[str, Any] | None:
         """Return one exact technical qualification row when it is a durable PASS."""
 
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT id, status, generated_at, payload FROM readiness_reports WHERE id = ?",
-                (qualification_id,),
-            ).fetchone()
-        if row is None or str(row["status"]) != "PASS":
-            return None
-        try:
-            payload = json.loads(str(row["payload"]))
-        except (TypeError, json.JSONDecodeError):
-            return None
-        if not isinstance(payload, dict) or payload.get("kind") != "PAPER_TECHNICAL_QUALIFICATION":
-            return None
-        return {
-            "id": int(row["id"]),
-            "status": str(row["status"]),
-            "generated_at": str(row["generated_at"]),
-            "payload": payload,
-        }
+        return self._qualification_repository.paper_technical_qualification_record(qualification_id)
 
     def finish_qualification_campaign(
         self,
@@ -6549,26 +6309,12 @@ class StateStore:
         final_report: dict[str, Any] | None = None,
         ended_at: str | None = None,
     ) -> None:
-        if status not in ("PASSED", "CANCELED"):
-            raise ValueError("status doit valoir PASSED ou CANCELED")
-        if status == "PASSED" and (final_report is None or final_report.get("status") != "PASS"):
-            raise ValueError("Une campagne ne peut passer qu'avec un rapport PASS")
-        with self._transaction() as connection:
-            cursor = connection.execute(
-                """
-                UPDATE qualification_campaigns
-                SET status=?, ended_at=?, final_report=?
-                WHERE id=? AND status='RUNNING'
-                """,
-                (
-                    status,
-                    ended_at or utc_now(),
-                    self._json(final_report) if final_report else None,
-                    campaign_id,
-                ),
-            )
-        if cursor.rowcount != 1:
-            raise RuntimeError("La campagne n'est plus active")
+        return self._qualification_repository.finish_qualification_campaign(
+            campaign_id,
+            status=status,
+            final_report=final_report,
+            ended_at=ended_at,
+        )
 
     #: Événements de simple checkpoint périodique. Ils portent l'état complet
     #: du moteur et sont réémis à chaque tick : leur valeur d'audit décroît
