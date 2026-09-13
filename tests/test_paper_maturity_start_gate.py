@@ -8,6 +8,7 @@ import pytest
 from btcquant.execution import paper_technical_qualification as technical
 from btcquant.execution.readiness import (
     ReadinessPolicy,
+    canonical_service_component_profile,
     paper_maturity_status,
     start_paper_maturity_campaign,
 )
@@ -241,6 +242,51 @@ def test_runtime_required_engine_change_invalidates_existing_binding(
     assert status["binding"]["comparisons"]["required_engines"] is False
 
 
+@pytest.mark.parametrize(
+    ("contents", "required", "reason"),
+    [
+        ("OTHER_SECRET=ignored\n", ("trend",), ()),
+        ("BTCQUANT_REQUIRED_ENGINES=trend\n", ("trend",), ()),
+        ("BTCQUANT_REQUIRED_ENGINES=carry\n", ("carry",), ()),
+        ("BTCQUANT_REQUIRED_ENGINES=trend,carry\n", ("trend", "carry"), ()),
+        (
+            "BTCQUANT_REQUIRED_ENGINES=trend\nBTCQUANT_REQUIRED_ENGINES=trend\n",
+            ("trend",),
+            ("AMBIGUOUS_REQUIRED_ENGINE_PROFILE",),
+        ),
+        (
+            "BTCQUANT_REQUIRED_ENGINES=trend\nBTCQUANT_REQUIRED_ENGINES=carry\n",
+            ("trend",),
+            ("AMBIGUOUS_REQUIRED_ENGINE_PROFILE",),
+        ),
+        ("BTCQUANT_REQUIRED_ENGINES=unknown\n", ("trend",), ("INVALID_REQUIRED_ENGINE_PROFILE",)),
+        ("BTCQUANT_REQUIRED_ENGINES=\n", ("trend",), ("INVALID_REQUIRED_ENGINE_PROFILE",)),
+    ],
+)
+def test_canonical_profile_parser_is_strict_and_allow_listed(
+    tmp_path: Path, contents: str, required: tuple[str, ...], reason: tuple[str, ...]
+) -> None:
+    root = tmp_path / "runtime"
+    root.mkdir()
+    (root / ".env").write_text(contents)
+    profile = canonical_service_component_profile(root)
+    assert profile.required == required
+    assert profile.reason_codes == reason
+
+
+def test_canonical_profile_ignores_secret_looking_lines(tmp_path: Path) -> None:
+    root = tmp_path / "runtime"
+    root.mkdir()
+    (root / ".env").write_text(
+        "BACKUP_ENCRYPTION_KEY=do-not-surface\n"
+        "TELEGRAM_TOKEN=do-not-surface\n"
+        "BTCQUANT_REQUIRED_ENGINES=carry\n"
+    )
+    profile = canonical_service_component_profile(root)
+    assert profile.required == ("carry",)
+    assert "do-not-surface" not in repr(profile)
+
+
 def test_binding_uses_canonical_profile_when_ambient_shell_diverges(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -256,6 +302,31 @@ def test_binding_uses_canonical_profile_when_ambient_shell_diverges(
     status = paper_maturity_status(store, root=root)
     assert status["binding_status"] == "MISMATCH"
     assert status["reason_code"] == "PAPER_MATURITY_BINDING_MISMATCH"
+
+
+def test_ambiguous_canonical_profile_refuses_new_start(monkeypatch, tmp_path: Path) -> None:
+    root, store = _prepare_bound_fixture(monkeypatch, tmp_path)
+    (root / ".env").write_text("BTCQUANT_REQUIRED_ENGINES=trend\nBTCQUANT_REQUIRED_ENGINES=trend\n")
+    with pytest.raises(RuntimeError, match="AMBIGUOUS_REQUIRED_ENGINE_PROFILE"):
+        start_paper_maturity_campaign(root)
+    assert store.active_qualification_campaign() is None
+
+
+def test_ambiguous_canonical_profile_fails_closed_for_status_and_finalize(
+    monkeypatch, tmp_path: Path
+) -> None:
+    root, store = _prepare_bound_fixture(monkeypatch, tmp_path)
+    start_paper_maturity_campaign(root)
+    (root / ".env").write_text("BTCQUANT_REQUIRED_ENGINES=trend\nBTCQUANT_REQUIRED_ENGINES=carry\n")
+    monkeypatch.delenv("BTCQUANT_REQUIRED_ENGINES", raising=False)
+    status = paper_maturity_status(store, root=root)
+    assert status["binding_status"] == "UNKNOWN"
+    assert status["qualified"] is False
+
+    from btcquant.execution.readiness import finalize_campaign
+
+    with pytest.raises(RuntimeError, match="binding mismatch"):
+        finalize_campaign(store)
 
 
 def test_missing_canonical_profile_fails_closed(monkeypatch, tmp_path: Path) -> None:

@@ -83,7 +83,7 @@ def canonical_service_component_profile(root: Path) -> ServiceComponentProfile:
     """
 
     path = root.resolve(strict=True) / _CANONICAL_ENV_FILENAME
-    configured: str | None = None
+    configured_values: list[str] = []
     pattern = re.compile(r"^(?:export\s+)?BTCQUANT_REQUIRED_ENGINES\s*=\s*(.*?)\s*$")
     try:
         with path.open(encoding="utf-8") as handle:
@@ -97,10 +97,12 @@ def canonical_service_component_profile(root: Path) -> ServiceComponentProfile:
                 value = match.group(1)
                 if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
                     value = value[1:-1]
-                configured = value
-                break
+                configured_values.append(value)
     except OSError as error:
         raise RuntimeError("Canonical PAPER runtime profile unavailable") from error
+    if len(configured_values) > 1:
+        return ServiceComponentProfile(reason_codes=("AMBIGUOUS_REQUIRED_ENGINE_PROFILE",))
+    configured = configured_values[0] if configured_values else None
     return _profile_from_required_engines(configured)
 
 
@@ -381,6 +383,8 @@ def _current_paper_binding(
         resolved_root = (root or store.path.parent.parent).resolve(strict=True)
         _release, manifest = active_paper_release(resolved_root)
         profile = canonical_service_component_profile(resolved_root)
+        if profile.reason_codes:
+            raise RuntimeError(profile.reason_codes[0])
         current_engines = tuple(profile.required)
         current_config = paper_config_identity(manifest, required_engines=current_engines)
         bound_id = binding.get("technical_qualification_id")
@@ -427,11 +431,18 @@ def _current_paper_binding(
             },
         }
     except Exception as error:
+        error_code = str(error)
+        if error_code not in {
+            "AMBIGUOUS_REQUIRED_ENGINE_PROFILE",
+            "INVALID_REQUIRED_ENGINE_PROFILE",
+        }:
+            error_code = type(error).__name__
         return {
             "status": "UNKNOWN",
             "passed": False,
             "reason_code": "PAPER_MATURITY_BINDING_MISMATCH",
             "detail": "current PAPER binding could not be demonstrated",
+            "error_code": error_code,
             "error_type": type(error).__name__,
         }
 
@@ -457,7 +468,7 @@ def start_paper_maturity_campaign(
     cfg = policy or ReadinessPolicy()
     profile = canonical_service_component_profile(root)
     if profile.reason_codes:
-        raise RuntimeError("Invalid PAPER required-engine profile")
+        raise RuntimeError(profile.reason_codes[0])
     cfg = ReadinessPolicy(**{**cfg.to_dict(), "required_engines": profile.required})
     selected_probes = probes or DEFAULT_PROBES
     evidence = collect_paper_technical_evidence(root, probes=selected_probes)
