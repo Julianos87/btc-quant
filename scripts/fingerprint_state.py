@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -41,20 +42,43 @@ def _reject_production_path(database: Path) -> Path:
     return resolved
 
 
+def _canonical_value(value: Any) -> list[Any]:
+    """Encode SQLite scalar types without depending on Python's repr()."""
+
+    if value is None:
+        return ["null", None]
+    if isinstance(value, bool):
+        return ["bool", value]
+    if isinstance(value, int):
+        return ["int", value]
+    if isinstance(value, float):
+        if math.isnan(value):
+            encoded = "nan"
+        elif math.isinf(value):
+            encoded = "inf" if value > 0 else "-inf"
+        else:
+            encoded = value.hex()
+        return ["float", encoded]
+    if isinstance(value, str):
+        return ["text", value]
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return ["blob", bytes(value).hex()]
+    raise TypeError(f"unsupported SQLite value type: {type(value).__name__}")
+
+
 def _canonical_rows(connection: sqlite3.Connection, table: str) -> tuple[int, str]:
+    escaped_table = table.replace(chr(34), chr(34) * 2)
     rows = [
-        tuple(row)
-        for row in connection.execute(
-            f'SELECT * FROM "{table.replace(chr(34), chr(34) * 2)}" ORDER BY rowid'
+        json.dumps(
+            [_canonical_value(value) for value in tuple(row)],
+            ensure_ascii=False,
+            separators=(",", ":"),
         )
+        for row in connection.execute(f'SELECT * FROM "{escaped_table}"')
     ]
-    payload = json.dumps(
-        rows,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    ).encode("utf-8")
+    # Sort canonical row encodings rather than rowid. This supports WITHOUT
+    # ROWID tables and makes the digest independent of physical insertion order.
+    payload = "\n".join(sorted(rows)).encode("utf-8")
     return len(rows), hashlib.sha256(payload).hexdigest()
 
 
