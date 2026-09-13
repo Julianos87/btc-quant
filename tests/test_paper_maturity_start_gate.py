@@ -335,3 +335,58 @@ def test_relative_testnet_database_is_rejected_for_paper_cli(monkeypatch, tmp_pa
     )
     with pytest.raises(SystemExit, match="canonical PAPER database"):
         entrypoint.main()
+
+
+def test_absolute_canonical_database_is_root_independent(tmp_path: Path) -> None:
+    from btcquant.entrypoints.readiness import _resolve_requested_database
+
+    root = tmp_path / "runtime"
+    canonical = root / "state" / "btcquant.db"
+    assert _resolve_requested_database(root, str(canonical)) == canonical.resolve()
+
+
+def test_relative_arbitrary_database_is_rejected_for_paper_cli(monkeypatch, tmp_path: Path) -> None:
+    from btcquant.entrypoints import readiness as entrypoint
+
+    root = tmp_path / "runtime"
+    root.mkdir()
+    monkeypatch.setattr(entrypoint, "ROOT", root)
+    monkeypatch.setattr(
+        entrypoint.sys,
+        "argv",
+        [
+            "btcquant-readiness",
+            "start",
+            "--profile",
+            "paper",
+            "--database",
+            "state/arbitrary.db",
+        ],
+    )
+    with pytest.raises(SystemExit, match="canonical PAPER database"):
+        entrypoint.main()
+
+
+def test_symlink_resolving_to_testnet_database_is_rejected(monkeypatch, tmp_path: Path) -> None:
+    from btcquant.entrypoints import readiness as entrypoint
+
+    root = tmp_path / "runtime"
+    state = root / "state"
+    state.mkdir(parents=True)
+    (state / "btcquant-testnet.db").touch()
+    (state / "paper-alias.db").symlink_to("btcquant-testnet.db")
+    monkeypatch.setattr(entrypoint, "ROOT", root)
+    monkeypatch.setattr(
+        entrypoint.sys,
+        "argv",
+        [
+            "btcquant-readiness",
+            "start",
+            "--profile",
+            "paper",
+            "--database",
+            "state/paper-alias.db",
+        ],
+    )
+    with pytest.raises(SystemExit, match="canonical PAPER database"):
+        entrypoint.main()
