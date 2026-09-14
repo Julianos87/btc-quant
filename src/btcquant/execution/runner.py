@@ -41,6 +41,7 @@ from ..notify import notify
 from ..risk import RiskConfig, position_size
 from ..strategies.base import Direction, Position, Strategy
 from .broker import Broker
+from .atomic_financial_writer import StateStoreAtomicFinancialWriter
 from .clock import SystemClock
 from .data_quality import validate_closed_ohlcv
 from .errors import ReconciliationRequired
@@ -176,7 +177,10 @@ class LiveRunner:
                 self.broker,
                 self.clock,
             )
-        self.reconciliation_coordinator = OrderReconciliationCoordinator(self.store)
+        self.reconciliation_coordinator = OrderReconciliationCoordinator(
+            self.store,
+            financial_writer=StateStoreAtomicFinancialWriter(self.store),
+        )
         self.peak_equity = sum(s.cash for s in slots)
         self.halted = False
         self.day: str | None = None

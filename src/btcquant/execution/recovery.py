@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass, field
 
 from .broker import Broker
+from .atomic_financial_writer import StateStoreAtomicFinancialWriter
 from .order_state import ExternalOrderState, LocalOrderState
 from .paper_order_finalization import PaperFinalizationStatus
 from .reconciliation_coordinator import OrderReconciliationCoordinator, ReconciliationStatus
@@ -98,7 +99,10 @@ def recover_interrupted_orders(
                 report.manual_order_ids.append(order_id)
                 report.lookup_errors[order_id] = "LEGACY_APPLICATION_CONTEXT_INCOMPLETE"
                 continue
-            reconciliation = OrderReconciliationCoordinator(store).reconcile(order_id)
+            reconciliation = OrderReconciliationCoordinator(
+                store,
+                financial_writer=StateStoreAtomicFinancialWriter(store),
+            ).reconcile(order_id)
             projection = reconciliation.after.projection
             has_durable_fill = (
                 projection.status == ProjectionStatus.READY

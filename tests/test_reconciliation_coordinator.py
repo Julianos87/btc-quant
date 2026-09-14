@@ -6,9 +6,14 @@ from pathlib import Path
 
 import pytest
 
+from btcquant.execution.atomic_financial_writer import StateStoreAtomicFinancialWriter
+from btcquant.execution.ports import AtomicFinancialWriter
 from btcquant.execution.broker import BrokerOrderResult, Fill
 from btcquant.execution.financial_application_plan import PersistedFinancialApplicationPlan
-from btcquant.execution.financial_fill_application import FinancialFillApplicationError
+from btcquant.execution.financial_fill_application import (
+    FinancialFillApplicationError,
+    FinancialFillCommitResult,
+)
 from btcquant.execution.order_state import ExternalOrderState
 from btcquant.execution.paper_execution_evidence import (
     PaperExecutionEvidenceContext,
@@ -193,3 +198,44 @@ def test_coordinator_rejects_evidence_for_a_different_order_before_writing(tmp_p
     assert _count(store, "external_order_observations") == 0
     assert _count(store, "external_fills") == 0
     assert _count(store, "events", event_type="PAPER_EXECUTION_EVIDENCE_PERSISTED") == 0
+
+
+def test_state_store_adapter_implements_the_narrow_atomic_writer_port(
+    tmp_path: Path,
+) -> None:
+    store = StateStore(tmp_path / "state.db")
+
+    writer = StateStoreAtomicFinancialWriter(store)
+
+    assert isinstance(writer, AtomicFinancialWriter)
+    assert not hasattr(writer, "read_orders")
+    assert not hasattr(writer, "write_event")
+
+
+def test_coordinator_uses_injected_atomic_writer_port(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, persisted = _prepared_store(tmp_path)
+    evidence = _paper_evidence(persisted)
+    delegate = store.apply_financial_fill_atomically
+    calls: list[tuple[int, str]] = []
+
+    class RecordingWriter:
+        def apply_financial_fill_atomically(
+            self, *, local_order_id: int, fill_key: str
+        ) -> FinancialFillCommitResult:
+            calls.append((local_order_id, fill_key))
+            return delegate(local_order_id=local_order_id, fill_key=fill_key)
+
+    def forbidden(**_kwargs):
+        raise AssertionError("coordinator bypassed the injected writer port")
+
+    monkeypatch.setattr(store, "apply_financial_fill_atomically", forbidden)
+    result = OrderReconciliationCoordinator(store, financial_writer=RecordingWriter()).reconcile(
+        persisted.local_order_id, paper_evidence=evidence
+    )
+
+    assert result.status == ReconciliationStatus.APPLIED
+    assert evidence.fill is not None and evidence.fill.fill_key is not None
+    assert calls == [(persisted.local_order_id, evidence.fill.fill_key)]
+    assert _count(store, "financial_fill_applications") == 1
