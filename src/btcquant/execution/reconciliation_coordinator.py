@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+from .atomic_financial_writer import StateStoreAtomicFinancialWriter
 from .financial_fill_application import (
     FinancialApplicationLedgerConflict,
     FinancialFillApplicationError,
@@ -19,6 +20,7 @@ from .resolution_projection import (
     ProjectionStatus,
     assess_persisted_resolution,
 )
+from .ports import AtomicFinancialWriter
 from .state_store import StateStore
 
 
@@ -99,10 +101,16 @@ class OrderReconciliationCoordinator:
     SQLite transaction.
     """
 
-    def __init__(self, store: StateStore) -> None:
+    def __init__(
+        self,
+        store: StateStore,
+        *,
+        financial_writer: AtomicFinancialWriter | None = None,
+    ) -> None:
         if not isinstance(store, StateStore):
             raise TypeError("store must be a StateStore")
         self._store = store
+        self._financial_writer = financial_writer or StateStoreAtomicFinancialWriter(store)
 
     @staticmethod
     def _local_order_id(value: object) -> int:
@@ -233,7 +241,7 @@ class OrderReconciliationCoordinator:
         for fill_key in unapplied:
             try:
                 commits.append(
-                    self._store.apply_financial_fill_atomically(
+                    self._financial_writer.apply_financial_fill_atomically(
                         local_order_id=local_order_id,
                         fill_key=fill_key,
                     )
