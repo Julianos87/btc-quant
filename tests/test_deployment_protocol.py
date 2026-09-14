@@ -966,8 +966,9 @@ def test_migration_failure_inside_v6_rolls_back_atomically(tmp_path, monkeypatch
         )
 
 
-def test_canonical_remote_identity_requires_explicit_alias_mapping():
+def test_canonical_remote_identity_requires_explicit_alias_mapping(monkeypatch):
     expected = "https://github.com/Julianos87/btc-quant.git"
+    monkeypatch.delenv("BTCQUANT_CANONICAL_REMOTE_ALIASES", raising=False)
     with pytest.raises(DeploymentProtocolError, match="Alias remote non configuré"):
         validate_canonical_repository("github-backup:Julianos87/btc-quant.git", expected)
     assert validate_canonical_repository(
@@ -983,6 +984,22 @@ def test_canonical_remote_identity_requires_explicit_alias_mapping():
             expected,
             allowed_aliases={"github-backup": "github.com"},
         )
+
+
+def test_canonical_remote_identity_uses_explicit_configured_alias(monkeypatch):
+    expected = "https://github.com/Julianos87/btc-quant.git"
+    monkeypatch.setenv("BTCQUANT_CANONICAL_REMOTE_ALIASES", "github-backup=github.com")
+    assert validate_canonical_repository("github-backup:Julianos87/btc-quant.git", expected)
+
+
+def test_canonical_remote_identity_rejects_invalid_configured_alias(monkeypatch):
+    expected = "https://github.com/Julianos87/btc-quant.git"
+    monkeypatch.setenv("BTCQUANT_CANONICAL_REMOTE_ALIASES", "github-backup")
+    with pytest.raises(
+        DeploymentProtocolError,
+        match="BTCQUANT_CANONICAL_REMOTE_ALIASES doit contenir alias=host",
+    ):
+        validate_canonical_repository("github-backup:Julianos87/btc-quant.git", expected)
 
 
 def test_open_database_handle_gate_is_fail_closed(tmp_path):
