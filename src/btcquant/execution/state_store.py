@@ -14,17 +14,13 @@ import math
 import re
 import sqlite3
 from collections.abc import Iterator, Mapping, Sequence
-from types import MappingProxyType
 from contextlib import contextmanager
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
 from .errors import (
     AccountingIdentityCollision,
-    ExternalFillConflict,
-    ExternalObservationConflict,
     FinancialApplicationPlanConflict,
     InvalidExternalObservation,
     InvalidOrderStateTransition,
@@ -33,6 +29,11 @@ from .errors import (
     ReconciliationRequired,
 )
 from .engine_state_repository import EngineStateRepository
+from .execution_evidence_repository import (
+    ExecutionEvidenceRepository,
+    PersistedLookupEvent,  # noqa: F401 - public compatibility import
+    ResolutionSnapshot,
+)
 from .external_evidence import ExternalEvidenceSource, ExternalFill, ExternalOrderObservation
 from .external_submission_commitment import (
     IOC_NO_MATCH_ERROR,
@@ -44,8 +45,6 @@ from .external_submission_commitment import (
     build_submission_response,
 )
 from .paper_execution_evidence import (
-    PAPER_EVIDENCE_VERSION,
-    PAPER_EXECUTION_EVIDENCE_AGGREGATE_TYPE,
     PAPER_EXECUTION_EVIDENCE_EVENT_TYPE,
     PaperExecutionEvidence,
     PaperExecutionEvidencePersistenceResult,
@@ -91,13 +90,6 @@ from .paper_order_finalization import (
     PaperFinalizationStatus,
     decide_paper_finalization,
 )
-from .paper_zero_effect import (
-    PAPER_ZERO_EFFECT_AGGREGATE_TYPE,
-    PAPER_ZERO_EFFECT_EVENT_TYPE,
-    PAPER_ZERO_EFFECT_EVIDENCE_VERSION,
-    PaperZeroEffectStatus,
-    decide_paper_zero_effect,
-)
 from .order_state import (
     ExternalOrderState,
     FinancialTransitionType,
@@ -109,29 +101,6 @@ from .state_contract import validate_trend_state
 
 SCHEMA_VERSION = 14
 DEPOSIT_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}")
-
-
-@dataclass(frozen=True)
-class PersistedLookupEvent:
-    """Un événement de lookup brut lu dans un snapshot SQLite cohérent."""
-
-    event_id: int
-    ts: str
-    engine: str
-    event_type: str
-    aggregate_type: str
-    aggregate_id: str
-    payload: str
-
-
-@dataclass(frozen=True)
-class ResolutionSnapshot:
-    """Entrée read-only bornée pour la projection de résolution."""
-
-    order: Mapping[str, Any] | None
-    order_observations: tuple[ExternalOrderObservation, ...]
-    fills: tuple[ExternalFill, ...]
-    lookup_events: tuple[PersistedLookupEvent, ...]
 
 
 def utc_now() -> str:
@@ -210,6 +179,16 @@ class StateStore:
             insert_event=self._insert_event,
             assert_reconciliation_clear=self._assert_engine_reconciliation_clear,
             now=utc_now,
+        )
+        self._execution_evidence_repository = ExecutionEvidenceRepository(
+            connect=self._connect,
+            transaction=self._transaction,
+            read_transaction=self._read_transaction,
+            insert_event=self._repository_insert_event,
+            now=utc_now,
+            is_read_only=lambda: self.read_only,
+            observation_from_row=lambda row: self._external_order_observation_from_row(row),
+            fill_from_row=lambda row: self._external_fill_from_row(row),
         )
         if not read_only:
             # Every production StateStore writer shares the restore gate.  This
@@ -2400,22 +2379,12 @@ class StateStore:
         payload: dict[str, Any],
         event_type: str,
     ) -> None:
-        """Journalise une tentative de lookup sans modifier l'état métier."""
-
-        if self.read_only:
-            raise RuntimeError("Un StateStore read-only ne peut pas journaliser une tentative")
-        normalized_engine = str(engine).strip()
-        normalized_aggregate_id = str(aggregate_id).strip()
-        if not normalized_engine or not normalized_aggregate_id:
-            raise ValueError("engine et aggregate_id doivent être non vides")
-        with self._transaction() as connection:
-            self._append_external_order_lookup_attempt_in_transaction(
-                connection,
-                engine=normalized_engine,
-                aggregate_id=normalized_aggregate_id,
-                payload=payload,
-                event_type=event_type,
-            )
+        return self._execution_evidence_repository.append_external_order_lookup_attempt(
+            engine=engine,
+            aggregate_id=aggregate_id,
+            payload=payload,
+            event_type=event_type,
+        )
 
     def append_external_submission_response(
         self,
@@ -2423,63 +2392,10 @@ class StateStore:
         *,
         engine: str,
     ) -> tuple[ExternalSubmissionResponse, bool]:
-        """Durably append one external submission response."""
-
-        if self.read_only:
-            raise RuntimeError("Un StateStore read-only ne peut pas persister une réponse")
-        if not isinstance(response, ExternalSubmissionResponse):
-            raise TypeError("response must be ExternalSubmissionResponse")
-        normalized_engine = str(engine).strip()
-        if not normalized_engine:
-            raise ValueError("engine doit être non vide")
-        payload = response.to_payload()
-        with self._transaction() as connection:
-            rows = connection.execute(
-                "SELECT engine, aggregate_id, payload FROM events WHERE event_type = ? AND correlation_id = ? ORDER BY id",
-                (SUBMISSION_RESPONSE_EVENT_TYPE, response.intent_id),
-            ).fetchall()
-            if rows:
-                for row in rows:
-                    if row["engine"] != normalized_engine or row["aggregate_id"] != str(
-                        response.local_order_id
-                    ):
-                        raise SubmissionCommitmentError(
-                            "EXTERNAL_SUBMISSION_RESPONSE_BINDING_CONFLICT"
-                        )
-                    try:
-                        existing_payload = json.loads(str(row["payload"]))
-                    except json.JSONDecodeError as error:
-                        raise SubmissionCommitmentError(
-                            "corrupt external submission response journal"
-                        ) from error
-                    if not isinstance(existing_payload, dict):
-                        raise SubmissionCommitmentError(
-                            "external submission response journal is not an object"
-                        )
-                    if existing_payload.get("submission_key") != response.submission_key:
-                        raise SubmissionCommitmentError("EXTERNAL_SUBMISSION_RESPONSE_KEY_CONFLICT")
-                    existing_compare = json.loads(canonical_json(existing_payload))
-                    current_compare = json.loads(canonical_json(payload))
-                    existing_compare.pop("response_acquired_at", None)
-                    current_compare.pop("response_acquired_at", None)
-                    for candidate in (existing_compare, current_compare):
-                        commitment_payload = candidate.get("commitment")
-                        if isinstance(commitment_payload, dict):
-                            commitment_payload.pop("response_acquired_at", None)
-                    if canonical_json(existing_compare) != canonical_json(current_compare):
-                        raise SubmissionCommitmentError("EXTERNAL_SUBMISSION_RESPONSE_CONFLICT")
-                return response, False
-            self._insert_event(
-                connection,
-                normalized_engine,
-                SUBMISSION_RESPONSE_EVENT_TYPE,
-                payload,
-                aggregate_type=SUBMISSION_RESPONSE_AGGREGATE_TYPE,
-                aggregate_id=str(response.local_order_id),
-                correlation_id=response.intent_id,
-                ts=response.response_acquired_at,
-            )
-        return response, True
+        return self._execution_evidence_repository.append_external_submission_response(
+            response,
+            engine=engine,
+        )
 
     def read_external_submission_responses(
         self,
@@ -2487,39 +2403,10 @@ class StateStore:
         *,
         engine: str | None = None,
     ) -> list[ExternalSubmissionResponse]:
-        """Read and validate durable submission response envelopes."""
-
-        conditions = ["event_type = ?"]
-        params: list[Any] = [SUBMISSION_RESPONSE_EVENT_TYPE]
-        if intent_id is not None:
-            conditions.append("correlation_id = ?")
-            params.append(intent_id)
-        if engine is not None:
-            conditions.append("engine = ?")
-            params.append(engine)
-        query = (
-            "SELECT aggregate_type, payload FROM events WHERE "
-            + " AND ".join(conditions)
-            + " ORDER BY id"
+        return self._execution_evidence_repository.read_external_submission_responses(
+            intent_id,
+            engine=engine,
         )
-        with self._read_transaction() as connection:
-            rows = connection.execute(query, tuple(params)).fetchall()
-        responses: list[ExternalSubmissionResponse] = []
-        for row in rows:
-            if row["aggregate_type"] != SUBMISSION_RESPONSE_AGGREGATE_TYPE:
-                raise SubmissionCommitmentError("EXTERNAL_SUBMISSION_RESPONSE_PROVENANCE_CONFLICT")
-            try:
-                payload = json.loads(str(row["payload"]))
-            except json.JSONDecodeError as error:
-                raise SubmissionCommitmentError(
-                    "corrupt external submission response journal"
-                ) from error
-            if not isinstance(payload, dict):
-                raise SubmissionCommitmentError(
-                    "external submission response payload is not an object"
-                )
-            responses.append(ExternalSubmissionResponse.from_payload(payload))
-        return responses
 
     def _append_external_order_lookup_attempt_in_transaction(
         self,
@@ -2530,13 +2417,14 @@ class StateStore:
         payload: dict[str, Any],
         event_type: str,
     ) -> None:
-        self._insert_event(
-            connection,
-            engine,
-            event_type,
-            payload,
-            aggregate_type="external_order_lookup",
-            aggregate_id=aggregate_id,
+        return (
+            self._execution_evidence_repository.append_external_order_lookup_attempt_in_transaction(
+                connection,
+                engine=engine,
+                aggregate_id=aggregate_id,
+                payload=payload,
+                event_type=event_type,
+            )
         )
 
     @staticmethod
@@ -2864,57 +2752,11 @@ class StateStore:
 
     @staticmethod
     def _external_order_observation_from_row(row: sqlite3.Row) -> ExternalOrderObservation:
-        return ExternalOrderObservation(
-            local_order_id=int(row["local_order_id"]),
-            intent_id=str(row["intent_id"]),
-            venue=str(row["venue"]),
-            account_scope=str(row["account_scope"]),
-            instrument=str(row["instrument"]),
-            side=str(row["side"]),
-            source_kind=str(row["source_kind"]),
-            normalized_external_status=str(row["external_state"]),
-            requested_qty=float(row["requested_qty"]),
-            cumulative_filled_qty=(
-                float(row["cumulative_filled_qty"])
-                if row["cumulative_filled_qty"] is not None
-                else None
-            ),
-            remaining_qty=(
-                float(row["remaining_qty"]) if row["remaining_qty"] is not None else None
-            ),
-            client_order_id=row["client_order_id"],
-            external_order_id=row["external_order_id"],
-            venue_event_at=row["venue_event_at"],
-            status_event_at=row["status_event_at"],
-            observed_at=str(row["observed_at"]),
-            persisted_at=str(row["persisted_at"]),
-            observation_key=str(row["observation_key"]),
-            raw_payload_hash=str(row["raw_payload_hash"]),
-        )
+        return ExecutionEvidenceRepository.external_order_observation_from_row(row)
 
     @staticmethod
     def _external_fill_from_row(row: sqlite3.Row) -> ExternalFill:
-        return ExternalFill(
-            local_order_id=int(row["local_order_id"]),
-            intent_id=str(row["intent_id"]),
-            venue=str(row["venue"]),
-            account_scope=str(row["account_scope"]),
-            instrument=str(row["instrument"]),
-            side=str(row["side"]),
-            source_kind=str(row["source_kind"]),
-            client_order_id=row["client_order_id"],
-            external_order_id=row["external_order_id"],
-            venue_fill_id=row["venue_fill_id"],
-            quantity=float(row["quantity"]),
-            price=float(row["price"]),
-            fee=float(row["fee"]) if row["fee"] is not None else None,
-            fee_asset=row["fee_asset"],
-            venue_event_at=row["venue_event_at"],
-            observed_at=str(row["observed_at"]),
-            persisted_at=str(row["persisted_at"]),
-            fill_key=str(row["fill_key"]),
-            raw_payload_hash=str(row["raw_payload_hash"]),
-        )
+        return ExecutionEvidenceRepository.external_fill_from_row(row)
 
     @staticmethod
     def _assert_evidence_attribution(
@@ -2923,85 +2765,27 @@ class StateStore:
         local_order_id: int,
         intent_id: str,
     ) -> None:
-        row = connection.execute(
-            "SELECT intent_id FROM orders WHERE id = ?", (local_order_id,)
-        ).fetchone()
-        if row is None:
-            raise InvalidExternalObservation(
-                f"Preuve externe refusée : ordre local {local_order_id} introuvable"
-            )
-        if str(row["intent_id"]) != intent_id:
-            raise InvalidExternalObservation(
-                f"Preuve externe refusée : intent_id incohérent pour l'ordre {local_order_id}"
-            )
+        return ExecutionEvidenceRepository._assert_evidence_attribution(
+            connection,
+            local_order_id=local_order_id,
+            intent_id=intent_id,
+        )
 
     def append_external_order_observation(
         self,
         observation: ExternalOrderObservation,
     ) -> tuple[ExternalOrderObservation, bool]:
-        """Ajoute une preuve d'ordre une seule fois, sans toucher à l'ordre local."""
-
-        persisted = (
-            observation
-            if observation.persisted_at is not None
-            else observation.with_persisted_at(utc_now())
-        )
-        with self._transaction() as connection:
-            return self._append_external_order_observation_in_transaction(connection, persisted)
+        return self._execution_evidence_repository.append_external_order_observation(observation)
 
     def _append_external_order_observation_in_transaction(
         self,
         connection: sqlite3.Connection,
         observation: ExternalOrderObservation,
     ) -> tuple[ExternalOrderObservation, bool]:
-        self._assert_evidence_attribution(
+        return self._execution_evidence_repository.append_external_order_observation_in_transaction(
             connection,
-            local_order_id=observation.local_order_id,
-            intent_id=observation.intent_id,
+            observation,
         )
-        existing_row = connection.execute(
-            "SELECT * FROM external_order_observations WHERE observation_key = ?",
-            (observation.observation_key,),
-        ).fetchone()
-        if existing_row is not None:
-            existing = self._external_order_observation_from_row(existing_row)
-            if existing.semantic_content() != observation.semantic_content():
-                raise ExternalObservationConflict(
-                    f"Observation externe conflictuelle pour {observation.observation_key}"
-                )
-            return existing, False
-        connection.execute(
-            """
-            INSERT INTO external_order_observations(
-                local_order_id, intent_id, venue, account_scope, instrument, side,
-                source_kind, external_state, client_order_id, external_order_id,
-                requested_qty, cumulative_filled_qty, remaining_qty, venue_event_at, status_event_at,
-                observed_at, persisted_at, observation_key, raw_payload_hash
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                observation.local_order_id,
-                observation.intent_id,
-                observation.venue,
-                observation.account_scope,
-                observation.instrument,
-                observation.side,
-                str(observation.source_kind),
-                str(observation.normalized_external_status),
-                observation.client_order_id,
-                observation.external_order_id,
-                observation.requested_qty,
-                observation.cumulative_filled_qty,
-                observation.remaining_qty,
-                observation.venue_event_at,
-                observation.status_event_at,
-                observation.observed_at,
-                observation.persisted_at,
-                observation.observation_key,
-                observation.raw_payload_hash,
-            ),
-        )
-        return observation, True
 
     def persist_external_order_lookup_evidence(
         self,
@@ -3012,94 +2796,26 @@ class StateStore:
         payload: dict[str, Any],
         event_type: str,
     ) -> tuple[ExternalOrderObservation | None, bool]:
-        """Persiste atomiquement une observation éventuelle et sa tentative."""
-
-        if self.read_only:
-            raise RuntimeError("Un StateStore read-only ne peut pas persister une preuve")
-        normalized_engine = str(engine).strip()
-        normalized_aggregate_id = str(aggregate_id).strip()
-        if not normalized_engine or not normalized_aggregate_id:
-            raise ValueError("engine et aggregate_id doivent être non vides")
-        persisted = (
-            None
-            if observation is None
-            else observation
-            if observation.persisted_at is not None
-            else observation.with_persisted_at(utc_now())
+        return self._execution_evidence_repository.persist_external_order_lookup_evidence(
+            observation=observation,
+            engine=engine,
+            aggregate_id=aggregate_id,
+            payload=payload,
+            event_type=event_type,
         )
-        with self._transaction() as connection:
-            persisted_observation: ExternalOrderObservation | None = None
-            observation_created = False
-            if persisted is not None:
-                persisted_observation, observation_created = (
-                    self._append_external_order_observation_in_transaction(connection, persisted)
-                )
-            self._append_external_order_lookup_attempt_in_transaction(
-                connection,
-                engine=normalized_engine,
-                aggregate_id=normalized_aggregate_id,
-                payload=payload,
-                event_type=event_type,
-            )
-        return persisted_observation, observation_created
 
     def append_external_fill(self, fill: ExternalFill) -> tuple[ExternalFill, bool]:
-        """Ajoute un fill externe une seule fois, sans application métier."""
-
-        persisted = fill if fill.persisted_at is not None else fill.with_persisted_at(utc_now())
-        with self._transaction() as connection:
-            return self._append_external_fill_in_transaction(connection, persisted)
+        return self._execution_evidence_repository.append_external_fill(fill)
 
     def _append_external_fill_in_transaction(
         self,
         connection: sqlite3.Connection,
         fill: ExternalFill,
     ) -> tuple[ExternalFill, bool]:
-        self._assert_evidence_attribution(
+        return self._execution_evidence_repository.append_external_fill_in_transaction(
             connection,
-            local_order_id=fill.local_order_id,
-            intent_id=fill.intent_id,
+            fill,
         )
-        existing_row = connection.execute(
-            "SELECT * FROM external_fills WHERE fill_key = ?", (fill.fill_key,)
-        ).fetchone()
-        if existing_row is not None:
-            existing = self._external_fill_from_row(existing_row)
-            if not existing.is_semantically_compatible_with(fill):
-                raise ExternalFillConflict(f"Fill externe conflictuel pour {fill.fill_key}")
-            return existing, False
-        connection.execute(
-            """
-            INSERT INTO external_fills(
-                local_order_id, intent_id, venue, account_scope, instrument, side,
-                source_kind, client_order_id, external_order_id, venue_fill_id,
-                quantity, price, fee, fee_asset, venue_event_at, observed_at,
-                persisted_at, fill_key, raw_payload_hash
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                fill.local_order_id,
-                fill.intent_id,
-                fill.venue,
-                fill.account_scope,
-                fill.instrument,
-                fill.side,
-                str(fill.source_kind),
-                fill.client_order_id,
-                fill.external_order_id,
-                fill.venue_fill_id,
-                fill.quantity,
-                fill.price,
-                fill.fee,
-                fill.fee_asset,
-                fill.venue_event_at,
-                fill.observed_at,
-                fill.persisted_at,
-                fill.fill_key,
-                fill.raw_payload_hash,
-            ),
-        )
-        return fill, True
 
     def _append_external_fill_lookup_attempt_in_transaction(
         self,
@@ -3110,13 +2826,14 @@ class StateStore:
         payload: dict[str, Any],
         event_type: str,
     ) -> None:
-        self._insert_event(
-            connection,
-            engine,
-            event_type,
-            payload,
-            aggregate_type="external_fill_lookup",
-            aggregate_id=aggregate_id,
+        return (
+            self._execution_evidence_repository.append_external_fill_lookup_attempt_in_transaction(
+                connection,
+                engine=engine,
+                aggregate_id=aggregate_id,
+                payload=payload,
+                event_type=event_type,
+            )
         )
 
     def persist_external_fill_lookup_evidence(
@@ -3128,35 +2845,13 @@ class StateStore:
         payload: dict[str, Any],
         event_type: str,
     ) -> tuple[tuple[ExternalFill, ...], tuple[bool, ...]]:
-        """Persiste atomiquement 0..N fills et une tentative de lookup."""
-
-        if self.read_only:
-            raise RuntimeError("Un StateStore read-only ne peut pas persister des fills")
-        normalized_engine = str(engine).strip()
-        normalized_aggregate_id = str(aggregate_id).strip()
-        if not normalized_engine or not normalized_aggregate_id:
-            raise ValueError("engine et aggregate_id doivent être non vides")
-        persisted_fills = tuple(
-            fill if fill.persisted_at is not None else fill.with_persisted_at(utc_now())
-            for fill in fills
+        return self._execution_evidence_repository.persist_external_fill_lookup_evidence(
+            fills=tuple(fills),
+            engine=engine,
+            aggregate_id=aggregate_id,
+            payload=payload,
+            event_type=event_type,
         )
-        persisted: list[ExternalFill] = []
-        created: list[bool] = []
-        with self._transaction() as connection:
-            for fill in persisted_fills:
-                persisted_fill, fill_created = self._append_external_fill_in_transaction(
-                    connection, fill
-                )
-                persisted.append(persisted_fill)
-                created.append(fill_created)
-            self._append_external_fill_lookup_attempt_in_transaction(
-                connection,
-                engine=normalized_engine,
-                aggregate_id=normalized_aggregate_id,
-                payload=payload,
-                event_type=event_type,
-            )
-        return tuple(persisted), tuple(created)
 
     def persist_external_order_settlement(
         self,
@@ -3273,100 +2968,7 @@ class StateStore:
         self,
         evidence: PaperExecutionEvidence,
     ) -> PaperExecutionEvidencePersistenceResult:
-        """Commit one local PAPER submission observation and optional fill together.
-
-        This is a deliberately separate local-domain boundary. It does not
-        project a Hyperliquid lookup result and cannot manufacture evidence for
-        an external broker. A crash before commit leaves neither evidence row
-        nor its audit event visible.
-        """
-
-        if self.read_only:
-            raise RuntimeError("Un StateStore read-only ne peut pas persister une preuve PAPER")
-        if not isinstance(evidence, PaperExecutionEvidence):
-            raise TypeError("evidence must be PaperExecutionEvidence")
-        persisted_at = utc_now()
-        observation = (
-            evidence.observation
-            if evidence.observation.persisted_at is not None
-            else evidence.observation.with_persisted_at(persisted_at)
-        )
-        fill = (
-            None
-            if evidence.fill is None
-            else evidence.fill
-            if evidence.fill.persisted_at is not None
-            else evidence.fill.with_persisted_at(persisted_at)
-        )
-        with self._transaction() as connection:
-            persisted_observation, observation_created = (
-                self._append_external_order_observation_in_transaction(connection, observation)
-            )
-            persisted_fill: ExternalFill | None = None
-            fill_created = False
-            if fill is not None:
-                persisted_fill, fill_created = self._append_external_fill_in_transaction(
-                    connection, fill
-                )
-            zero_effect = decide_paper_zero_effect(
-                external_execution=False,
-                evidence_persisted=True,
-                external_state=persisted_observation.normalized_external_status,
-                filled_qty=persisted_observation.cumulative_filled_qty,
-                remaining_qty=evidence.reported_remaining_qty,
-                individual_fill_present=persisted_fill is not None,
-            )
-            self._insert_event(
-                connection,
-                evidence.context.engine,
-                PAPER_EXECUTION_EVIDENCE_EVENT_TYPE,
-                {
-                    "contract": PAPER_EVIDENCE_VERSION,
-                    "local_order_id": evidence.context.local_order_id,
-                    "intent_id": evidence.context.intent_id,
-                    "venue": evidence.observation.venue,
-                    "account_scope": evidence.observation.account_scope,
-                    "instrument": evidence.observation.instrument,
-                    "side": evidence.observation.side,
-                    "observation_key": persisted_observation.observation_key,
-                    "fill_key": None if persisted_fill is None else persisted_fill.fill_key,
-                    "venue_fill_id": (
-                        None if persisted_fill is None else persisted_fill.venue_fill_id
-                    ),
-                    "raw_payload_hash": evidence.raw_payload_hash,
-                },
-                aggregate_type=PAPER_EXECUTION_EVIDENCE_AGGREGATE_TYPE,
-                aggregate_id=str(evidence.context.local_order_id),
-                correlation_id=evidence.context.intent_id,
-            )
-            if zero_effect.status == PaperZeroEffectStatus.PROVEN:
-                self._insert_event(
-                    connection,
-                    evidence.context.engine,
-                    PAPER_ZERO_EFFECT_EVENT_TYPE,
-                    {
-                        "contract": PAPER_ZERO_EFFECT_EVIDENCE_VERSION,
-                        "local_order_id": evidence.context.local_order_id,
-                        "intent_id": evidence.context.intent_id,
-                        "observation_key": persisted_observation.observation_key,
-                        "raw_payload_hash": evidence.raw_payload_hash,
-                        "external_state": ExternalOrderState(
-                            persisted_observation.normalized_external_status
-                        ).value,
-                        "filled_qty": persisted_observation.cumulative_filled_qty,
-                        "remaining_qty": evidence.reported_remaining_qty,
-                        "reason": zero_effect.reason,
-                    },
-                    aggregate_type=PAPER_ZERO_EFFECT_AGGREGATE_TYPE,
-                    aggregate_id=str(evidence.context.local_order_id),
-                    correlation_id=evidence.context.intent_id,
-                )
-        return PaperExecutionEvidencePersistenceResult(
-            observation=persisted_observation,
-            observation_created=observation_created,
-            fill=persisted_fill,
-            fill_created=fill_created,
-        )
+        return self._execution_evidence_repository.persist_paper_execution_evidence(evidence)
 
     def finalize_paper_order_atomically(self, local_order_id: int) -> PaperFinalizationDecision:
         """Finalize one positive PAPER order after durable fill application.
@@ -3588,105 +3190,22 @@ class StateStore:
     def _read_resolution_snapshot_in_transaction(
         self, connection: sqlite3.Connection, local_order_id: int
     ) -> ResolutionSnapshot:
-        order_row = connection.execute(
-            "SELECT * FROM orders WHERE id = ?", (local_order_id,)
-        ).fetchone()
-        if order_row is None:
-            return ResolutionSnapshot(None, (), (), ())
-        order = MappingProxyType(dict(order_row))
-        observations = tuple(
-            self._external_order_observation_from_row(row)
-            for row in connection.execute(
-                """
-                SELECT * FROM external_order_observations
-                WHERE local_order_id = ?
-                ORDER BY id
-                """,
-                (local_order_id,),
-            ).fetchall()
+        return self._execution_evidence_repository.read_resolution_snapshot_in_transaction(
+            connection,
+            local_order_id,
         )
-        fills = tuple(
-            self._external_fill_from_row(row)
-            for row in connection.execute(
-                """
-                SELECT * FROM external_fills
-                WHERE local_order_id = ?
-                ORDER BY id
-                """,
-                (local_order_id,),
-            ).fetchall()
-        )
-        events = tuple(
-            PersistedLookupEvent(
-                event_id=int(row["id"]),
-                ts=str(row["ts"]),
-                engine=str(row["engine"]),
-                event_type=str(row["event_type"]),
-                aggregate_type=str(row["aggregate_type"]),
-                aggregate_id=str(row["aggregate_id"]),
-                payload=str(row["payload"]),
-            )
-            for row in connection.execute(
-                """
-                SELECT id, ts, engine, event_type, aggregate_type, aggregate_id, payload
-                FROM events
-                WHERE engine = ?
-                  AND (
-                    (
-                      aggregate_id = ?
-                      AND aggregate_type IN ('external_order_lookup', 'external_fill_lookup')
-                    )
-                    OR (
-                      aggregate_id = ?
-                      AND event_type = ?
-                    )
-                  )
-                ORDER BY id
-                """,
-                (
-                    str(order["engine"]),
-                    str(order["intent_id"]),
-                    str(order["id"]),
-                    PAPER_EXECUTION_EVIDENCE_EVENT_TYPE,
-                ),
-            ).fetchall()
-        )
-        return ResolutionSnapshot(order, observations, fills, events)
 
     def read_resolution_snapshot(self, local_order_id: int) -> ResolutionSnapshot:
-        """Lit ordre, preuves et lookup events dans un unique snapshot SQLite."""
-
-        if (
-            isinstance(local_order_id, bool)
-            or not isinstance(local_order_id, int)
-            or local_order_id <= 0
-        ):
-            raise ValueError("local_order_id doit être un entier strictement positif")
-        with self._read_transaction() as connection:
-            return self._read_resolution_snapshot_in_transaction(connection, local_order_id)
+        return self._execution_evidence_repository.read_resolution_snapshot(local_order_id)
 
     def get_external_order_observations(
         self,
         local_order_id: int,
     ) -> list[ExternalOrderObservation]:
-        with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT * FROM external_order_observations
-                WHERE local_order_id = ?
-                ORDER BY id
-                """,
-                (local_order_id,),
-            ).fetchall()
-        return [self._external_order_observation_from_row(row) for row in rows]
+        return self._execution_evidence_repository.get_external_order_observations(local_order_id)
 
     def get_external_fills(self, local_order_id: int) -> list[ExternalFill]:
-        with self._connect() as connection:
-            rows = connection.execute(
-                "SELECT * FROM external_fills WHERE local_order_id = ? ORDER BY id",
-                (local_order_id,),
-            ).fetchall()
-        return [self._external_fill_from_row(row) for row in rows]
+        return self._execution_evidence_repository.get_external_fills(local_order_id)
 
     def get_external_order_settlements(
         self,
