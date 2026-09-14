@@ -85,6 +85,7 @@ from .external_settlement_finalization import (
     ExternalZeroEffectFinalizationStatus,
 )
 from .incident_repository import IncidentRepository
+from .order_repository import OrderRepository, OrderReservation
 from .paper_order_finalization import (
     PaperFinalizationDecision,
     PaperFinalizationStatus,
@@ -108,19 +109,6 @@ from .state_contract import validate_trend_state
 
 SCHEMA_VERSION = 14
 DEPOSIT_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}")
-
-
-@dataclass(frozen=True)
-class OrderReservation:
-    order_id: int
-    intent_id: str
-    logical_order_key: str
-    acquired: bool
-    status: str
-    local_state: str
-    external_state: str | None
-    filled_qty: float
-    remaining_qty: float
 
 
 @dataclass(frozen=True)
@@ -214,6 +202,13 @@ class StateStore:
         self._incident_repository = IncidentRepository(
             transaction=self._transaction,
             encode_json=self._json,
+            now=utc_now,
+        )
+        self._order_repository = OrderRepository(
+            connect=self._connect,
+            transaction=self._transaction,
+            insert_event=self._insert_event,
+            assert_reconciliation_clear=self._assert_engine_reconciliation_clear,
             now=utc_now,
         )
         if not read_only:
@@ -2788,31 +2783,15 @@ class StateStore:
                     raise FinancialApplicationPlanConflict("Le plan financier existant diffère")
                 return self._reservation_from_row(existing, acquired=False)
             self._assert_engine_reconciliation_clear(connection, identity.engine)
-            cursor = connection.execute(
-                """
-                INSERT INTO orders(
-                    engine, slot, intent_id, logical_order_key, order_type, side, requested_qty,
-                    reference_price, remaining_qty, local_state, status, reason, created_at, updated_at
-                ) VALUES(?, ?, ?, ?, 'MARKET', ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)
-                """,
-                (
-                    identity.engine,
-                    identity.slot,
-                    intent_id,
-                    logical_key,
-                    plan.side,
-                    plan.requested_qty,
-                    plan.reference_price,
-                    plan.requested_qty,
-                    LocalOrderState.INTENT_CREATED.value,
-                    plan.reason,
-                    now,
-                    now,
-                ),
+            order_id = self._order_repository.insert_market_order_in_transaction(
+                connection,
+                identity,
+                side=plan.side,
+                requested_qty=plan.requested_qty,
+                reference_price=plan.reference_price,
+                reason=plan.reason,
+                now=now,
             )
-            order_id = cursor.lastrowid
-            if order_id is None:
-                raise RuntimeError("SQLite n'a pas retourné l'identifiant de l'ordre")
             self._insert_financial_application_plan(
                 connection, order_id=int(order_id), intent_id=intent_id, plan=plan, now=now
             )
@@ -2882,314 +2861,6 @@ class StateStore:
             ).fetchone()
             assert row is not None
             return self._reservation_from_row(row, acquired=True)
-
-    def reserve_market_order(
-        self,
-        identity: LogicalOrderIdentity,
-        *,
-        side: str,
-        requested_qty: float,
-        reason: str,
-        reference_price: float,
-    ) -> OrderReservation:
-        """Arbitre atomiquement la propriété d'une transition financière."""
-
-        if not math.isfinite(requested_qty) or requested_qty <= 0:
-            raise ValueError("requested_qty doit être finie et strictement positive")
-        if not math.isfinite(reference_price) or reference_price <= 0:
-            raise ValueError("reference_price doit être fini et strictement positif")
-        if side not in {"BUY", "SELL"}:
-            raise ValueError(f"Côté d'ordre non normalisé : {side!r}")
-        logical_key = identity.logical_key
-        intent_id = identity.intent_id
-        now = utc_now()
-        with self._transaction() as connection:
-            self._assert_engine_reconciliation_clear(connection, identity.engine)
-            try:
-                cursor = connection.execute(
-                    """
-                    INSERT INTO orders(
-                        engine, slot, intent_id, logical_order_key, order_type,
-                        side, requested_qty, reference_price, remaining_qty,
-                        local_state, status, reason, created_at, updated_at
-                    ) VALUES(?, ?, ?, ?, 'MARKET', ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)
-                    """,
-                    (
-                        identity.engine,
-                        identity.slot,
-                        intent_id,
-                        logical_key,
-                        side,
-                        requested_qty,
-                        reference_price,
-                        requested_qty,
-                        LocalOrderState.INTENT_CREATED.value,
-                        reason,
-                        now,
-                        now,
-                    ),
-                )
-            except sqlite3.IntegrityError as error:
-                existing = connection.execute(
-                    """
-                    SELECT id, intent_id, logical_order_key, status,
-                           local_state, external_state, filled_qty, remaining_qty
-                    FROM orders
-                    WHERE logical_order_key = ? OR intent_id = ?
-                    ORDER BY id LIMIT 1
-                    """,
-                    (logical_key, intent_id),
-                ).fetchone()
-                if existing is None:
-                    raise
-                if (
-                    existing["logical_order_key"] != logical_key
-                    or existing["intent_id"] != intent_id
-                ):
-                    raise OrderIdentityCollision(
-                        "Collision entre l'empreinte d'intention et la clé logique complète"
-                    ) from error
-                return OrderReservation(
-                    order_id=int(existing["id"]),
-                    intent_id=str(existing["intent_id"]),
-                    logical_order_key=logical_key,
-                    acquired=False,
-                    status=str(existing["status"]),
-                    local_state=str(existing["local_state"]),
-                    external_state=existing["external_state"],
-                    filled_qty=float(existing["filled_qty"]),
-                    remaining_qty=float(existing["remaining_qty"]),
-                )
-            order_id = cursor.lastrowid
-            if order_id is None:
-                raise RuntimeError("SQLite n'a pas retourné l'identifiant de l'ordre")
-            self._insert_event(
-                connection,
-                identity.engine,
-                "order_intent_reserved",
-                {
-                    "order_id": order_id,
-                    "logical_order_key": logical_key,
-                    "intent_id": intent_id,
-                    "transition_type": identity.transition_type.value,
-                    "decision_checkpoint": identity.decision_checkpoint,
-                    "position_generation": identity.position_generation,
-                    "transition_sequence": identity.transition_sequence,
-                    "side": side,
-                    "requested_qty": requested_qty,
-                    "reference_price": reference_price,
-                    "reason": reason,
-                },
-                "order",
-                str(order_id),
-                intent_id,
-            )
-            return OrderReservation(
-                order_id=int(order_id),
-                intent_id=intent_id,
-                logical_order_key=logical_key,
-                acquired=True,
-                status="PENDING",
-                local_state=LocalOrderState.INTENT_CREATED.value,
-                external_state=None,
-                filled_qty=0.0,
-                remaining_qty=requested_qty,
-            )
-
-    def mark_order_submitting(self, order_id: int) -> None:
-        now = utc_now()
-        with self._transaction() as connection:
-            row = connection.execute(
-                "SELECT engine, intent_id, local_state FROM orders WHERE id = ?",
-                (order_id,),
-            ).fetchone()
-            if row is None:
-                raise KeyError(f"Ordre journalisé introuvable : {order_id}")
-            if row["local_state"] != LocalOrderState.INTENT_CREATED.value:
-                raise InvalidOrderStateTransition(
-                    f"Ordre {order_id}: {row['local_state']} ne peut pas devenir SUBMITTING"
-                )
-            connection.execute(
-                "UPDATE orders SET local_state=?, updated_at=? WHERE id=?",
-                (LocalOrderState.SUBMITTING.value, now, order_id),
-            )
-            self._insert_event(
-                connection,
-                row["engine"],
-                "order_submission_started",
-                {"order_id": order_id},
-                "order",
-                str(order_id),
-                row["intent_id"],
-            )
-
-    def reclaim_safe_market_order(
-        self,
-        order_id: int,
-        *,
-        allow_local_failure: bool = False,
-    ) -> bool:
-        """Réclame par CAS une intention sans effet externe possible.
-
-        La ligne et son client_order_id sont réutilisés : aucune seconde
-        intention financière n'est créée. Seuls un crash prouvé avant le
-        broker, ou un échec d'un broker explicitement local, sont admissibles.
-        Un état ayant pu atteindre l'exchange ne satisfait jamais le prédicat.
-        """
-
-        now = utc_now()
-        with self._transaction() as connection:
-            row = connection.execute(
-                "SELECT engine, intent_id, status FROM orders WHERE id = ?", (order_id,)
-            ).fetchone()
-            if row is None:
-                raise KeyError(f"Ordre journalisé introuvable : {order_id}")
-            cursor = connection.execute(
-                """
-                UPDATE orders SET status='PENDING', local_state='SUBMITTING',
-                    remaining_qty=requested_qty, error=NULL, updated_at=?
-                WHERE id=? AND logical_order_key IS NOT NULL
-                  AND (
-                      status='RECOVERED_ABORTED'
-                      OR (? AND status='FAILED')
-                  )
-                  AND local_state='TERMINAL'
-                  AND external_state IS NULL AND broker_order_id IS NULL
-                  AND filled_qty=0
-                """,
-                (now, order_id, allow_local_failure),
-            )
-            if cursor.rowcount != 1:
-                return False
-            self._insert_event(
-                connection,
-                row["engine"],
-                "order_submission_reclaimed",
-                {"order_id": order_id, "previous_status": row["status"]},
-                "order",
-                str(order_id),
-                row["intent_id"],
-            )
-            return True
-
-    def recover_local_market_order(self, order_id: int, *, error: str) -> bool:
-        """Abandonne un ordre Paper interrompu, sans prétendre à un état exchange.
-
-        Seul l'appelant qui sait que le broker n'a aucun effet durable externe
-        peut utiliser cette transition. L'événement d'observation antérieur reste
-        dans le journal, mais la ligne redevient réclamable avec le même identifiant.
-        """
-
-        now = utc_now()
-        with self._transaction() as connection:
-            row = connection.execute(
-                """
-                SELECT engine, intent_id, status, order_type, local_state, external_state,
-                       filled_qty, broker_order_id
-                FROM orders WHERE id = ?
-                """,
-                (order_id,),
-            ).fetchone()
-            if row is None:
-                raise KeyError(f"Ordre journalisé introuvable : {order_id}")
-            if row["local_state"] == LocalOrderState.TERMINAL.value:
-                return bool(
-                    row["status"] == "RECOVERED_ABORTED"
-                    and row["order_type"] == "MARKET"
-                    and row["external_state"] is None
-                    and float(row["filled_qty"]) == 0.0
-                    and row["broker_order_id"] is None
-                )
-            cursor = connection.execute(
-                """
-                UPDATE orders SET status='RECOVERED_ABORTED', local_state='TERMINAL',
-                    external_state=NULL, filled_qty=0, remaining_qty=0, price=NULL,
-                    fee=0, broker_order_id=NULL, error=?, updated_at=?
-                WHERE id=? AND order_type='MARKET' AND local_state<>'TERMINAL'
-                """,
-                (error, now, order_id),
-            )
-            if cursor.rowcount != 1:
-                return False
-            self._insert_event(
-                connection,
-                row["engine"],
-                "local_order_recovered",
-                {"order_id": order_id, "previous_status": row["status"], "error": error},
-                "order",
-                str(order_id),
-                row["intent_id"],
-            )
-            return True
-
-    def record_order_observation(
-        self,
-        order_id: int,
-        *,
-        external_state: ExternalOrderState,
-        filled_qty: float,
-        remaining_qty: float,
-        price: float | None,
-        fee: float,
-        broker_order_id: str | None,
-    ) -> None:
-        """Persiste la réponse broker avant tout checkpoint métier."""
-
-        external_state = ExternalOrderState(external_state)
-        local_state = (
-            LocalOrderState.PENDING_RECONCILIATION
-            if external_state == ExternalOrderState.UNKNOWN or external_state.is_terminal
-            else LocalOrderState.AWAITING_EXTERNAL
-        )
-        status = "PENDING" if local_state == LocalOrderState.PENDING_RECONCILIATION else "OPEN"
-        now = utc_now()
-        with self._transaction() as connection:
-            row = connection.execute(
-                "SELECT engine, intent_id, local_state FROM orders WHERE id = ?",
-                (order_id,),
-            ).fetchone()
-            if row is None:
-                raise KeyError(f"Ordre journalisé introuvable : {order_id}")
-            if row["local_state"] != LocalOrderState.SUBMITTING.value:
-                raise InvalidOrderStateTransition(
-                    f"Ordre {order_id}: réponse broker reçue depuis {row['local_state']}"
-                )
-            connection.execute(
-                """
-                UPDATE orders SET status=?, local_state=?, external_state=?,
-                    filled_qty=?, remaining_qty=?, price=?, fee=?, broker_order_id=?,
-                    updated_at=?
-                WHERE id=?
-                """,
-                (
-                    status,
-                    local_state.value,
-                    external_state.value,
-                    filled_qty,
-                    remaining_qty,
-                    price,
-                    fee,
-                    broker_order_id,
-                    now,
-                    order_id,
-                ),
-            )
-            self._insert_event(
-                connection,
-                row["engine"],
-                "order_external_observed",
-                {
-                    "order_id": order_id,
-                    "external_state": external_state.value,
-                    "filled_qty": filled_qty,
-                    "remaining_qty": remaining_qty,
-                    "price": price,
-                    "fee": fee,
-                },
-                "order",
-                str(order_id),
-                row["intent_id"],
-            )
 
     @staticmethod
     def _external_order_observation_from_row(row: sqlite3.Row) -> ExternalOrderObservation:
@@ -5452,105 +5123,6 @@ class StateStore:
                 event_id=event_id,
             )
 
-    def record_submission_error(self, order_id: int, *, error: str, ambiguous: bool) -> None:
-        now = utc_now()
-        local_state = (
-            LocalOrderState.PENDING_RECONCILIATION if ambiguous else LocalOrderState.TERMINAL
-        )
-        with self._transaction() as connection:
-            row = connection.execute(
-                "SELECT engine, intent_id, local_state FROM orders WHERE id = ?", (order_id,)
-            ).fetchone()
-            if row is None:
-                raise KeyError(f"Ordre journalisé introuvable : {order_id}")
-            if row["local_state"] != LocalOrderState.SUBMITTING.value:
-                raise InvalidOrderStateTransition(
-                    f"Ordre {order_id}: échec de soumission reçu depuis {row['local_state']}"
-                )
-            connection.execute(
-                """
-                UPDATE orders SET status=?, local_state=?, external_state=?, error=?, updated_at=?
-                WHERE id=?
-                """,
-                (
-                    "PENDING" if ambiguous else "FAILED",
-                    local_state.value,
-                    ExternalOrderState.UNKNOWN.value if ambiguous else None,
-                    error,
-                    now,
-                    order_id,
-                ),
-            )
-            self._insert_event(
-                connection,
-                row["engine"],
-                "order_submission_failed",
-                {"order_id": order_id, "ambiguous": ambiguous, "error": error},
-                "order",
-                str(order_id),
-                row["intent_id"],
-            )
-
-    def begin_order(
-        self,
-        engine: str,
-        slot: str,
-        intent_id: str,
-        order_type: str,
-        side: str,
-        requested_qty: float,
-        reason: str,
-        reference_price: float | None = None,
-    ) -> int:
-        now = utc_now()
-        with self._transaction() as connection:
-            self._assert_engine_reconciliation_clear(connection, engine)
-            cursor = connection.execute(
-                """
-                INSERT INTO orders(
-                    engine, slot, intent_id, order_type, side, requested_qty,
-                    reference_price, remaining_qty, local_state, status, reason,
-                    created_at, updated_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)
-                """,
-                (
-                    engine,
-                    slot,
-                    intent_id,
-                    order_type,
-                    side,
-                    requested_qty,
-                    reference_price,
-                    requested_qty,
-                    # API historique sans frontière explicite avant/après
-                    # appel broker : ne jamais y inventer la preuve que la
-                    # soumission n'a pas commencé.
-                    LocalOrderState.PENDING_RECONCILIATION.value,
-                    reason,
-                    now,
-                    now,
-                ),
-            )
-            order_id = cursor.lastrowid
-            if order_id is None:
-                raise RuntimeError("SQLite n'a pas retourné l'identifiant de l'ordre")
-            self._insert_event(
-                connection,
-                engine,
-                "order_intent",
-                {
-                    "order_id": order_id,
-                    "side": side,
-                    "requested_qty": requested_qty,
-                    "reference_price": reference_price,
-                    "reason": reason,
-                },
-                "order",
-                str(order_id),
-                intent_id,
-            )
-            return order_id
-
     def begin_order_and_checkpoint(
         self,
         engine: str,
@@ -5636,106 +5208,6 @@ class StateStore:
                 intent_id,
             )
         return int(order_id)
-
-    def complete_order(
-        self,
-        order_id: int,
-        *,
-        status: str,
-        filled_qty: float = 0.0,
-        remaining_qty: float | None = None,
-        price: float | None = None,
-        fee: float = 0.0,
-        broker_order_id: str | None = None,
-        error: str | None = None,
-        external_state: ExternalOrderState | str | None = None,
-        local_state: LocalOrderState | str | None = None,
-    ) -> None:
-        now = utc_now()
-        with self._transaction() as connection:
-            row = connection.execute(
-                """
-                SELECT engine, intent_id, logical_order_key, local_state,
-                       external_state, remaining_qty
-                FROM orders WHERE id = ?
-                """,
-                (order_id,),
-            ).fetchone()
-            if row is None:
-                raise KeyError(f"Ordre journalisé introuvable : {order_id}")
-            resolved_local = (
-                LocalOrderState(local_state)
-                if local_state is not None
-                else self._local_state_for_legacy_status(status)
-            )
-            resolved_external = (
-                ExternalOrderState(external_state)
-                if external_state is not None
-                else ExternalOrderState(row["external_state"])
-                if row["external_state"] is not None
-                else self._external_state_for_legacy_status(status)
-            )
-            if (
-                row["logical_order_key"] is not None
-                and resolved_local == LocalOrderState.TERMINAL
-                and not (
-                    status == "RECOVERED_ABORTED"
-                    and row["local_state"] == LocalOrderState.INTENT_CREATED.value
-                )
-                and (resolved_external is None or not resolved_external.is_terminal)
-            ):
-                raise InvalidOrderStateTransition(
-                    f"Ordre {order_id}: terminalité locale sans preuve externe terminale"
-                )
-            resolved_remaining = (
-                remaining_qty
-                if remaining_qty is not None
-                else 0.0
-                if resolved_local == LocalOrderState.TERMINAL
-                else float(row["remaining_qty"])
-            )
-            connection.execute(
-                """
-                UPDATE orders SET status=?, local_state=?, external_state=?,
-                    filled_qty=?, remaining_qty=?, price=?, fee=?,
-                    broker_order_id=?, error=?, updated_at=?
-                WHERE id=?
-                """,
-                (
-                    status,
-                    resolved_local.value,
-                    resolved_external.value if resolved_external is not None else None,
-                    filled_qty,
-                    resolved_remaining,
-                    price,
-                    fee,
-                    broker_order_id,
-                    error,
-                    now,
-                    order_id,
-                ),
-            )
-            self._insert_event(
-                connection,
-                row["engine"],
-                "order_updated",
-                {
-                    "order_id": order_id,
-                    "status": status,
-                    "local_state": resolved_local.value,
-                    "external_state": (
-                        resolved_external.value if resolved_external is not None else None
-                    ),
-                    "filled_qty": filled_qty,
-                    "remaining_qty": resolved_remaining,
-                    "price": price,
-                    "fee": fee,
-                    "error": error,
-                },
-                "order",
-                str(order_id),
-                row["intent_id"],
-            )
 
     def complete_order_and_checkpoint(
         self,
@@ -6004,51 +5476,115 @@ class StateStore:
             )
         return True
 
+    def reserve_market_order(
+        self,
+        identity: LogicalOrderIdentity,
+        *,
+        side: str,
+        requested_qty: float,
+        reason: str,
+        reference_price: float,
+    ) -> OrderReservation:
+        return self._order_repository.reserve_market_order(
+            identity,
+            side=side,
+            requested_qty=requested_qty,
+            reason=reason,
+            reference_price=reference_price,
+        )
+
+    def mark_order_submitting(self, order_id: int) -> None:
+        return self._order_repository.mark_submitting(order_id)
+
+    def reclaim_safe_market_order(
+        self, order_id: int, *, allow_local_failure: bool = False
+    ) -> bool:
+        return self._order_repository.reclaim_safe_market_order(
+            order_id, allow_local_failure=allow_local_failure
+        )
+
+    def recover_local_market_order(self, order_id: int, *, error: str) -> bool:
+        return self._order_repository.recover_local_market_order(order_id, error=error)
+
+    def record_order_observation(
+        self,
+        order_id: int,
+        *,
+        external_state: ExternalOrderState,
+        filled_qty: float,
+        remaining_qty: float,
+        price: float | None,
+        fee: float,
+        broker_order_id: str | None,
+    ) -> None:
+        return self._order_repository.record_observation(
+            order_id,
+            external_state=external_state,
+            filled_qty=filled_qty,
+            remaining_qty=remaining_qty,
+            price=price,
+            fee=fee,
+            broker_order_id=broker_order_id,
+        )
+
+    def record_submission_error(self, order_id: int, *, error: str, ambiguous: bool) -> None:
+        return self._order_repository.record_submission_error(
+            order_id, error=error, ambiguous=ambiguous
+        )
+
+    def begin_order(
+        self,
+        engine: str,
+        slot: str,
+        intent_id: str,
+        order_type: str,
+        side: str,
+        requested_qty: float,
+        reason: str,
+        reference_price: float | None = None,
+    ) -> int:
+        return self._order_repository.begin_order(
+            engine, slot, intent_id, order_type, side, requested_qty, reason, reference_price
+        )
+
+    def complete_order(
+        self,
+        order_id: int,
+        *,
+        status: str,
+        filled_qty: float = 0.0,
+        remaining_qty: float | None = None,
+        price: float | None = None,
+        fee: float = 0.0,
+        broker_order_id: str | None = None,
+        error: str | None = None,
+        external_state: ExternalOrderState | str | None = None,
+        local_state: LocalOrderState | str | None = None,
+    ) -> None:
+        return self._order_repository.complete_order(
+            order_id,
+            status=status,
+            filled_qty=filled_qty,
+            remaining_qty=remaining_qty,
+            price=price,
+            fee=fee,
+            broker_order_id=broker_order_id,
+            error=error,
+            external_state=external_state,
+            local_state=local_state,
+        )
+
     def pending_orders(self, engine: str) -> list[dict[str, Any]]:
-        with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT * FROM orders
-                WHERE engine = ? AND status = 'PENDING'
-                ORDER BY id
-                """,
-                (engine,),
-            ).fetchall()
-        return [dict(row) for row in rows]
+        return self._order_repository.pending_orders(engine)
 
     def unresolved_orders(self, engine: str) -> list[dict[str, Any]]:
-        """Ordres qui interdisent une reprise normale du moteur."""
-
-        with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT * FROM orders
-                WHERE engine = ? AND local_state != 'TERMINAL'
-                  AND NOT (order_type = 'STOP' AND status = 'OPEN')
-                ORDER BY id
-                """,
-                (engine,),
-            ).fetchall()
-        return [dict(row) for row in rows]
+        return self._order_repository.unresolved_orders(engine)
 
     def read_order_by_intent(self, intent_id: str) -> dict[str, Any] | None:
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT * FROM orders WHERE intent_id = ?",
-                (intent_id,),
-            ).fetchone()
-        return dict(row) if row is not None else None
+        return self._order_repository.read_order_by_intent(intent_id)
 
     def read_orders(self, engine: str | None = None) -> list[dict[str, Any]]:
-        query = "SELECT * FROM orders"
-        params: tuple[str, ...] = ()
-        if engine is not None:
-            query += " WHERE engine = ?"
-            params = (engine,)
-        query += " ORDER BY id"
-        with self._connect() as connection:
-            rows = connection.execute(query, params).fetchall()
-        return [dict(row) for row in rows]
+        return self._order_repository.read_orders(engine)
 
     def read_events(
         self,
