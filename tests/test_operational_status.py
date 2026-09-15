@@ -35,7 +35,7 @@ def _healthy_report(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(status, "_service_state", lambda runner: _domain())
     monkeypatch.setattr(status, "_semantic_health", lambda root, getter: _domain())
     monkeypatch.setattr(status, "_read_backup", lambda root, now: _domain())
-    monkeypatch.setattr(status, "_read_capacity", lambda root: _domain())
+    monkeypatch.setattr(status, "_read_capacity", lambda root, **kwargs: _domain())
     monkeypatch.setattr(status, "_read_safety", lambda root, runner: _domain())
 
 
@@ -102,6 +102,7 @@ def test_human_output_exposes_limiting_dimension_without_secret_fields() -> None
                 "limiting_dimension": "terminal_orders",
             },
             "capacity": {"retention": {"deletions_performed": 0}},
+            "alerts": {"status": status.PASS},
         },
     }
     output = status.render_human(report)
