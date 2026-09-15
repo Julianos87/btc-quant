@@ -133,7 +133,7 @@ def _service_state(
             values = _parse_key_values(
                 runner("show", unit, "--property=ActiveState,SubState,NRestarts", "--no-pager")
             )
-            active = values.get("ActiveState") == "active"
+            active = values.get("ActiveState") == "active" and values.get("SubState") == "running"
             state = PASS if active else FAIL
             components[component] = {
                 "unit": unit,
@@ -437,8 +437,11 @@ def _read_safety(root: Path, runner: Callable[..., str]) -> dict[str, Any]:
     details: dict[str, Any] = {}
     states: list[str] = []
     try:
-        active = runner("is-active", TESTNET_UNIT).strip()
-        enabled = runner("is-enabled", TESTNET_UNIT).strip()
+        values = _parse_key_values(
+            runner("show", TESTNET_UNIT, "--property=ActiveState,UnitFileState", "--no-pager")
+        )
+        active = values.get("ActiveState", "UNKNOWN")
+        enabled = values.get("UnitFileState", "UNKNOWN")
         details.update({"service_active": active, "service_enabled": enabled})
         safe = active not in {"active", "activating"} and enabled not in {"enabled", "static"}
         states.append(PASS if safe else FAIL)

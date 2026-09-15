@@ -26,13 +26,17 @@ def test_safety_probe_uses_repository_testnet_unit_name(tmp_path: Path) -> None:
 
     def runner(*args: str) -> str:
         calls.append(args)
-        return "inactive" if args[0] == "is-active" else "disabled"
+        return "ActiveState=inactive\nUnitFileState=disabled\n"
 
     (tmp_path / "state").mkdir()
     result = status._read_safety(tmp_path, runner)
 
     assert result["status"] == status.PASS
     assert calls == [
-        ("is-active", "btcquant-hyperliquid-testnet.service"),
-        ("is-enabled", "btcquant-hyperliquid-testnet.service"),
+        (
+            "show",
+            "btcquant-hyperliquid-testnet.service",
+            "--property=ActiveState,UnitFileState",
+            "--no-pager",
+        )
     ]

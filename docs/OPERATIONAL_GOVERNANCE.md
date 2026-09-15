@@ -64,6 +64,20 @@ cleanup tool must first produce a deterministic plan, require explicit review,
 preserve the latest verified backup and rollback release, and remain separate
 from this status command.
 
+## Scheduled read-only observation
+
+The release contains btcquant-ops-status.service and
+btcquant-ops-status.timer. Deployment installs these units but does not enable
+or start them. After the final PAPER qualification and maturity start have been
+reviewed, the operator may explicitly enable the six-hour read-only timer:
+
+    sudo systemctl enable --now btcquant-ops-status.timer
+    sudo systemctl start --wait btcquant-ops-status.service
+    sudo journalctl -u btcquant-ops-status.service -n 1 --no-pager
+
+The service runs as btcquant, loads no .env, has no write path, and exits
+non-zero for FAIL or UNKNOWN. It only writes its JSON result to journald.
+
 ## Safety boundary
 
 The status command is not a qualification producer and not a TESTNET
