@@ -21,6 +21,8 @@ from btcquant.execution.paper_technical_qualification import active_paper_releas
 from btcquant.execution.readiness import paper_maturity_status
 from btcquant.execution.readonly_state_db import open_state_db_readonly
 from btcquant.execution.state_store import StateStore
+from btcquant.operations.alerts import evaluate_alerts
+from btcquant.operations.retention import measure_footprints, plan_retention
 
 PASS = "PASS"
 WATCH = "WATCH"
@@ -407,7 +409,12 @@ def _read_backup(root: Path, now: datetime) -> dict[str, Any]:
     }
 
 
-def _read_capacity(root: Path) -> dict[str, Any]:
+def _read_capacity(
+    root: Path,
+    *,
+    protected_release_sha: str | None = None,
+    latest_verified_backup: str | None = None,
+) -> dict[str, Any]:
     try:
         usage = shutil.disk_usage(root)
         if usage.free < OFFICIAL_MIN_FREE_BYTES:
@@ -422,12 +429,12 @@ def _read_capacity(root: Path) -> dict[str, Any]:
             "free_bytes": usage.free,
             "free_gib": round(usage.free / 1024**3, 2),
             "official_min_free_gib": round(OFFICIAL_MIN_FREE_BYTES / 1024**3, 2),
-            "retention": {
-                "mode": "DRY_RUN_ONLY",
-                "deletions_performed": 0,
-                "unknown_or_unverified_preserved": True,
-                "policy_reference": "docs/BACKUP_DISASTER_RECOVERY.md",
-            },
+            "footprints": measure_footprints(root),
+            "retention": plan_retention(
+                root,
+                protected_release_sha=protected_release_sha,
+                latest_verified_backup=latest_verified_backup,
+            ),
         }
     except OSError as error:
         return {"status": UNKNOWN, "reason": type(error).__name__}
@@ -478,7 +485,14 @@ def collect_status(
     services = _service_state(systemctl)
     health = _semantic_health(root, json_getter)
     backup = _read_backup(root, observed_at)
-    capacity = _read_capacity(root)
+    binding = maturity.get("binding") if isinstance(maturity.get("binding"), dict) else {}
+    protected_release_sha = binding.get("release_sha") if isinstance(binding, dict) else None
+    latest_verified_backup = backup.get("latest_archive") if backup.get("status") == PASS else None
+    capacity = _read_capacity(
+        root,
+        protected_release_sha=protected_release_sha,
+        latest_verified_backup=latest_verified_backup,
+    )
     safety = _read_safety(root, systemctl)
     domains = {
         "release": release,
@@ -491,6 +505,8 @@ def collect_status(
         "capacity": capacity,
         "testnet_safety": safety,
     }
+    alerts = evaluate_alerts({"domains": domains})
+    domains["alerts"] = alerts
     required_states = [str(domains[name].get("status", UNKNOWN)) for name in domains]
     overall = _status_from(required_states)
     return {
