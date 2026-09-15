@@ -1,0 +1,11 @@
+[Unit]
+Description=btcquant - statut opérationnel PAPER toutes les 6 heures
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=6h
+Persistent=true
+Unit=btcquant-ops-status.service
+
+[Install]
+WantedBy=timers.target

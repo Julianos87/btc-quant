@@ -196,6 +196,30 @@ def test_long_running_services_have_restart_rate_limits():
         assert "StartLimitBurst=5" in service
 
 
+def test_ops_status_timer_is_read_only_and_not_deployment_enabled():
+    service = (ROOT / "deploy" / "btcquant-ops-status.service").read_text(encoding="utf-8")
+    timer = (ROOT / "deploy" / "btcquant-ops-status.timer").read_text(encoding="utf-8")
+
+    assert "User=btcquant" in service
+    assert "Environment=BTCQUANT_ROOT=/opt/btcquant" in service
+    assert "EnvironmentFile=" not in service
+    assert (
+        "ExecStart=/opt/btcquant/current/venv/bin/python -m btcquant.entrypoints.ops_status --json"
+        in service
+    )
+    assert "NoNewPrivileges=true" in service
+    assert "PrivateTmp=true" in service
+    assert "ProtectSystem=strict" in service
+    assert "ProtectHome=read-only" in service
+    assert "ReadWritePaths=" not in service
+    assert "[Install]" not in service
+    assert "OnUnitActiveSec=6h" in timer
+    assert "Persistent=true" in timer
+    assert "Unit=btcquant-ops-status.service" in timer
+    assert "[Install]" in timer
+    assert "WantedBy=timers.target" in timer
+
+
 def test_watchdog_monitors_shadow_every_two_minutes():
     service = (ROOT / "deploy" / "btcquant-watchdog.service").read_text(encoding="utf-8")
     timer = (ROOT / "deploy" / "btcquant-watchdog.timer").read_text(encoding="utf-8")

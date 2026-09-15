@@ -41,6 +41,18 @@ def test_service_probe_reports_active_components_and_failures() -> None:
     assert result["components"]["carry"]["restarts"] == "1"
 
 
+def test_service_probe_requires_running_substate() -> None:
+    def runner(*args: str) -> str:
+        if args[1] == status.SERVICE_UNITS["dashboard"]:
+            return "ActiveState=active\nSubState=exited\nNRestarts=0\n"
+        return "ActiveState=active\nSubState=running\nNRestarts=0\n"
+
+    result = status._service_state(runner)
+
+    assert result["status"] == status.FAIL
+    assert result["components"]["dashboard"]["status"] == status.FAIL
+
+
 def test_service_probe_keeps_command_failure_unknown() -> None:
     def runner(*args: str) -> str:
         raise RuntimeError("probe unavailable")
@@ -191,13 +203,28 @@ def test_capacity_has_pass_watch_and_fail_bands(
 
 def test_safety_reader_fails_on_testnet_or_markers(tmp_path: Path) -> None:
     def runner(*args: str) -> str:
-        return "active" if args[0] == "is-active" else "disabled"
+        assert args[0] == "show"
+        return "ActiveState=inactive\nUnitFileState=disabled\n"
 
     (tmp_path / "state").mkdir()
     (tmp_path / "state" / "TESTNET_APPROVED").touch()
     result = status._read_safety(tmp_path, runner)
     assert result["status"] == status.FAIL
     assert result["markers_present"]
+
+
+def test_safety_reader_accepts_expected_inactive_disabled_testnet(tmp_path: Path) -> None:
+    def runner(*args: str) -> str:
+        assert args[0] == "show"
+        return "ActiveState=inactive\nUnitFileState=disabled\n"
+
+    (tmp_path / "state").mkdir()
+
+    result = status._read_safety(tmp_path, runner)
+
+    assert result["status"] == status.PASS
+    assert result["service_active"] == "inactive"
+    assert result["service_enabled"] == "disabled"
 
 
 def test_backup_reader_requires_matching_verified_archive(
