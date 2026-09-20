@@ -1031,9 +1031,7 @@ class LiveRunner:
         entry_direction: int | None = None,
         entry_stop_price: float | None = None,
     ) -> SubmittedOrder:
-        qty = self.broker.normalize_market_quantity(
-            qty, ref_price, reduce_only=reduce_only
-        )
+        qty = self.broker.normalize_market_quantity(qty, ref_price, reduce_only=reduce_only)
         identity = LogicalOrderIdentity(
             engine="trend",
             slot=slot.strategy.name,

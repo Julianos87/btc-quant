@@ -1029,7 +1029,11 @@ class CarryRunner:
 
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
         stop_event = stop_event or threading.Event()
-        lock = EngineInstanceLock(self.store.path, "carry") if hasattr(self, "store") else nullcontext()
+        lock = (
+            EngineInstanceLock(self.store.path, "carry")
+            if hasattr(self, "store")
+            else nullcontext()
+        )
         with lock:
             if hasattr(self, "store"):
                 self._load_state()

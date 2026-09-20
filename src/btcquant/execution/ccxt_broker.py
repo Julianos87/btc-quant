@@ -173,7 +173,6 @@ class CcxtBroker(Broker):
         self._check_min_notional(normalized, ref_price)
         return normalized
 
-
     def _round_price(self, price: float, *, name: str) -> float:
         requested = exchange_float(price, name=f"{name} demandé", positive=True)
         return exchange_float(

@@ -156,7 +156,6 @@ class Broker(ABC):
         del ref_price, reduce_only
         return exchange_float(qty, name="quantité demandée", positive=True)
 
-
     def venue_client_order_id(self, intent_id: str) -> str:
         """Return the venue-facing client id for one durable local intent."""
 
