@@ -103,6 +103,16 @@ class _KernelStrategy(Strategy):
         return 1
 
 
+class _ReplaySignalStrategy(_KernelStrategy):
+    def entry_signal(self, row: pd.Series) -> int:
+        del row
+        return 1
+
+    def exit_signal(self, row: pd.Series, position: Position) -> bool:
+        del row, position
+        return True
+
+
 class _ExchangeBroker(Broker):
     supports_stop_orders = True
     external_execution = True
@@ -588,6 +598,40 @@ def test_historical_terminal_orders_are_not_replayed(tmp_path: Path) -> None:
     runner._run_cycle(80_000.0, threading.Event())
     after = store.read_orders("trend")
     assert [item["intent_id"] for item in before] == [item["intent_id"] for item in after]
+
+
+@pytest.mark.parametrize("with_position", [False, True])
+def test_missed_bar_replay_suppresses_historical_trade_signals(
+    tmp_path: Path, with_position: bool
+) -> None:
+    runner, source, store = _seed_open_runner(tmp_path)
+    slot = runner.slots[0]
+    slot.strategy = _ReplaySignalStrategy()
+    if not with_position:
+        slot.position = None
+    runner.clock = _FakeClock(1_777_363_200.0 + 30.0)
+    slot.last_bar_ts = pd.Timestamp("2026-04-27T20:00:00Z")
+    frame = pd.DataFrame(
+        {
+            "open": [72_000.0, 72_100.0, 72_200.0],
+            "high": [72_050.0] * 3,
+            "low": [71_950.0] * 3,
+            "close": [72_020.0, 72_120.0, 72_220.0],
+            "volume": [100.0] * 3,
+        },
+        index=pd.date_range("2026-04-27T20:00:00Z", periods=3, freq="4h"),
+    )
+    runner._fetch_frame = lambda _strategy: frame  # type: ignore[method-assign]
+    before = store.read_orders("trend")
+    runner._process_due_bars(72_000.0)
+    after = store.read_orders("trend")
+    assert [item["intent_id"] for item in before] == [item["intent_id"] for item in after]
+    assert slot.last_bar_ts == frame.index[-1]
+    if with_position:
+        assert slot.position is not None
+        assert slot.position.bars_held == int(source["bars_held"]) + 2
+    else:
+        assert slot.position is None
 
 
 def test_false_positive_incident_resolves_after_software_checkpoint(tmp_path: Path) -> None:

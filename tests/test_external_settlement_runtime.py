@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import pytest
 from pathlib import Path
+from types import SimpleNamespace
 
+from btcquant.execution.errors import ReconciliationRequired
 from btcquant.execution.broker import Broker
 from btcquant.execution.external_settlement_coordinator import (
     ExternalSettlementReconciliationStatus,
@@ -12,6 +15,7 @@ from btcquant.execution.external_settlement_finalization import (
 )
 from btcquant.execution.external_settlement_runtime import ExternalSettlementRuntime
 
+from btcquant.execution.runner import LiveRunner
 from test_external_settlement_coordinator import OBSERVED, _prepared
 
 
@@ -77,3 +81,16 @@ def test_runtime_replay_is_idempotent_after_external_finalization(tmp_path: Path
     assert second.finalization.status == ExternalSettlementFinalizationStatus.ALREADY_FINALIZED
     assert acquirer.calls == 2
     assert len(store.read_financial_settlement_application_chain(persisted.local_order_id)) == 1
+
+
+def test_runner_fails_closed_when_external_readback_fails() -> None:
+    calls: list[tuple[int, str]] = []
+    runner = LiveRunner.__new__(LiveRunner)
+    runner.external_settlement_runtime = SimpleNamespace(
+        reconcile_order=lambda order_id, observed_at: calls.append((order_id, observed_at))
+    )
+    runner.clock = _Clock()
+    runner._load_state = lambda: (_ for _ in ()).throw(OSError("sqlite readback failed"))
+    with pytest.raises(ReconciliationRequired, match="relecture impossible"):
+        runner._reconcile_external_submission(SimpleNamespace(order_id=17))
+    assert calls == [(17, "2026-09-05T12:05:00+00:00")]
