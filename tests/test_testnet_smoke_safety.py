@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from btcquant.execution.errors import EngineInstanceAlreadyRunning
+from btcquant.execution.instance_lock import EngineInstanceLock
 from btcquant.execution.state_store import StateStore
 from scripts import test_testnet
 
@@ -126,3 +128,84 @@ def test_external_smoke_settlement_delegates_to_durable_runtime() -> None:
     test_testnet._settle_external_market_order(runtime, submitted, clock)
 
     assert calls == [(42, "2026-09-20T12:00:00+00:00")]
+
+
+def test_first_cleanup_sequence_is_loaded_from_durable_entry_state(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "smoke.db")
+    entry_state = _open_state()
+    store.save_engine_state("trend", entry_state)
+
+    loaded = test_testnet._load_smoke_state(store)
+
+    assert test_testnet._smoke_transition_sequence(loaded) == 1
+
+
+def test_stop_rejection_path_performs_one_reduce_only_cleanup(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "smoke.db")
+    store.save_engine_state("trend", _open_state())
+    broker = _RemoteBroker(0.1)
+    local_stop_id = store.begin_order(
+        "trend",
+        test_testnet.SMOKE_SLOT,
+        "rejected-stop",
+        "STOP",
+        "SELL",
+        0.1,
+        "p1_smoke_stop",
+    )
+    test_testnet._finalize_smoke_stop(store, broker, local_stop_id, None)
+    submissions: list[test_testnet.SubmitMarketCommand] = []
+
+    def submit_market(command: test_testnet.SubmitMarketCommand) -> SimpleNamespace:
+        submissions.append(command)
+        broker.position = 0.0
+        store.save_engine_state(
+            "trend",
+            test_testnet._state_payload(cash=990.0, position=None, transition_sequence=2),
+        )
+        return SimpleNamespace(
+            is_terminal=True,
+            order_id=99,
+            fill=SimpleNamespace(qty=0.1),
+            transition_sequence=1,
+        )
+
+    orders = SimpleNamespace(submit_market=submit_market)
+    runtime = SimpleNamespace(
+        reconcile_order=lambda order_id, *, observed_at: None,
+    )
+    clock = SimpleNamespace(utc_now=lambda: datetime(2026, 9, 20, 12, 0, tzinfo=UTC))
+
+    test_testnet._cleanup_smoke_position(
+        store=store,
+        broker=broker,
+        orders=orders,
+        runtime=runtime,
+        clock=clock,
+        price=100.0,
+        close_checkpoint="2026-09-20T00:01:00+00:00",
+        position_generation="entry=2026-09-20T00:00:00+00:00|initial_qty=0.10000000000000001",
+        next_close_sequence=1,
+        opened=True,
+    )
+
+    assert len(submissions) == 1
+    assert submissions[0].reduce_only is True
+    assert submissions[0].transition_sequence == 1
+    assert broker.position == 0.0
+
+
+def test_smoke_uses_the_engine_testnet_lock_before_any_submission(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    engine_lock = EngineInstanceLock(
+        state_dir / test_testnet.TESTNET_ENGINE_DATABASE_NAME,
+        "trend",
+    )
+    engine_lock.acquire()
+    smoke_lock = test_testnet._smoke_instance_lock(tmp_path)
+    try:
+        with pytest.raises(EngineInstanceAlreadyRunning):
+            smoke_lock.acquire()
+    finally:
+        engine_lock.release()

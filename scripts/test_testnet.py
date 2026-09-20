@@ -43,7 +43,7 @@ from btcquant.execution.state_store import StateStore
 
 SYMBOL = "BTC/USDC:USDC"
 SMOKE_SLOT = "p1-smoke"
-SMOKE_DATABASE_LOCK_NAME = "btcquant-testnet-smoke.db"
+TESTNET_ENGINE_DATABASE_NAME = "btcquant-testnet.db"
 SMOKE_DATABASE_PREFIX = "btcquant-testnet-smoke-"
 
 
@@ -155,6 +155,16 @@ def _smoke_database_path(root: Path = ROOT) -> Path:
     return directory / f"{SMOKE_DATABASE_PREFIX}{uuid.uuid4().hex}.db"
 
 
+def _testnet_engine_database(root: Path = ROOT) -> Path:
+    return root / "state" / TESTNET_ENGINE_DATABASE_NAME
+
+
+def _smoke_instance_lock(root: Path = ROOT) -> EngineInstanceLock:
+    """Use the engine's lock while keeping smoke persistence isolated."""
+
+    return EngineInstanceLock(_testnet_engine_database(root), "trend")
+
+
 def _testnet_preflight(broker: CcxtBroker) -> tuple[float, str]:
     """Read every external precondition before creating any smoke state."""
 
@@ -186,6 +196,15 @@ def _smoke_position(state: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(position, dict):
         raise RuntimeError("Position locale attendue pour la clôture de secours")
     return position
+
+
+def _smoke_transition_sequence(state: dict[str, Any]) -> int:
+    slots = state.get("slots")
+    slot = slots.get(SMOKE_SLOT) if isinstance(slots, dict) else None
+    sequence = slot.get("financial_transition_seq") if isinstance(slot, dict) else None
+    if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 0:
+        raise RuntimeError("Séquence financière locale absente ou invalide")
+    return sequence
 
 
 def _settle_external_market_order(
@@ -222,8 +241,80 @@ def _assert_smoke_cleanup(store: StateStore, broker: CcxtBroker) -> None:
         )
 
 
+def _finalize_smoke_stop(
+    store: StateStore,
+    broker: CcxtBroker,
+    local_stop_id: int | None,
+    stop_id: str | None,
+) -> None:
+    if stop_id is not None:
+        broker.cancel_stop(stop_id)
+        if local_stop_id is not None:
+            store.complete_order(
+                local_stop_id,
+                status="CANCELED",
+                broker_order_id=stop_id,
+            )
+    elif local_stop_id is not None:
+        store.complete_order(
+            local_stop_id,
+            status="REJECTED",
+            error="Stop testnet rejeté avant toute émission externe",
+        )
+
+
+def _cleanup_smoke_position(
+    *,
+    store: StateStore,
+    broker: CcxtBroker,
+    orders: OrderExecutionService,
+    runtime: ExternalSettlementRuntime,
+    clock: SystemClock,
+    price: float,
+    close_checkpoint: str | None,
+    position_generation: str | None,
+    next_close_sequence: int | None,
+    opened: bool,
+) -> None:
+    """Close an open smoke position only with a durable, unambiguous identity."""
+
+    remote = broker.net_position(SYMBOL)
+    if opened and abs(remote) > 1e-12:
+        side = "SELL" if remote > 0 else "BUY"
+        if close_checkpoint is None or position_generation is None or next_close_sequence is None:
+            raise RuntimeError(
+                "Nettoyage interdit : identité absente ou clôture précédente ambiguë"
+            )
+        current_state = _load_smoke_state(store)
+        current_position = _smoke_position(current_state)
+        local_qty = float(current_position["qty"])
+        if not math.isclose(local_qty, abs(remote), rel_tol=0.0, abs_tol=1e-9):
+            raise RuntimeError(
+                "Nettoyage interdit : position locale et distante divergentes "
+                f"({local_qty} != {abs(remote)})"
+            )
+        if _smoke_transition_sequence(current_state) != next_close_sequence:
+            raise RuntimeError("Nettoyage interdit : séquence locale de clôture incohérente")
+        emergency = orders.submit_market(
+            _market_command(
+                state=current_state,
+                side=side,
+                qty=abs(remote),
+                reference_price=price,
+                reason="p1_smoke_close",
+                decision_checkpoint=close_checkpoint,
+                transition_type=FinancialTransitionType.EXIT,
+                position_generation=position_generation,
+                transition_sequence=next_close_sequence,
+                reduce_only=True,
+            )
+        )
+        _settle_external_market_order(runtime, emergency, clock)
+    _assert_smoke_cleanup(store, broker)
+
+
 def main() -> None:
-    smoke_lock = EngineInstanceLock(ROOT / "state" / SMOKE_DATABASE_LOCK_NAME, "trend")
+    smoke_lock = _smoke_instance_lock()
     smoke_lock.acquire()
     try:
         print("═══ Smoke test Hyperliquid TESTNET (ordres externes) ═══")
@@ -244,6 +335,7 @@ def main() -> None:
         store.save_engine_state("trend", flat_state)
         quantity = _smoke_quantity(broker, price)
         stop_id: str | None = None
+        local_stop_id: int | None = None
         close_checkpoint: str | None = None
         position_generation: str | None = None
         next_close_sequence: int | None = None
@@ -276,6 +368,10 @@ def main() -> None:
                 f"initial_qty={float(entry_position['initial_qty']):.17g}"
             )
             close_checkpoint = datetime.now(UTC).isoformat()
+            # L'entrée réglée a durablement consommé sa séquence. Cette valeur
+            # autorise la toute première clôture, notamment si le stop est
+            # rejeté avant qu'une clôture normale ne soit engagée.
+            next_close_sequence = _smoke_transition_sequence(entry_state)
             print(f"PASS entrée IOC : {entry.qty:.8f} BTC")
 
             stop_intent = f"p1-smoke-stop-{uuid.uuid4().hex}"
@@ -314,12 +410,17 @@ def main() -> None:
 
             broker.cancel_stop(stop_id)
             store.complete_order(local_stop_id, status="CANCELED", broker_order_id=stop_id)
+            local_stop_id = None
             stop_id = None
-            # Tant que cet appel n'a pas fourni puis persisté une preuve terminale,
-            # le finally ne doit jamais fabriquer une autre identité de clôture.
-            next_close_sequence = None
             if entry_state is None:
                 raise RuntimeError("État d’entrée durable absent avant la clôture")
+            if next_close_sequence is None:
+                raise RuntimeError("Séquence d’entrée durable absente avant la clôture")
+            close_sequence = next_close_sequence
+            # Une clôture devient ambiguë dès que sa soumission est engagée.
+            # Une erreur avant cette ligne conserve l'autorisation initiale;
+            # une erreur après cette ligne impose la réconciliation.
+            next_close_sequence = None
             close_state = entry_state
             close_result = orders.submit_market(
                 _market_command(
@@ -331,7 +432,7 @@ def main() -> None:
                     decision_checkpoint=close_checkpoint,
                     transition_type=FinancialTransitionType.EXIT,
                     position_generation=position_generation,
-                    transition_sequence=1,
+                    transition_sequence=close_sequence,
                     reduce_only=True,
                 )
             )
@@ -342,56 +443,19 @@ def main() -> None:
                 raise RuntimeError("Clôture reduce-only non exécutée")
             print(f"PASS clôture reduce-only : {close.qty:.8f} BTC")
         finally:
-            if stop_id is not None:
-                broker.cancel_stop(stop_id)
-            remote = broker.net_position(SYMBOL)
-            if opened and abs(remote) > 1e-12:
-                side = "SELL" if remote > 0 else "BUY"
-                if (
-                    close_checkpoint is None
-                    or position_generation is None
-                    or next_close_sequence is None
-                ):
-                    raise RuntimeError(
-                        "Nettoyage interdit : identité absente ou clôture précédente ambiguë"
-                    )
-                current_state = _load_smoke_state(store)
-                current_position = _smoke_position(current_state)
-                local_qty = float(current_position["qty"])
-                if not math.isclose(local_qty, abs(remote), rel_tol=0.0, abs_tol=1e-9):
-                    raise RuntimeError(
-                        "Nettoyage interdit : position locale et distante divergentes "
-                        f"({local_qty} != {abs(remote)})"
-                    )
-                current_slots = current_state.get("slots")
-                current_slot = (
-                    current_slots.get(SMOKE_SLOT) if isinstance(current_slots, dict) else None
-                )
-                sequence = (
-                    current_slot.get("financial_transition_seq")
-                    if isinstance(current_slot, dict)
-                    else None
-                )
-                if not isinstance(sequence, int) or sequence != next_close_sequence:
-                    raise RuntimeError(
-                        "Nettoyage interdit : séquence locale de clôture incohérente"
-                    )
-                emergency = orders.submit_market(
-                    _market_command(
-                        state=current_state,
-                        side=side,
-                        qty=abs(remote),
-                        reference_price=price,
-                        reason="p1_smoke_close",
-                        decision_checkpoint=close_checkpoint,
-                        transition_type=FinancialTransitionType.EXIT,
-                        position_generation=position_generation,
-                        transition_sequence=next_close_sequence,
-                        reduce_only=True,
-                    )
-                )
-                _settle_external_market_order(runtime, emergency, clock)
-            _assert_smoke_cleanup(store, broker)
+            _finalize_smoke_stop(store, broker, local_stop_id, stop_id)
+            _cleanup_smoke_position(
+                store=store,
+                broker=broker,
+                orders=orders,
+                runtime=runtime,
+                clock=clock,
+                price=price,
+                close_checkpoint=close_checkpoint,
+                position_generation=position_generation,
+                next_close_sequence=next_close_sequence,
+                opened=opened,
+            )
         print("═══ PASS : portail Hyperliquid testnet validé et compte remis à plat ═══")
 
     finally:
