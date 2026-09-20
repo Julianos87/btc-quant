@@ -15,6 +15,8 @@ def test_live_runner_checkpoints_when_stop_is_already_requested(tmp_path):
     runner.symbol = "BTC/USDT"
     runner.slots = []
     runner.broker = SimpleNamespace(supports_stop_orders=False)
+    runner._load_state = lambda: None
+    runner.reconciliation_required = False
     runner.store = SimpleNamespace(path=tmp_path / "state.db")
     checkpoints: list[str] = []
     runner._save_state = lambda: checkpoints.append("state")
@@ -27,6 +29,17 @@ def test_live_runner_checkpoints_when_stop_is_already_requested(tmp_path):
     assert checkpoints == ["state"]
 
 
+def test_live_runner_refreshes_state_after_acquiring_lock(tmp_path):
+    runner = LiveRunner.__new__(LiveRunner)
+    runner.store = SimpleNamespace(path=tmp_path / "state.db")
+    runner.reconciliation_required = False
+    calls: list[str] = []
+    runner._load_state = lambda: calls.append("load")
+    runner._run_forever_owned = lambda _stop: calls.append("run")
+    runner.run_forever(threading.Event())
+    assert calls == ["load", "run"]
+
+
 def test_live_runner_never_checkpoints_mutated_memory_after_ambiguous_exit(tmp_path):
     runner = LiveRunner.__new__(LiveRunner)
     runner.symbol = "BTC/USDT"
@@ -34,6 +47,8 @@ def test_live_runner_never_checkpoints_mutated_memory_after_ambiguous_exit(tmp_p
     runner.store = SimpleNamespace(path=tmp_path / "state.db")
     checkpoints: list[str] = []
     runner._save_state = lambda: checkpoints.append("state")
+    runner._load_state = lambda: None
+    runner.reconciliation_required = False
     runner._append_equity = lambda _price: checkpoints.append("equity")
     runner._prepare_external_execution = lambda: None
     runner._last_price = lambda: 100.0

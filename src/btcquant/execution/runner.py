@@ -1225,7 +1225,15 @@ class LiveRunner:
             submitted.order_id,
             observed_at=self.clock.utc_now().isoformat(),
         )
-        self._load_state()
+        try:
+            self._load_state()
+        except ReconciliationRequired:
+            raise
+        except Exception as error:
+            raise ReconciliationRequired(
+                "État externe appliqué mais relecture impossible; arrêt fail-closed "
+                "pour empêcher un checkpoint périmé"
+            ) from error
 
     @staticmethod
     def _position_generation(position: Position) -> str:
@@ -1563,6 +1571,7 @@ class LiveRunner:
         *,
         frame: pd.DataFrame | None = None,
         target_ts: pd.Timestamp | None = None,
+        allow_trade_actions: bool = True,
     ) -> BarDecision | None:
         """Décide sur la dernière clôture et exécute au prix de marché courant.
 
@@ -1624,6 +1633,44 @@ class LiveRunner:
         data["_rvol"] = realized_vol(
             data["close"], VOL_LOOKBACK, bars_per_year(slot.strategy.timeframe)
         )
+        if not allow_trade_actions:
+            row = data.loc[last_ts]
+            if slot.position is None:
+                # Une entrée historique serait exécutée au prix du tick actuel,
+                # et non au prix de la barre : elle est donc volontairement
+                # ignorée pendant le rattrapage.
+                slot.last_bar_ts = last_ts
+                return BarDecision(position=None)
+            pos = slot.position
+            decision = decide_bar_close(
+                slot.strategy,
+                row,
+                pos,
+                halted=self.halted,
+            )
+            assert decision.position is not None
+            next_position = decision.position
+            slot.last_bar_ts = last_ts
+            pos.best_close = next_position.best_close
+            pos.bars_held = next_position.bars_held
+            stop_event = next(
+                (event for event in decision.events if isinstance(event, StopTightened)),
+                None,
+            )
+            if stop_event and not self.broker.supports_stop_orders:
+                pos.stop_price = stop_event.new_price
+            skipped = tuple(
+                event
+                for event in decision.events
+                if isinstance(event, (ExitRequested, PyramidRequested))
+            )
+            if skipped:
+                log.info(
+                    "[%s] Signaux historiques ignorés pendant le rattrapage : %s",
+                    slot.strategy.name,
+                    ", ".join(type(event).__name__ for event in skipped),
+                )
+            return decision
         data["funding"] = float("nan")
         funding_available = True
         try:
@@ -1945,8 +1992,20 @@ class LiveRunner:
                     incident_kind="paper_history_gap",
                 )
             due = frame.index[(frame.index > checkpoint) & (frame.index <= previous_bar_start)]
+            normal_next_bar = (
+                len(due) == 1
+                and due[0] == previous_bar_start
+                and checkpoint + pd.Timedelta(seconds=timeframe_seconds) == previous_bar_start
+            )
             for bar_ts in due:
-                self._process_bar(slot, price, frame=frame, target_ts=bar_ts)
+                process_kwargs = {} if normal_next_bar else {"allow_trade_actions": False}
+                self._process_bar(
+                    slot,
+                    price,
+                    frame=frame,
+                    target_ts=bar_ts,
+                    **process_kwargs,
+                )
 
     def _run_cycle(self, price: float, stop_event: threading.Event) -> bool:
         self._apply_funding_payments(price)
@@ -1974,6 +2033,14 @@ class LiveRunner:
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
         stop_event = stop_event or threading.Event()
         with EngineInstanceLock(self.store.path, "trend"):
+            # Une instance construite avant l'acquisition du lock peut avoir
+            # chargé un état obsolète pendant qu'une autre instance tournait.
+            # Recharger ici rend l'instance propriétaire de la boucle autoritaire.
+            self._load_state()
+            if self.reconciliation_required:
+                raise ReconciliationRequired(
+                    "État trend marqué reconciliation_required : démarrage interdit"
+                )
             self._run_forever_owned(stop_event)
 
     def _run_forever_owned(self, stop_event: threading.Event) -> None:
