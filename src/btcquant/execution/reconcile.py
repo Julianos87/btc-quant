@@ -21,8 +21,13 @@ TOLERANCE_BTC = 1e-5
 
 def reconcile(broker: Broker, slots: list, symbol: str) -> bool:
     """Retourne True si l'état local est cohérent avec l'exchange."""
-    if not broker.supports_position_reconciliation:
+    if broker.supports_position_reconciliation:
+        pass
+    elif bool(getattr(broker, "is_paper", False)):
         return True  # broker papier : rien à réconcilier
+    else:
+        log.error("Broker externe sans port de réconciliation de position")
+        return False
 
     local_net = sum((s.position.direction * s.position.qty) for s in slots if s.position)
     try:

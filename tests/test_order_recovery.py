@@ -52,7 +52,9 @@ class LookupBroker(Broker):
         crash_before_send: bool = False,
     ) -> None:
         self.snapshot = snapshot
-        self.fill = fill or Fill(price=100.0, qty=1.0, fee=0.1, broker_order_id="remote-1")
+        self.fill = fill or Fill(
+            price=100.0, qty=1.0, fee=0.1, broker_order_id="remote-1", status="FILLED"
+        )
         self.lookup_error = lookup_error
         self.execute_error = execute_error
         self.crash_before_send = crash_before_send
@@ -406,7 +408,14 @@ def test_crash_after_fill_before_checkpoint_is_never_auto_applied(tmp_path, monk
         runner._enter_position(slot, row, 100.0, 1)
 
     assert slot.position is not None  # mémoire du processus mourant uniquement
-    assert runner.store.load_engine_state("trend") is None
+    persisted = runner.store.load_engine_state("trend")
+    assert persisted is not None
+    persisted_slot = persisted["slots"]["recovery"]
+    assert persisted_slot["position"] is None
+    assert (
+        persisted_slot["active_transition"]["intent_id"]
+        == runner.store.read_orders("trend")[0]["intent_id"]
+    )
     report = recover_interrupted_orders(
         StateStore(tmp_path / "btcquant.db"),
         broker,

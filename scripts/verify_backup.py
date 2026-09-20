@@ -7,6 +7,7 @@ import json
 import os
 import sqlite3
 import subprocess
+import sys
 import tarfile
 import tempfile
 from contextlib import closing
@@ -22,7 +23,10 @@ def _safe_extract(archive: Path, destination: Path) -> None:
                 raise ValueError(f"Chemin dangereux dans l'archive : {member.name}")
             if member.issym() or member.islnk():
                 raise ValueError(f"Lien interdit dans l'archive : {member.name}")
-        bundle.extractall(destination)
+        if sys.version_info >= (3, 12):
+            bundle.extractall(destination, filter="data")
+        else:
+            bundle.extractall(destination)
 
 
 def _decrypt(archive: Path, destination: Path) -> None:

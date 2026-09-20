@@ -131,6 +131,20 @@ class CcxtBroker(Broker):
             positive=True,
         )
 
+    def normalize_market_quantity(
+        self,
+        qty: float,
+        ref_price: float,
+        *,
+        reduce_only: bool = False,
+    ) -> float:
+        """Normalise et valide la quantité avant la persistance."""
+
+        del reduce_only
+        normalized = self._round_qty(qty)
+        self._check_min_notional(normalized, ref_price)
+        return normalized
+
     def _check_min_notional(self, qty: float, price: float) -> None:
         market = self.exchange.market(self.symbol)
         min_cost = (market.get("limits", {}).get("cost") or {}).get("min")
@@ -154,11 +168,32 @@ class CcxtBroker(Broker):
         if not fee and order.get("fee"):
             fee = order["fee"].get("cost") or 0.0
         broker_order_id = str(order["id"]) if order.get("id") is not None else None
+        raw_status = str(order.get("status") or "").lower()
+        requested = float(order.get("amount") or 0.0)
+        if raw_status == "closed":
+            if qty <= 0:
+                status = "REJECTED"
+            elif requested > 0 and qty < requested - 1e-12:
+                status = "PARTIAL"
+            else:
+                status = "FILLED"
+        elif raw_status in ("canceled", "cancelled"):
+            status = "CANCELED"
+        elif raw_status in ("rejected", "expired"):
+            status = "REJECTED"
+        elif raw_status in ("open", "new", "untriggered"):
+            status = "OPEN"
+        else:
+            # Un statut absent ou inconnu ne prouve ni un rejet ni une
+            # terminalité. Le service d'exécution le conserve donc
+            # réconciliable au lieu de déduire un état depuis filled.
+            status = "UNKNOWN"
         return Fill(
             price=float(price),
             qty=float(qty),
             fee=float(fee),
             broker_order_id=broker_order_id,
+            status=status,
         )
 
     @staticmethod
@@ -180,8 +215,9 @@ class CcxtBroker(Broker):
         *,
         reduce_only: bool = False,
     ) -> Fill:
-        qty = self._round_qty(qty)
-        self._check_min_notional(qty, ref_price)
+        # Défense en profondeur pour les appels directs au broker ; le runner
+        # a déjà appliqué cette normalisation avant de créer l’intention.
+        qty = self.normalize_market_quantity(qty, ref_price, reduce_only=reduce_only)
         exchange_id = getattr(self, "exchange_id", "binance")
         local_intent = client_order_id or self._client_order_id(side)
         external_client_id = self._external_client_order_id(local_intent, exchange_id)
@@ -245,13 +281,20 @@ class CcxtBroker(Broker):
         raw_status = str(order.get("status") or "").lower()
         requested = float(order.get("amount") or 0.0)
         if raw_status == "closed":
-            status = "FILLED" if fill.qty >= requested - 1e-12 else "PARTIAL"
+            if fill.qty <= 0:
+                status = "REJECTED"
+            elif requested > 0 and fill.qty < requested - 1e-12:
+                status = "PARTIAL"
+            else:
+                status = "FILLED"
         elif raw_status in ("canceled", "cancelled"):
             status = "CANCELED"
         elif raw_status in ("rejected", "expired"):
-            status = raw_status.upper()
-        else:
+            status = "REJECTED"
+        elif raw_status in ("open", "new", "untriggered"):
             status = "OPEN"
+        else:
+            status = "UNKNOWN"
         return BrokerOrderSnapshot(
             client_order_id=client_order_id,
             broker_order_id=fill.broker_order_id,

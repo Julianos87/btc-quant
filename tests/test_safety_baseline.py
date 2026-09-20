@@ -109,7 +109,7 @@ def _position(qty: float = 2.0) -> Position:
 
 
 def test_kill_switch_liquidates_at_current_tick(tmp_path):
-    broker = RecordingBroker([Fill(price=70.0, qty=2.0, fee=0.0)])
+    broker = RecordingBroker([Fill(price=70.0, qty=2.0, fee=0.0, status="FILLED")])
     runner, slot = _runner(tmp_path, broker, cash=800.0)
     slot.position = _position()
     runner.peak_equity = 1_000.0
@@ -122,7 +122,7 @@ def test_kill_switch_liquidates_at_current_tick(tmp_path):
 
 
 def test_failed_exit_keeps_position_and_existing_stop(tmp_path):
-    broker = RecordingBroker([Fill(price=100.0, qty=0.0, fee=0.0)])
+    broker = RecordingBroker([Fill(price=100.0, qty=0.0, fee=0.0, status="REJECTED")])
     runner, slot = _runner(tmp_path, broker)
     slot.position = _position()
     slot.stop_order_id = "existing-stop"
@@ -135,7 +135,7 @@ def test_failed_exit_keeps_position_and_existing_stop(tmp_path):
 
 
 def test_partial_exit_reprotects_remainder_before_cancel(tmp_path):
-    broker = RecordingBroker([Fill(price=100.0, qty=0.75, fee=0.0)])
+    broker = RecordingBroker([Fill(price=100.0, qty=0.75, fee=0.0, status="PARTIAL")])
     runner, slot = _runner(tmp_path, broker)
     slot.position = _position(qty=2.0)
     slot.stop_order_id = "existing-stop"

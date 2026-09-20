@@ -61,6 +61,7 @@ def test_paper_error_is_failed_but_external_ambiguity_stays_pending(tmp_path):
         )
 
     external = StubBroker(TimeoutError("ambiguous"))
+    external.is_paper = False
     external.supports_order_lookup = True
     with pytest.raises(TimeoutError):
         OrderExecutionService(store, external).submit_market(

@@ -51,10 +51,10 @@ class SagaBroker(Broker):
         self.timeout_on_cancel = False
 
     def market_buy(self, qty: float, ref_price: float) -> Fill:
-        return Fill(ref_price, qty, 0.0)
+        return Fill(ref_price, qty, 0.0, status="FILLED")
 
     def market_sell(self, qty: float, ref_price: float) -> Fill:
-        return Fill(ref_price, qty, 0.0)
+        return Fill(ref_price, qty, 0.0, status="FILLED")
 
     def place_stop(
         self,
@@ -211,7 +211,7 @@ def test_crash_after_remote_create_reuses_the_same_intent(tmp_path):
     assert pending["status"] == "PENDING"
     persisted = runner.store.load_engine_state("trend")
     assert persisted is not None
-    assert persisted["slots"]["stop-saga"]["stop_transition"]["phase"] == "PLACING"
+    assert persisted["slots"]["stop-saga"]["stop_transition"]["phase"] == "SUBMITTING"
 
     broker.crash_after_create = False
     restarted, restarted_slot = _runner(database, broker)
@@ -250,10 +250,10 @@ def test_unconfirmed_placement_stops_runner_then_recovers(tmp_path):
     )
 
     broker.timeout_before_create = False
-    restarted, restarted_slot = _restarted_runner(database, broker)
+    with pytest.raises(ReconciliationRequired, match="nouvelle émission interdite"):
+        _restarted_runner(database, broker)
 
-    assert restarted_slot.stop_order_id == "remote-stop-1"
-    assert restarted.store.read_incidents(open_only=True) == []
+    assert len(broker.place_calls) == 1
 
 
 def test_crash_after_confirmation_resumes_only_the_cancel(tmp_path):
@@ -310,7 +310,7 @@ def test_sqlite_failure_after_create_reverts_to_recoverable_placing(tmp_path, mo
         )
 
     assert slot.stop_transition is not None
-    assert slot.stop_transition["phase"] == "PLACING"
+    assert slot.stop_transition["phase"] == "SUBMISSION_AMBIGUOUS"
     assert broker.cancel_calls == []
 
     _, restarted_slot = _restarted_runner(database, broker)

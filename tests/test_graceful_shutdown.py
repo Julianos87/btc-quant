@@ -11,7 +11,7 @@ def test_live_runner_checkpoints_when_stop_is_already_requested():
     runner = LiveRunner.__new__(LiveRunner)
     runner.symbol = "BTC/USDT"
     runner.slots = []
-    runner.broker = SimpleNamespace(supports_stop_orders=False)
+    runner.broker = SimpleNamespace(supports_stop_orders=False, is_paper=True)
     checkpoints: list[str] = []
     runner._save_state = lambda: checkpoints.append("state")
     runner._append_equity = lambda _price: checkpoints.append("equity")

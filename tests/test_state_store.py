@@ -304,7 +304,7 @@ def test_schema_v1_is_migrated_with_execution_observability(tmp_path):
         ).fetchone()[0]
 
     assert "reference_price" in columns
-    assert version == "4"
+    assert version == "5"
     assert store.read_deposits() == []
     assert store.read_incidents() == []
 

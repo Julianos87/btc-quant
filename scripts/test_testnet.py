@@ -38,7 +38,7 @@ def _smoke_quantity(broker: CcxtBroker, price: float) -> float:
     market = broker.exchange.market(SYMBOL)
     minimum = float(((market.get("limits") or {}).get("amount") or {}).get("min") or 0.0)
     raw = max(minimum, 12.0 / price)
-    quantity = float(broker.exchange.amount_to_precision(SYMBOL, raw))
+    quantity = broker.normalize_market_quantity(raw, price)
     if quantity <= 0 or not math.isfinite(quantity):
         raise RuntimeError("Impossible de calculer une quantité testnet valide")
     return quantity

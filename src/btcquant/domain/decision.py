@@ -128,6 +128,7 @@ def _append_exit_or_pyramid(
     position: Position,
     events: list[DecisionEvent],
     *,
+    allow_add: bool,
     halted: bool,
 ) -> None:
     if halted:
@@ -136,7 +137,7 @@ def _append_exit_or_pyramid(
     if strategy.exit_signal(row, position):
         events.append(ExitRequested(reason="signal"))
         return
-    fraction = float(strategy.pyramid_fraction(row, position))
+    fraction = float(strategy.pyramid_fraction(row, position)) if allow_add else 0.0
     if fraction < 0 or fraction > 1:
         raise ValueError("Fraction de renfort invalide")
     if fraction:
@@ -152,6 +153,7 @@ def decide_bar_close(
     halted: bool = False,
     can_enter: bool = True,
     allow_short: bool = True,
+    allow_add: bool = True,
 ) -> BarDecision:
     """Évalue une barre clôturée sans modifier la position fournie.
 
@@ -176,5 +178,5 @@ def decide_bar_close(
         amount = funding_amount(updated, float(funding_rate), close)
         mutable_events.append(FundingAccrued(rate=float(funding_rate), amount=amount))
     _append_tighter_stop(strategy, row, updated, mutable_events)
-    _append_exit_or_pyramid(strategy, row, updated, mutable_events, halted=halted)
+    _append_exit_or_pyramid(strategy, row, updated, mutable_events, halted=halted, allow_add=allow_add)
     return BarDecision(position=updated, events=tuple(mutable_events))

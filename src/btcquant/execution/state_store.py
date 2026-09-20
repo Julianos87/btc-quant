@@ -19,7 +19,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 4
+from .errors import ReconciliationRequired
+
+SCHEMA_VERSION = 5
 DEPOSIT_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}")
 
 
@@ -101,8 +103,18 @@ class StateStore:
                 CREATE TABLE IF NOT EXISTS engine_state (
                     engine TEXT PRIMARY KEY,
                     payload TEXT NOT NULL CHECK(json_valid(payload)),
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0)
                 );
+
+                CREATE TRIGGER IF NOT EXISTS engine_state_revision_bump
+                AFTER UPDATE OF payload ON engine_state
+                WHEN NEW.revision = OLD.revision
+                BEGIN
+                    UPDATE engine_state
+                    SET revision = OLD.revision + 1
+                    WHERE engine = NEW.engine;
+                END;
 
                 CREATE TABLE IF NOT EXISTS positions (
                     engine TEXT NOT NULL,
@@ -277,6 +289,16 @@ class StateStore:
                     current_version = 3
                 if current_version < 4:
                     current_version = 4
+                if current_version < 5:
+                    columns = {
+                        item["name"]
+                        for item in connection.execute("PRAGMA table_info(engine_state)").fetchall()
+                    }
+                    if "revision" not in columns:
+                        connection.execute(
+                            "ALTER TABLE engine_state ADD COLUMN revision INTEGER NOT NULL DEFAULT 0"
+                        )
+                    current_version = 5
                 connection.execute(
                     "UPDATE metadata SET value = ? WHERE key = 'schema_version'",
                     (str(current_version),),
@@ -328,6 +350,18 @@ class StateStore:
                 "SELECT payload FROM engine_state WHERE engine = ?", (engine,)
             ).fetchone()
         return json.loads(row["payload"]) if row else None
+
+    def load_engine_state_with_revision(
+        self,
+        engine: str,
+    ) -> tuple[dict[str, Any] | None, int]:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload, revision FROM engine_state WHERE engine = ?", (engine,)
+            ).fetchone()
+        if row is None:
+            return None, 0
+        return json.loads(row["payload"]), int(row["revision"])
 
     @staticmethod
     def _validate_deposit(deposit_id: str, amount: float) -> tuple[str, float]:
@@ -572,6 +606,128 @@ class StateStore:
                 )
         return imported
 
+    def _checkpoint_payload(
+        self,
+        connection: sqlite3.Connection,
+        engine: str,
+        payload: Mapping[str, Any],
+        *,
+        preserve_active_transitions: bool = True,
+        allowed_transition_intent: str | None = None,
+    ) -> dict[str, Any]:
+        candidate = json.loads(self._json(payload))
+        if not isinstance(candidate, dict):
+            raise ValueError("État engine invalide : objet JSON attendu")
+        row = connection.execute(
+            "SELECT payload FROM engine_state WHERE engine = ?", (engine,)
+        ).fetchone()
+        existing: dict[str, Any] | None = None
+        if row is not None:
+            loaded = json.loads(row["payload"])
+            if isinstance(loaded, dict):
+                existing = loaded
+                if loaded.get("reconciliation_required"):
+                    candidate["reconciliation_required"] = True
+
+        if existing is None:
+            return candidate
+
+        existing_slots = existing.get("slots")
+        candidate_slots = candidate.get("slots")
+        if not isinstance(existing_slots, Mapping):
+            return candidate
+        if not isinstance(candidate_slots, dict):
+            raise ReconciliationRequired(
+                f"Checkpoint {engine} invalide : impossible de préserver les transitions actives"
+            )
+
+        for slot, existing_slot_value in existing_slots.items():
+            if not isinstance(existing_slot_value, Mapping):
+                continue
+            existing_transition = existing_slot_value.get("active_transition")
+            if not isinstance(existing_transition, Mapping):
+                continue
+            intent_id = existing_transition.get("intent_id")
+            if not isinstance(intent_id, str) or not intent_id:
+                raise ReconciliationRequired(f"Transition active invalide pour {engine}/{slot}")
+            order = connection.execute(
+                "SELECT status FROM orders WHERE intent_id = ?", (intent_id,)
+            ).fetchone()
+            if order is None:
+                raise ReconciliationRequired(
+                    f"Transition {intent_id} sans intention SQLite pour {engine}/{slot}"
+                )
+            if str(order["status"]) not in {"PENDING", "OPEN", "UNBALANCED"}:
+                continue
+
+            candidate_slot = candidate_slots.get(slot)
+            if not isinstance(candidate_slot, dict):
+                raise ReconciliationRequired(
+                    f"Checkpoint {engine}/{slot} absent alors que l'intention {intent_id} est active"
+                )
+            candidate_transition = candidate_slot.get("active_transition")
+            candidate_intent = (
+                candidate_transition.get("intent_id")
+                if isinstance(candidate_transition, Mapping)
+                else None
+            )
+            if preserve_active_transitions:
+                if candidate_transition is None:
+                    candidate_slot["active_transition"] = dict(existing_transition)
+                    if candidate_slot.get("position_cycle_id") is None:
+                        candidate_slot["position_cycle_id"] = existing_slot_value.get(
+                            "position_cycle_id"
+                        )
+                elif candidate_intent != intent_id:
+                    raise ReconciliationRequired(
+                        f"Checkpoint {engine}/{slot} tente d'écraser l'intention active {intent_id}"
+                    )
+            else:
+                if intent_id != allowed_transition_intent:
+                    raise ReconciliationRequired(
+                        f"Checkpoint {engine}/{slot} ne possède pas l'intention active {intent_id}"
+                    )
+                if candidate_transition is not None and candidate_intent != intent_id:
+                    raise ReconciliationRequired(
+                        f"Checkpoint {engine}/{slot} tente de remplacer l'intention {intent_id}"
+                    )
+        return candidate
+
+    def _write_engine_state(
+        self,
+        connection: sqlite3.Connection,
+        engine: str,
+        payload: Mapping[str, Any],
+        now: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> int:
+        row = connection.execute(
+            "SELECT revision FROM engine_state WHERE engine = ?", (engine,)
+        ).fetchone()
+        current_revision = int(row["revision"]) if row is not None else 0
+        if expected_revision is not None and expected_revision != current_revision:
+            raise ReconciliationRequired(
+                f"Checkpoint périmé pour {engine}: attendu revision {expected_revision}, "
+                f"durable {current_revision}"
+            )
+        serialized = self._json(payload)
+        next_revision = current_revision + 1
+        if row is None:
+            connection.execute(
+                "INSERT INTO engine_state(engine, payload, updated_at, revision) VALUES(?, ?, ?, ?)",
+                (engine, serialized, now, next_revision),
+            )
+            return next_revision
+        cursor = connection.execute(
+            "UPDATE engine_state SET payload=?, updated_at=?, revision=? "
+            "WHERE engine=? AND revision=?",
+            (serialized, now, next_revision, engine, current_revision),
+        )
+        if cursor.rowcount != 1:
+            raise ReconciliationRequired(f"Écriture concurrente du checkpoint {engine}")
+        return next_revision
+
     def save_engine_state(
         self,
         engine: str,
@@ -579,26 +735,25 @@ class StateStore:
         *,
         event_type: str = "checkpoint",
         event_payload: dict[str, Any] | None = None,
-    ) -> None:
+        expected_revision: int | None = None,
+    ) -> int:
         now = utc_now()
         with self._transaction() as connection:
-            connection.execute(
-                """
-                INSERT INTO engine_state(engine, payload, updated_at) VALUES(?, ?, ?)
-                ON CONFLICT(engine) DO UPDATE SET
-                    payload=excluded.payload, updated_at=excluded.updated_at
-                """,
-                (engine, self._json(payload), now),
+            checkpoint = self._checkpoint_payload(connection, engine, payload)
+            revision = self._write_engine_state(
+                connection, engine, checkpoint, now, expected_revision=expected_revision
             )
-            self._sync_positions(connection, engine, payload, now)
+            self._sync_positions(connection, engine, checkpoint, now)
             self._insert_event(
                 connection,
                 engine,
                 event_type,
-                self._state_event(payload, event_payload),
+                self._state_event(checkpoint, event_payload),
                 aggregate_type="engine",
                 aggregate_id=engine,
             )
+
+        return revision
 
     def save_states_and_flows(
         self,
@@ -612,20 +767,21 @@ class StateStore:
         now = utc_now()
         with self._transaction() as connection:
             for engine, payload in states.items():
+                checkpoint = self._checkpoint_payload(connection, engine, payload)
                 connection.execute(
                     """
                     INSERT INTO engine_state(engine, payload, updated_at) VALUES(?, ?, ?)
                     ON CONFLICT(engine) DO UPDATE SET
                         payload=excluded.payload, updated_at=excluded.updated_at
                     """,
-                    (engine, self._json(payload), now),
+                    (engine, self._json(checkpoint), now),
                 )
-                self._sync_positions(connection, engine, payload, now)
+                self._sync_positions(connection, engine, checkpoint, now)
                 self._insert_event(
                     connection,
                     engine,
                     "state_checkpoint",
-                    self._state_event(payload),
+                    self._state_event(checkpoint),
                     "engine",
                     engine,
                 )
@@ -741,6 +897,22 @@ class StateStore:
                 ),
             )
 
+    @staticmethod
+    def _resolve_order_ambiguity(
+        connection: sqlite3.Connection,
+        engine: str,
+        intent_id: str,
+        now: str,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE incidents
+            SET status='RESOLVED', resolved_at=?
+            WHERE fingerprint=? AND status='OPEN'
+            """,
+            (now, f"execution:{engine}:order_ambiguous:{intent_id}"),
+        )
+
     def _insert_event(
         self,
         connection: sqlite3.Connection,
@@ -822,6 +994,305 @@ class StateStore:
             )
             return order_id
 
+    def reserve_order(
+        self,
+        engine: str,
+        slot: str,
+        intent_id: str,
+        order_type: str,
+        side: str,
+        requested_qty: float,
+        reason: str,
+        reference_price: float | None = None,
+    ) -> tuple[int, bool, dict[str, Any] | None]:
+        """Réserve une intention sans jamais créer deux lignes pour son ID.
+
+        La transaction BEGIN IMMEDIATE sérialise la lecture et l'insertion.
+        Le second appel concurrent récupère donc la ligne PENDING déjà réservée
+        au lieu de pouvoir atteindre le broker.
+        """
+
+        now = utc_now()
+        with self._transaction() as connection:
+            state_row = connection.execute(
+                "SELECT payload FROM engine_state WHERE engine = ?", (engine,)
+            ).fetchone()
+            if state_row is not None:
+                current_state = json.loads(state_row["payload"])
+                if isinstance(current_state, dict) and current_state.get("reconciliation_required"):
+                    raise ReconciliationRequired(f"Moteur {engine} marqué reconciliation_required")
+            existing = connection.execute(
+                "SELECT * FROM orders WHERE intent_id = ?", (intent_id,)
+            ).fetchone()
+            if existing is not None:
+                return int(existing["id"]), False, dict(existing)
+            blocking = connection.execute(
+                "SELECT intent_id, status FROM orders WHERE engine = ? AND slot = ? "
+                'AND status IN ("PENDING", "OPEN", "UNBALANCED") '
+                'AND NOT (order_type = "STOP" AND status = "OPEN") '
+                "ORDER BY id LIMIT 1",
+                (engine, slot),
+            ).fetchone()
+            if blocking is not None:
+                raise ReconciliationRequired(
+                    f"Intention {blocking['intent_id']} déjà active ({blocking['status']})"
+                )
+            cursor = connection.execute(
+                """
+                INSERT INTO orders(
+                    engine, slot, intent_id, order_type, side, requested_qty,
+                    reference_price, status, reason, created_at, updated_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)
+                """,
+                (
+                    engine,
+                    slot,
+                    intent_id,
+                    order_type,
+                    side,
+                    requested_qty,
+                    reference_price,
+                    reason,
+                    now,
+                    now,
+                ),
+            )
+            order_id = cursor.lastrowid
+            if order_id is None:
+                raise RuntimeError("SQLite n'a pas retourné l'identifiant de l'ordre")
+            self._insert_event(
+                connection,
+                engine,
+                "order_intent",
+                {
+                    "order_id": order_id,
+                    "side": side,
+                    "requested_qty": requested_qty,
+                    "reference_price": reference_price,
+                    "reason": reason,
+                },
+                "order",
+                str(order_id),
+                intent_id,
+            )
+            return int(order_id), True, None
+
+    def reserve_order_and_transition(
+        self,
+        engine: str,
+        slot: str,
+        transition: Mapping[str, Any],
+        order_type: str,
+        side: str,
+        requested_qty: float,
+        reason: str,
+        state: Mapping[str, Any],
+        reference_price: float | None = None,
+    ) -> tuple[int, bool, dict[str, Any], dict[str, Any], dict[str, Any]]:
+        """Réserve atomiquement une transition trend et son intention market.
+
+        active_transition est lu depuis engine_state sous le même verrou
+        SQLite que l'insertion de orders. Deux processus qui partent
+        simultanément d'un état flat convergent ainsi vers la même transition
+        générée par le premier processus.
+        """
+
+        now = utc_now()
+        with self._transaction() as connection:
+            state_row = connection.execute(
+                "SELECT payload FROM engine_state WHERE engine = ?", (engine,)
+            ).fetchone()
+            current_state = json.loads(state_row["payload"]) if state_row is not None else None
+            if current_state is not None and not isinstance(current_state, dict):
+                raise ValueError("État engine_state invalide : objet JSON attendu")
+            if isinstance(current_state, dict) and current_state.get("reconciliation_required"):
+                raise ReconciliationRequired(f"Moteur {engine} marqué reconciliation_required")
+            current_slot: Mapping[str, Any] | None = None
+            if isinstance(current_state, dict):
+                slots = current_state.get("slots")
+                if isinstance(slots, Mapping):
+                    candidate = slots.get(slot)
+                    if isinstance(candidate, Mapping):
+                        current_slot = candidate
+            current_transition = (
+                current_slot.get("active_transition") if current_slot is not None else None
+            )
+            if current_transition is not None and not isinstance(current_transition, Mapping):
+                raise ReconciliationRequired(
+                    f"Transition active trend invalide pour {engine}/{slot}"
+                )
+
+            if current_transition is None:
+                blocking = connection.execute(
+                    'SELECT id, intent_id, status FROM orders WHERE engine = ? AND slot = ? AND status IN ("PENDING", "OPEN", "UNBALANCED") AND NOT (order_type = "STOP" AND status = "OPEN") ORDER BY id LIMIT 1',
+                    (engine, slot),
+                ).fetchone()
+                if blocking is not None:
+                    blocking_intent_id = blocking["intent_id"]
+                    blocking_status = blocking["status"]
+                    raise ReconciliationRequired(
+                        f"Intention {blocking_intent_id} déjà active ({blocking_status})"
+                    )
+            if current_transition is not None:
+                effective_transition = dict(current_transition)
+                if not isinstance(current_state, dict):
+                    raise ReconciliationRequired(
+                        f"Transition active sans état trend pour {engine}/{slot}"
+                    )
+                persisted_state = current_state
+            else:
+                effective_transition = dict(transition)
+                if isinstance(current_state, dict):
+                    # Le checkpoint déjà en base est la source de vérité sous
+                    # le verrou IMMEDIATE : un appelant peut avoir décidé sur
+                    # un snapshot devenu obsolète entre deux ticks.
+                    persisted_state = json.loads(self._json(current_state))
+                else:
+                    persisted_state = json.loads(self._json(state))
+                if not isinstance(persisted_state, dict):
+                    raise ValueError("État trend invalide : objet JSON attendu")
+                if persisted_state.get("reconciliation_required"):
+                    raise ReconciliationRequired(f"Moteur {engine} marqué reconciliation_required")
+                slots = persisted_state.setdefault("slots", {})
+                if not isinstance(slots, dict):
+                    raise ValueError("État trend invalide : slots doit être un objet")
+                slot_state = slots.setdefault(slot, {})
+                if not isinstance(slot_state, dict):
+                    raise ValueError(f"État trend invalide : slot {slot!r}")
+                kind = str(effective_transition.get("kind") or reason).upper()
+                current_position = slot_state.get("position")
+                if kind == "ENTRY" and current_position is not None:
+                    raise ReconciliationRequired(
+                        f"État {engine}/{slot} déjà en position : entrée obsolète refusée"
+                    )
+                position_kinds = {"EXIT", "PYRAMID", "KILL_SWITCH", "STOP"}
+                if kind in position_kinds and current_position is None:
+                    raise ReconciliationRequired(
+                        f"État {engine}/{slot} flat : transition {kind} obsolète refusée"
+                    )
+                current_cycle_id = slot_state.get("position_cycle_id")
+                requested_cycle_id = effective_transition.get("position_cycle_id")
+                if (
+                    kind in position_kinds
+                    and current_cycle_id is not None
+                    and requested_cycle_id != current_cycle_id
+                ):
+                    raise ReconciliationRequired(f"Cycle de position obsolète pour {engine}/{slot}")
+                slot_state["active_transition"] = effective_transition
+
+            intent_id = str(effective_transition.get("intent_id") or "")
+            if not intent_id:
+                raise ValueError("Une transition active doit posséder un intent_id")
+            existing = connection.execute(
+                "SELECT * FROM orders WHERE intent_id = ?", (intent_id,)
+            ).fetchone()
+            if existing is None and current_transition is not None:
+                raise ReconciliationRequired(f"Transition {intent_id} sans intention SQLite")
+            if existing is not None and str(existing["status"]) not in {
+                "PENDING",
+                "OPEN",
+                "UNBALANCED",
+            }:
+                raise ReconciliationRequired(f"Transition {intent_id} terminal mais encore active")
+            if existing is not None:
+                if existing["engine"] != engine or existing["slot"] != slot:
+                    raise ReconciliationRequired(
+                        f"Collision d'intention {intent_id} entre {existing['engine']}/{existing['slot']} "
+                        f"et {engine}/{slot}"
+                    )
+                if str(existing["order_type"]) != str(order_type):
+                    raise ReconciliationRequired(
+                        f"Intention {intent_id} réutilisée avec un type d'ordre différent"
+                    )
+                if str(existing["side"]).upper() != str(side).upper():
+                    raise ReconciliationRequired(
+                        f"Intention {intent_id} réutilisée avec un côté différent"
+                    )
+                return (
+                    int(existing["id"]),
+                    False,
+                    dict(existing),
+                    persisted_state,
+                    effective_transition,
+                )
+
+            cursor = connection.execute(
+                """
+                INSERT INTO orders(
+                    engine, slot, intent_id, order_type, side, requested_qty,
+                    reference_price, status, reason, created_at, updated_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)
+                """,
+                (
+                    engine,
+                    slot,
+                    intent_id,
+                    order_type,
+                    side,
+                    requested_qty,
+                    reference_price,
+                    reason,
+                    now,
+                    now,
+                ),
+            )
+            order_id = cursor.lastrowid
+            if order_id is None:
+                raise RuntimeError("SQLite n'a pas retourné l'identifiant de l'ordre")
+            checkpoint = self._checkpoint_payload(connection, engine, persisted_state)
+            connection.execute(
+                """
+                INSERT INTO engine_state(engine, payload, updated_at) VALUES(?, ?, ?)
+                ON CONFLICT(engine) DO UPDATE SET
+                    payload=excluded.payload, updated_at=excluded.updated_at
+                """,
+                (engine, self._json(checkpoint), now),
+            )
+            self._sync_positions(connection, engine, checkpoint, now)
+            self._insert_event(
+                connection,
+                engine,
+                "order_intent",
+                {
+                    "order_id": order_id,
+                    "side": side,
+                    "requested_qty": requested_qty,
+                    "reference_price": reference_price,
+                    "reason": reason,
+                    "transition": effective_transition,
+                },
+                "order",
+                str(order_id),
+                intent_id,
+            )
+            self._insert_event(
+                connection,
+                engine,
+                "transitional_checkpoint",
+                self._state_event(
+                    checkpoint,
+                    {
+                        "order_id": order_id,
+                        "intent_id": intent_id,
+                        "transition": effective_transition,
+                    },
+                ),
+                "engine",
+                engine,
+                intent_id,
+            )
+            inserted = connection.execute(
+                "SELECT * FROM orders WHERE id = ?", (int(order_id),)
+            ).fetchone()
+            assert inserted is not None
+            return (
+                int(order_id),
+                True,
+                dict(inserted),
+                persisted_state,
+                effective_transition,
+            )
+
     def begin_order_and_checkpoint(
         self,
         engine: str,
@@ -838,6 +1309,7 @@ class StateStore:
 
         now = utc_now()
         with self._transaction() as connection:
+            checkpoint = self._checkpoint_payload(connection, engine, state)
             cursor = connection.execute(
                 """
                 INSERT INTO orders(
@@ -866,9 +1338,9 @@ class StateStore:
                 ON CONFLICT(engine) DO UPDATE SET
                     payload=excluded.payload, updated_at=excluded.updated_at
                 """,
-                (engine, self._json(state), now),
+                (engine, self._json(checkpoint), now),
             )
-            self._sync_positions(connection, engine, state, now)
+            self._sync_positions(connection, engine, checkpoint, now)
             self._insert_event(
                 connection,
                 engine,
@@ -889,10 +1361,10 @@ class StateStore:
                 engine,
                 "transitional_checkpoint",
                 self._state_event(
-                    state,
+                    checkpoint,
                     {
                         "order_id": order_id,
-                        "execution_state": state.get("execution_state"),
+                        "execution_state": checkpoint.get("execution_state"),
                     },
                 ),
                 "engine",
@@ -953,6 +1425,130 @@ class StateStore:
                 row["intent_id"],
             )
 
+    def complete_order_and_clear_transition(
+        self,
+        order_id: int,
+        *,
+        status: str,
+        filled_qty: float = 0.0,
+        price: float | None = None,
+        fee: float = 0.0,
+        broker_order_id: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        """Termine un ordre sans laisser sa transition active en SQLite."""
+
+        now = utc_now()
+        with self._transaction() as connection:
+            order = connection.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
+            if order is None:
+                raise KeyError(f"Ordre journalisé introuvable : {order_id}")
+            normalized_status = str(status).upper()
+            if normalized_status not in {
+                "FILLED",
+                "PARTIAL",
+                "REJECTED",
+                "CANCELED",
+                "RECOVERED_ABORTED",
+                "FAILED",
+            }:
+                raise ValueError(
+                    f"Une transition active ne peut être effacée qu'à un état terminal, reçu {status!r}"
+                )
+            status = normalized_status
+            connection.execute(
+                """
+                UPDATE orders SET status=?, filled_qty=?, price=?, fee=?,
+                    broker_order_id=?, error=?, updated_at=?
+                WHERE id=?
+                """,
+                (
+                    status,
+                    filled_qty,
+                    price,
+                    fee,
+                    broker_order_id,
+                    error,
+                    now,
+                    order_id,
+                ),
+            )
+            self._insert_event(
+                connection,
+                order["engine"],
+                "order_updated",
+                {
+                    "order_id": order_id,
+                    "status": status,
+                    "filled_qty": filled_qty,
+                    "price": price,
+                    "fee": fee,
+                    "error": error,
+                },
+                "order",
+                str(order_id),
+                order["intent_id"],
+            )
+            self._resolve_order_ambiguity(
+                connection,
+                str(order["engine"]),
+                str(order["intent_id"]),
+                now,
+            )
+            state_row = connection.execute(
+                "SELECT payload FROM engine_state WHERE engine = ?",
+                (order["engine"],),
+            ).fetchone()
+            if state_row is None:
+                return
+            payload = json.loads(state_row["payload"])
+            if not isinstance(payload, dict):
+                raise ValueError("État engine invalide : objet JSON attendu")
+            slots = payload.get("slots")
+            slot_state = slots.get(order["slot"]) if isinstance(slots, dict) else None
+            if not isinstance(slot_state, dict):
+                return
+            active = slot_state.get("active_transition")
+            if not isinstance(active, dict) or active.get("intent_id") != order["intent_id"]:
+                return
+            slot_state["active_transition"] = None
+            if (
+                str(active.get("kind", "")).upper() == "ENTRY"
+                or str(order["reason"] or "").lower() == "entry"
+            ) and slot_state.get("position") is None:
+                slot_state["position_cycle_id"] = None
+            checkpoint = self._checkpoint_payload(
+                connection,
+                order["engine"],
+                payload,
+                preserve_active_transitions=False,
+                allowed_transition_intent=str(order["intent_id"]),
+            )
+            connection.execute(
+                """
+                INSERT INTO engine_state(engine, payload, updated_at) VALUES(?, ?, ?)
+                ON CONFLICT(engine) DO UPDATE SET
+                    payload=excluded.payload, updated_at=excluded.updated_at
+                """,
+                (order["engine"], self._json(checkpoint), now),
+            )
+            self._sync_positions(connection, order["engine"], checkpoint, now)
+            self._insert_event(
+                connection,
+                order["engine"],
+                "order_transition_cleared",
+                {"order_id": order_id, "intent_id": order["intent_id"]},
+                "order",
+                str(order_id),
+                order["intent_id"],
+            )
+            self._resolve_order_ambiguity(
+                connection,
+                str(order["engine"]),
+                str(order["intent_id"]),
+                now,
+            )
+
     def complete_order_and_checkpoint(
         self,
         order_id: int,
@@ -972,10 +1568,17 @@ class StateStore:
         now = utc_now()
         with self._transaction() as connection:
             order = connection.execute(
-                "SELECT engine, intent_id FROM orders WHERE id = ?", (order_id,)
+                "SELECT engine, slot, intent_id FROM orders WHERE id = ?", (order_id,)
             ).fetchone()
             if order is None:
                 raise KeyError(f"Ordre journalisé introuvable : {order_id}")
+            checkpoint = self._checkpoint_payload(
+                connection,
+                engine,
+                state,
+                preserve_active_transitions=False,
+                allowed_transition_intent=str(order["intent_id"]),
+            )
             if order["engine"] != engine:
                 raise ValueError("L'ordre et le checkpoint appartiennent à deux moteurs différents")
             connection.execute(
@@ -1001,9 +1604,9 @@ class StateStore:
                 ON CONFLICT(engine) DO UPDATE SET
                     payload=excluded.payload, updated_at=excluded.updated_at
                 """,
-                (engine, self._json(state), now),
+                (engine, self._json(checkpoint), now),
             )
-            self._sync_positions(connection, engine, state, now)
+            self._sync_positions(connection, engine, checkpoint, now)
             self._insert_event(
                 connection,
                 engine,
@@ -1024,7 +1627,7 @@ class StateStore:
                 connection,
                 engine,
                 "order_checkpoint",
-                self._state_event(state, {"order_id": order_id}),
+                self._state_event(checkpoint, {"order_id": order_id}),
                 "engine",
                 engine,
                 order["intent_id"],
@@ -1059,6 +1662,238 @@ class StateStore:
                     str(trade["strategy"]),
                     order["intent_id"],
                 )
+
+    def mark_order_ambiguous_and_checkpoint(
+        self,
+        order_id: int,
+        *,
+        engine: str,
+        state: Mapping[str, Any] | None,
+        error: str,
+        status: str | None = None,
+        filled_qty: float | None = None,
+        price: float | None = None,
+        fee: float | None = None,
+        broker_order_id: str | None = None,
+    ) -> str:
+        """Conserve une intention ambiguë et bloque l'état engine.
+
+        L'ordre reste PENDING, OPEN ou UNBALANCED selon son état courant. Une
+        intention ambiguë ne devient jamais REJECTED pour rendre un retry
+        possible.
+        """
+
+        now = utc_now()
+        with self._transaction() as connection:
+            row = connection.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
+            if row is None:
+                raise KeyError(f"Ordre journalisé introuvable : {order_id}")
+            if row["engine"] != engine:
+                raise ValueError("L'ordre et le moteur appartiennent à deux périmètres différents")
+            current_status = str(row["status"])
+            if current_status not in {"PENDING", "OPEN", "UNBALANCED"}:
+                return current_status
+            effective_status = current_status if status is None else str(status).upper()
+            if effective_status == "UNKNOWN":
+                effective_status = "UNBALANCED" if (filled_qty or 0.0) > 0 else current_status
+            if effective_status not in {"PENDING", "OPEN", "UNBALANCED"}:
+                raise ValueError(f"Statut ambigu invalide : {effective_status}")
+
+            connection.execute(
+                """
+                UPDATE orders
+                SET status=?, filled_qty=?, price=?, fee=?, broker_order_id=?,
+                    error=?, updated_at=?
+                WHERE id=?
+                """,
+                (
+                    effective_status,
+                    row["filled_qty"] if filled_qty is None else filled_qty,
+                    row["price"] if price is None else price,
+                    row["fee"] if fee is None else fee,
+                    row["broker_order_id"] if broker_order_id is None else broker_order_id,
+                    error,
+                    now,
+                    order_id,
+                ),
+            )
+            persisted_state: dict[str, Any] | None = None
+            if state is not None:
+                persisted_state = json.loads(self._json(state))
+                if not isinstance(persisted_state, dict):
+                    raise ValueError("État engine invalide : objet JSON attendu")
+            else:
+                state_row = connection.execute(
+                    "SELECT payload FROM engine_state WHERE engine = ?", (engine,)
+                ).fetchone()
+                if state_row is not None:
+                    loaded_state = json.loads(state_row["payload"])
+                    if not isinstance(loaded_state, dict):
+                        raise ValueError("État engine invalide : objet JSON attendu")
+                    persisted_state = loaded_state
+            if persisted_state is not None:
+                persisted_state = self._checkpoint_payload(connection, engine, persisted_state)
+                persisted_state["reconciliation_required"] = True
+                connection.execute(
+                    """
+                    INSERT INTO engine_state(engine, payload, updated_at) VALUES(?, ?, ?)
+                    ON CONFLICT(engine) DO UPDATE SET
+                        payload=excluded.payload, updated_at=excluded.updated_at
+                    """,
+                    (engine, self._json(persisted_state), now),
+                )
+                self._sync_positions(connection, engine, persisted_state, now)
+
+            self._insert_event(
+                connection,
+                engine,
+                "order_reconciliation_required",
+                {
+                    "order_id": order_id,
+                    "intent_id": row["intent_id"],
+                    "status": effective_status,
+                    "error": error,
+                },
+                "order",
+                str(order_id),
+                row["intent_id"],
+            )
+            fingerprint = f"execution:{engine}:order_ambiguous:{row['intent_id']}"
+            context = self._json(
+                {
+                    "order_id": order_id,
+                    "intent_id": row["intent_id"],
+                    "status": effective_status,
+                    "error": error,
+                }
+            )
+            connection.execute(
+                """
+                INSERT INTO incidents(
+                    fingerprint, engine, severity, kind, message, context,
+                    status, occurrences, first_seen, last_seen
+                ) VALUES(?, ?, 'CRITICAL', 'order_ambiguous', ?, ?,
+                          'OPEN', 1, ?, ?)
+                ON CONFLICT(fingerprint) DO UPDATE SET
+                    engine=excluded.engine,
+                    severity=excluded.severity,
+                    kind=excluded.kind,
+                    message=excluded.message,
+                    context=excluded.context,
+                    status='OPEN',
+                    occurrences=incidents.occurrences + 1,
+                    last_seen=excluded.last_seen,
+                    resolved_at=NULL
+                """,
+                (fingerprint, engine, error, context, now, now),
+            )
+            return effective_status
+
+    def clear_order_transition(self, order_id: int) -> None:
+        now = utc_now()
+        with self._transaction() as connection:
+            order = connection.execute(
+                "SELECT engine, slot, intent_id, reason, status FROM orders WHERE id = ?",
+                (order_id,),
+            ).fetchone()
+            if order is None:
+                raise KeyError(f"Ordre journalisé introuvable : {order_id}")
+            if str(order["status"]) in {"PENDING", "OPEN", "UNBALANCED"}:
+                raise ReconciliationRequired(
+                    f"Transition de l'ordre {order_id} encore non terminale"
+                )
+            row = connection.execute(
+                "SELECT payload FROM engine_state WHERE engine = ?",
+                (order["engine"],),
+            ).fetchone()
+            if row is None:
+                return
+            payload = json.loads(row["payload"])
+            if not isinstance(payload, dict):
+                raise ValueError("État engine invalide : objet JSON attendu")
+            slots = payload.get("slots")
+            slot_state = slots.get(order["slot"]) if isinstance(slots, dict) else None
+            if not isinstance(slot_state, dict):
+                return
+            active = slot_state.get("active_transition")
+            if not isinstance(active, dict) or active.get("intent_id") != order["intent_id"]:
+                return
+            slot_state["active_transition"] = None
+            if (
+                str(active.get("kind", "")).upper() == "ENTRY"
+                or str(order["reason"] or "").lower() == "entry"
+            ) and slot_state.get("position") is None:
+                slot_state["position_cycle_id"] = None
+            checkpoint = self._checkpoint_payload(
+                connection,
+                order["engine"],
+                payload,
+                preserve_active_transitions=False,
+                allowed_transition_intent=str(order["intent_id"]),
+            )
+            connection.execute(
+                """
+                INSERT INTO engine_state(engine, payload, updated_at) VALUES(?, ?, ?)
+                ON CONFLICT(engine) DO UPDATE SET
+                    payload=excluded.payload, updated_at=excluded.updated_at
+                """,
+                (order["engine"], self._json(checkpoint), now),
+            )
+            self._sync_positions(connection, order["engine"], checkpoint, now)
+            self._insert_event(
+                connection,
+                order["engine"],
+                "order_transition_cleared",
+                {"order_id": order_id, "intent_id": order["intent_id"]},
+                "order",
+                str(order_id),
+                order["intent_id"],
+            )
+            self._resolve_order_ambiguity(
+                connection,
+                str(order["engine"]),
+                str(order["intent_id"]),
+                now,
+            )
+
+    def clear_reconciliation_if_safe(self, engine: str) -> bool:
+        now = utc_now()
+        with self._transaction() as connection:
+            unresolved = connection.execute(
+                'SELECT 1 FROM orders WHERE engine = ? AND status IN ("PENDING", "OPEN", "UNBALANCED") AND NOT (order_type = "STOP" AND status = "OPEN") LIMIT 1',
+                (engine,),
+            ).fetchone()
+            open_ambiguity = connection.execute(
+                "SELECT 1 FROM incidents WHERE engine = ? AND kind = 'order_ambiguous' AND status = 'OPEN' LIMIT 1",
+                (engine,),
+            ).fetchone()
+            if unresolved is not None or open_ambiguity is not None:
+                return False
+            row = connection.execute(
+                "SELECT payload FROM engine_state WHERE engine = ?", (engine,)
+            ).fetchone()
+            if row is None:
+                return True
+            payload = json.loads(row["payload"])
+            if not isinstance(payload, dict):
+                raise ValueError("État engine invalide : objet JSON attendu")
+            if not payload.get("reconciliation_required"):
+                return True
+            payload["reconciliation_required"] = False
+            connection.execute(
+                "INSERT INTO engine_state(engine, payload, updated_at) VALUES(?, ?, ?) ON CONFLICT(engine) DO UPDATE SET payload=excluded.payload, updated_at=excluded.updated_at",
+                (engine, self._json(payload), now),
+            )
+            self._sync_positions(connection, engine, payload, now)
+            self._insert_event(
+                connection,
+                engine,
+                "reconciliation_cleared",
+                {"engine": engine},
+                "engine",
+                engine,
+            )
+            return True
 
     def record_observed_fill_and_checkpoint(
         self,

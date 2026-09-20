@@ -23,6 +23,8 @@ class PositionState(TypedDict):
 class TrendSlotState(TypedDict):
     cash: float
     position: PositionState | None
+    position_cycle_id: str | None
+    active_transition: dict[str, Any] | None
     stop_order_id: str | None
     stop_order_local_id: int | None
     stop_intent_id: str | None
@@ -89,6 +91,15 @@ def validate_trend_state(payload: object) -> TrendStatePayload:
     for name, value in slots.items():
         slot = _mapping(value, f"trend.{name}")
         _finite_number(slot.get("cash"), f"trend.{name}.cash")
+        cycle_id = slot.get("position_cycle_id")
+        if cycle_id is not None and (not isinstance(cycle_id, str) or not cycle_id):
+            raise ValueError(f"État trend invalide : {name}.position_cycle_id")
+        active_transition = slot.get("active_transition")
+        if active_transition is not None:
+            transition = _mapping(active_transition, f"trend.{name}.active_transition")
+            intent_id = transition.get("intent_id")
+            if not isinstance(intent_id, str) or not intent_id:
+                raise ValueError(f"État trend invalide : {name}.active_transition.intent_id")
         position = slot.get("position")
         if position is not None:
             pos = _mapping(position, f"trend.{name}.position")

@@ -24,6 +24,7 @@ import logging
 import threading
 import uuid
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -32,6 +33,8 @@ from ..domain.carry_decision import CarryAction, decide_carry_payment
 from ..notify import notify
 from ..risk import RiskConfig
 from .carry_contract import CarrySagaStatus
+from .instance_lock import EngineInstanceLock, InstanceAlreadyRunning
+from .errors import ReconciliationRequired
 from .ports import MarketDataPort, Notifier
 from .risk_service import PortfolioRiskService, PortfolioRiskState
 from .state_contract import CarryStatePayload, validate_carry_state
@@ -98,6 +101,7 @@ class CarryRunner:
             Path(legacy_state_file) if legacy_state_file is not None else self.state_path
         )
         self.store = StateStore(database_path(self.state_path))
+        self._instance_lock = EngineInstanceLock(self.store.path, "carry")
         if self.store.path.name == "btcquant.db":
             self.store.migrate_legacy_journals(self.state_path.parent)
         self.venue: MarketDataPort = venue or Venue(exchange_id, symbol_perp)
@@ -109,6 +113,8 @@ class CarryRunner:
         self.qty = 0.0  # BTC détenu (live)
         self.spot_qty = 0.0
         self.perp_qty = 0.0
+        self._state_revision = 0
+        self._checkpoint_writes_disabled = False
         self.last_funding_ts: pd.Timestamp | None = None
         self._load_state()
         pending = self.store.pending_orders("carry")
@@ -136,7 +142,8 @@ class CarryRunner:
 
     def _load_state(self) -> None:
         self.store.migrate_legacy_json("carry", self.legacy_state_path)
-        stored = self.store.load_engine_state("carry")
+        stored, revision = self.store.load_engine_state_with_revision("carry")
+        self._state_revision = revision
         raw = validate_carry_state(stored) if stored is not None else None
         if raw is None:
             return
@@ -174,7 +181,19 @@ class CarryRunner:
         }
 
     def _save_state(self) -> None:
-        self.store.save_engine_state("carry", self._state_payload())
+        self._state_revision = self.store.save_engine_state(
+            "carry",
+            self._state_payload(),
+            expected_revision=self._state_revision,
+        )
+
+    def _refresh_state_revision(self) -> None:
+        _, revision = self.store.load_engine_state_with_revision("carry")
+        self._state_revision = revision
+
+    def _complete_order_and_checkpoint(self, *args: Any, **kwargs: Any) -> None:
+        self.store.complete_order_and_checkpoint(*args, **kwargs)
+        self._refresh_state_revision()
 
     def _recent_funding(self) -> pd.Series:
         """Historique couvrant À LA FOIS le lissage et tout l'arriéré non comptabilisé.
@@ -216,11 +235,12 @@ class CarryRunner:
             # position legacy était réellement ouverte. Initialiser au dernier
             # paiement est conservateur et évite de créditer un historique fictif.
             self.last_funding_ts = funding.index[-1]
-            self.store.save_engine_state(
+            self._state_revision = self.store.save_engine_state(
                 "carry",
                 self._state_payload(),
                 event_type="funding_checkpoint_initialized",
                 event_payload={"last_funding_ts": self.last_funding_ts.isoformat()},
+                expected_revision=self._state_revision,
             )
             return
 
@@ -242,7 +262,7 @@ class CarryRunner:
             self.equity += gain
             self.last_funding_ts = payment_ts
             try:
-                self.store.save_engine_state(
+                self._state_revision = self.store.save_engine_state(
                     "carry",
                     self._state_payload(),
                     event_payload={
@@ -251,7 +271,13 @@ class CarryRunner:
                         "rate": rate,
                         "gain": gain,
                     },
+                    expected_revision=self._state_revision,
                 )
+            except ReconciliationRequired:
+                self.equity = previous_equity
+                self.last_funding_ts = previous_checkpoint
+                self._load_state()
+                return
             except Exception:
                 self.equity = previous_equity
                 self.last_funding_ts = previous_checkpoint
@@ -295,7 +321,7 @@ class CarryRunner:
             if result.status == CarrySagaStatus.UNBALANCED:
                 self.in_position = result.spot_qty > 0 or result.perp_qty > 0
                 self.execution_state = "UNBALANCED"
-                self.store.complete_order_and_checkpoint(
+                self._complete_order_and_checkpoint(
                     order_id,
                     engine="carry",
                     state=self._state_payload(),
@@ -310,7 +336,7 @@ class CarryRunner:
             if result.status == CarrySagaStatus.REJECTED:
                 self.in_position = False
                 self.execution_state = "FLAT"
-                self.store.complete_order_and_checkpoint(
+                self._complete_order_and_checkpoint(
                     order_id,
                     engine="carry",
                     state=self._state_payload(),
@@ -327,7 +353,7 @@ class CarryRunner:
         self.in_position = True
         self.execution_state = "OPEN"
         if order_id is not None:
-            self.store.complete_order_and_checkpoint(
+            self._complete_order_and_checkpoint(
                 order_id,
                 engine="carry",
                 state=self._state_payload(),
@@ -367,7 +393,7 @@ class CarryRunner:
             self.qty = result.neutral_qty
             if result.status == CarrySagaStatus.UNBALANCED:
                 self.execution_state = "UNBALANCED"
-                self.store.complete_order_and_checkpoint(
+                self._complete_order_and_checkpoint(
                     order_id,
                     engine="carry",
                     state=self._state_payload(),
@@ -384,7 +410,7 @@ class CarryRunner:
             if result.status in (CarrySagaStatus.REJECTED, CarrySagaStatus.PARTIAL):
                 self.execution_state = "OPEN"
                 self.in_position = self.qty > 0
-                self.store.complete_order_and_checkpoint(
+                self._complete_order_and_checkpoint(
                     order_id,
                     engine="carry",
                     state=self._state_payload(),
@@ -401,7 +427,7 @@ class CarryRunner:
         self.in_position = False
         self.execution_state = "FLAT"
         if self.live_broker is not None:
-            self.store.complete_order_and_checkpoint(
+            self._complete_order_and_checkpoint(
                 order_id,
                 engine="carry",
                 state=self._state_payload(),
@@ -509,23 +535,50 @@ class CarryRunner:
 
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
         stop_event = stop_event or threading.Event()
-        mode = "LIVE" if self.live_broker is not None else "PAPER"
-        log.info(
-            "Carry runner (%s) démarré : %s, levier %.1fx, entrée >%.0f%%/an, sortie <%.0f%%/an",
-            mode,
-            self.symbol,
-            self.leverage,
-            self.enter_ann * 100,
-            self.exit_ann * 100,
-        )
+        instance_lock = getattr(self, "_instance_lock", None)
+        if instance_lock is not None and not instance_lock.acquire():
+            raise InstanceAlreadyRunning(f"Instance carry déjà active : {instance_lock.path}")
         try:
+            if instance_lock is not None:
+                # Le second runner recharge après avoir obtenu l’ownership :
+                # son equity ne peut donc pas écraser un checkpoint concurrent.
+                self._load_state()
+            mode = "LIVE" if self.live_broker is not None else "PAPER"
+            log.info(
+                "Carry runner (%s) démarré : %s, levier %.1fx, entrée >%.0f%%/an, sortie <%.0f%%/an",
+                mode,
+                self.symbol,
+                self.leverage,
+                self.enter_ann * 100,
+                self.exit_ann * 100,
+            )
             while not stop_event.is_set():
                 try:
                     self._tick()
+                except ReconciliationRequired:
+                    self._checkpoint_writes_disabled = True
+                    log.critical(
+                        "Carry arrêté fail-closed : réconciliation du checkpoint requise"
+                    )
+                    raise
                 except Exception:
-                    log.exception("Erreur carry (on continue)")
+                    # Une transaction financière peut avoir réussi avant
+                    # l’exception. Continuer avec la mémoire locale serait
+                    # susceptible de réécrire une equity périmée.
+                    self._checkpoint_writes_disabled = True
+                    log.exception("Erreur carry : arrêt fail-closed")
+                    break
                 stop_event.wait(TICK_SECONDS)
         finally:
-            self._save_state()
-            self._append_equity()
-            log.info("Carry arrêté proprement ; checkpoint final enregistré")
+            try:
+                if not getattr(self, "_checkpoint_writes_disabled", False):
+                    self._save_state()
+                    self._append_equity()
+                    log.info("Carry arrêté proprement ; checkpoint final enregistré")
+                else:
+                    log.critical(
+                        "Carry arrêté sans checkpoint final après une erreur : intervention requise"
+                    )
+            finally:
+                if instance_lock is not None:
+                    instance_lock.release()

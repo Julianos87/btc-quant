@@ -8,6 +8,7 @@ l'ignore et exécute au marché.
 from __future__ import annotations
 
 import logging
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -22,6 +23,7 @@ class Fill:
     qty: float
     fee: float
     broker_order_id: str | None = None
+    status: str | None = None
 
 
 @dataclass(frozen=True)
@@ -48,11 +50,30 @@ class ProtectiveOrderSnapshot:
 
 
 class Broker(ABC):
+    #: True uniquement pour un simulateur sans effet externe durable.
+    #: Un broker réel peut ne pas proposer de lookup ou de stops et doit tout
+    #: de même rester traité en mode fail-closed.
+    is_paper: bool = False
     #: True si le broker pose de vrais ordres stop côté exchange ;
     #: sinon le runner surveille un stop "logiciel" à chaque tick.
     supports_stop_orders: bool = False
     supports_order_lookup: bool = False
     supports_position_reconciliation: bool = False
+
+    def normalize_market_quantity(
+        self,
+        qty: float,
+        ref_price: float,
+        *,
+        reduce_only: bool = False,
+    ) -> float:
+        """Retourne la quantité canonique enregistrée avant émission."""
+
+        del ref_price, reduce_only
+        value = float(qty)
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("qty doit être un nombre fini strictement positif")
+        return value
 
     @abstractmethod
     def market_buy(self, qty: float, ref_price: float) -> Fill: ...
@@ -161,6 +182,7 @@ class Broker(ABC):
 class PaperBroker(Broker):
     """Adaptateur paper autour du simulateur d'exécution commun."""
 
+    is_paper = True
     supports_stop_orders = False
 
     def __init__(
@@ -220,4 +242,9 @@ class PaperBroker(Broker):
             result.price,
             result.fee,
         )
-        return Fill(price=result.price, qty=result.qty, fee=result.fee)
+        return Fill(
+            price=result.price,
+            qty=result.qty,
+            fee=result.fee,
+            status=str(result.status),
+        )
