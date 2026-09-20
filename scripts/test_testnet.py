@@ -20,6 +20,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import ccxt
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
@@ -241,12 +243,57 @@ def _assert_smoke_cleanup(store: StateStore, broker: CcxtBroker) -> None:
         )
 
 
+def _is_certain_stop_rejection(error: BaseException) -> bool:
+    """Return whether the error proves that no stop reached the exchange."""
+
+    return isinstance(error, (ValueError, RuntimeError, ccxt.InvalidOrder))
+
+
+def _stop_status(snapshot: Any) -> str:
+    raw_status = getattr(snapshot, "status", None)
+    return str(getattr(raw_status, "value", raw_status)).upper()
+
+
+def _persist_ambiguous_stop(
+    store: StateStore,
+    local_stop_id: int,
+    *,
+    status: str,
+    broker_order_id: str | None,
+    error: str,
+) -> None:
+    known_statuses = {
+        "OPEN",
+        "PARTIAL_OPEN",
+        "FILLED",
+        "PARTIAL_TERMINAL",
+        "CANCELED",
+        "REJECTED",
+        "EXPIRED",
+        "UNKNOWN",
+    }
+    external_state = status if status in known_statuses else "UNKNOWN"
+    is_active = external_state in {"OPEN", "PARTIAL_OPEN"}
+    store.complete_order(
+        local_stop_id,
+        status="OPEN" if is_active else "PENDING",
+        broker_order_id=broker_order_id,
+        error=error,
+        external_state=external_state,
+        local_state="AWAITING_EXTERNAL" if is_active else "PENDING_RECONCILIATION",
+    )
+
+
 def _finalize_smoke_stop(
     store: StateStore,
     broker: CcxtBroker,
     local_stop_id: int | None,
     stop_id: str | None,
+    *,
+    stop_intent: str | None = None,
+    placement_ambiguous: bool = False,
 ) -> None:
+
     if stop_id is not None:
         broker.cancel_stop(stop_id)
         if local_stop_id is not None:
@@ -255,12 +302,93 @@ def _finalize_smoke_stop(
                 status="CANCELED",
                 broker_order_id=stop_id,
             )
-    elif local_stop_id is not None:
+        return
+    if local_stop_id is None:
+        return
+    if not placement_ambiguous:
         store.complete_order(
             local_stop_id,
             status="REJECTED",
             error="Stop testnet rejeté avant toute émission externe",
         )
+        return
+
+    if stop_intent is None:
+        _persist_ambiguous_stop(
+            store,
+            local_stop_id,
+            status="UNKNOWN",
+            broker_order_id=None,
+            error="Stop testnet ambigu : identifiant client absent, réconciliation requise",
+        )
+        raise RuntimeError("Stop testnet ambigu : réconciliation requise")
+
+    snapshot = broker.lookup_order(stop_intent)
+    if snapshot is None:
+        _persist_ambiguous_stop(
+            store,
+            local_stop_id,
+            status="UNKNOWN",
+            broker_order_id=None,
+            error="Stop testnet ambigu : lookup absent, réconciliation requise",
+        )
+        raise RuntimeError("Stop testnet ambigu : lookup absent, réconciliation requise")
+
+    status = _stop_status(snapshot)
+    broker_order_id = getattr(snapshot, "broker_order_id", None)
+    if status in {"OPEN", "PARTIAL_OPEN"}:
+        _persist_ambiguous_stop(
+            store,
+            local_stop_id,
+            status=status,
+            broker_order_id=broker_order_id,
+            error="Stop testnet retrouvé après réponse ambiguë; annulation en cours",
+        )
+        if broker_order_id is None:
+            raise RuntimeError("Stop testnet ambigu : identifiant externe absent")
+        broker.cancel_stop(broker_order_id)
+        snapshot = broker.lookup_order(stop_intent)
+        if snapshot is None:
+            _persist_ambiguous_stop(
+                store,
+                local_stop_id,
+                status="UNKNOWN",
+                broker_order_id=broker_order_id,
+                error="Stop testnet annulé sans preuve de terminalité, réconciliation requise",
+            )
+            raise RuntimeError("Stop testnet ambigu : terminalité d'annulation absente")
+        status = _stop_status(snapshot)
+        broker_order_id = getattr(snapshot, "broker_order_id", None) or broker_order_id
+
+    if status in {"CANCELED", "EXPIRED"}:
+        store.complete_order(
+            local_stop_id,
+            status="CANCELED",
+            broker_order_id=broker_order_id,
+            external_state=status,
+        )
+        return
+    if status == "REJECTED":
+        store.complete_order(
+            local_stop_id,
+            status="REJECTED",
+            broker_order_id=broker_order_id,
+            external_state=status,
+            error="Stop testnet rejeté confirmé par lookup",
+        )
+        return
+
+    _persist_ambiguous_stop(
+        store,
+        local_stop_id,
+        status=status,
+        broker_order_id=broker_order_id,
+        error=(
+            f"Stop testnet ambigu : état externe {status!r}; "
+            "réconciliation requise avant toute reprise"
+        ),
+    )
+    raise RuntimeError(f"Stop testnet ambigu : état externe {status!r}")
 
 
 def _cleanup_smoke_position(
@@ -336,6 +464,8 @@ def main() -> None:
         quantity = _smoke_quantity(broker, price)
         stop_id: str | None = None
         local_stop_id: int | None = None
+        stop_intent: str | None = None
+        stop_placement_ambiguous = False
         close_checkpoint: str | None = None
         position_generation: str | None = None
         next_close_sequence: int | None = None
@@ -385,13 +515,18 @@ def main() -> None:
                 "p1_smoke_stop",
                 reference_price=entry_price * 0.95,
             )
-            stop_id = broker.place_stop(
-                entry_qty,
-                entry_price * 0.95,
-                direction=1,
-                client_order_id=stop_intent,
-            )
+            try:
+                stop_id = broker.place_stop(
+                    entry_qty,
+                    entry_price * 0.95,
+                    direction=1,
+                    client_order_id=stop_intent,
+                )
+            except Exception as error:
+                stop_placement_ambiguous = not _is_certain_stop_rejection(error)
+                raise
             if stop_id is None:
+                stop_placement_ambiguous = True
                 raise RuntimeError("Stop testnet créé sans identifiant récupérable")
             stop = broker.protective_order_snapshot(stop_id)
             if stop.status != "OPEN" or abs(stop.requested_qty - entry_qty) > 1e-9:
@@ -443,7 +578,14 @@ def main() -> None:
                 raise RuntimeError("Clôture reduce-only non exécutée")
             print(f"PASS clôture reduce-only : {close.qty:.8f} BTC")
         finally:
-            _finalize_smoke_stop(store, broker, local_stop_id, stop_id)
+            _finalize_smoke_stop(
+                store,
+                broker,
+                local_stop_id,
+                stop_id,
+                stop_intent=stop_intent,
+                placement_ambiguous=stop_placement_ambiguous,
+            )
             _cleanup_smoke_position(
                 store=store,
                 broker=broker,

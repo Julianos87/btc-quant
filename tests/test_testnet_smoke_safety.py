@@ -195,6 +195,84 @@ def test_stop_rejection_path_performs_one_reduce_only_cleanup(tmp_path: Path) ->
     assert broker.position == 0.0
 
 
+def test_ambiguous_stop_without_lookup_proof_stays_unresolved(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "smoke.db")
+    store.save_engine_state("trend", _open_state())
+    local_stop_id = store.begin_order(
+        "trend",
+        test_testnet.SMOKE_SLOT,
+        "ambiguous-stop",
+        "STOP",
+        "SELL",
+        0.1,
+        "p1_smoke_stop",
+    )
+    lookup_calls: list[str] = []
+    broker = SimpleNamespace(
+        lookup_order=lambda intent: lookup_calls.append(intent) or None,
+    )
+
+    with pytest.raises(RuntimeError, match="lookup absent"):
+        test_testnet._finalize_smoke_stop(
+            store,
+            broker,
+            local_stop_id,
+            None,
+            stop_intent="ambiguous-stop",
+            placement_ambiguous=True,
+        )
+
+    assert lookup_calls == ["ambiguous-stop"]
+    order = store.read_orders("trend")[0]
+    assert order["status"] == "PENDING"
+    assert order["local_state"] == "PENDING_RECONCILIATION"
+    assert order["external_state"] == "UNKNOWN"
+    assert order["broker_order_id"] is None
+    assert store.unresolved_orders("trend")
+
+
+def test_ambiguous_stop_is_canceled_only_after_lookup_confirmation(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "smoke.db")
+    store.save_engine_state("trend", _open_state())
+    local_stop_id = store.begin_order(
+        "trend",
+        test_testnet.SMOKE_SLOT,
+        "ambiguous-stop-cancel",
+        "STOP",
+        "SELL",
+        0.1,
+        "p1_smoke_stop",
+    )
+    snapshots = iter(
+        [
+            SimpleNamespace(status="OPEN", broker_order_id="remote-stop"),
+            SimpleNamespace(status="CANCELED", broker_order_id="remote-stop"),
+        ]
+    )
+    lookups: list[str] = []
+    cancellations: list[str] = []
+    broker = SimpleNamespace(
+        lookup_order=lambda intent: lookups.append(intent) or next(snapshots),
+        cancel_stop=lambda order_id: cancellations.append(order_id),
+    )
+
+    test_testnet._finalize_smoke_stop(
+        store,
+        broker,
+        local_stop_id,
+        None,
+        stop_intent="ambiguous-stop-cancel",
+        placement_ambiguous=True,
+    )
+
+    assert lookups == ["ambiguous-stop-cancel", "ambiguous-stop-cancel"]
+    assert cancellations == ["remote-stop"]
+    order = store.read_orders("trend")[0]
+    assert order["status"] == "CANCELED"
+    assert order["external_state"] == "CANCELED"
+    assert store.unresolved_orders("trend") == []
+
+
 def test_smoke_uses_the_engine_testnet_lock_before_any_submission(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     state_dir.mkdir()
