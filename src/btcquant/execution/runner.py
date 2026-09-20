@@ -189,6 +189,8 @@ class LiveRunner:
         self.reconciliation_required = False
         self.last_funding_ts: pd.Timestamp | None = None
         self._last_position_reconciliation_at: float | None = None
+        self._startup_lock = EngineInstanceLock(self.store.path, "trend")
+        self._startup_lock.acquire()
         self._load_state()
         if self.reconciliation_required:
             raise ReconciliationRequired(
@@ -243,6 +245,8 @@ class LiveRunner:
             # constructor load. Refresh memory from that durable state before
             # any strategy decision can be evaluated.
             self._load_state()
+
+        self._startup_lock.release()
 
     # ── persistance ──────────────────────────────────────────────────────────
     def _load_state(self) -> None:
@@ -625,21 +629,37 @@ class LiveRunner:
         order_id: int,
     ) -> str:
         replacement_id = transition.get("replacement_stop_id")
-        if transition["phase"] != "PLACING":
+        phase = transition["phase"]
+        if phase in {"SUBMITTING", "SUBMISSION_AMBIGUOUS"}:
+            try:
+                snapshot = self._lookup_stop_placement(intent_id)
+            except Exception as error:
+                self._stop_transition_pending(
+                    slot,
+                    "Recherche du stop ambigu interrompue",
+                    error,
+                )
+            if snapshot is None:
+                self._stop_transition_pending(
+                    slot,
+                    "Stop potentiellement soumis mais toujours introuvable",
+                )
+        elif phase != "PLACING":
             if replacement_id is None:
                 self._stop_transition_pending(
                     slot,
                     "Phase de stop sans identifiant de remplacement",
                 )
             return str(replacement_id)
-        try:
-            snapshot = self._lookup_stop_placement(intent_id)
-        except Exception as error:
-            self._stop_transition_pending(
-                slot,
-                "Recherche du stop protecteur interrompue",
-                error,
-            )
+        else:
+            try:
+                snapshot = self._lookup_stop_placement(intent_id)
+            except Exception as error:
+                self._stop_transition_pending(
+                    slot,
+                    "Recherche du stop protecteur interrompue",
+                    error,
+                )
         if snapshot is not None:
             if (
                 snapshot.filled_qty > 0
@@ -660,6 +680,7 @@ class LiveRunner:
                 )
             replacement_id = snapshot.broker_order_id
         if replacement_id is None:
+            self._persist_stop_phase(slot, "SUBMITTING")
             try:
                 replacement_id = self.broker.place_stop(
                     float(transition["qty"]),
@@ -668,6 +689,7 @@ class LiveRunner:
                     client_order_id=intent_id,
                 )
             except Exception as placement_error:
+                self._persist_stop_phase(slot, "SUBMISSION_AMBIGUOUS")
                 try:
                     snapshot = self._lookup_stop_placement(intent_id)
                 except Exception as lookup_error:
@@ -1009,6 +1031,9 @@ class LiveRunner:
         entry_direction: int | None = None,
         entry_stop_price: float | None = None,
     ) -> SubmittedOrder:
+        qty = self.broker.normalize_market_quantity(
+            qty, ref_price, reduce_only=reduce_only
+        )
         identity = LogicalOrderIdentity(
             engine="trend",
             slot=slot.strategy.name,
@@ -1048,6 +1073,13 @@ class LiveRunner:
                 entry_direction=entry_direction,
                 entry_stop_price=entry_stop_price,
             )
+        # Reuse the durable plan exactly on retries.
+        qty = application_plan.requested_qty
+        ref_price = application_plan.reference_price
+        side = application_plan.side
+        reason = application_plan.reason
+        reduce_only = application_plan.reduce_only
+
         submitted = self.order_service.submit_market(
             SubmitMarketCommand(
                 engine="trend",
@@ -1170,9 +1202,17 @@ class LiveRunner:
         }:
             # The durable E3 state is the accounting authority. In
             # particular, an EXIT must clear an obsolete in-memory Position.
-            self._load_state()
-            self.store.finalize_paper_order_atomically(submitted.order_id)
-            self._load_state()
+            try:
+                self._load_state()
+                self.store.finalize_paper_order_atomically(submitted.order_id)
+                self._load_state()
+            except ReconciliationRequired:
+                raise
+            except Exception as error:
+                raise ReconciliationRequired(
+                    "État PAPER appliqué mais relecture/finalisation impossible; "
+                    f"arrêt fail-closed pour empêcher un checkpoint périmé: {error}"
+                ) from error
         return reconciliation
 
     def _reconcile_external_submission(self, submitted: SubmittedOrder) -> None:
@@ -1518,7 +1558,14 @@ class LiveRunner:
                 "arrêt fail-closed"
             ) from error
 
-    def _process_bar(self, slot: StrategySlot, execution_price: float) -> BarDecision | None:
+    def _process_bar(
+        self,
+        slot: StrategySlot,
+        execution_price: float,
+        *,
+        frame: pd.DataFrame | None = None,
+        target_ts: pd.Timestamp | None = None,
+    ) -> BarDecision | None:
         """Décide sur la dernière clôture et exécute au prix de marché courant.
 
         Le backtest remplit les décisions de clôture à l'ouverture de ``t+1``.
@@ -1528,10 +1575,16 @@ class LiveRunner:
 
         if execution_price <= 0:
             raise ValueError("execution_price doit être strictement positif")
-        df = self._fetch_frame(slot.strategy)
+        df = frame if frame is not None else self._fetch_frame(slot.strategy)
         if df.empty:
             return None
-        last_ts = df.index[-1]
+        if target_ts is None:
+            last_ts = df.index[-1]
+        else:
+            eligible = df.index[df.index <= target_ts]
+            if len(eligible) == 0:
+                return None
+            last_ts = eligible[-1]
         if slot.last_bar_ts is not None and last_ts <= slot.last_bar_ts:
             return None  # pas de nouvelle barre clôturée
         if slot.position is not None and not self.broker.supports_stop_orders:
@@ -1545,7 +1598,7 @@ class LiveRunner:
             else:
                 entry_time = entry_time.tz_convert("UTC")
             if entry_time <= last_ts:
-                raw_row = df.iloc[-1]
+                raw_row = df.loc[last_ts]
                 stop_reference = ExecutionSimulator.stop_trigger_price(
                     direction=position.direction,
                     open_price=float(raw_row["open"]),
@@ -1578,10 +1631,10 @@ class LiveRunner:
         try:
             # toujours en équivalent 8 h (convention des filtres et du backtest),
             # quelle que soit la périodicité native de la venue
-            data.loc[data.index[-1], "funding"] = self.venue.funding_rate_8h()
+            data.loc[last_ts, "funding"] = self.venue.funding_rate_8h()
         except Exception as e:
             if self.funding_rate_8h:
-                data.loc[data.index[-1], "funding"] = self.funding_rate_8h
+                data.loc[last_ts, "funding"] = self.funding_rate_8h
             else:
                 funding_available = False
                 log.warning(
@@ -1593,7 +1646,7 @@ class LiveRunner:
             or slot.strategy.params.get("funding_short_min") is not None
         )
         allow_new_exposure = funding_available or not uses_funding_filter
-        row = data.iloc[-1]
+        row = data.loc[last_ts]
 
         if slot.position is not None:
             pos = slot.position
@@ -1645,7 +1698,7 @@ class LiveRunner:
                     (float(row["_rvol"]) if pd.notna(row.get("_rvol")) else None),
                     decision_checkpoint=last_ts.isoformat(),
                 )
-            elif pyramid_event and allow_new_exposure:
+            elif pyramid_event and not self.daily_lockout and allow_new_exposure:
                 self._pyramid_position(
                     slot,
                     row,
@@ -1655,7 +1708,7 @@ class LiveRunner:
                 )
             elif pyramid_event:
                 log.warning(
-                    "[%s] Renfort ignoré : funding venue indisponible",
+                    "[%s] Renfort ignoré : lockout journalier ou funding venue indisponible",
                     slot.strategy.name,
                 )
             return decision
@@ -1862,8 +1915,40 @@ class LiveRunner:
                 tz="UTC",
             )
             previous_bar_start = current_bar_start - pd.Timedelta(seconds=timeframe_seconds)
-            if slot.last_bar_ts is None or slot.last_bar_ts < previous_bar_start:
-                self._process_bar(slot, price)
+            if slot.last_bar_ts is not None and slot.last_bar_ts >= previous_bar_start:
+                continue
+            frame = self._fetch_frame(slot.strategy)
+            if frame.empty:
+                continue
+            if slot.last_bar_ts is None:
+                self._process_bar(slot, price, frame=frame, target_ts=frame.index[-1])
+                continue
+            checkpoint = pd.Timestamp(slot.last_bar_ts)
+            if checkpoint.tzinfo is None:
+                checkpoint = checkpoint.tz_localize("UTC")
+            else:
+                checkpoint = checkpoint.tz_convert("UTC")
+            if (
+                slot.position is not None
+                and not self.broker.supports_stop_orders
+                and checkpoint < frame.index[0]
+                and checkpoint < previous_bar_start
+            ):
+                self._require_manual_reconciliation(
+                    "Historique PAPER insuffisant pour reconstituer les stops manqués",
+                    slot=slot,
+                    context={
+                        "checkpoint": checkpoint.isoformat(),
+                        "oldest_available_bar": frame.index[0].isoformat(),
+                    },
+                    incident_fingerprint=(
+                        f"execution:trend:paper_history_gap:{slot.strategy.name}"
+                    ),
+                    incident_kind="paper_history_gap",
+                )
+            due = frame.index[(frame.index > checkpoint) & (frame.index <= previous_bar_start)]
+            for bar_ts in due:
+                self._process_bar(slot, price, frame=frame, target_ts=bar_ts)
 
     def _run_cycle(self, price: float, stop_event: threading.Event) -> bool:
         self._apply_funding_payments(price)

@@ -145,6 +145,18 @@ class Broker(ABC):
     supports_order_lookup: bool = False
     supports_position_reconciliation: bool = False
 
+    def normalize_market_quantity(
+        self,
+        qty: float,
+        ref_price: float,
+        *,
+        reduce_only: bool = False,
+    ) -> float:
+        """Return the canonical quantity persisted before market submission."""
+        del ref_price, reduce_only
+        return exchange_float(qty, name="quantité demandée", positive=True)
+
+
     def venue_client_order_id(self, intent_id: str) -> str:
         """Return the venue-facing client id for one durable local intent."""
 

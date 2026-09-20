@@ -413,7 +413,7 @@ def test_crash_after_remote_create_reuses_the_same_intent(tmp_path):
     assert pending["status"] == "PENDING"
     persisted = runner.store.load_engine_state("trend")
     assert persisted is not None
-    assert persisted["slots"]["stop-saga"]["stop_transition"]["phase"] == "PLACING"
+    assert persisted["slots"]["stop-saga"]["stop_transition"]["phase"] == "SUBMITTING"
 
     broker.crash_after_create = False
     restarted, restarted_slot = _runner(database, broker)
@@ -452,10 +452,13 @@ def test_unconfirmed_placement_stops_runner_then_recovers(tmp_path):
     )
 
     broker.timeout_before_create = False
-    restarted, restarted_slot = _restarted_runner(database, broker)
+    with pytest.raises(ReconciliationRequired, match="Stop potentiellement soumis"):
+        _restarted_runner(database, broker)
 
-    assert restarted_slot.stop_order_id == "remote-stop-1"
-    assert OperationalStateReader(restarted.store.path).read_incidents(open_only=True) == []
+    assert len(broker.place_calls) == 1
+    persisted = runner.store.load_engine_state("trend")
+    assert persisted is not None
+    assert persisted["slots"]["stop-saga"]["stop_transition"]["phase"] == "SUBMISSION_AMBIGUOUS"
 
 
 def test_crash_after_confirmation_resumes_only_the_cancel(tmp_path):

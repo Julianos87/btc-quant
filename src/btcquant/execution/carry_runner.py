@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from contextlib import nullcontext
 import uuid
 from pathlib import Path
 
@@ -46,6 +47,7 @@ from ..notify import notify
 from ..risk import RiskConfig
 from .carry_contract import CarrySagaStatus
 from .errors import AccountingIdentityCollision
+from .instance_lock import EngineInstanceLock
 from .ports import MarketDataPort, Notifier
 from .risk_service import PortfolioRiskService, PortfolioRiskState
 from .state_contract import CarryStatePayload, validate_carry_state
@@ -140,6 +142,8 @@ class CarryRunner:
         self.last_funding_ts: pd.Timestamp | None = None
         self.accounting_uncertain = False
         self.accounting_uncertainty_reason: str | None = None
+        self._startup_lock = EngineInstanceLock(self.store.path, "carry")
+        self._startup_lock.acquire()
         self._load_state()
         pending = self.store.pending_orders("carry")
         if pending and self.live_broker is not None:
@@ -165,6 +169,7 @@ class CarryRunner:
             raise RuntimeError("Carry en incertitude comptable : réconciliation manuelle requise")
         if self.live_broker is not None and not self.live_broker.reconcile():
             raise RuntimeError("Réconciliation carry échouée : runner arrêté (fail-closed)")
+        self._startup_lock.release()
 
     def _load_state(self) -> None:
         self.store.migrate_legacy_json("carry", self.legacy_state_path)
@@ -616,7 +621,10 @@ class CarryRunner:
                 self.last_funding_ts = previous_checkpoint
                 raise
             if result == "replayed":
-                self.equity = previous_equity
+                # Another owner committed this event first; reload the
+                # authoritative checkpoint before any later save.
+                self._load_state()
+                break
             checkpoint = payment_ts
             if self.in_position:
                 log.info(
@@ -1021,23 +1029,27 @@ class CarryRunner:
 
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
         stop_event = stop_event or threading.Event()
-        mode = "LIVE" if self.live_broker is not None else "PAPER"
-        log.info(
-            "Carry runner (%s) démarré : %s, levier %.1fx, entrée >%.0f%%/an, sortie <%.0f%%/an",
-            mode,
-            self.symbol,
-            self.leverage,
-            self.enter_ann * 100,
-            self.exit_ann * 100,
-        )
-        try:
-            while not stop_event.is_set():
-                try:
-                    self._tick()
-                except Exception:
-                    log.exception("Erreur carry (on continue)")
-                stop_event.wait(TICK_SECONDS)
-        finally:
-            self._save_state()
-            self._append_equity()
-            log.info("Carry arrêté proprement ; checkpoint final enregistré")
+        lock = EngineInstanceLock(self.store.path, "carry") if hasattr(self, "store") else nullcontext()
+        with lock:
+            if hasattr(self, "store"):
+                self._load_state()
+            mode = "LIVE" if self.live_broker is not None else "PAPER"
+            log.info(
+                "Carry runner (%s) démarré : %s, levier %.1fx, entrée >%.0f%%/an, sortie <%.0f%%/an",
+                mode,
+                self.symbol,
+                self.leverage,
+                self.enter_ann * 100,
+                self.exit_ann * 100,
+            )
+            try:
+                while not stop_event.is_set():
+                    try:
+                        self._tick()
+                    except Exception:
+                        log.exception("Erreur carry (on continue)")
+                    stop_event.wait(TICK_SECONDS)
+            finally:
+                self._save_state()
+                self._append_equity()
+                log.info("Carry arrêté proprement ; checkpoint final enregistré")
