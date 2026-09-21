@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -17,9 +18,11 @@ from btcquant.domain.execution import (
 from btcquant.execution.broker import PaperBroker
 from btcquant.execution.errors import ReconciliationRequired
 from btcquant.execution.margin import SharedCrossMarginModel
+from btcquant.execution.financial_application_plan import sha256_json
 from btcquant.execution.runner import LiveRunner, StrategySlot
+from btcquant.execution.state_store import StateStore
 from btcquant.risk import RiskConfig
-from btcquant.strategies.base import Strategy
+from btcquant.strategies.base import Position, Strategy
 
 
 class FlatStrategy(Strategy):
@@ -67,6 +70,60 @@ def _timeline(slot: StrategySlot, items: list[tuple[str, str, float, int]]) -> N
         }
         for timestamp, intent, qty, direction in items
     ]
+
+
+def test_restart_reconstructs_legacy_position_timeline_from_financial_ledger(tmp_path, monkeypatch):
+    first = _runner(tmp_path)
+    entry_time = pd.Timestamp("2026-09-21T10:00:00Z")
+    first.slots[0].position = Position(
+        entry_time=entry_time,
+        entry_price=100.0,
+        qty=2.0,
+        stop_price=90.0,
+        direction=1,
+        best_close=100.0,
+        initial_qty=2.0,
+    )
+    first._save_state()
+    stored = first.store.load_engine_state("trend")
+    assert stored is not None
+    first._startup_lock.release()
+
+    application = {
+        "application_key": "application-legacy-entry",
+        "intent_id": "intent-legacy-entry",
+        "transition_type": "ENTER_LONG",
+        "economic_effect_at": entry_time.isoformat(),
+        "state_after_sha256": sha256_json(stored),
+        "result_payload": json.dumps({"state_after_payload": stored}),
+        "slot": "realism",
+        "position_generation": (f"entry={entry_time.isoformat()}|initial_qty=2"),
+        "entry_direction": 1,
+        "planned_effect_at": entry_time.isoformat(),
+    }
+    monkeypatch.setattr(
+        StateStore,
+        "read_financial_position_transitions",
+        lambda _store, _engine: [application],
+    )
+
+    restarted = _runner(tmp_path)
+    try:
+        assert restarted.slots[0].position_timeline == [
+            {
+                "effective_at": entry_time.isoformat(),
+                "intent_id": "intent-legacy-entry",
+                "qty": 2.0,
+                "direction": 1,
+                "generation": "entry=2026-09-21T10:00:00+00:00|initial_qty=2",
+            }
+        ]
+        assert any(
+            event["event_type"] == "position_timeline_reconstructed"
+            for event in restarted.store.read_events("trend")
+        )
+    finally:
+        restarted._startup_lock.release()
 
 
 def test_funding_replay_uses_event_prices_and_exposure_at_each_timestamp(tmp_path, monkeypatch):

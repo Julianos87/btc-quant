@@ -5142,6 +5142,34 @@ class StateStore:
             rows = connection.execute(query, tuple(params)).fetchall()
         return [dict(row) for row in rows]
 
+    def read_financial_position_transitions(self, engine: str) -> list[dict[str, Any]]:
+        """Read committed financial transitions needed for exposure replay."""
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    f.rowid AS application_rowid,
+                    f.application_key,
+                    f.intent_id,
+                    f.transition_type,
+                    f.economic_effect_at,
+                    f.state_after_sha256,
+                    f.result_payload,
+                    p.slot,
+                    p.position_generation,
+                    p.entry_direction,
+                    p.planned_effect_at
+                FROM financial_fill_applications AS f
+                JOIN financial_application_plans AS p
+                  ON p.plan_key = f.plan_key
+                WHERE p.engine = ?
+                ORDER BY f.economic_effect_at, f.rowid
+                """,
+                (engine,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def record_incident(
         self,
         fingerprint: str,

@@ -20,6 +20,7 @@ import hashlib
 import json
 import logging
 import threading
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -58,7 +59,11 @@ from .reconciliation_coordinator import (
     ReconciliationResult,
     ReconciliationStatus,
 )
-from .financial_application_plan import FinancialApplicationPlan, sha256_json
+from .financial_application_plan import (
+    FinancialApplicationPlan,
+    position_generation_from_payload,
+    sha256_json,
+)
 from .order_state import FinancialTransitionType, LogicalOrderIdentity
 from .ports import ClockPort, MarketDataPort, Notifier
 from .position_accounting import PositionAccountingService
@@ -210,7 +215,6 @@ class LiveRunner:
         recovery_can_start: bool
         recovery_manual_order_ids: tuple[int, ...] | list[int]
         recovery_lookup_errors: dict[int, str]
-        recovery_finalized_order_ids: tuple[int, ...] | list[int]
         if self.external_settlement_runtime is not None:
             external_recovery = self.external_settlement_runtime.recover_startup(
                 observed_at=self.clock.utc_now().isoformat()
@@ -218,7 +222,6 @@ class LiveRunner:
             recovery_can_start = external_recovery.can_start
             recovery_manual_order_ids = external_recovery.manual_order_ids
             recovery_lookup_errors = dict(external_recovery.blocking_reasons)
-            recovery_finalized_order_ids = external_recovery.finalized_order_ids
         else:
             recovery = recover_interrupted_orders(
                 self.store,
@@ -229,7 +232,6 @@ class LiveRunner:
             recovery_can_start = recovery.can_start
             recovery_manual_order_ids = recovery.manual_order_ids
             recovery_lookup_errors = recovery.lookup_errors
-            recovery_finalized_order_ids = recovery.finalized_order_ids
         if not recovery_can_start:
             details = (
                 f"manuel={recovery_manual_order_ids}, "
@@ -251,16 +253,125 @@ class LiveRunner:
                 "réconciliation manuelle requise, démarrage interdit"
             )
         self.store.resolve_incident("execution:trend:recovery_blocked")
-        if recovery_finalized_order_ids:
-            # Recovery may have committed finalization after the initial
-            # constructor load. Refresh memory from that durable state before
-            # any strategy decision can be evaluated.
-            self._load_state()
+        # Recovery may have committed finalization after the initial
+        # constructor load. Refresh memory from that durable state before
+        # reconstructing any legacy timeline or evaluating a strategy decision.
+        self._load_state(reconstruct_legacy_timelines=True)
 
         self._startup_lock.release()
 
     # ── persistance ──────────────────────────────────────────────────────────
-    def _load_state(self) -> None:
+    def _reconstruct_missing_position_timelines(self, stored: Mapping[str, Any]) -> None:
+        """Rebuild legacy timelines from committed financial applications."""
+
+        missing_slots = [
+            slot for slot in self.slots if slot.position is not None and not slot.position_timeline
+        ]
+        if not missing_slots:
+            return
+
+        records = self.store.read_financial_position_transitions("trend")
+        grouped: dict[str, list[dict[str, Any]]] = {
+            slot.strategy.name: [] for slot in missing_slots
+        }
+        for record in records:
+            slot_name = str(record.get("slot") or "")
+            if slot_name in grouped:
+                grouped[slot_name].append(record)
+
+        repaired_slots: list[str] = []
+        application_keys: list[str] = []
+        for slot in missing_slots:
+            slot_records = grouped[slot.strategy.name]
+            if not slot_records:
+                # Older/manual checkpoints may predate the financial journal.
+                # Leave them untouched; funding will still fail closed because
+                # no historical exposure can be proven.
+                continue
+            timeline: list[dict[str, Any]] = []
+            last_position: dict[str, Any] | None = None
+            last_direction = 1
+            for record in slot_records:
+                try:
+                    result = json.loads(str(record["result_payload"]))
+                    state_after = result["state_after_payload"]
+                    if not isinstance(state_after, dict):
+                        raise ValueError("state_after_payload non objet")
+                    if sha256_json(state_after) != str(record["state_after_sha256"]):
+                        raise ValueError("hash state_after divergent")
+                    after_slots = state_after["slots"]
+                    after_slot = after_slots[slot.strategy.name]
+                    if not isinstance(after_slot, dict):
+                        raise ValueError("slot state_after non objet")
+                    position = after_slot.get("position")
+                    if position is not None:
+                        if not isinstance(position, dict):
+                            raise ValueError("position state_after non objet")
+                        qty = float(position["qty"])
+                        direction = int(position["direction"])
+                        generation = position_generation_from_payload(position)
+                        last_position = position
+                        last_direction = direction
+                    else:
+                        qty = 0.0
+                        direction = last_direction
+                        generation = str(record.get("position_generation") or "FLAT")
+                        last_position = None
+                    effective_at = str(record["economic_effect_at"])
+                    if not effective_at:
+                        raise ValueError("economic_effect_at absent")
+                    timeline.append(
+                        {
+                            "effective_at": effective_at,
+                            "intent_id": str(record["intent_id"]),
+                            "qty": qty,
+                            "direction": direction,
+                            "generation": generation,
+                        }
+                    )
+                    application_keys.append(str(record["application_key"]))
+                except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+                    raise ReconciliationRequired(
+                        f"Timeline {slot.strategy.name} non reconstructible depuis "
+                        f"l'application financière {record.get('application_key')}"
+                    ) from error
+
+            current = slot.position
+            if not timeline or last_position is None or current is None:
+                raise ReconciliationRequired(
+                    f"Timeline {slot.strategy.name} absente ou incompatible avec la position courante"
+                )
+            if (
+                abs(float(last_position["qty"]) - float(current.qty)) > 1e-12
+                or int(last_position["direction"]) != int(current.direction)
+                or position_generation_from_payload(last_position)
+                != self._position_generation(current)
+            ):
+                raise ReconciliationRequired(
+                    f"Timeline {slot.strategy.name} divergente de la position courante"
+                )
+            slot.position_timeline = timeline
+            repaired_slots.append(slot.strategy.name)
+
+        if not repaired_slots:
+            return
+        before_hash = sha256_json(stored)
+        repaired_state = self._state_payload()
+        self.store.save_engine_state(
+            "trend",
+            repaired_state,
+            event_type="position_timeline_reconstructed",
+            event_payload={
+                "source": "financial_fill_applications",
+                "slots": repaired_slots,
+                "application_keys": application_keys,
+                "state_before_sha256": before_hash,
+                "state_after_sha256": sha256_json(repaired_state),
+            },
+        )
+        self.store.resolve_incident("accounting:trend:funding_uncertainty")
+
+    def _load_state(self, *, reconstruct_legacy_timelines: bool = False) -> None:
         self.store.migrate_legacy_json("trend", self.legacy_state_path)
         stored = self.store.load_engine_state("trend")
         raw = validate_trend_state(stored) if stored is not None else None
@@ -316,6 +427,8 @@ class LiveRunner:
         last_funding_ts = raw.get("last_funding_ts")
         if last_funding_ts:
             self.last_funding_ts = pd.Timestamp(last_funding_ts)
+        if reconstruct_legacy_timelines:
+            self._reconstruct_missing_position_timelines(raw)
         log.info("État trend rechargé depuis %s", self.store.path)
 
     def _state_payload(self) -> TrendStatePayload:
