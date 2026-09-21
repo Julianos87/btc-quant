@@ -177,6 +177,7 @@ class Broker(ABC):
         reduce_only: bool = False,
         available_volume: float | None = None,
         delayed_price: float | None = None,
+        order_book: Mapping[str, object] | None = None,
         volatility_annual: float | None = None,
     ) -> BrokerOrderResult:
         """Point d'entrée commun ; les brokers réels gardent leur implémentation."""
@@ -185,7 +186,14 @@ class Broker(ABC):
             raise NotImplementedError(
                 "Un broker externe doit implémenter execute_market et préserver client_order_id"
             )
-        del client_order_id, reduce_only, available_volume, delayed_price, volatility_annual
+        del (
+            client_order_id,
+            reduce_only,
+            available_volume,
+            delayed_price,
+            order_book,
+            volatility_annual,
+        )
         order_side = OrderSide(side)
         if order_side == OrderSide.BUY:
             return self.market_buy(qty, ref_price)
@@ -293,6 +301,21 @@ class Broker(ABC):
         """Solde disponible en devise de cotation (None si non applicable)."""
         return None
 
+    @staticmethod
+    def _stop_float(value: object) -> float:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("valeur numérique de stop invalide")
+        result = float(value)
+        if not math.isfinite(result):
+            raise ValueError("valeur numérique de stop non finie")
+        return result
+
+    @staticmethod
+    def _stop_int(value: object) -> int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("valeur entière de stop invalide")
+        return int(value)
+
     def lookup_order(self, client_order_id: str) -> BrokerOrderSnapshot | None:
         """Recherche fiable d'un ordre externe par identifiant client."""
 
@@ -317,7 +340,12 @@ class Broker(ABC):
 
 
 class PaperBroker(Broker):
-    """Adaptateur paper autour du simulateur d'exécution commun."""
+    """Adaptateur PAPER autour du simulateur d'exécution commun.
+
+    ``simulate_exchange_stops`` deliberately defaults to false for direct
+    unit users. The runtime PAPER profile enables it explicitly so stop
+    lifecycle tests exercise the same runner saga as an external venue.
+    """
 
     supports_stop_orders = False
     external_execution = False
@@ -328,13 +356,233 @@ class PaperBroker(Broker):
         slippage_bps: float = 5.0,
         *,
         simulator: ExecutionSimulator | None = None,
+        simulate_exchange_stops: bool = False,
     ) -> None:
         self.simulator = simulator or ExecutionSimulator(
             ExecutionConfig(fee_rate=fee_rate, slippage_bps=slippage_bps)
         )
         self.fee_rate = self.simulator.config.fee_rate
         self.slippage = self.simulator.config.slippage_bps / 10_000.0
+        self.supports_stop_orders = bool(simulate_exchange_stops)
+        # Preserve explicit test/adaptor overrides on subclasses.
+        self.supports_order_lookup = bool(
+            simulate_exchange_stops or type(self).supports_order_lookup
+        )
         self._sequence = 0
+        self._stops: dict[str, dict[str, object]] = {}
+        self._stop_by_client_id: dict[str, str] = {}
+
+    def restore_protective_stop(
+        self,
+        order_id: str,
+        *,
+        qty: float,
+        stop_price: float,
+        direction: int,
+        client_order_id: str | None = None,
+    ) -> None:
+        """Rehydrate a confirmed PAPER stop after a process restart."""
+
+        if not self.supports_stop_orders:
+            return
+        if order_id in self._stops:
+            return
+        self._stops[order_id] = {
+            "id": order_id,
+            "client_order_id": client_order_id or order_id,
+            "qty": float(qty),
+            "stop_price": float(stop_price),
+            "direction": int(direction),
+            "status": "OPEN",
+            "filled_qty": 0.0,
+            "remaining_qty": float(qty),
+            "average_price": None,
+            "fee": 0.0,
+        }
+        self._stop_by_client_id[client_order_id or order_id] = order_id
+
+    def place_stop(
+        self,
+        qty: float,
+        stop_price: float,
+        direction: int = 1,
+        *,
+        client_order_id: str | None = None,
+    ) -> str | None:
+        if not self.supports_stop_orders:
+            return super().place_stop(qty, stop_price, direction, client_order_id=client_order_id)
+        if qty <= 0 or stop_price <= 0 or direction not in (-1, 1):
+            raise ValueError("Stop PAPER invalide")
+        if client_order_id and client_order_id in self._stop_by_client_id:
+            return self._stop_by_client_id[client_order_id]
+        self._sequence += 1
+        order_id = f"paper-stop-{self._sequence}"
+        client = client_order_id or order_id
+        self._stops[order_id] = {
+            "id": order_id,
+            "client_order_id": client,
+            "qty": float(qty),
+            "stop_price": float(stop_price),
+            "direction": int(direction),
+            "status": "OPEN",
+            "filled_qty": 0.0,
+            "remaining_qty": float(qty),
+            "average_price": None,
+            "fee": 0.0,
+        }
+        self._stop_by_client_id[client] = order_id
+        return order_id
+
+    def cancel_stop(self, order_id: str) -> None:
+        if not self.supports_stop_orders:
+            return
+        stop = self._stops.get(str(order_id))
+        if stop is None:
+            return
+        if stop["status"] == "OPEN":
+            stop["status"] = "CANCELED"
+            stop["remaining_qty"] = 0.0
+
+    def lookup_order(self, client_order_id: str) -> BrokerOrderSnapshot | None:
+        order_id = self._stop_by_client_id.get(client_order_id)
+        if order_id is None:
+            return None
+        stop = self._stops[order_id]
+        status = {
+            "OPEN": ExternalOrderState.OPEN,
+            "CANCELED": ExternalOrderState.CANCELED,
+            "FILLED": ExternalOrderState.FILLED,
+            "PARTIAL": ExternalOrderState.PARTIAL_TERMINAL,
+            "AMBIGUOUS": ExternalOrderState.UNKNOWN,
+        }[str(stop["status"])]
+        return BrokerOrderSnapshot(
+            client_order_id=client_order_id,
+            broker_order_id=order_id,
+            status=status,
+            filled_qty=self._stop_float(stop["filled_qty"]),
+            price=(
+                self._stop_float(stop["average_price"])
+                if stop["average_price"] is not None
+                else None
+            ),
+            fee=self._stop_float(stop["fee"]),
+            requested_qty=self._stop_float(stop["qty"]),
+            remaining_qty=self._stop_float(stop["remaining_qty"]),
+        )
+
+    def protective_order_snapshot(self, order_id: str) -> ProtectiveOrderSnapshot:
+        stop = self._stops.get(str(order_id))
+        if stop is None:
+            return ProtectiveOrderSnapshot(
+                broker_order_id=str(order_id),
+                status="CANCELED",
+                requested_qty=0.0,
+                filled_qty=0.0,
+                remaining_qty=0.0,
+            )
+        return ProtectiveOrderSnapshot(
+            broker_order_id=str(order_id),
+            status=str(stop["status"]),
+            requested_qty=self._stop_float(stop["qty"]),
+            filled_qty=self._stop_float(stop["filled_qty"]),
+            remaining_qty=self._stop_float(stop["remaining_qty"]),
+            average_price=(
+                self._stop_float(stop["average_price"])
+                if stop["average_price"] is not None
+                else None
+            ),
+            fee=self._stop_float(stop["fee"]),
+        )
+
+    def _trigger_stop(
+        self,
+        stop: dict[str, object],
+        trigger_price: float,
+        *,
+        available_volume: float | None = None,
+        order_book: Mapping[str, object] | None = None,
+    ) -> None:
+        if stop["status"] != "OPEN":
+            return
+        config = self.simulator.config
+        if config.latency_ms > 0 or (config.liquidity_model == "order_book" and order_book is None):
+            stop["status"] = "AMBIGUOUS"
+            return
+        side = OrderSide.SELL if self._stop_int(stop["direction"]) == 1 else OrderSide.BUY
+        result = self.simulator.execute_market(
+            MarketOrder(
+                order_id=f"{stop['id']}:trigger",
+                side=side,
+                qty=self._stop_float(stop["qty"]),
+                reference_price=trigger_price,
+                available_volume=available_volume,
+                order_book=order_book,
+            )
+        )
+        stop["filled_qty"] = float(result.qty)
+        stop["remaining_qty"] = 0.0
+        stop["average_price"] = float(result.price) if result.qty > 0 else None
+        stop["fee"] = float(result.fee)
+        stop["status"] = (
+            "FILLED"
+            if result.status == FillStatus.FILLED
+            else "PARTIAL"
+            if result.status == FillStatus.PARTIAL
+            else "CANCELED"
+            if result.status in {FillStatus.REJECTED, FillStatus.EXPIRED}
+            else "AMBIGUOUS"
+        )
+
+    def observe_market_price(
+        self,
+        price: float,
+        *,
+        available_volume: float | None = None,
+        order_book: Mapping[str, object] | None = None,
+    ) -> None:
+        if not self.supports_stop_orders:
+            return
+        for stop in self._stops.values():
+            direction = self._stop_int(stop["direction"])
+            hit = (
+                price <= self._stop_float(stop["stop_price"])
+                if direction == 1
+                else price >= self._stop_float(stop["stop_price"])
+            )
+            if hit:
+                self._trigger_stop(
+                    stop,
+                    price,
+                    available_volume=available_volume,
+                    order_book=order_book,
+                )
+
+    def observe_market_bar(
+        self,
+        open_price: float,
+        high_price: float,
+        low_price: float,
+        *,
+        available_volume: float | None = None,
+        order_book: Mapping[str, object] | None = None,
+    ) -> None:
+        if not self.supports_stop_orders:
+            return
+        for stop in self._stops.values():
+            trigger = ExecutionSimulator.stop_trigger_price(
+                direction=self._stop_int(stop["direction"]),
+                open_price=open_price,
+                high_price=high_price,
+                low_price=low_price,
+                stop_price=self._stop_float(stop["stop_price"]),
+            )
+            if trigger is not None:
+                self._trigger_stop(
+                    stop,
+                    trigger,
+                    available_volume=available_volume,
+                    order_book=order_book,
+                )
 
     def market_buy(self, qty: float, ref_price: float) -> BrokerOrderResult:
         return self.execute_market("BUY", qty, ref_price)
@@ -352,6 +600,7 @@ class PaperBroker(Broker):
         reduce_only: bool = False,
         available_volume: float | None = None,
         delayed_price: float | None = None,
+        order_book: Mapping[str, object] | None = None,
         volatility_annual: float | None = None,
     ) -> BrokerOrderResult:
         del reduce_only
@@ -367,6 +616,7 @@ class PaperBroker(Broker):
                 reference_price=ref_price,
                 available_volume=available_volume,
                 delayed_price=delayed_price,
+                order_book=order_book,
                 volatility_annual=volatility_annual,
             )
         )

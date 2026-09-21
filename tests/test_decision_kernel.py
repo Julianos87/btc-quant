@@ -174,6 +174,15 @@ def test_runner_applies_native_funding_payments_once(tmp_path, monkeypatch):
     strategy = KernelStrategy(exit_after=99)
     slot = StrategySlot(strategy, 1.0, 10_000.0)
     slot.position = make_position()
+    slot.position_timeline = [
+        {
+            "effective_at": slot.position.entry_time.isoformat(),
+            "intent_id": "entry-kernel",
+            "qty": slot.position.qty,
+            "direction": int(slot.position.direction),
+            "generation": "entry=2026-01-01T00:00:00+00:00|initial_qty=2",
+        }
+    ]
     runner = LiveRunner(
         [slot],
         PaperBroker(),
@@ -187,15 +196,25 @@ def test_runner_applies_native_funding_payments_once(tmp_path, monkeypatch):
     payment_ts = now - pd.Timedelta(hours=1)
     payments = pd.Series([0.0001], index=pd.DatetimeIndex([payment_ts]))
     monkeypatch.setattr(runner.venue, "funding_history_since", lambda _since: payments)
+    monkeypatch.setattr(
+        runner.venue,
+        "funding_reference_price",
+        lambda timestamp: {
+            "price": 100.0,
+            "timestamp": timestamp,
+            "source": "fixture-venue-reference",
+        },
+    )
 
     runner._apply_funding_payments(110.0)
     runner.funding_service.last_poll_monotonic = 0.0
     runner._apply_funding_payments(110.0)
 
-    assert slot.cash == pytest.approx(10_000.0 - 2.0 * 110.0 * 0.0001)
+    assert slot.cash == pytest.approx(10_000.0 - 2.0 * 100.0 * 0.0001)
     events = [
         event
         for event in runner.store.read_events("trend")
-        if event["event_type"] == "funding_payments_applied"
+        if event["event_type"] == "funding_payment"
     ]
     assert len(events) == 1
+    assert runner.store.read_funding_ledger()[0]["funding_notional_price"] == pytest.approx(100.0)

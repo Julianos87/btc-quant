@@ -394,6 +394,9 @@ def execution_config_from_config(
         if not isinstance(selected, dict):
             raise ValueError(f"Profil de simulation inconnu : {profile!r}")
         simulation.update(selected)
+        simulation["simulation_profile"] = profile
+    else:
+        simulation.setdefault("simulation_profile", "custom")
     forbidden = {"fee_rate", "slippage_bps"} & simulation.keys()
     if forbidden:
         raise ValueError("Configurer fee_rate/slippage_bps dans costs, pas execution.simulation")

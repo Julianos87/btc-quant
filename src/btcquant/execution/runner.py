@@ -32,15 +32,15 @@ from ..domain import (
     PyramidRequested,
     StopTightened,
     decide_bar_close,
-    funding_amount,
 )
 from ..domain.execution import ExecutionSimulator
+from ..carry import funding_event_id
 from ..indicators import bars_per_year, realized_vol
 from ..backup import assert_writer_recovery_clear
 from ..notify import notify
 from ..risk import RiskConfig, position_size
 from ..strategies.base import Direction, Position, Strategy
-from .broker import Broker
+from .broker import Broker, Fill
 from .atomic_financial_writer import StateStoreAtomicFinancialWriter
 from .clock import SystemClock
 from .data_quality import validate_closed_ohlcv
@@ -63,6 +63,7 @@ from .order_state import FinancialTransitionType, LogicalOrderIdentity
 from .ports import ClockPort, MarketDataPort, Notifier
 from .position_accounting import PositionAccountingService
 from .protective_stops import ProtectiveStopService, StopDecision, StopDecisionKind
+from .margin import MarginSnapshot, SharedCrossMarginModel
 from .recovery import recover_interrupted_orders
 from .risk_service import PortfolioRiskService, PortfolioRiskState
 from .state_contract import (
@@ -103,6 +104,9 @@ class StrategySlot:
         #: frais d'entrée de la position ouverte — inclus dans le PnL du trade
         #: à la sortie (même convention que le backtest)
         self.entry_fee: float = 0.0
+        # Durable position snapshots used to reconstruct exposure at each
+        # funding timestamp. A current position is not a historical ledger.
+        self.position_timeline: list[dict[str, Any]] = []
 
     def equity(self, price: float) -> float:
         """Comptabilité sur marge : équity = cash + PnL latent (valide spot 1x
@@ -135,6 +139,7 @@ class LiveRunner:
         self.slots = slots
         self.broker = broker
         self.risk = risk
+        self.exchange_id = exchange_id
         self.symbol = symbol
         self.state_path = Path(state_file)
         self.legacy_state_path = (
@@ -188,6 +193,12 @@ class LiveRunner:
         self.daily_lockout = False
         self.reconciliation_required = False
         self.last_funding_ts: pd.Timestamp | None = None
+        self.execution_context: dict[str, Any] | None = None
+        self.margin_model = SharedCrossMarginModel(
+            max_leverage=risk.max_leverage,
+            venue=exchange_id,
+        )
+        self._last_margin_snapshot: MarginSnapshot | None = None
         self._last_position_reconciliation_at: float | None = None
         self._startup_lock = EngineInstanceLock(self.store.path, "trend")
         self._startup_lock.acquire()
@@ -265,6 +276,7 @@ class LiveRunner:
             slot.stop_intent_id = s.get("stop_intent_id")
             slot.stop_transition = s.get("stop_transition")
             slot.entry_fee = s.get("entry_fee", 0.0)
+            slot.position_timeline = list(s.get("position_timeline", []))
             slot.financial_transition_seq = s.get("financial_transition_seq", 0)
             last_bar_ts = s.get("last_bar_ts")
             slot.last_bar_ts = pd.Timestamp(last_bar_ts) if last_bar_ts else None
@@ -284,12 +296,23 @@ class LiveRunner:
                     last_add_price=p.get("last_add_price", p["entry_price"]),
                     pyramid_adds=p.get("pyramid_adds", 0),
                 )
+                restore_stop = getattr(self.broker, "restore_protective_stop", None)
+                if slot.stop_order_id is not None and callable(restore_stop):
+                    restore_stop(
+                        str(slot.stop_order_id),
+                        qty=slot.position.qty,
+                        stop_price=slot.position.stop_price,
+                        direction=int(slot.position.direction),
+                        client_order_id=slot.stop_intent_id,
+                    )
         self.peak_equity = raw.get("peak_equity", self.peak_equity)
         self.halted = raw.get("halted", False)
         self.day = raw.get("day")
         self.day_start_equity = raw.get("day_start_equity", self.day_start_equity)
         self.daily_lockout = raw.get("daily_lockout", False)
         self.reconciliation_required = raw.get("reconciliation_required", False)
+        context = raw.get("execution_context")
+        self.execution_context = dict(context) if isinstance(context, dict) else None
         last_funding_ts = raw.get("last_funding_ts")
         if last_funding_ts:
             self.last_funding_ts = pd.Timestamp(last_funding_ts)
@@ -310,7 +333,10 @@ class LiveRunner:
             "stop_protection_mode": stop_protection_mode_from_broker(
                 supports_stop_orders=self.broker.supports_stop_orders
             ),
+            "execution_realism": self._execution_realism_payload(),
         }
+        if self.execution_context is not None:
+            raw["execution_context"] = dict(self.execution_context)
         for slot in self.slots:
             pos: PositionState | None = None
             if slot.position:
@@ -338,6 +364,7 @@ class LiveRunner:
                 if slot.last_bar_ts is not None
                 else None,
                 "financial_transition_seq": slot.financial_transition_seq,
+                "position_timeline": list(slot.position_timeline),
             }
             raw["slots"][slot.strategy.name] = slot_state
         return raw
@@ -859,35 +886,56 @@ class LiveRunner:
         assert decision.snapshot is not None
         assert decision.previous_stop_id is not None
         snapshot = decision.snapshot
-        stop_id = decision.previous_stop_id
+        fill_qty = float(snapshot.filled_qty)
+        if fill_qty <= 0 or fill_qty > pos.qty + 1e-9:
+            self._require_manual_reconciliation(
+                "Fill stop incohérent avec la position locale",
+                slot=slot,
+                context={"filled_qty": fill_qty, "local_qty": pos.qty},
+            )
         fill_price = snapshot.average_price or pos.stop_price
-        pnl = pos.direction * pos.qty * (fill_price - pos.entry_price) - snapshot.fee
-        slot.cash += pnl
+        fill = Fill(
+            price=fill_price,
+            qty=fill_qty,
+            fee=float(snapshot.fee),
+            broker_order_id=snapshot.broker_order_id,
+        )
+        try:
+            accounting = self.accounting_service.close_position(pos, fill, entry_fee=slot.entry_fee)
+        except Exception as error:
+            raise ReconciliationRequired(
+                "Stop exécuté mais application comptable impossible; arrêt fail-closed"
+            ) from error
+        slot.cash += accounting.cash_delta
+        partial = accounting.partial
         trade = self._trade_payload(
             slot,
             pos,
             fill_price,
-            pnl - slot.entry_fee,
+            accounting.trade_pnl,
             "stop_exchange",
+            qty=fill_qty,
         )
-        filled_qty = pos.qty
-        side = "SELL" if pos.direction == 1 else "BUY"
-        slot.position = None
+        if partial:
+            assert accounting.remaining_position is not None
+            slot.position = accounting.remaining_position
+        else:
+            slot.position = None
         slot.stop_order_id = None
         local_stop_order_id = slot.stop_order_local_id
         slot.stop_order_local_id = None
         slot.stop_intent_id = None
-        slot.entry_fee = 0.0
+        slot.entry_fee = accounting.remaining_entry_fee
         self.store.record_observed_fill_and_checkpoint(
             engine="trend",
             slot=slot.strategy.name,
-            intent_id=f"observed-stop-{stop_id}",
+            intent_id=f"observed-stop-{snapshot.broker_order_id}",
             broker_order_id=snapshot.broker_order_id,
-            side=side,
-            requested_qty=filled_qty,
-            filled_qty=filled_qty,
+            side="SELL" if pos.direction == 1 else "BUY",
+            requested_qty=float(snapshot.requested_qty),
+            filled_qty=fill_qty,
             price=fill_price,
-            fee=snapshot.fee,
+            fee=float(snapshot.fee),
             reason="stop_exchange",
             state=self._state_payload(),
             trade=trade,
@@ -895,16 +943,26 @@ class LiveRunner:
         if local_stop_order_id is not None:
             self.store.complete_order(
                 local_stop_order_id,
-                status="FILLED",
-                filled_qty=filled_qty,
+                status="PARTIAL" if partial else "FILLED",
+                filled_qty=fill_qty,
                 price=fill_price,
-                fee=snapshot.fee,
+                fee=float(snapshot.fee),
                 broker_order_id=snapshot.broker_order_id,
+            )
+        if partial:
+            assert slot.position is not None
+            self._begin_stop_replacement(
+                slot,
+                qty=slot.position.qty,
+                stop_price=slot.position.stop_price,
+                direction=slot.position.direction,
+                reason="partial_stop_fill",
             )
         self.store.resolve_incident("execution:trend:protective_order_uncertain")
         self.notifier(
             f"{'🟩' if trade['pnl'] >= 0 else '🟥'} {slot.strategy.name} — "
-            f"stop exchange exécuté @ {fill_price:,.0f} $ : {trade['pnl']:+,.2f} $"
+            f"stop exchange {'partiel ' if partial else ''}exécuté @ {fill_price:,.0f} $ : "
+            f"{trade['pnl']:+,.2f} $"
         )
 
     def _observe_exchange_stop_fills(self) -> None:
@@ -928,7 +986,7 @@ class LiveRunner:
                 stop_price=slot.position.stop_price,
                 direction=slot.position.direction,
             )
-            if decision.kind == StopDecisionKind.FILLED:
+            if decision.kind in {StopDecisionKind.FILLED, StopDecisionKind.PARTIAL_FILLED}:
                 self._materialize_filled_stop(slot, decision)
             elif decision.kind == StopDecisionKind.UNCERTAIN:
                 self._require_manual_reconciliation(
@@ -971,15 +1029,95 @@ class LiveRunner:
                     reason="monitor_replacement",
                 )
                 continue
-            self._materialize_filled_stop(slot, decision)
+            if decision.kind in {StopDecisionKind.FILLED, StopDecisionKind.PARTIAL_FILLED}:
+                self._materialize_filled_stop(slot, decision)
 
-    def _apply_funding_payments(self, mark_price: float) -> None:
-        """Applique chaque paiement natif une fois, selon son horodatage."""
+    def _record_position_transition(
+        self,
+        slot: StrategySlot,
+        submitted: SubmittedOrder,
+        *,
+        previous_direction: int | None = None,
+    ) -> None:
+        """Persist the exposure after one durable market transition.
 
+        Funding replay uses this causal timeline rather than the position that
+        happens to be open when a payment is polled. A missing timeline is
+        intentionally not repaired from the current position: doing so would
+        silently include exposure that did not exist at the event timestamp.
+        """
+
+        position = slot.position
+        if position is not None:
+            qty = float(position.qty)
+            direction = int(position.direction)
+            generation = self._position_generation(position)
+        else:
+            qty = 0.0
+            direction = int(previous_direction or submitted.application_plan.entry_direction or 1)
+            generation = submitted.application_plan.identity.position_generation or "FLAT"
+        intent_id = submitted.intent_id
+        if any(item.get("intent_id") == intent_id for item in slot.position_timeline):
+            return
+        slot.position_timeline.append(
+            {
+                "effective_at": submitted.application_plan.planned_effect_at,
+                "intent_id": intent_id,
+                "qty": qty,
+                "direction": direction,
+                "generation": generation,
+            }
+        )
+        slot.position_timeline.sort(
+            key=lambda item: (str(item["effective_at"]), str(item["intent_id"]))
+        )
+        self._save_state()
+
+    @staticmethod
+    def _exposure_at(
+        slot: StrategySlot, timestamp: pd.Timestamp
+    ) -> tuple[dict[str, Any] | None, bool]:
+        """Return exposure at ``timestamp`` and whether its history is known."""
+
+        timeline = slot.position_timeline
+        if not timeline:
+            # A non-flat legacy checkpoint without transitions is ambiguous.
+            return (None, slot.position is None)
+        point = pd.Timestamp(timestamp)
+        point = point.tz_localize("UTC") if point.tzinfo is None else point.tz_convert("UTC")
+        selected: dict[str, Any] | None = None
+        for item in timeline:
+            effective = pd.Timestamp(item["effective_at"])
+            effective = (
+                effective.tz_localize("UTC")
+                if effective.tzinfo is None
+                else effective.tz_convert("UTC")
+            )
+            if effective <= point:
+                selected = item
+            else:
+                break
+        return selected, True
+
+    def _apply_funding_payments(self, _mark_price: float) -> None:
+        """Settle venue funding from event prices and a durable exposure timeline."""
+
+        del _mark_price  # current marks are never funding accounting inputs
         poll = self.funding_service.poll(self.last_funding_ts)
         if poll is None:
             return
         if poll.initialized:
+            if any(slot.position is not None for slot in self.slots):
+                reason = "Position ouverte sans checkpoint funding durable"
+                self.store.record_incident(
+                    "accounting:trend:funding_uncertainty",
+                    engine="trend",
+                    severity="CRITICAL",
+                    kind="funding_accounting_uncertainty",
+                    message=reason,
+                    context={"classification": "MISSING_FUNDING_CHECKPOINT"},
+                )
+                raise ReconciliationRequired(reason)
             self.last_funding_ts = poll.checkpoint
             self.store.save_engine_state(
                 "trend",
@@ -990,29 +1128,323 @@ class LiveRunner:
             return
         if not poll.payments:
             return
-        applied: list[dict[str, Any]] = []
         for payment in poll.payments:
-            slot_amounts: dict[str, float] = {}
+            details: dict[str, dict[str, Any]] = {}
+            total_amount = 0.0
+            total_notional = 0.0
+            generations: list[str] = []
+            active_exposure = False
             for slot in self.slots:
-                if slot.position is None:
+                exposure, known = self._exposure_at(slot, payment.timestamp)
+                if not known:
+                    reason = (
+                        f"Historique de position absent pour le funding "
+                        f"{payment.timestamp.isoformat()} ({slot.strategy.name})"
+                    )
+                    self.store.record_incident(
+                        "accounting:trend:funding_uncertainty",
+                        engine="trend",
+                        severity="CRITICAL",
+                        kind="funding_accounting_uncertainty",
+                        message=reason,
+                        context={
+                            "classification": "POSITION_TIMELINE_UNAVAILABLE",
+                            "slot": slot.strategy.name,
+                            "funding_timestamp": payment.timestamp.isoformat(),
+                        },
+                    )
+                    raise ReconciliationRequired(reason)
+                if exposure is None or float(exposure["qty"]) <= 0:
+                    details[slot.strategy.name] = {"amount": 0.0, "qty": 0.0}
                     continue
-                amount = funding_amount(slot.position, payment.rate, mark_price)
-                slot.cash -= amount
-                slot_amounts[slot.strategy.name] = amount
-            applied.append(
-                {
-                    "ts": payment.timestamp.isoformat(),
-                    "rate": payment.rate,
-                    "amounts": slot_amounts,
+                active_exposure = True
+                if (
+                    payment.reference_price is None
+                    or payment.reference_price <= 0
+                    or not payment.reference_price_source
+                    or payment.reference_price_timestamp is None
+                ):
+                    reason = (
+                        f"Prix de référence funding indisponible pour "
+                        f"{payment.timestamp.isoformat()}"
+                    )
+                    self.store.record_incident(
+                        "accounting:trend:funding_uncertainty",
+                        engine="trend",
+                        severity="CRITICAL",
+                        kind="funding_accounting_uncertainty",
+                        message=reason,
+                        context={
+                            "classification": "FUNDING_REFERENCE_PRICE_UNAVAILABLE",
+                            "funding_timestamp": payment.timestamp.isoformat(),
+                            "source": payment.reference_price_source,
+                        },
+                    )
+                    raise ReconciliationRequired(reason)
+                qty = float(exposure["qty"])
+                direction = int(exposure["direction"])
+                amount = direction * qty * float(payment.reference_price) * float(payment.rate)
+                total_amount += amount
+                total_notional += qty * float(payment.reference_price)
+                generations.append(
+                    f"{slot.strategy.name}:{exposure['generation']}:{qty:.17g}:{direction}"
+                )
+                details[slot.strategy.name] = {
+                    "amount": amount,
+                    "qty": qty,
+                    "direction": direction,
+                    "generation": exposure["generation"],
                 }
+            # With no active exposure the checkpoint is still durable, but the
+            # missing price is not silently turned into a numeric zero.
+            source = (
+                payment.reference_price_source
+                if active_exposure
+                else (payment.reference_price_source or "not_required_flat")
             )
-        self.last_funding_ts = poll.checkpoint
-        self.store.save_engine_state(
-            "trend",
-            self._state_payload(),
-            event_type="funding_payments_applied",
-            event_payload={"payments": applied},
+            price_timestamp = (
+                payment.reference_price_timestamp.isoformat()
+                if payment.reference_price_timestamp is not None
+                else None
+            )
+            previous_cash = {slot.strategy.name: slot.cash for slot in self.slots}
+            previous_checkpoint = self.last_funding_ts
+            for slot in self.slots:
+                amount = float(details[slot.strategy.name]["amount"])
+                slot.cash -= amount
+            self.last_funding_ts = payment.timestamp
+            event_key = funding_event_id(self.exchange_id, self.symbol, payment.timestamp)
+            ledger = {
+                "event_key": event_key,
+                "venue": self.exchange_id,
+                "instrument": self.symbol,
+                "funding_timestamp": payment.timestamp.isoformat(),
+                "native_funding_rate": float(payment.rate),
+                "position_generation": "|".join(sorted(generations)) or "FLAT",
+                "funding_notional": total_notional,
+                "funding_notional_price": payment.reference_price if active_exposure else None,
+                "funding_notional_price_source": source,
+                "funding_notional_price_timestamp": price_timestamp,
+                "funding_pnl": -total_amount,
+                "borrow_principal": 0.0,
+                "borrow_rate_ann": 0.0,
+                "borrow_dt_seconds": 0.0,
+                "borrow_cost": 0.0,
+                "applied_at": self.clock.utc_now().isoformat(),
+            }
+            try:
+                result = self.store.apply_carry_accounting_event_and_checkpoint(
+                    ledger,
+                    self._state_payload(),
+                    engine="trend",
+                    event_payload={
+                        "reason": "funding_payment",
+                        "event_key": event_key,
+                        "payment_ts": payment.timestamp.isoformat(),
+                        "native_funding_rate": float(payment.rate),
+                        "reference_price": payment.reference_price,
+                        "reference_price_source": source,
+                        "reference_price_timestamp": price_timestamp,
+                        "amounts": details,
+                        "funding_pnl": -total_amount,
+                    },
+                )
+            except Exception:
+                for slot in self.slots:
+                    slot.cash = previous_cash[slot.strategy.name]
+                self.last_funding_ts = previous_checkpoint
+                raise
+            if result == "replayed":
+                self._load_state()
+                break
+
+    def _execution_realism_payload(self) -> dict[str, Any]:
+        simulator = getattr(self.broker, "simulator", None)
+        config = getattr(simulator, "config", None)
+        context = self.execution_context or {}
+        payload: dict[str, Any] = {
+            "simulator_version": "paper-execution-v2",
+            "profile": getattr(config, "simulation_profile", "custom"),
+            "liquidity_model": getattr(config, "liquidity_model", "aggregate"),
+            "latency_ms": getattr(config, "latency_ms", 0),
+            "stop_model": (
+                "persistent_exchange_style"
+                if self.broker.supports_stop_orders
+                else "software_tick_or_ohlc"
+            ),
+            "funding_reference": "event_price_required",
+            "margin_model": self.margin_model.model,
+            "margin_qualified": self.margin_model.qualified,
+            "margin_source": self.margin_model.source,
+            "cost_assumptions": {
+                "fee_rate": getattr(config, "fee_rate", None),
+                "slippage_bps": getattr(config, "slippage_bps", None),
+                "market_impact_bps": getattr(config, "market_impact_bps", None),
+                "source": "selected_simulation_profile",
+            },
+            "data_provenance": {
+                "reference_price_source": context.get("price_source"),
+                "market_timestamp": context.get("market_timestamp"),
+                "reception_timestamp": context.get("reception_timestamp"),
+                "order_book_source": (
+                    context.get("order_book", {}).get("source")
+                    if isinstance(context.get("order_book"), dict)
+                    else None
+                ),
+                "order_book_timestamp": (
+                    context.get("order_book", {}).get("timestamp")
+                    if isinstance(context.get("order_book"), dict)
+                    else None
+                ),
+            },
+            "uncertainties": [
+                "venue_margin_tiers_not_loaded",
+            ],
+        }
+        if self._last_margin_snapshot is not None:
+            payload["last_margin_snapshot"] = self._last_margin_snapshot.as_dict()
+        return payload
+
+    def _simulator_latency_ms(self) -> int:
+        simulator = getattr(self.broker, "simulator", None)
+        config = getattr(simulator, "config", None)
+        value = getattr(config, "latency_ms", 0)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ReconciliationRequired("Configuration de latence PAPER invalide")
+        return value
+
+    @staticmethod
+    def _checkpoint_timestamp(value: str) -> pd.Timestamp | None:
+        """Parse one causal market checkpoint without inventing a timestamp."""
+
+        try:
+            timestamp = pd.Timestamp(value)
+            return (
+                timestamp.tz_localize("UTC")
+                if timestamp.tzinfo is None
+                else timestamp.tz_convert("UTC")
+            )
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    def _start_execution_context(self, decision_checkpoint: str, reference_price: float) -> None:
+        """Persist the five causal clocks used by one simulated submission.
+
+        The checkpoint is the market/decision time supplied by the strategy.
+        Reception and submission are local observations.  They are kept
+        separate even when a deterministic test clock makes them equal.
+        """
+
+        now = self.clock.utc_now()
+        decision_timestamp = self._checkpoint_timestamp(decision_checkpoint)
+        decision_iso = (
+            decision_timestamp.isoformat() if decision_timestamp is not None else now.isoformat()
         )
+        self.execution_context = {
+            "market_timestamp": decision_iso,
+            "reception_timestamp": now.isoformat(),
+            "decision_timestamp": decision_iso,
+            "submission_timestamp": now.isoformat(),
+            "execution_timestamp": None,
+            "execution_timestamp_source": None,
+            "latency_ms": self._simulator_latency_ms(),
+            "reference_price": float(reference_price),
+            "price_source": "decision_reference",
+        }
+
+    def _resolve_delayed_price(
+        self, decision_checkpoint: str, reference_price: float
+    ) -> float | None:
+        latency_ms = self._simulator_latency_ms()
+        if latency_ms == 0:
+            return None
+        decision_timestamp = self._checkpoint_timestamp(decision_checkpoint)
+        if decision_timestamp is None:
+            decision_timestamp = self.clock.utc_now()
+        target_timestamp = decision_timestamp + pd.Timedelta(milliseconds=latency_ms)
+        resolver = getattr(self.venue, "execution_price_after", None)
+        if not callable(resolver):
+            raise ReconciliationRequired(
+                "Latence PAPER positive mais aucune source de prix post-décision horodatée"
+            )
+        resolved = resolver(decision_timestamp, latency_ms)
+        if isinstance(resolved, dict):
+            price = resolved.get("price")
+            observed_at = resolved.get("timestamp", target_timestamp)
+            source = resolved.get("source")
+        elif isinstance(resolved, tuple) and len(resolved) == 3:
+            price, observed_at, source = resolved
+        else:
+            price, observed_at, source = resolved, target_timestamp, None
+        if price is None or source is None:
+            raise ReconciliationRequired(
+                "Prix d'exécution retardé absent ou sans provenance; ordre non soumis"
+            )
+        try:
+            delayed_price = float(price)
+            observed_timestamp = pd.Timestamp(observed_at)
+            observed_timestamp = (
+                observed_timestamp.tz_localize("UTC")
+                if observed_timestamp.tzinfo is None
+                else observed_timestamp.tz_convert("UTC")
+            )
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ReconciliationRequired("Prix retardé invalide; ordre non soumis") from error
+        if (
+            not pd.notna(delayed_price)
+            or delayed_price <= 0
+            or observed_timestamp < target_timestamp
+        ):
+            raise ReconciliationRequired(
+                "Prix retardé antérieur à la latence demandée; ordre non soumis"
+            )
+        self.execution_context = {
+            **(self.execution_context or {}),
+            "decision_timestamp": decision_timestamp.isoformat(),
+            "target_timestamp": target_timestamp.isoformat(),
+            "observed_timestamp": observed_timestamp.isoformat(),
+            "delayed_price": delayed_price,
+            "price_source": str(source),
+            "reference_price": float(reference_price),
+        }
+        return delayed_price
+
+    def _liquidity_model(self) -> str:
+        simulator = getattr(self.broker, "simulator", None)
+        config = getattr(simulator, "config", None)
+        model = getattr(config, "liquidity_model", "aggregate")
+        if model not in {"aggregate", "order_book"}:
+            raise ReconciliationRequired(f"Modèle de liquidité PAPER inconnu: {model!r}")
+        return str(model)
+
+    def _resolve_order_book(self) -> dict[str, Any] | None:
+        if self._liquidity_model() != "order_book":
+            return None
+        fetch = getattr(self.venue, "fetch_order_book", None)
+        if not callable(fetch):
+            raise ReconciliationRequired(
+                "Simulation order-book activée mais le flux de carnet est indisponible"
+            )
+        raw = fetch(limit=20)
+        if (
+            not isinstance(raw, dict)
+            or not isinstance(raw.get("bids"), list)
+            or not isinstance(raw.get("asks"), list)
+        ):
+            raise ReconciliationRequired("Carnet enregistré incomplet; ordre non soumis")
+        observed_at = self.clock.utc_now()
+        book = dict(raw)
+        book["timestamp"] = str(book.get("timestamp") or observed_at.isoformat())
+        book["snapshot_id"] = str(
+            book.get("snapshot_id") or f"{book['timestamp']}:{sha256_json(book)}"
+        )
+        book["source"] = str(book.get("source") or f"{self.exchange_id}:public_order_book")
+        self.execution_context = {
+            **(self.execution_context or {}),
+            "liquidity_model": "order_book",
+            "order_book": book,
+        }
+        return book
 
     def _execute_market_order(
         self,
@@ -1032,6 +1464,9 @@ class LiveRunner:
         entry_stop_price: float | None = None,
     ) -> SubmittedOrder:
         qty = self.broker.normalize_market_quantity(qty, ref_price, reduce_only=reduce_only)
+        latency_ms = self._simulator_latency_ms()
+        delayed_price: float | None = None
+        order_book: dict[str, Any] | None = None
         identity = LogicalOrderIdentity(
             engine="trend",
             slot=slot.strategy.name,
@@ -1055,7 +1490,24 @@ class LiveRunner:
                     "pre-state du plan financier durable"
                 )
             application_plan = persisted_plan.plan
+            context = application_plan.pre_state_payload.get("execution_context")
+            if latency_ms > 0:
+                if not isinstance(context, dict) or context.get("delayed_price") is None:
+                    raise ReconciliationRequired(
+                        "Plan durable sans prix retardé pour une latence positive"
+                    )
+                delayed_price = float(context["delayed_price"])
+                self.execution_context = dict(context)
+            if self._liquidity_model() == "order_book":
+                if not isinstance(context, dict) or not isinstance(context.get("order_book"), dict):
+                    raise ReconciliationRequired(
+                        "Plan durable sans carnet enregistré pour une liquidité order-book"
+                    )
+                order_book = dict(context["order_book"])
         else:
+            self._start_execution_context(decision_checkpoint, ref_price)
+            delayed_price = self._resolve_delayed_price(decision_checkpoint, ref_price)
+            order_book = self._resolve_order_book()
             application_plan = FinancialApplicationPlan(
                 identity=identity,
                 side=side,
@@ -1093,6 +1545,8 @@ class LiveRunner:
                 reduce_only=reduce_only,
                 available_volume=available_volume,
                 volatility_annual=volatility_annual,
+                delayed_price=delayed_price,
+                order_book=order_book,
                 application_plan=application_plan,
             )
         )
@@ -1122,6 +1576,15 @@ class LiveRunner:
                 f"Ordre {submitted.order_id} non terminal "
                 f"({submitted.external_state.value}) : reprise bloquée"
             )
+        self.execution_context = {
+            **(self.execution_context or {}),
+            "execution_timestamp": self.clock.utc_now().isoformat(),
+            "execution_timestamp_source": "paper_broker_observation"
+            if not self.broker.external_execution
+            else "external_submission_observation",
+            "execution_price": submitted.fill.price if submitted.fill.qty > 0 else None,
+            "execution_qty": submitted.fill.qty,
+        }
         return submitted
 
     def _complete_market_order_and_checkpoint(
@@ -1295,6 +1758,7 @@ class LiveRunner:
         )
         if self.external_settlement_runtime is not None:
             self._reconcile_external_submission(submitted)
+            self._record_position_transition(slot, submitted, previous_direction=int(pos.direction))
             if self.broker.supports_stop_orders:
                 if slot.position is None:
                     self._prepare_stop_cancellation(slot, reason=f"position_closed:{reason}")
@@ -1309,6 +1773,18 @@ class LiveRunner:
             return
         if not self.broker.external_execution:
             self._reconcile_paper_submission(submitted)
+            self._record_position_transition(slot, submitted, previous_direction=int(pos.direction))
+            if self.broker.supports_stop_orders:
+                if slot.position is None:
+                    self._prepare_stop_cancellation(slot, reason=f"position_closed:{reason}")
+                else:
+                    self._begin_stop_replacement(
+                        slot,
+                        qty=slot.position.qty,
+                        stop_price=slot.position.stop_price,
+                        direction=slot.position.direction,
+                        reason=f"partial_exit:{reason}",
+                    )
             return
         fill = submitted.fill
         application_plan = submitted.application_plan
@@ -1407,6 +1883,7 @@ class LiveRunner:
             direction=direction,
         )
         qty *= slot.strategy.position_size_multiplier(row, direction)
+        qty = min(qty, self._shared_margin_quantity_cap(ref_price))
         live_balance = self.broker.free_quote_balance()
         if live_balance is not None:
             qty = min(qty, live_balance * 0.99 / ref_price)
@@ -1434,6 +1911,7 @@ class LiveRunner:
         )
         if self.external_settlement_runtime is not None:
             self._reconcile_external_submission(submitted)
+            self._record_position_transition(slot, submitted, previous_direction=direction)
             if self.broker.supports_stop_orders and slot.position is not None:
                 self._begin_stop_replacement(
                     slot,
@@ -1445,6 +1923,15 @@ class LiveRunner:
             return
         if not self.broker.external_execution:
             self._reconcile_paper_submission(submitted)
+            self._record_position_transition(slot, submitted, previous_direction=direction)
+            if self.broker.supports_stop_orders and slot.position is not None:
+                self._begin_stop_replacement(
+                    slot,
+                    qty=slot.position.qty,
+                    stop_price=slot.position.stop_price,
+                    direction=slot.position.direction,
+                    reason="entry_protection",
+                )
             return
         fill = submitted.fill
         application_plan = submitted.application_plan
@@ -1508,10 +1995,10 @@ class LiveRunner:
         position = slot.position
         if position is None:
             return
-        if self.broker.supports_stop_orders:
+        if self.broker.supports_stop_orders and self.broker.external_execution:
             log.warning(
-                "[%s] Renfort ignoré hors paper : saga de redimensionnement du stop "
-                "exchange non encore qualifiée",
+                "[%s] Renfort ignoré : saga de redimensionnement du stop externe "
+                "non encore qualifiée",
                 slot.strategy.name,
             )
             return
@@ -1520,6 +2007,7 @@ class LiveRunner:
             slot.equity(ref_price) * self.risk.max_position_pct * self.risk.max_leverage / ref_price
         )
         qty = min(qty, max_total_qty - position.qty)
+        qty = min(qty, self._shared_margin_quantity_cap(ref_price))
         if qty <= 0:
             return
         side = "BUY" if position.direction == 1 else "SELL"
@@ -1538,9 +2026,23 @@ class LiveRunner:
         )
         if self.external_settlement_runtime is not None:
             self._reconcile_external_submission(submitted)
+            self._record_position_transition(
+                slot, submitted, previous_direction=int(position.direction)
+            )
             return
         if not self.broker.external_execution:
             self._reconcile_paper_submission(submitted)
+            self._record_position_transition(
+                slot, submitted, previous_direction=int(position.direction)
+            )
+            if self.broker.supports_stop_orders and slot.position is not None:
+                self._begin_stop_replacement(
+                    slot,
+                    qty=slot.position.qty,
+                    stop_price=slot.position.stop_price,
+                    direction=slot.position.direction,
+                    reason="pyramid_protection",
+                )
             return
         fill = submitted.fill
         try:
@@ -1594,6 +2096,26 @@ class LiveRunner:
             last_ts = eligible[-1]
         if slot.last_bar_ts is not None and last_ts <= slot.last_bar_ts:
             return None  # pas de nouvelle barre clôturée
+        if slot.position is not None and self.broker.supports_stop_orders:
+            raw_row = df.loc[last_ts]
+            observe_bar = getattr(self.broker, "observe_market_bar", None)
+            if callable(observe_bar):
+                entry_time = slot.position.entry_time
+                entry_time = (
+                    entry_time.tz_localize("UTC")
+                    if entry_time.tzinfo is None
+                    else entry_time.tz_convert("UTC")
+                )
+                if entry_time <= last_ts:
+                    observe_bar(
+                        float(raw_row["open"]),
+                        float(raw_row["high"]),
+                        float(raw_row["low"]),
+                        available_volume=(
+                            float(raw_row["volume"]) if pd.notna(raw_row.get("volume")) else None
+                        ),
+                    )
+
         if slot.position is not None and not self.broker.supports_stop_orders:
             position = slot.position
             # A position opened after this candle began cannot safely use the
@@ -1791,7 +2313,47 @@ class LiveRunner:
             if hit:
                 self._exit_position(slot, price, "stop")
 
+    def _margin_snapshot(self, price: float) -> MarginSnapshot:
+        positions = []
+        for slot in self.slots:
+            if slot.position is not None:
+                positions.append(
+                    (
+                        int(slot.position.direction),
+                        float(slot.position.qty),
+                        float(slot.position.entry_price),
+                        float(price),
+                    )
+                )
+        self._last_margin_snapshot = self.margin_model.evaluate(
+            collateral=sum(float(slot.cash) for slot in self.slots),
+            positions=positions,
+            mark_price=float(price),
+        )
+        return self._last_margin_snapshot
+
+    def _shared_margin_quantity_cap(self, price: float) -> float:
+        return self.margin_model.max_additional_qty(
+            self._margin_snapshot(price),
+            price=float(price),
+        )
+
     def _update_kill_switches(self, price: float) -> None:
+        margin = self._margin_snapshot(price)
+        if margin.liquidatable and not self.halted:
+            self.halted = True
+            self.store.record_incident(
+                "execution:trend:margin_liquidation",
+                engine="trend",
+                severity="CRITICAL",
+                kind="paper_margin_liquidation",
+                message="Marge de maintenance franchie : liquidation PAPER déclenchée",
+                context=margin.as_dict(),
+            )
+            self.notifier(
+                f"⛔ MARGE : maintenance franchie ({margin.equity:,.2f} / "
+                f"{margin.maintenance_margin:,.2f} $), liquidation PAPER."
+            )
         equity = sum(s.equity(price) for s in self.slots)
         today = str(self.clock.utc_now().date())
         transition = self.risk_service.evaluate(
@@ -2009,6 +2571,9 @@ class LiveRunner:
 
     def _run_cycle(self, price: float, stop_event: threading.Event) -> bool:
         self._apply_funding_payments(price)
+        observe_price = getattr(self.broker, "observe_market_price", None)
+        if callable(observe_price):
+            observe_price(price)
         self._monitor_exchange_stops()
         self._maybe_reconcile_position()
         # Le risque est évalué avant toute stratégie : un kill switch liquide
@@ -2017,6 +2582,9 @@ class LiveRunner:
         self._liquidate_if_halted(price)
         self._check_soft_stops(price)
         self._process_due_bars(price)
+        # A bar can trigger a PAPER exchange stop; reconcile it in the same
+        # cycle before persisting the final projections.
+        self._monitor_exchange_stops()
         self._save_state()
         self._append_equity(price)
         if not self.halted or any(slot.position is not None for slot in self.slots):

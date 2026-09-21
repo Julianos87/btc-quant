@@ -30,6 +30,7 @@ class TrendSlotState(TypedDict):
     entry_fee: float
     last_bar_ts: str | None
     financial_transition_seq: NotRequired[int]
+    position_timeline: NotRequired[list[dict[str, Any]]]
 
 
 STOP_PROTECTION_SOFTWARE = "SOFTWARE"
@@ -64,6 +65,8 @@ class TrendStatePayload(TypedDict):
     reconciliation_required: bool
     last_funding_ts: str | None
     stop_protection_mode: NotRequired[str]
+    execution_realism: NotRequired[dict[str, Any]]
+    execution_context: NotRequired[dict[str, Any]]
 
 
 class CarryStatePayload(TypedDict):
@@ -179,6 +182,25 @@ def validate_trend_state(payload: object) -> TrendStatePayload:
                 prefix=f"trend.{name}.position",
             )
         _validate_optional_finite_fields(slot, ("entry_fee",), prefix=f"trend.{name}")
+        timeline = slot.get("position_timeline", [])
+        if not isinstance(timeline, list):
+            raise ValueError(f"État trend invalide : {name}.position_timeline doit être une liste")
+        for index, transition in enumerate(timeline):
+            if not isinstance(transition, Mapping):
+                raise ValueError(
+                    f"État trend invalide : {name}.position_timeline[{index}] doit être un objet"
+                )
+            for field in ("effective_at", "intent_id", "generation"):
+                if not isinstance(transition.get(field), str) or not transition[field]:
+                    raise ValueError(
+                        f"État trend invalide : {name}.position_timeline[{index}].{field} absent"
+                    )
+            _finite_number(transition.get("qty"), f"trend.{name}.position_timeline[{index}].qty")
+            direction = transition.get("direction")
+            if direction not in (-1, 1):
+                raise ValueError(
+                    f"État trend invalide : {name}.position_timeline[{index}].direction"
+                )
     _validate_optional_risk_baselines(raw, "trend")
     return cast(TrendStatePayload, payload)
 

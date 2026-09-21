@@ -60,6 +60,8 @@ class SubmitMarketCommand:
     reduce_only: bool = False
     available_volume: float | None = None
     volatility_annual: float | None = None
+    delayed_price: float | None = None
+    order_book: Mapping[str, object] | None = None
     application_plan: FinancialApplicationPlan | None = None
 
     def validate(
@@ -283,15 +285,32 @@ class OrderExecutionService:
         order_id = reservation.order_id
         intent_id = reservation.intent_id
         try:
-            result = self.broker.execute_market(
-                application_plan.side,
-                application_plan.requested_qty,
-                application_plan.reference_price,
-                client_order_id=intent_id,
-                reduce_only=application_plan.reduce_only,
-                available_volume=command.available_volume,
-                volatility_annual=command.volatility_annual,
-            )
+            # Keep the historical broker contract intact unless the caller
+            # explicitly selected the recorded-book model. External adapters
+            # must not receive an irrelevant new keyword.
+            if command.order_book is None:
+                result = self.broker.execute_market(
+                    application_plan.side,
+                    application_plan.requested_qty,
+                    application_plan.reference_price,
+                    client_order_id=intent_id,
+                    reduce_only=application_plan.reduce_only,
+                    available_volume=command.available_volume,
+                    delayed_price=command.delayed_price,
+                    volatility_annual=command.volatility_annual,
+                )
+            else:
+                result = self.broker.execute_market(
+                    application_plan.side,
+                    application_plan.requested_qty,
+                    application_plan.reference_price,
+                    client_order_id=intent_id,
+                    reduce_only=application_plan.reduce_only,
+                    available_volume=command.available_volume,
+                    delayed_price=command.delayed_price,
+                    volatility_annual=command.volatility_annual,
+                    order_book=command.order_book,
+                )
         except Exception as error:
             ambiguous = self.broker.external_execution
             suffix = " (résultat externe ambigu, réconciliation requise)" if ambiguous else ""

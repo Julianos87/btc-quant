@@ -13,6 +13,7 @@ class StopDecisionKind(StrEnum):
     NOOP = "NOOP"
     REPLACE_REQUIRED = "REPLACE_REQUIRED"
     FILLED = "FILLED"
+    PARTIAL_FILLED = "PARTIAL_FILLED"
     UNCERTAIN = "UNCERTAIN"
 
 
@@ -86,6 +87,17 @@ class ProtectiveStopService:
         if snapshot.status == "FILLED" and abs(snapshot.filled_qty - qty) <= 1e-9:
             return StopDecision(
                 StopDecisionKind.FILLED,
+                previous_stop_id=stop_id,
+                snapshot=snapshot,
+            )
+        if (
+            snapshot.status == "PARTIAL"
+            and snapshot.filled_qty > 1e-9
+            and snapshot.filled_qty < qty - 1e-9
+            and snapshot.remaining_qty <= 1e-9
+        ):
+            return StopDecision(
+                StopDecisionKind.PARTIAL_FILLED,
                 previous_stop_id=stop_id,
                 snapshot=snapshot,
             )

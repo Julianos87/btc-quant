@@ -141,6 +141,19 @@ execution:
         volatility_impact_bps: 1.5
         volatility_reference_annual: 0.40
         volatility_multiplier_cap: 3.0
+        liquidity_model: aggregate
+        latency_ms: 0
+      degraded:
+        # Requires a timestamped post-decision stream; the runner fails closed
+        # if the selected venue cannot provide it. It is not the active profile.
+        latency_ms: 250
+        rejection_rate: 0.02
+        max_volume_participation: 0.02
+        market_impact_bps: 40.0
+        volatility_impact_bps: 3.0
+        volatility_reference_annual: 0.40
+        volatility_multiplier_cap: 4.0
+        liquidity_model: aggregate
       stress:
         rejection_rate: 0.01
         max_volume_participation: 0.01
@@ -148,6 +161,8 @@ execution:
         volatility_impact_bps: 6.0
         volatility_reference_annual: 0.40
         volatility_multiplier_cap: 5.0
+        liquidity_model: aggregate
+        latency_ms: 0
   # Venue LIVE depuis le 17/07/2026 : Hyperliquid (funding horaire, converti en
   # équivalent 8 h par venue.py). La référence backtest reste Binance 2019-2026
   # (exchange: ci-dessus) — écart documenté au protocole : la comparaison

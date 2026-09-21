@@ -66,7 +66,12 @@ def main() -> None:
         fee = costs.perp_fee_rate if market == "perp" else costs.fee_rate
         if fee is None:
             raise SystemExit("Configuration invalide : fee rate absent pour le marché sélectionné")
-        broker = PaperBroker(simulator=ExecutionSimulator(execution_config_from_config(cfg, fee)))
+        broker = PaperBroker(
+            simulator=ExecutionSimulator(execution_config_from_config(cfg, fee)),
+            # PAPER exercises the exchange-stop saga; direct PaperBroker users
+            # may still opt into software stops explicitly in unit tests.
+            simulate_exchange_stops=True,
+        )
     elif mode == "testnet":
         live_exchange, live_symbol = exec_cfg.require_live_venue()
         if live_exchange != "hyperliquid" or market != "perp":

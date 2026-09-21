@@ -133,6 +133,29 @@ class Venue:
         )
         return float(funding["fundingRate"])
 
+    def funding_reference_price(self, timestamp: pd.Timestamp) -> object:
+        """Return the venue's accounting price when an exact public source exists.
+
+        Hyperliquid funding is valued with its spot oracle price, not the perp
+        mark. This adapter does not currently expose a historical oracle
+        series, so returning ``None`` makes the Trend runner block accounting
+        rather than silently substituting a current or perp price.
+        """
+
+        del timestamp
+        return None
+
+    def execution_price_after(self, decision_timestamp: pd.Timestamp, latency_ms: int) -> object:
+        """No recorded post-decision stream is exposed by this adapter yet.
+
+        Returning ``None`` is intentional: a positive simulated latency must
+        not fall back to the current ticker, which could be a future price
+        relative to the decision.
+        """
+
+        del decision_timestamp, latency_ms
+        return None
+
     def funding_history(self, days: float) -> pd.Series:
         """Paiements de funding des `days` derniers jours (taux par période
         NATIVE, un point par paiement réel), indexés par horodatage UTC."""

@@ -418,9 +418,10 @@ class CcxtBroker(Broker):
         reduce_only: bool = False,
         available_volume: float | None = None,
         delayed_price: float | None = None,
+        order_book: Mapping[str, object] | None = None,
         volatility_annual: float | None = None,
     ) -> BrokerOrderResult:
-        del available_volume, delayed_price, volatility_annual
+        del available_volume, delayed_price, order_book, volatility_annual
         normalized_side = side.lower()
         if normalized_side not in ("buy", "sell"):
             raise ValueError(f"Côté d'ordre invalide : {side!r}")

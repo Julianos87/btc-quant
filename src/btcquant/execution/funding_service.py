@@ -21,6 +21,13 @@ def _as_utc(value: Any) -> pd.Timestamp:
 class FundingPayment:
     timestamp: pd.Timestamp
     rate: float
+    # A funding rate is not enough to settle a linear contract. The venue's
+    # reference price must be carried with the event; None is deliberate
+    # and means that accounting cannot safely be completed for an open
+    # position.
+    reference_price: float | None = None
+    reference_price_timestamp: pd.Timestamp | None = None
+    reference_price_source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -57,7 +64,38 @@ class FundingService:
         raw.index = pd.to_datetime(raw.index, utc=True)
         raw = raw[(raw.index > since) & (raw.index <= current)].sort_index()
         payments = tuple(
-            FundingPayment(_as_utc(timestamp), float(rate)) for timestamp, rate in raw.items()
+            self._payment(_as_utc(timestamp), float(rate)) for timestamp, rate in raw.items()
         )
         checkpoint = payments[-1].timestamp if payments else since
         return FundingPoll(checkpoint, payments)
+
+    def _payment(self, timestamp: pd.Timestamp, rate: float) -> FundingPayment:
+        """Attach an explicit venue price when the data port can provide one.
+
+        The resolver is intentionally optional for compatibility with data
+        ports that only expose rates. The runner treats an unresolved price
+        as an accounting uncertainty when a position was active at the event;
+        it never substitutes the current mark price.
+        """
+
+        resolver = getattr(self.venue, "funding_reference_price", None)
+        if not callable(resolver):
+            return FundingPayment(timestamp, rate)
+        resolved = resolver(timestamp)
+        if isinstance(resolved, dict):
+            price = resolved.get("price")
+            price_timestamp = resolved.get("timestamp", timestamp)
+            source = resolved.get("source")
+        elif isinstance(resolved, tuple) and len(resolved) == 3:
+            price, price_timestamp, source = resolved
+        else:
+            # A bare price has no auditable provenance and is therefore not
+            # accepted as a qualified accounting input.
+            price, price_timestamp, source = resolved, timestamp, None
+        return FundingPayment(
+            timestamp,
+            rate,
+            float(price) if price is not None else None,
+            _as_utc(price_timestamp) if price_timestamp is not None else None,
+            str(source) if source is not None else None,
+        )

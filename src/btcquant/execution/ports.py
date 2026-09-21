@@ -28,6 +28,14 @@ class MarketDataPort(Protocol):
 
     def funding_history_since(self, since: pd.Timestamp) -> pd.Series: ...
 
+    # Optional at runtime: funding accounting must fail closed when this
+    # resolver is not exposed for an event with an active position.
+    def funding_reference_price(self, timestamp: pd.Timestamp) -> object: ...
+
+    def execution_price_after(
+        self, decision_timestamp: pd.Timestamp, latency_ms: int
+    ) -> object: ...
+
 
 class ClockPort(Protocol):
     def utc_now(self) -> pd.Timestamp: ...
