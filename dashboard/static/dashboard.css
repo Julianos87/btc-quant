@@ -1709,3 +1709,113 @@
   .journal-row strong { grid-column:1/-1; }
   .journal-row small { grid-column:1/-1; }
 }
+
+
+/* Responsive contract -------------------------------------------------------
+   This final layer deliberately resolves older dashboard generations that
+   still share this stylesheet. Keep the shell flush to the viewport, let the
+   working canvas own its gutters, and move navigation to the safe-area-aware
+   bottom edge on compact screens. */
+body {
+  width:100%;
+  max-width:100%;
+  padding-inline:0;
+}
+.workspace-shell,
+.workspace-canvas,
+.workspace-header,
+.workspace-brief,
+.cockpitbar,
+.metric-strip,
+.decision-board,
+.decision-board > *,
+.accounting-grid,
+.trend-accounting-values {
+  min-width:0;
+  max-width:100%;
+}
+.workspace-canvas { width:100%; }
+canvas, svg, img { max-width:100%; }
+.table-wrap,
+.contribution-table-wrap,
+.position-table-wrap {
+  max-width:100%;
+  overscroll-behavior-inline:contain;
+}
+
+@media (max-width:1280px) {
+  header.workspace-header {
+    grid-template-columns:minmax(168px,1fr) auto auto auto auto;
+  }
+  header.workspace-header .spacer,
+  header.workspace-header .hm:nth-last-child(-n+2) { display:none; }
+  .accounting-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .accounting-cell:first-child { grid-column:span 2; }
+  .trend-accounting-values { grid-template-columns:repeat(3,minmax(0,1fr)); }
+}
+
+@media (max-width:1120px) {
+  header.workspace-header {
+    grid-template-columns:minmax(168px,1fr) auto auto;
+  }
+  header.workspace-header .mode,
+  header.workspace-header .hm { display:none; }
+  .accounting-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .accounting-cell:first-child { grid-column:1 / -1; }
+  .trend-accounting-values { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+
+@media (max-width:780px) {
+  .workspace-rail {
+    top:auto;
+    right:0;
+    bottom:0;
+    left:0;
+    width:100%;
+    max-width:none;
+  }
+  .workspace-canvas {
+    padding-right:max(12px,env(safe-area-inset-right));
+    padding-bottom:calc(87px + env(safe-area-inset-bottom));
+    padding-left:max(12px,env(safe-area-inset-left));
+  }
+  footer {
+    padding-right:max(12px,env(safe-area-inset-right));
+    padding-bottom:calc(83px + env(safe-area-inset-bottom));
+    padding-left:max(12px,env(safe-area-inset-left));
+  }
+  .workspace-tab { min-height:48px; }
+  .cockpit-status .status-detail { max-height:4.2em; overflow:auto; }
+  .contribution-table-wrap { overflow-x:auto; }
+  .contribution-table { min-width:420px; }
+}
+
+@media (max-width:560px) {
+  .metric-strip .tile.hero,
+  .metric-strip .tile:last-child { grid-column:1 / -1; }
+  .metric-strip .tile.hero {
+    border-right:1px solid var(--grid);
+    border-radius:10px 10px 0 0;
+  }
+  .metric-strip .tile:nth-child(2) { border-radius:0; }
+  .metric-strip .tile:last-child { border-radius:0 0 10px 10px; }
+  .accounting-cell:first-child { grid-column:auto; }
+  .workspace-brief h2 { overflow-wrap:anywhere; }
+}
+
+@media (max-width:360px) {
+  .workspace-canvas {
+    padding-right:max(9px,env(safe-area-inset-right));
+    padding-left:max(9px,env(safe-area-inset-left));
+  }
+  .workspace-tab { font-size:9px; }
+  .system-rail { grid-template-columns:1fr; }
+  .system-rail .truth-node,
+  .system-rail .truth-node:nth-child(2n),
+  .system-rail .truth-node:nth-last-child(-n+2) {
+    border-right:0;
+    border-bottom:1px solid var(--grid);
+  }
+  .system-rail .truth-node:last-child { border-bottom:0; }
+  .trend-accounting-values { grid-template-columns:1fr; }
+}
