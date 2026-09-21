@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from dataclasses import asdict, replace
 from contextlib import nullcontext
 import uuid
 from pathlib import Path
@@ -42,10 +43,24 @@ from ..carry import (
     smooth_funding_events,
 )
 from ..domain.carry_decision import CarryAction, decide_carry_payment
+from ..domain.execution import ExecutionConfig
 from ..backup import assert_writer_recovery_clear
 from ..notify import notify
 from ..risk import RiskConfig
 from .carry_contract import CarrySagaStatus
+from .carry_paper import (
+    CarryAccountingState,
+    CarryExecutionState,
+    CarryLeg,
+    CarryMarketState,
+    CarryVenueSpec,
+    CausalMarketTape,
+    FinancingPlan,
+    PaperTwoLegExecutor,
+    check_margin,
+    expected_net_carry,
+    serialize_two_leg_state,
+)
 from .errors import AccountingIdentityCollision
 from .instance_lock import EngineInstanceLock
 from .ports import MarketDataPort, Notifier
@@ -83,8 +98,13 @@ class CarryRunner:
         notifier: Notifier = notify,
         risk: RiskConfig | None = None,
         risk_service: PortfolioRiskService | None = None,
+        carry_execution: object | None = None,
+        paper_execution_config=None,
     ) -> None:
         self.symbol = symbol_perp
+        self.carry_execution = carry_execution
+        self.paper_execution_config = paper_execution_config
+        self.paper_model = getattr(carry_execution, "model", "synthetic_historical")
         #: règles partagées mot pour mot avec `carry.backtest_carry` : c'est la
         #: condition pour que la référence publiée décrive ce moteur.
         self.policy = policy
@@ -142,6 +162,11 @@ class CarryRunner:
         self.last_funding_ts: pd.Timestamp | None = None
         self.accounting_uncertain = False
         self.accounting_uncertainty_reason: str | None = None
+        self.two_leg_spec = self._make_two_leg_spec()
+        self.two_leg_balance = CarryAccountingState(initial_cash=initial_capital)
+        self.two_leg_state = CarryExecutionState.FLAT
+        self.two_leg_intent: dict[str, object] | None = None
+        self.two_leg_journal: list[dict[str, object]] = []
         self._startup_lock = EngineInstanceLock(self.store.path, "carry")
         self._startup_lock.acquire()
         self._load_state()
@@ -170,6 +195,96 @@ class CarryRunner:
         if self.live_broker is not None and not self.live_broker.reconcile():
             raise RuntimeError("Réconciliation carry échouée : runner arrêté (fail-closed)")
         self._startup_lock.release()
+
+    def _make_two_leg_spec(self) -> CarryVenueSpec:
+        configured = self.carry_execution
+        if configured is None:
+            return CarryVenueSpec.hyperliquid_btc_usdc()
+        return CarryVenueSpec(
+            venue=str(getattr(self.venue, "exchange_id", "unknown")),
+            spot_symbol=str(getattr(configured, "spot_symbol", "BTC/USDC")),
+            perp_symbol=str(getattr(configured, "perp_symbol", self.symbol)),
+            spot_account=str(getattr(configured, "spot_account", "spot")),
+            perp_account=str(getattr(configured, "perp_account", "perp")),
+            collateral_asset=str(getattr(configured, "collateral_asset", "USDC")),
+            borrow_asset=str(getattr(configured, "borrow_asset", "USDC")),
+            borrow_enabled=bool(getattr(configured, "borrow_enabled", False)),
+            max_borrow=getattr(configured, "max_borrow", None),
+            max_leverage=getattr(configured, "max_leverage", None),
+            initial_margin_rate=getattr(configured, "initial_margin_rate", None),
+            maintenance_margin_rate=getattr(configured, "maintenance_margin_rate", None),
+            fee_source=str(getattr(configured, "fee_source", "UNSPECIFIED")),
+            financing_source=str(getattr(configured, "financing_source", "UNSPECIFIED")),
+            qualified=bool(getattr(configured, "borrow_enabled", False))
+            and all(
+                getattr(configured, name, None) is not None
+                for name in (
+                    "max_borrow",
+                    "max_leverage",
+                    "initial_margin_rate",
+                    "maintenance_margin_rate",
+                )
+            ),
+            qualification_reason=(
+                "capacités d'emprunt, comptes et marge explicitement déclarés"
+                if bool(getattr(configured, "borrow_enabled", False))
+                else "capacités d'emprunt spot ou partage de collatéral non qualifiés"
+            ),
+        )
+
+    def _restore_two_leg(self, payload: object) -> None:
+        if not isinstance(payload, dict):
+            self.accounting_uncertain = True
+            self.accounting_uncertainty_reason = "checkpoint two-leg invalide"
+            self.two_leg_state = CarryExecutionState.RECONCILIATION_REQUIRED
+            return
+        state_value = payload.get("state", CarryExecutionState.FLAT.value)
+        try:
+            self.two_leg_state = CarryExecutionState(state_value)
+        except ValueError:
+            self.two_leg_state = CarryExecutionState.RECONCILIATION_REQUIRED
+            self.accounting_uncertain = True
+            self.accounting_uncertainty_reason = f"état two-leg inconnu : {state_value}"
+        balance_raw = payload.get("balance")
+        if isinstance(balance_raw, dict):
+            balance = CarryAccountingState(
+                initial_cash=float(balance_raw.get("initial_cash", self.policy.capital)),
+                cash_available=float(balance_raw.get("cash_available", self.policy.capital)),
+                cash_locked=float(balance_raw.get("cash_locked", 0.0)),
+                spot_qty=float(balance_raw.get("spot_qty", 0.0)),
+                spot_cost_basis=float(balance_raw.get("spot_cost_basis", 0.0)),
+                perp_qty=float(balance_raw.get("perp_qty", 0.0)),
+                perp_entry_price=float(balance_raw.get("perp_entry_price", 0.0)),
+                debt_principal=float(balance_raw.get("debt_principal", 0.0)),
+                accrued_interest=float(balance_raw.get("accrued_interest", 0.0)),
+                funding_received=float(balance_raw.get("funding_received", 0.0)),
+                funding_paid=float(balance_raw.get("funding_paid", 0.0)),
+                spot_fees=float(balance_raw.get("spot_fees", 0.0)),
+                perp_fees=float(balance_raw.get("perp_fees", 0.0)),
+                transfers=list(balance_raw.get("transfers", [])),
+                applied_event_ids=list(balance_raw.get("applied_event_ids", [])),
+            )
+            self.two_leg_balance = balance
+        intent = payload.get("active_intent")
+        self.two_leg_intent = dict(intent) if isinstance(intent, dict) else None
+        journal = payload.get("journal")
+        self.two_leg_journal = list(journal) if isinstance(journal, list) else []
+        if self.two_leg_state in {
+            CarryExecutionState.ENTRY_PENDING,
+            CarryExecutionState.ONE_LEG_FILLED,
+            CarryExecutionState.PARTIALLY_HEDGED,
+            CarryExecutionState.EXIT_PENDING,
+        }:
+            self.execution_state = self.two_leg_state.value
+            self.in_position = (
+                self.two_leg_balance.spot_qty > 0 or self.two_leg_balance.perp_qty > 0
+            )
+            if self.two_leg_state != CarryExecutionState.HEDGED:
+                self.accounting_uncertain = True
+                self.accounting_uncertainty_reason = (
+                    self.accounting_uncertainty_reason
+                    or "reprise d'une transition two-leg non terminale"
+                )
 
     def _load_state(self) -> None:
         self.store.migrate_legacy_json("carry", self.legacy_state_path)
@@ -207,6 +322,19 @@ class CarryRunner:
         self.daily_lockout = raw.get("daily_lockout", False)
         self.accounting_uncertain = raw.get("accounting_uncertain", False)
         self.accounting_uncertainty_reason = raw.get("accounting_uncertainty_reason")
+        two_leg_payload = raw.get("two_leg")
+        if self.paper_model == "two_leg_execution_v1":
+            if two_leg_payload is None and self.in_position:
+                self.accounting_uncertain = True
+                self.accounting_uncertainty_reason = (
+                    "ancienne position synthétique incompatible avec le bilan two-leg"
+                )
+                self.two_leg_state = CarryExecutionState.RECONCILIATION_REQUIRED
+            elif two_leg_payload is not None:
+                self._restore_two_leg(two_leg_payload)
+            elif raw.get("carry_model") == "two_leg_execution_v1" and not self.in_position:
+                self.two_leg_balance = CarryAccountingState(initial_cash=self.equity)
+                self.two_leg_state = CarryExecutionState.FLAT
         if self.in_position and not self.accounting_uncertain:
             required = (
                 self.entry_equity,
@@ -270,10 +398,45 @@ class CarryRunner:
             "daily_lockout": self.daily_lockout,
             "accounting_uncertain": self.accounting_uncertain,
             "accounting_uncertainty_reason": self.accounting_uncertainty_reason,
+            "carry_model": self.paper_model,
+            "historical_series_label": (
+                "synthetic_historical"
+                if self.paper_model != "two_leg_execution_v1"
+                else "two_leg_execution_v1"
+            ),
+            "two_leg": (
+                serialize_two_leg_state(
+                    state=self.two_leg_state,
+                    spec=self.two_leg_spec,
+                    balance=self.two_leg_balance,
+                    active_intent=self.two_leg_intent,
+                    journal=self.two_leg_journal,
+                    cost_provenance={
+                        "spot_fee_rate": self.policy.fee_rate,
+                        "perp_fee_rate": self.policy.fee_rate,
+                        "spot_slippage_bps": self.policy.slippage_bps,
+                        "perp_slippage_bps": self.policy.slippage_bps,
+                        "borrow_rate_ann": self.borrow_rate_ann,
+                        "source": getattr(self.carry_execution, "fee_source", "policy"),
+                    },
+                )
+                if self.paper_model == "two_leg_execution_v1"
+                else None
+            ),
         }
 
-    def _save_state(self) -> None:
-        self.store.save_engine_state("carry", self._state_payload())
+    def _save_state(
+        self,
+        *,
+        event_type: str = "checkpoint",
+        event_payload: dict[str, object] | None = None,
+    ) -> None:
+        self.store.save_engine_state(
+            "carry",
+            self._state_payload(),
+            event_type=event_type,
+            event_payload=event_payload,
+        )
 
     def _recent_funding(self) -> pd.Series:
         """Historique couvrant À LA FOIS le lissage et tout l'arriéré non comptabilisé.
@@ -938,7 +1101,451 @@ class CarryRunner:
                 f"{self.risk.daily_loss_limit:.0%} (équity {self.equity:,.0f} $)."
             )
 
+    def _two_leg_execution_config(self) -> ExecutionConfig:
+        configured = self.paper_execution_config
+        if isinstance(configured, ExecutionConfig):
+            if configured.liquidity_model == "aggregate":
+                return replace(configured, liquidity_model="order_book")
+            return configured
+        return ExecutionConfig(
+            fee_rate=self.policy.fee_rate,
+            slippage_bps=self.policy.slippage_bps,
+            liquidity_model="order_book",
+            simulation_profile="carry_two_leg",
+        )
+
+    def _two_leg_market(self) -> CarryMarketState | None:
+        provider = getattr(self.venue, "current_carry_market_state", None)
+        if not callable(provider):
+            if self.in_position:
+                self._mark_accounting_uncertain(
+                    "Marché spot/perp synchronisé indisponible pour le carry two-leg",
+                    {"classification": "TWO_LEG_MARKET_UNAVAILABLE"},
+                )
+            else:
+                self.store.record_incident(
+                    "accounting:carry:market_unavailable",
+                    engine="carry",
+                    severity="WARNING",
+                    kind="paper_market_unavailable",
+                    message="Entrée carry bloquée : snapshot spot/perp absent",
+                    context={"model": "carry_two_leg_execution_v1"},
+                )
+            return None
+        try:
+            market = provider()
+            if not isinstance(market, CarryMarketState):
+                raise TypeError("current_carry_market_state ne renvoie pas CarryMarketState")
+            return market
+        except Exception as error:
+            if self.in_position:
+                self._mark_accounting_uncertain(
+                    "Snapshot spot/perp indisponible pendant une position carry",
+                    {"classification": "TWO_LEG_MARKET_ERROR", "detail": str(error)},
+                )
+            else:
+                self.store.record_incident(
+                    "accounting:carry:market_unavailable",
+                    engine="carry",
+                    severity="WARNING",
+                    kind="paper_market_unavailable",
+                    message=str(error),
+                    context={"model": "carry_two_leg_execution_v1"},
+                )
+            return None
+
+    def _sync_two_leg_legacy_fields(self) -> None:
+        self.spot_qty = self.two_leg_balance.spot_qty
+        self.perp_qty = self.two_leg_balance.perp_qty
+        self.qty = self.spot_qty
+        self.spot_notional = self.two_leg_balance.spot_cost_basis
+        self.perp_notional = self.two_leg_balance.perp_qty * (
+            self.two_leg_balance.perp_entry_price or 0.0
+        )
+        self.borrow_principal = self.two_leg_balance.debt_principal
+        self.equity = self.two_leg_balance.equity
+        self.in_position = self.spot_qty > 1e-12 or self.perp_qty > 1e-12
+        self.execution_state = self.two_leg_state.value
+
+    def _two_leg_persist(self, event_type: str, payload: dict[str, object]) -> None:
+        self.two_leg_journal.append({"event_type": event_type, **payload})
+        self._sync_two_leg_legacy_fields()
+        self._save_state(event_type=event_type, event_payload=payload)
+
+    def _two_leg_plan(self, market: CarryMarketState) -> FinancingPlan:
+        configured = self.carry_execution
+        return FinancingPlan.build(
+            capital_available=self.two_leg_balance.equity,
+            target_notional=self.policy.capital * self.leverage,
+            spot_price=market.spot_ask,
+            perp_mark_price=market.perp_mark,
+            leverage=self.leverage,
+            max_borrow=getattr(configured, "max_borrow", None),
+            initial_margin_rate=getattr(configured, "initial_margin_rate", None),
+            spot_fee_rate=self.policy.fee_rate,
+            perp_fee_rate=self.policy.fee_rate,
+            spot_slippage_bps=self.policy.slippage_bps,
+            perp_slippage_bps=self.policy.slippage_bps,
+        )
+
+    def _open_two_leg(
+        self, *, smooth_ann: float, market: CarryMarketState, decision_timestamp: pd.Timestamp
+    ) -> None:
+        plan = self._two_leg_plan(market)
+        leverage_supported = (
+            self.two_leg_spec.max_leverage is None
+            or self.leverage <= self.two_leg_spec.max_leverage + 1e-12
+        )
+        if not self.two_leg_spec.qualified or not plan.qualified or not leverage_supported:
+            self.store.record_incident(
+                "accounting:carry:financing_not_qualified",
+                engine="carry",
+                severity="WARNING",
+                kind="carry_entry_blocked",
+                message="Entrée carry bloquée : opération non finançable ou non qualifiée",
+                context={
+                    "spec_reason": self.two_leg_spec.qualification_reason,
+                    "leverage_supported": leverage_supported,
+                    "plan": plan.as_dict(),
+                },
+            )
+            self.two_leg_state = CarryExecutionState.FLAT
+            self._two_leg_persist("carry_entry_blocked", {"reason": plan.reason})
+            return
+        configured = self.carry_execution
+        holding_days = float(getattr(configured, "holding_days", 30.0))
+        reserve = plan.target_notional * float(getattr(configured, "uncertainty_reserve_rate", 0.0))
+        economics = expected_net_carry(
+            funding_ann=smooth_ann,
+            notional=plan.target_notional,
+            borrow_rate_ann=self.borrow_rate_ann,
+            debt=plan.borrow_principal,
+            holding_days=holding_days,
+            entry_cost=plan.estimated_entry_cost,
+            exit_cost=plan.estimated_entry_cost,
+            uncertainty_reserve=reserve,
+        )
+        if not bool(economics["qualified"]):
+            self.store.record_incident(
+                "accounting:carry:net_edge_negative",
+                engine="carry",
+                severity="INFO",
+                kind="carry_entry_blocked",
+                message="Entrée carry bloquée : portage net attendu négatif",
+                context={"economics": economics},
+            )
+            self._two_leg_persist("carry_entry_blocked", {"reason": "net_expected_non_positive"})
+            return
+
+        try:
+            self.two_leg_balance.reserve_margin(plan.perp_initial_margin)
+        except Exception as error:
+            self._two_leg_persist("carry_entry_blocked", {"reason": str(error)})
+            return
+        intent_id = f"carry-two-leg:{pd.Timestamp.now(tz='UTC').value}"
+        self.two_leg_state = CarryExecutionState.ENTRY_PENDING
+        self.two_leg_intent = {
+            "intent_id": intent_id,
+            "decision_timestamp": str(decision_timestamp),
+            "spot_qty": plan.spot_qty,
+            "perp_qty": plan.perp_qty,
+            "plan": plan.as_dict(),
+            "economics": economics,
+        }
+        self._two_leg_persist(
+            "carry_entry_intent", {"intent_id": intent_id, "plan": plan.as_dict()}
+        )
+        executor = PaperTwoLegExecutor(self._two_leg_execution_config(), CausalMarketTape([market]))
+        try:
+            spot = executor.execute(
+                leg=CarryLeg.SPOT,
+                side="BUY",
+                qty=plan.spot_qty,
+                decision_timestamp=decision_timestamp,
+                event_id=f"{intent_id}:spot",
+            )
+            if spot.filled_qty > 0:
+                self.two_leg_balance.apply_spot_fill(
+                    side="BUY",
+                    qty=spot.filled_qty,
+                    price=spot.price,
+                    fee=spot.fee,
+                    event_id=spot.event_id,
+                )
+                self.two_leg_state = (
+                    CarryExecutionState.ONE_LEG_FILLED
+                    if spot.filled_qty < spot.requested_qty
+                    else CarryExecutionState.ONE_LEG_FILLED
+                )
+                self._two_leg_persist(
+                    "carry_spot_fill", {"status": spot.status, "filled_qty": spot.filled_qty}
+                )
+            if spot.filled_qty <= 0:
+                self.two_leg_balance.release_margin()
+                self.two_leg_state = CarryExecutionState.FLAT
+                self.two_leg_intent = None
+                self._two_leg_persist(
+                    "carry_entry_rejected", {"leg": "SPOT", "status": spot.status}
+                )
+                return
+            perp = executor.execute(
+                leg=CarryLeg.PERP,
+                side="SELL",
+                qty=min(spot.filled_qty, plan.perp_qty),
+                decision_timestamp=spot.timestamp,
+                event_id=f"{intent_id}:perp",
+            )
+            if perp.filled_qty > 0:
+                self.two_leg_balance.apply_perp_fill(
+                    side="SELL",
+                    qty=perp.filled_qty,
+                    price=perp.price,
+                    fee=perp.fee,
+                    event_id=perp.event_id,
+                )
+            self.two_leg_state = (
+                CarryExecutionState.HEDGED
+                if perp.filled_qty >= spot.filled_qty - 1e-12
+                else CarryExecutionState.PARTIALLY_HEDGED
+            )
+            self._two_leg_persist(
+                "carry_perp_fill",
+                {
+                    "status": perp.status,
+                    "filled_qty": perp.filled_qty,
+                    "requested_qty": perp.requested_qty,
+                },
+            )
+        except Exception as error:
+            self.two_leg_state = CarryExecutionState.RECONCILIATION_REQUIRED
+            self.accounting_uncertain = True
+            self.accounting_uncertainty_reason = f"transition two-leg ambiguë : {error}"
+            self._two_leg_persist("carry_reconciliation_required", {"error": str(error)})
+
+    def _close_two_leg(
+        self, *, reason: str, market: CarryMarketState, decision_timestamp: pd.Timestamp
+    ) -> None:
+        if not self.in_position:
+            return
+        intent_id = f"carry-two-leg-exit:{pd.Timestamp.now(tz='UTC').value}"
+        self.two_leg_state = CarryExecutionState.EXIT_PENDING
+        self.two_leg_intent = {"intent_id": intent_id, "reason": reason}
+        self._two_leg_persist("carry_exit_intent", {"intent_id": intent_id, "reason": reason})
+        executor = PaperTwoLegExecutor(self._two_leg_execution_config(), CausalMarketTape([market]))
+        try:
+            perp = executor.execute(
+                leg=CarryLeg.PERP,
+                side="BUY",
+                qty=self.two_leg_balance.perp_qty,
+                decision_timestamp=decision_timestamp,
+                event_id=f"{intent_id}:perp",
+            )
+            if perp.filled_qty > 0:
+                self.two_leg_balance.apply_perp_fill(
+                    side="BUY",
+                    qty=perp.filled_qty,
+                    price=perp.price,
+                    fee=perp.fee,
+                    event_id=perp.event_id,
+                )
+            spot = executor.execute(
+                leg=CarryLeg.SPOT,
+                side="SELL",
+                qty=min(self.two_leg_balance.spot_qty, perp.filled_qty),
+                decision_timestamp=perp.timestamp,
+                event_id=f"{intent_id}:spot",
+            )
+            if spot.filled_qty > 0:
+                self.two_leg_balance.apply_spot_fill(
+                    side="SELL",
+                    qty=spot.filled_qty,
+                    price=spot.price,
+                    fee=spot.fee,
+                    event_id=spot.event_id,
+                )
+            if self.two_leg_balance.perp_qty <= 1e-12 and self.two_leg_balance.spot_qty <= 1e-12:
+                self.two_leg_balance.release_margin()
+                self.two_leg_state = CarryExecutionState.FLAT
+                self.two_leg_intent = None
+                self._two_leg_persist("carry_exit_complete", {"reason": reason})
+            else:
+                self.two_leg_state = CarryExecutionState.PARTIALLY_HEDGED
+                self._two_leg_persist("carry_exit_partial", {"reason": reason})
+        except Exception as error:
+            self.two_leg_state = CarryExecutionState.RECONCILIATION_REQUIRED
+            self.accounting_uncertain = True
+            self.accounting_uncertainty_reason = f"sortie two-leg ambiguë : {error}"
+            self._two_leg_persist("carry_reconciliation_required", {"error": str(error)})
+
+    def _apply_two_leg_funding(self, funding: pd.Series) -> None:
+        if self.two_leg_balance.perp_qty <= 0:
+            return
+        resolver = getattr(self.venue, "funding_reference_price", None)
+        if not callable(resolver):
+            raise RuntimeError("référence funding absente")
+        for timestamp, rate in funding.items():
+            timestamp = pd.Timestamp(str(timestamp))
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.tz_localize("UTC")
+            if self.last_funding_ts is not None and timestamp <= self.last_funding_ts:
+                continue
+            reference = resolver(timestamp)
+            if reference is None:
+                raise RuntimeError(f"prix oracle funding absent pour {timestamp}")
+            event = __import__(
+                "btcquant.execution.carry_paper", fromlist=["CarryFundingEvent"]
+            ).CarryFundingEvent(
+                event_id=f"{self.two_leg_spec.venue}:{self.two_leg_spec.perp_symbol}:{timestamp.isoformat()}",
+                venue=self.two_leg_spec.venue,
+                instrument=self.two_leg_spec.perp_symbol,
+                timestamp=timestamp,
+                native_rate=float(rate),
+                reference_price=float(reference),
+                reference_source="venue_funding_reference_price",
+            )
+            self.two_leg_balance.apply_funding(event)
+            self.two_leg_balance.accrue_interest(
+                annual_rate=self.borrow_rate_ann,
+                until=timestamp,
+                event_id=f"{event.event_id}:borrow",
+            )
+            self.last_funding_ts = timestamp
+        self._sync_two_leg_legacy_fields()
+
+    def _enforce_two_leg_timeout(
+        self,
+        *,
+        now: pd.Timestamp,
+        market: CarryMarketState | None,
+        decision_timestamp: pd.Timestamp,
+    ) -> bool:
+        if self.two_leg_state not in {
+            CarryExecutionState.ENTRY_PENDING,
+            CarryExecutionState.ONE_LEG_FILLED,
+            CarryExecutionState.PARTIALLY_HEDGED,
+            CarryExecutionState.EXIT_PENDING,
+        }:
+            return False
+        intent_ts_raw = (
+            self.two_leg_intent.get("decision_timestamp") if self.two_leg_intent else None
+        )
+        if not isinstance(intent_ts_raw, str):
+            self.two_leg_state = CarryExecutionState.RECONCILIATION_REQUIRED
+            self.accounting_uncertain = True
+            self.accounting_uncertainty_reason = "transition two-leg sans horodatage"
+            self._two_leg_persist(
+                "carry_reconciliation_required", {"reason": "missing_intent_timestamp"}
+            )
+            return True
+        age = (now - pd.Timestamp(intent_ts_raw)).total_seconds()
+        limit = int(getattr(self.carry_execution, "max_unhedged_seconds", 300))
+        if age <= limit:
+            return False
+        if self.in_position and market is not None:
+            self._close_two_leg(
+                reason="unhedged_timeout",
+                market=market,
+                decision_timestamp=decision_timestamp,
+            )
+        else:
+            self.two_leg_state = CarryExecutionState.RECONCILIATION_REQUIRED
+            self.accounting_uncertain = True
+            self.accounting_uncertainty_reason = (
+                "transition two-leg expirée sans exposition résolue"
+            )
+            self._two_leg_persist(
+                "carry_reconciliation_required",
+                {"reason": "unhedged_timeout", "age_seconds": age, "limit_seconds": limit},
+            )
+        return True
+
+    def _tick_two_leg(self) -> None:
+        if (
+            self.accounting_uncertain
+            or self.two_leg_state == CarryExecutionState.RECONCILIATION_REQUIRED
+        ):
+            return
+        funding = self._recent_funding()
+        if funding.empty:
+            return
+        try:
+            self._apply_two_leg_funding(funding)
+        except Exception as error:
+            if self.in_position:
+                self._mark_accounting_uncertain(
+                    "Funding two-leg non reconstructible",
+                    {"classification": "TWO_LEG_FUNDING_UNCERTAIN", "detail": str(error)},
+                )
+            else:
+                self.store.record_incident(
+                    "accounting:carry:funding_unavailable",
+                    engine="carry",
+                    severity="WARNING",
+                    kind="carry_funding_unavailable",
+                    message=str(error),
+                    context={"model": "carry_two_leg_execution_v1"},
+                )
+            return
+        decision_timestamp = pd.Timestamp.now(tz="UTC")
+        market = self._two_leg_market()
+        if self._enforce_two_leg_timeout(
+            now=decision_timestamp,
+            market=market,
+            decision_timestamp=decision_timestamp,
+        ):
+            return
+        if market is not None:
+            self.two_leg_balance.mark(market)
+            margin = check_margin(
+                self.two_leg_balance,
+                perp_mark=market.perp_mark,
+                initial_margin_rate=getattr(self.carry_execution, "initial_margin_rate", None),
+                maintenance_margin_rate=getattr(
+                    self.carry_execution, "maintenance_margin_rate", None
+                ),
+            )
+            self._sync_two_leg_legacy_fields()
+            if margin.qualified and margin.liquidatable and self.in_position:
+                self._close_two_leg(
+                    reason="liquidation_margin",
+                    market=market,
+                    decision_timestamp=decision_timestamp,
+                )
+                self.halted = True
+                self._save_state(
+                    event_type="carry_liquidation", event_payload={"margin": asdict(margin)}
+                )
+                return
+        self._update_kill_switches()
+        smoothing = smooth_funding_events(
+            funding, smooth_days=self.smooth_days, funding_interval=self._native_funding_interval()
+        )
+        latest = smoothing.coverage.iloc[-1]
+        if int(latest["missing_events"]) > 0 or str(latest["status"]) != "OK":
+            self._mark_accounting_uncertain(
+                "Signal carry two-leg incertain",
+                {
+                    "classification": str(latest["status"]),
+                    "missing_events": int(latest["missing_events"]),
+                },
+            )
+            return
+        smooth_ann = float(smoothing.annualized.iloc[-1])
+        if self.in_position and smooth_ann < self.exit_ann and market is not None:
+            self._close_two_leg(
+                reason="funding_exit", market=market, decision_timestamp=decision_timestamp
+            )
+        elif not self.in_position and smooth_ann > self.enter_ann and market is not None:
+            self._open_two_leg(
+                smooth_ann=smooth_ann, market=market, decision_timestamp=decision_timestamp
+            )
+        else:
+            self._save_state()
+
     def _tick(self) -> None:
+        if self.paper_model == "two_leg_execution_v1" and self.live_broker is None:
+            self._tick_two_leg()
+            return
         funding = self._recent_funding()
         if self.accounting_uncertain or funding.empty:
             return

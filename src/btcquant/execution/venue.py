@@ -23,6 +23,7 @@ import pandas as pd
 
 from ..config import HYPERLIQUID_TESTNET_API_URL
 from .resilience import RetryPolicy
+from .carry_paper import CarryMarketState
 
 
 def _assert_hyperliquid_testnet_endpoint(exchange: object) -> None:
@@ -41,9 +42,17 @@ FUNDING_HISTORY_PAGE_LIMIT = 1000
 
 
 class Venue:
-    def __init__(self, exchange_id: str, symbol: str, *, testnet: bool = False) -> None:
+    def __init__(
+        self,
+        exchange_id: str,
+        symbol: str,
+        *,
+        testnet: bool = False,
+        spot_symbol: str | None = None,
+    ) -> None:
         self.exchange_id = exchange_id
         self.symbol = symbol
+        self.spot_symbol = spot_symbol or (symbol.split(":", 1)[0] if ":" in symbol else symbol)
         self.is_hourly_funding = exchange_id == "hyperliquid"
         klass = getattr(ccxt, exchange_id)
         self.exchange: ccxt.Exchange = klass({"enableRateLimit": True, "timeout": 30_000})
@@ -108,6 +117,48 @@ class Venue:
             self.symbol,
             limit=limit,
             retry_on=NETWORK_ERRORS,
+        )
+
+    def current_carry_market_state(self, limit: int = 20) -> CarryMarketState:
+        """Return one synchronous public observation for the two paper legs.
+
+        A positive configured latency still requires a recorded post-decision
+        tape; this live public snapshot is intentionally only suitable for a
+        zero-latency observation cycle.
+        """
+
+        spot_book = self._retry.call(
+            self.exchange.fetch_order_book,
+            self.spot_symbol,
+            limit=limit,
+            retry_on=NETWORK_ERRORS,
+        )
+        perp_book = self._retry.call(
+            self.exchange.fetch_order_book,
+            self.symbol,
+            limit=limit,
+            retry_on=NETWORK_ERRORS,
+        )
+
+        def top(book: dict, side: str) -> float:
+            levels = book.get(side)
+            if not isinstance(levels, list) or not levels or len(levels[0]) < 1:
+                raise ccxt.ExchangeNotAvailable(f"carnet {side} vide")
+            return float(levels[0][0])
+
+        spot_bid, spot_ask = top(spot_book, "bids"), top(spot_book, "asks")
+        perp_bid, perp_ask = top(perp_book, "bids"), top(perp_book, "asks")
+        return CarryMarketState(
+            timestamp=pd.Timestamp.now(tz="UTC"),
+            spot_bid=spot_bid,
+            spot_ask=spot_ask,
+            perp_bid=perp_bid,
+            perp_ask=perp_ask,
+            spot_mark=(spot_bid + spot_ask) / 2.0,
+            perp_mark=(perp_bid + perp_ask) / 2.0,
+            source="public_order_book_snapshot",
+            spot_order_book=spot_book,
+            perp_order_book=perp_book,
         )
 
     # ── funding ──────────────────────────────────────────────────────────────

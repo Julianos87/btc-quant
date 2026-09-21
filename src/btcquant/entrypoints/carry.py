@@ -11,7 +11,13 @@ import threading
 from dataclasses import replace
 from pathlib import Path
 
-from btcquant.config import carry_policy_from_config, load_config, runtime_execution_from_config
+from btcquant.config import (
+    carry_execution_from_config,
+    carry_policy_from_config,
+    execution_config_from_config,
+    load_config,
+    runtime_execution_from_config,
+)
 from btcquant.execution.carry_runner import CarryRunner
 from btcquant.execution.venue import Venue
 
@@ -26,6 +32,7 @@ def main() -> None:
     )
     cfg = load_config(parser.parse_known_args()[0].config)
     configured_policy = carry_policy_from_config(cfg)
+    configured_carry_execution = carry_execution_from_config(cfg)
     parser.add_argument(
         "--capital",
         type=float,
@@ -76,13 +83,20 @@ def main() -> None:
         ),
     )
     execution = runtime_execution_from_config(cfg)
+    execution_simulation = execution_config_from_config(cfg, configured_policy.fee_rate)
     live_exchange, live_symbol = execution.require_live_venue()
     runner = CarryRunner(
         policy=policy,
         state_file=ROOT / execution.require_state_file(),
         legacy_state_file=ROOT / "state" / "carry_state.json",
         live_broker=None,
-        venue=Venue(live_exchange, live_symbol),
+        venue=Venue(
+            live_exchange,
+            live_symbol,
+            spot_symbol=configured_carry_execution.spot_symbol,
+        ),
+        carry_execution=configured_carry_execution,
+        paper_execution_config=execution_simulation,
     )
     stop_event = threading.Event()
 

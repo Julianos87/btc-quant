@@ -1222,6 +1222,17 @@ def summary():
         "trend_state": trend_observed_at,
         "carry_state": carry_observed_at,
     }
+    carry_two_leg = carry_state.get("two_leg")
+    carry_two_leg = carry_two_leg if isinstance(carry_two_leg, dict) else {}
+    carry_mode = (
+        "PAPER_TWO_LEG"
+        if carry_state.get("carry_model") == "two_leg_execution_v1"
+        else "PAPER_SYNTHETIC"
+    )
+    carry_qualification = carry_two_leg.get("qualification")
+    carry_spec = carry_two_leg.get("venue_spec")
+    carry_cost_provenance = carry_two_leg.get("cost_provenance")
+
     return jsonify(
         {
             "api_schema_version": 2,
@@ -1316,7 +1327,13 @@ def summary():
                 "halted": carry_state.get("halted", False),
                 "daily_lockout": carry_state.get("daily_lockout", False),
                 "peak_equity": carry_state.get("peak_equity"),
-                "mode": "PAPER_SYNTHETIC",
+                "mode": carry_mode,
+                "model_version": carry_two_leg.get("model_version")
+                if carry_two_leg
+                else carry_state.get("carry_model"),
+                "qualification": carry_qualification,
+                "venue_spec": carry_spec,
+                "cost_provenance": carry_cost_provenance,
                 "position_status": carry_position_status,
                 "entry_time": carry_entry_time.isoformat()
                 if carry_is_open and carry_entry_time

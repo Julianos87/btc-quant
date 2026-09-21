@@ -28,6 +28,7 @@ from btcquant.execution.carry_cutover import (
     NO_OP_ALREADY_CUT_OVER,
     CutoverRefused,
     apply_legacy_synthetic_carry_cutover,
+    apply_legacy_synthetic_model_cutover,
     diagnose_legacy_synthetic_pattern,
     read_carry_state_sha256,
     require_paper_carry_config,
@@ -46,6 +47,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--confirm-legacy-synthetic-cutover",
         action="store_true",
         help="autorise explicitement la réécriture du checkpoint Carry",
+    )
+    parser.add_argument(
+        "--confirm-paper-model-cutover",
+        action="store_true",
+        help="archive le modèle synthétique et démarre le nouveau modèle two-leg PAPER",
     )
     parser.add_argument(
         "--print-expected-state-sha256",
@@ -78,10 +84,10 @@ def main(argv: list[str] | None = None) -> int:
         require_paper_carry_config(args.config)
         if args.print_expected_state_sha256:
             return _diagnose(args.database)
-        if not args.confirm_legacy_synthetic_cutover:
+        if not args.confirm_legacy_synthetic_cutover and not args.confirm_paper_model_cutover:
             print(
                 "CUTOVER_BLOCKED: confirmation absente ; "
-                "utiliser --confirm-legacy-synthetic-cutover après arrêt Carry",
+                "utiliser une confirmation explicite après arrêt Carry",
                 file=sys.stderr,
             )
             return 3
@@ -91,7 +97,12 @@ def main(argv: list[str] | None = None) -> int:
         if not args.git_sha:
             print("CUTOVER_BLOCKED: --git-sha requis", file=sys.stderr)
             return 3
-        result = apply_legacy_synthetic_carry_cutover(
+        cutover = (
+            apply_legacy_synthetic_model_cutover
+            if args.confirm_paper_model_cutover
+            else apply_legacy_synthetic_carry_cutover
+        )
+        result = cutover(
             args.database,
             expected_state_sha256=args.expected_state_sha256,
             git_sha=args.git_sha,

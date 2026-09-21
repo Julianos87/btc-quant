@@ -49,6 +49,26 @@ _RUNTIME_EXECUTION_KEYS = {
     "api_url",
 }
 
+_CARRY_EXECUTION_KEYS = {
+    "model",
+    "spot_symbol",
+    "perp_symbol",
+    "spot_account",
+    "perp_account",
+    "collateral_asset",
+    "borrow_asset",
+    "borrow_enabled",
+    "max_borrow",
+    "max_leverage",
+    "initial_margin_rate",
+    "maintenance_margin_rate",
+    "holding_days",
+    "max_unhedged_seconds",
+    "uncertainty_reserve_rate",
+    "fee_source",
+    "financing_source",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class CostsConfig:
@@ -152,6 +172,59 @@ class PortfolioConfig:
     @property
     def carry_capital(self) -> float:
         return self.total_capital * self.carry_fraction
+
+
+@dataclass(frozen=True, slots=True)
+class CarryExecutionConfig:
+    """Configuration du simulateur PAPER à deux jambes.
+
+    Les capacités absentes restent None et rendent le modèle non qualifié.
+    """
+
+    model: str = "synthetic_historical"
+    spot_symbol: str = "BTC/USDC"
+    perp_symbol: str = "BTC/USDC:USDC"
+    spot_account: str = "spot"
+    perp_account: str = "perp"
+    collateral_asset: str = "USDC"
+    borrow_asset: str = "USDC"
+    borrow_enabled: bool = False
+    max_borrow: float | None = None
+    max_leverage: float | None = None
+    initial_margin_rate: float | None = None
+    maintenance_margin_rate: float | None = None
+    holding_days: float = 30.0
+    max_unhedged_seconds: int = 300
+    uncertainty_reserve_rate: float = 0.0
+    fee_source: str = "UNSPECIFIED"
+    financing_source: str = "UNSPECIFIED"
+
+    def __post_init__(self) -> None:
+        if self.model not in {"synthetic_historical", "two_leg_execution_v1"}:
+            raise ValueError("carry_execution.model inconnu")
+        if self.holding_days <= 0 or self.max_unhedged_seconds <= 0:
+            raise ValueError("holding_days et max_unhedged_seconds doivent être positifs")
+        if self.uncertainty_reserve_rate < 0:
+            raise ValueError("uncertainty_reserve_rate doit être positif ou nul")
+        if not isinstance(self.borrow_enabled, bool):
+            raise TypeError("borrow_enabled doit être booléen")
+        for name in (
+            "max_borrow",
+            "max_leverage",
+            "initial_margin_rate",
+            "maintenance_margin_rate",
+        ):
+            value = getattr(self, name)
+            if value is not None and (not math.isfinite(float(value)) or float(value) < 0):
+                raise ValueError(f"carry_execution.{name} invalide")
+
+
+def carry_execution_from_config(cfg: dict[str, Any]) -> CarryExecutionConfig:
+    raw = cfg.get("carry_execution", {})
+    if not isinstance(raw, dict):
+        raise ValueError("carry_execution doit être un mapping YAML")
+    _unknown_keys("carry_execution", raw, _CARRY_EXECUTION_KEYS)
+    return CarryExecutionConfig(**raw)
 
 
 def load_config(path: str | Path = "environments/dev/config.yaml") -> dict[str, Any]:
@@ -281,6 +354,7 @@ def _validate_config(cfg: dict[str, Any]) -> None:
     _validate_strategies(cfg["strategies"])
     risk = risk_from_config(cfg)
     execution_config_from_config(cfg, costs.fee_rate)
+    carry_execution_from_config(cfg)
     _validate_tandem_capital(cfg, risk)
 
 

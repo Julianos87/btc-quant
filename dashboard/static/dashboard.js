@@ -68,6 +68,7 @@ const I18N = {
     yearly_note:"Simulation avec frais, slippage et funding réels — pas des résultats réalisés. Rendements par année civile ; pire creux de l’année au survol.",
     yearly_partial:"année incomplète", yearly_missing:"Référence annuelle absente — lancer scripts/make_yearly_reference.py",
     carry_synthetic:"paper synthétique · pas de position venue",
+    carry_two_leg:"paper deux jambes · qualification explicite",
     carry_mode:"Mode", carry_mode_value:"Paper synthétique",
     carry_modeled_qty:"Perp qty modélisé", carry_modeled_spot:"Spot notionnel modélisé",
     carry_modeled_perp:"Perp notionnel modélisé",
@@ -130,6 +131,7 @@ const I18N = {
     yearly_note:"Simulation with real fees, slippage and funding — not realized results. Calendar-year returns; each year's worst drawdown on hover.",
     yearly_partial:"partial year", yearly_missing:"Yearly reference missing — run scripts/make_yearly_reference.py",
     carry_synthetic:"synthetic paper · no venue position",
+    carry_two_leg:"two-leg paper · explicit qualification",
     carry_mode:"Mode", carry_mode_value:"Synthetic paper",
     carry_modeled_qty:"Modeled perp qty", carry_modeled_spot:"Modeled spot notional",
     carry_modeled_perp:"Modeled perp notional",
@@ -638,7 +640,11 @@ function renderCarryCard(carry) {
     : positionStatus === "FLAT"
       ? `<span class="badge flat">FLAT</span>`
       : `<span class="badge unknown">? ÉTAT INCONNU</span>`;
-  $("carry-pos").innerHTML = positionBadge + `<span class="carry-synth">${esc(t("carry_synthetic"))}</span>`;
+  const modelNote = carry.mode === "PAPER_TWO_LEG"
+    ? t("carry_two_leg") + " · " + (carry.qualification || "UNKNOWN")
+    : t("carry_synthetic");
+  $("carry-pos").innerHTML = positionBadge + '<span class="carry-synth">' + modelNote + '</span>';
+
   const qty = $("carry-perp-qty");
   if (qty) qty.textContent = !open || carry.perp_qty == null ? "N/A" : fmtQty(carry.perp_qty);
   const spot = $("carry-spot-notional");
@@ -668,7 +674,9 @@ function renderCarryCard(carry) {
   if ($("carry-borrow-cost-note")) $("carry-borrow-cost-note").textContent = carry.borrow_cost_total == null ? "N/A" : fmt$(carry.borrow_cost_total, 2);
   if ($("carry-borrow-cost")) $("carry-borrow-cost").textContent = carry.borrow_cost_total == null ? "N/A" : fmt$(carry.borrow_cost_total, 2);
   if ($("carry-ledger-status")) $("carry-ledger-status").textContent = carry.funding_ledger_status || "N/A";
-  if ($("carry-accounting")) $("carry-accounting").textContent = accounting;
+  if ($("carry-accounting")) $("carry-accounting").textContent =
+    accounting + (carry.qualification ? " · " + carry.qualification : "");
+
   const note = $("carry-uncertain");
   if (note) note.style.display = carry.accounting_uncertain === true ? "block" : "none";
 }

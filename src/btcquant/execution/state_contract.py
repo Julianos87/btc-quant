@@ -94,6 +94,9 @@ class CarryStatePayload(TypedDict):
     daily_lockout: bool
     accounting_uncertain: NotRequired[bool]
     accounting_uncertainty_reason: NotRequired[str | None]
+    carry_model: NotRequired[str]
+    historical_series_label: NotRequired[str]
+    two_leg: NotRequired[dict[str, Any] | None]
 
 
 def _mapping(payload: object, label: str) -> Mapping[str, Any]:

@@ -35,6 +35,27 @@ carry:
   smooth_days: 14
   borrow_rate_ann: 0.10
 
+# Le nouveau simulateur reste fail-closed tant que le compte spot/perp n'est
+# pas qualifié avec une capacité d'emprunt et une règle de marge vérifiables.
+carry_execution:
+  model: two_leg_execution_v1
+  spot_symbol: BTC/USDC
+  perp_symbol: BTC/USDC:USDC
+  spot_account: spot
+  perp_account: perp
+  collateral_asset: USDC
+  borrow_asset: USDC
+  borrow_enabled: false
+  max_borrow: null
+  max_leverage: null
+  initial_margin_rate: null
+  maintenance_margin_rate: null
+  holding_days: 30
+  max_unhedged_seconds: 300
+  uncertainty_reserve_rate: 0.02
+  fee_source: HYPERLIQUID_FEE_TIER_REQUIRED
+  financing_source: HYPERLIQUID_ACCOUNT_CAPACITY_NOT_PROVIDED
+
 data:
   dir: data
   base_timeframe: 1h

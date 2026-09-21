@@ -27,6 +27,8 @@ from .state_store import SCHEMA_VERSION, StateStore, utc_now
 
 CUTOVER_EVENT_TYPE = "legacy_synthetic_carry_cutover"
 CUTOVER_REASON = "LEGACY_SYNTHETIC_OPEN_QTY0"
+MODEL_CUTOVER_EVENT_TYPE = "carry_two_leg_model_cutover"
+MODEL_CUTOVER_REASON = "LEGACY_SYNTHETIC_MODEL_TO_TWO_LEG_EXECUTION"
 CUTOVER_APPLIED = "CUTOVER_APPLIED"
 NO_OP_ALREADY_CUT_OVER = "NO_OP_ALREADY_CUT_OVER"
 _FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -525,3 +527,181 @@ def read_carry_state_sha256(database: str | Path) -> str:
     if payload is None:
         raise CutoverRefused("CUTOVER_BLOCKED: engine_state carry absent")
     return canonical_carry_state_sha256(payload)
+
+
+def apply_legacy_synthetic_model_cutover(
+    database: str | Path,
+    *,
+    expected_state_sha256: str,
+    git_sha: str,
+    operator: str | None = None,
+    acquire_lock: bool = True,
+) -> CutoverResult:
+    """Archive the old synthetic PAPER model and initialize two-leg FLAT.
+
+    This is deliberately separate from the historical qty-zero cutover above:
+    an old synthetic position may have a non-zero simulated perp quantity, but
+    it is not an external order because the precondition is an explicit PAPER
+    configuration.  The old checkpoint remains available under a distinct
+    engine key and the new engine starts with the same cash equity.
+    """
+
+    if not _SHA256_RE.fullmatch(expected_state_sha256):
+        raise CutoverRefused("CUTOVER_BLOCKED: --expected-state-sha256 invalide")
+    if not _FULL_SHA_RE.fullmatch(git_sha):
+        raise CutoverRefused("CUTOVER_BLOCKED: --git-sha doit être un SHA git 40 hex")
+    require_schema_6(database)
+    try:
+        assert_writer_recovery_clear(Path(database).parent)
+    except RecoveryRequired as error:
+        raise CutoverRefused(f"CUTOVER_BLOCKED: recovery marker actif ({error})") from error
+    lock: EngineInstanceLock | None = None
+    if acquire_lock:
+        lock = EngineInstanceLock(database, "carry")
+        try:
+            lock.acquire()
+        except EngineInstanceAlreadyRunning as error:
+            raise CutoverRefused(f"CUTOVER_BLOCKED: writer carry actif ({error})") from error
+    try:
+        store = StateStore(database, allow_migration=False)
+        with store._transaction() as connection:
+            return apply_model_cutover_on_connection(
+                store,
+                connection,
+                expected_state_sha256=expected_state_sha256,
+                git_sha=git_sha,
+                operator=operator or getpass.getuser() or os.environ.get("USER") or "unknown",
+            )
+    except RecoveryRequired as error:
+        raise CutoverRefused(f"CUTOVER_BLOCKED: recovery marker actif ({error})") from error
+    finally:
+        if lock is not None:
+            lock.release()
+
+
+def apply_model_cutover_on_connection(
+    store: StateStore,
+    connection: Any,
+    *,
+    expected_state_sha256: str,
+    git_sha: str,
+    operator: str,
+) -> CutoverResult:
+    schema_row = connection.execute(
+        "SELECT value FROM metadata WHERE key = 'schema_version'"
+    ).fetchone()
+    if schema_row is None or int(schema_row[0]) != SCHEMA_VERSION:
+        raise CutoverRefused("CUTOVER_BLOCKED: schéma != 6 dans la transaction")
+    row = connection.execute("SELECT payload FROM engine_state WHERE engine = 'carry'").fetchone()
+    if row is None:
+        raise CutoverRefused("CUTOVER_BLOCKED: engine_state carry absent")
+    payload = json.loads(row["payload"])
+    current_sha = canonical_carry_state_sha256(payload)
+    events = [
+        dict(event)
+        for event in connection.execute(
+            "SELECT id, event_type, payload FROM events WHERE engine = 'carry' ORDER BY id"
+        ).fetchall()
+    ]
+    if payload.get("carry_model") == "two_leg_execution_v1" and payload.get("in_position") is False:
+        matching = [
+            _event_inner_payload(event["payload"])
+            for event in events
+            if event.get("event_type") == MODEL_CUTOVER_EVENT_TYPE
+        ]
+        if matching and current_sha == expected_state_sha256:
+            latest = matching[-1]
+            return CutoverResult(
+                status="NO_OP_ALREADY_CUT_OVER",
+                old_state_sha256=str(latest.get("old_state_sha256") or current_sha),
+                new_state_sha256=current_sha,
+                equity=float(payload["equity"]),
+                cutover_timestamp_utc=str(latest.get("cutover_timestamp_utc") or ""),
+            )
+        raise CutoverRefused("CUTOVER_BLOCKED: état two-leg déjà actif ou hash incohérent")
+    if current_sha != expected_state_sha256:
+        raise CutoverRefused(
+            "CUTOVER_BLOCKED: hash d'état différent "
+            f"(lu={current_sha}, attendu={expected_state_sha256})"
+        )
+    if payload.get("accounting_uncertain") is True:
+        raise CutoverRefused("CUTOVER_BLOCKED: ancien état déjà incertain")
+    if payload.get("execution_state") in {"OPENING", "CLOSING", "UNBALANCED"}:
+        raise CutoverRefused("CUTOVER_BLOCKED: transition synthétique en cours")
+    order_count, unresolved = _count_carry_orders(connection)
+    if order_count or unresolved:
+        raise CutoverRefused("CUTOVER_BLOCKED: ordres carry présents ou non résolus")
+    incidents = _open_critical_carry_incidents(connection)
+    if incidents:
+        raise CutoverRefused(
+            "CUTOVER_BLOCKED: incident CRITICAL carry OPEN: " + ", ".join(incidents)
+        )
+    if "equity" not in payload or "peak_equity" not in payload:
+        raise CutoverRefused("CUTOVER_BLOCKED: bilan synthétique incomplet")
+    archive_row = connection.execute(
+        "SELECT 1 FROM engine_state WHERE engine = 'carry_synthetic_historical'"
+    ).fetchone()
+    if archive_row is not None:
+        raise CutoverRefused("CUTOVER_BLOCKED: archive carry_synthetic_historical déjà présente")
+    archive = dict(payload)
+    archive["carry_model"] = "synthetic_historical"
+    archive["historical_series_label"] = "synthetic_historical"
+    archive["archived_by_model_cutover"] = True
+    archive = store._checkpoint_payload(connection, "carry_synthetic_historical", archive)
+    cutover_ts = utc_now()
+    new_payload = build_flat_payload(payload, last_funding_ts=cutover_ts)
+    new_payload["carry_model"] = "two_leg_execution_v1"
+    new_payload["historical_series_label"] = "two_leg_execution_v1"
+    new_payload["two_leg"] = None
+    new_payload = store._checkpoint_payload(connection, "carry", new_payload)
+    new_sha = canonical_carry_state_sha256(new_payload)
+    ledger_count = _count_carry_funding_ledger(connection)
+    event_payload = {
+        "schema_version": SCHEMA_VERSION,
+        "cutover_timestamp_utc": cutover_ts,
+        "reason": MODEL_CUTOVER_REASON,
+        "old_state_sha256": current_sha,
+        "new_state_sha256": new_sha,
+        "git_sha": git_sha,
+        "operator": operator,
+        "equity_before": payload["equity"],
+        "equity_after": new_payload["equity"],
+        "archived_engine": "carry_synthetic_historical",
+        "funding_ledger_rows_preserved": ledger_count,
+        "old_in_position": payload.get("in_position"),
+        "old_spot_qty": payload.get("spot_qty", 0.0),
+        "old_perp_qty": payload.get("perp_qty", 0.0),
+    }
+    connection.execute(
+        "INSERT INTO engine_state(engine, payload, updated_at) VALUES(?, ?, ?)",
+        ("carry_synthetic_historical", store._json(archive), cutover_ts),
+    )
+    connection.execute(
+        """
+        INSERT INTO engine_state(engine, payload, updated_at) VALUES(?, ?, ?)
+        ON CONFLICT(engine) DO UPDATE SET payload=excluded.payload, updated_at=excluded.updated_at
+        """,
+        ("carry", store._json(new_payload), cutover_ts),
+    )
+    store._sync_positions(connection, "carry", new_payload, cutover_ts)
+    store._insert_event(
+        connection,
+        "carry",
+        MODEL_CUTOVER_EVENT_TYPE,
+        store._state_event(new_payload, event_payload),
+        aggregate_type="engine",
+        aggregate_id="carry",
+    )
+    _require_consistent_position_row(
+        connection,
+        expected_status="FLAT",
+        expected_qty=0.0,
+        expected_cash=float(new_payload["equity"]),
+    )
+    return CutoverResult(
+        status="CUTOVER_APPLIED",
+        old_state_sha256=current_sha,
+        new_state_sha256=new_sha,
+        equity=float(new_payload["equity"]),
+        cutover_timestamp_utc=cutover_ts,
+    )

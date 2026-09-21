@@ -36,6 +36,7 @@ def decide_carry_payment(
     exit_ann: float,
     halted: bool = False,
     entry_blocked: bool = False,
+    net_expected: float | None = None,
 ) -> CarryDecision:
     """Décide la position applicable au prochain paiement de funding.
 
@@ -55,6 +56,22 @@ def decide_carry_payment(
 
     if in_position and smooth_ann < exit_ann:
         return CarryDecision(False, CarryAction.CLOSE, "funding_exit")
-    if not in_position and not entry_blocked and smooth_ann > enter_ann:
-        return CarryDecision(True, CarryAction.OPEN, "funding_entry")
+    if (
+        not in_position
+        and not entry_blocked
+        and smooth_ann > enter_ann
+        and (net_expected is None or (math.isfinite(net_expected) and net_expected > 0))
+    ):
+        return CarryDecision(
+            True,
+            CarryAction.OPEN,
+            "net_carry_entry" if net_expected is not None else "funding_entry",
+        )
+    if (
+        not in_position
+        and not entry_blocked
+        and smooth_ann > enter_ann
+        and net_expected is not None
+    ):
+        return CarryDecision(False, CarryAction.HOLD, "net_carry_non_positive")
     return CarryDecision(in_position, CarryAction.HOLD)

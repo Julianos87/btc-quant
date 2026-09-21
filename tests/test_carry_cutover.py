@@ -18,6 +18,7 @@ from btcquant.execution.carry_cutover import (
     NO_OP_ALREADY_CUT_OVER,
     CutoverRefused,
     apply_legacy_synthetic_carry_cutover,
+    apply_legacy_synthetic_model_cutover,
     canonical_carry_state_sha256,
     diagnose_legacy_synthetic_pattern,
 )
@@ -136,6 +137,26 @@ def test_exact_legacy_pattern_cuts_over_to_flat(tmp_path: Path) -> None:
     assert position is not None
     assert position[0] == "FLAT"
     assert position[1] == 0.0
+
+
+def test_two_leg_model_cutover_archives_nonzero_synthetic_state(tmp_path: Path) -> None:
+    database = _seed(tmp_path, _legacy_payload(qty=0.15, spot_qty=0.0, perp_qty=0.15))
+    result = apply_legacy_synthetic_model_cutover(
+        database,
+        expected_state_sha256=_sha(database),
+        git_sha=GIT_SHA,
+        operator="pytest",
+    )
+    assert result.status == CUTOVER_APPLIED
+    carry = StateStore(database, read_only=True).load_engine_state("carry")
+    archive = StateStore(database, read_only=True).load_engine_state("carry_synthetic_historical")
+    assert carry is not None and archive is not None
+    assert carry["carry_model"] == "two_leg_execution_v1"
+    assert carry["in_position"] is False
+    assert carry["equity"] == EXACT_EQUITY
+    assert archive["carry_model"] == "synthetic_historical"
+    assert archive["perp_qty"] == pytest.approx(0.15)
+    assert result.equity == EXACT_EQUITY
 
 
 def test_equity_and_risk_baselines_are_preserved_exactly(tmp_path: Path) -> None:
