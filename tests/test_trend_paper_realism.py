@@ -20,6 +20,7 @@ from btcquant.execution.errors import ReconciliationRequired
 from btcquant.execution.margin import SharedCrossMarginModel
 from btcquant.execution.financial_application_plan import sha256_json
 from btcquant.execution.runner import LiveRunner, StrategySlot
+from btcquant.execution.operational_state_reader import OperationalStateReader
 from btcquant.execution.state_store import StateStore
 from btcquant.risk import RiskConfig
 from btcquant.strategies.base import Position, Strategy
@@ -164,9 +165,19 @@ def test_funding_replay_uses_event_prices_and_exposure_at_each_timestamp(tmp_pat
         },
     )
     runner.last_funding_ts = first - pd.Timedelta(hours=1)
+    runner.store.record_incident(
+        "accounting:trend:funding_uncertainty",
+        engine="trend",
+        severity="CRITICAL",
+        kind="funding_accounting_uncertainty",
+        message="historical reference temporarily unavailable",
+    )
 
     runner._apply_funding_payments(999_999.0)
 
+    assert not OperationalStateReader(runner.store.path).read_incidents(
+        open_only=True, engine="trend"
+    )
     # 2 BTC at 100 for the first event, 1 BTC at 200 for the second.
     assert slot.cash == pytest.approx(20_000.0 - 0.2 - 0.2)
     ledger = runner.store.read_funding_ledger()

@@ -1373,6 +1373,9 @@ class LiveRunner:
                     slot.cash = previous_cash[slot.strategy.name]
                 self.last_funding_ts = previous_checkpoint
                 raise
+            # A previously unresolved funding incident is cleared only after
+            # the event is durably applied or proven idempotently replayed.
+            self.store.resolve_incident("accounting:trend:funding_uncertainty")
             if result == "replayed":
                 self._load_state()
                 break
