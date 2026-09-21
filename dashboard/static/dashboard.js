@@ -14,6 +14,33 @@ const PREFS_DEFAULT = {
 let PREFS = Object.assign({}, PREFS_DEFAULT, JSON.parse(localStorage.getItem("btcq-prefs") || "{}"));
 const savePrefs = () => localStorage.setItem("btcq-prefs", JSON.stringify(PREFS));
 const LOCALE = () => PREFS.lang === "en" ? "en-US" : "fr-FR";
+const DASHBOARD_STATE = window.BTCQuantDashboardState;
+if (!DASHBOARD_STATE) throw new Error("dashboard_state_unavailable");
+
+const FETCH_TIMEOUT_MS = 12000;
+function fetchDashboard(url, options = {}) {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, FETCH_TIMEOUT_MS);
+  const externalSignal = options.signal;
+  const abort = () => controller.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort();
+    else externalSignal.addEventListener("abort", abort, {once: true});
+  }
+  return fetch(url, {...options, signal: controller.signal}).catch(error => {
+    if (timedOut) {
+      const timeoutError = new Error(`dashboard_timeout_${url}`);
+      timeoutError.name = "TimeoutError";
+      throw timeoutError;
+    }
+    throw error;
+  }).finally(() => {
+    window.clearTimeout(timeout);
+    if (externalSignal) externalSignal.removeEventListener("abort", abort);
+  });
+}
+
 
 // ── i18n ───────────────────────────────────────────────────
 const I18N = {
@@ -180,7 +207,7 @@ function applyI18n() {
     ? t("auto_refresh") + " " + (PREFS.refresh/1000) + " s" : (PREFS.lang==="en"?"Manual refresh":"Rafraîchissement manuel");
   if ($("refresh-btn")) swapText($("refresh-label"), refreshLabel($("refresh-btn").dataset.state || "idle"));
   if (lastSummary) { renderCockpitStatus(lastSummary); renderViewFocus(lastSummary); }
-  if (pcData) drawPChart();
+  if (pcData) scheduleRedraw("price");
   updateDataFreshness();
 }
 
@@ -198,6 +225,11 @@ const fmtPct = (v, dp=2) => v == null || !Number.isFinite(Number(v)) ? "—" :
 const fmtDrawdown = (v, dp=1) => v == null || !Number.isFinite(Number(v)) ? "—" :
   (v*100).toFixed(dp).replace(".", PREFS.lang==="en"?".":",") + " %";
 const fmtNum = (v, dp=2) => v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(dp).replace(".", PREFS.lang==="en"?".":",");
+const fmtQty = (value, unit = "BTC") => DASHBOARD_STATE.formatQuantity(value, {unit, locale: LOCALE()});
+const summaryRequestState = new DASHBOARD_STATE.SourceRequestState();
+const tradeRequestGate = new DASHBOARD_STATE.LatestRequestGate();
+let tradeAbortController = null;
+let tradeLimit = 12;
 const cls = (el, v) => { el.classList.toggle("up", v > 0); el.classList.toggle("down", v < 0); };
 let range = PREFS.range, unit = "pct", chartData = null, showBH = false, lastSummary = null, lastTradeRows = [];
 let lastMetrics = null;
@@ -276,16 +308,16 @@ function applyDashboardView() {
   });
   setPressed("#unit", button => button.dataset.u === unit);
   requestAnimationFrame(() => {
-    if (typeof drawChart === "function") drawChart();
-    if (typeof drawPChart === "function") drawPChart();
+    if (typeof drawChart === "function") scheduleRedraw("chart");
+    if (typeof drawPChart === "function") scheduleRedraw("price");
   });
-  if (typeof drawYearly === "function") drawYearly(); // la carte devient visible en vue performance
+  if (typeof drawYearly === "function") scheduleRedraw("yearly"); // la carte devient visible en vue performance
 }
 
 function setChartUnit(next) {
   unit = next;
   setPressed("#unit", button => button.dataset.u === unit);
-  drawChart();
+  scheduleRedraw("chart");
 }
 
 document.querySelectorAll("#dashboard-view [data-view]").forEach(button => button.onclick = () => {
@@ -294,6 +326,7 @@ document.querySelectorAll("#dashboard-view [data-view]").forEach(button => butto
   applyDashboardView();
   if (PREFS.view === "risk") setChartUnit("dd");
   if (PREFS.view === "performance") setChartUnit("pct");
+  tick({force:true});
 });
 $("dashboard-view").addEventListener("keydown", event => {
   if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
@@ -323,14 +356,14 @@ function markSummaryUnavailable() {
   $("status-detail").textContent = "Source indisponible · utilisez Actualiser pour réessayer";
 }
 
-let summaryRequestSequence = 0;
 async function refreshSummary() {
-  const requestSequence = ++summaryRequestSequence;
+  const requestSequence = summaryRequestState.begin();
   try {
-    const response = await fetch("/api/summary");
+    const response = await fetchDashboard("/api/summary");
     if (!response.ok) throw new Error("summary_http_" + response.status);
     const s = await response.json();
-    if (requestSequence !== summaryRequestSequence) return;
+    if (!summaryRequestState.isCurrent(requestSequence)) return;
+    if (!summaryRequestState.succeed(requestSequence, Date.now())) return;
     btcPrice = s.btc.price; if (s.fx) fx = s.fx; lastSummary = s; lastSummaryUpdatedAt = Date.now();
   $("h-price").textContent = s.btc.price ? s.btc.price.toLocaleString(LOCALE(), {maximumFractionDigits:0}) + " $" : "—";
   $("h-change").textContent = fmtPct(s.btc.change24h); cls($("h-change"), s.btc.change24h);
@@ -530,7 +563,7 @@ async function refreshSummary() {
           <span class="track-marker marker-entry" style="left:${markerPositions.entry.toFixed(2)}%;--label-shift:${labelShift("entry")}px"><i></i><b>ENTRÉE</b><em class="num">${num(slot.entry)}</em></span>
           <span class="track-marker marker-price" style="left:${markerPositions.price.toFixed(2)}%;--label-shift:${labelShift("price")}px"><i></i><b>PRIX</b><em class="num">${num(slot.market_price)}</em></span>
         </div>
-        <div class="position-rail-foot"><span>Qty <strong class="num">${Number(slot.qty).toFixed(3)}</strong></span><span>Notionnel <strong class="num">${fmt$(slot.notional, 0)}</strong></span><span>${slot.stop_distance_pct == null ? "Distance stop N/A" : `Stop ${percentNA(slot.stop_distance_pct, 1)}`}</span></div>
+        <div class="position-rail-foot"><span>Qty <strong class="num">${fmtQty(slot.qty)}</strong></span><span>Notionnel <strong class="num">${fmt$(slot.notional, 0)}</strong></span><span>${slot.stop_distance_pct == null ? "Distance stop N/A" : `Stop ${percentNA(slot.stop_distance_pct, 1)}`}</span></div>
       </article>`;
     }).join("");
   }
@@ -542,7 +575,8 @@ async function refreshSummary() {
   $("f-updated").textContent = (PREFS.lang==="en"?"updated ":"mis à jour ") + new Date().toLocaleTimeString(LOCALE());
   } catch (error) {
     console.error(error);
-    if (requestSequence === summaryRequestSequence) markSummaryUnavailable();
+    summaryRequestState.fail(requestSequence, error);
+    if (summaryRequestState.isCurrent(requestSequence)) markSummaryUnavailable();
     throw error;
   }
 }
@@ -620,7 +654,7 @@ function renderCarryCard(carry) {
       : `<span class="badge unknown">? ÉTAT INCONNU</span>`;
   $("carry-pos").innerHTML = positionBadge + `<span class="carry-synth">${esc(t("carry_synthetic"))}</span>`;
   const qty = $("carry-perp-qty");
-  if (qty) qty.textContent = !open || carry.perp_qty == null ? "N/A" : fmtNum(carry.perp_qty, 6);
+  if (qty) qty.textContent = !open || carry.perp_qty == null ? "N/A" : fmtQty(carry.perp_qty);
   const spot = $("carry-spot-notional");
   if (spot) spot.textContent = !open || carry.spot_notional_derived == null ? "N/A" : fmt$(carry.spot_notional_derived, 0);
   const perp = $("carry-perp-notional");
@@ -709,6 +743,13 @@ function renderCockpitStatus(s) {
 }
 
 function updateDataFreshness() {
+  if (summaryRequestState.status === "unavailable") {
+    const stamp = $("data-age"), freshness = $("data-freshness");
+    freshness.classList.remove("stale");
+    freshness.classList.add("unknown");
+    stamp.textContent = "source indisponible — UNKNOWN";
+    return;
+  }
   if (!lastSummaryUpdatedAt) return;
   const age = Math.max(0, Math.floor((Date.now() - lastSummaryUpdatedAt) / 1000));
   const stamp = $("data-age"), freshness = $("data-freshness");
@@ -831,30 +872,50 @@ function renderViewFocus(s) {
 }
 
 async function refreshTrades() {
+  const requestSequence = tradeRequestGate.begin();
+  if (tradeAbortController) tradeAbortController.abort();
+  const controller = new AbortController();
+  tradeAbortController = controller;
   const p = new URLSearchParams();
   const f = $("tr-from") && $("tr-from").value, to = $("tr-to") && $("tr-to").value;
   if (f) p.set("from", f); if (to) p.set("to", to);
-  const tr = await (await fetch("/api/trades?" + p.toString())).json();
-  const st = $("tr-stats");
-  lastTradeRows = tr.rows || [];
-  drawChart();
-  if (!tr.stats.n) { st.textContent = "0 trade"; $("trades").innerHTML = `<div class="empty">${t("no_trades")}</div>`; return; }
-  const wr = Math.round(tr.stats.wins / tr.stats.n * 100);
-  st.textContent = `${tr.stats.n} trades · ${wr} % ✓ · ${(tr.stats.pnl >= 0 ? "+" : "") + fmt$(tr.stats.pnl, 0)}`;
-  $("trades").innerHTML = `<table>
-    <thead><tr><th>Sortie</th><th>Système</th><th>Sens</th><th>PnL</th><th>Motif</th></tr></thead>
-    <tbody>` + tr.rows.map(r => {
+  p.set("limit", String(tradeLimit));
+  const exportLink = document.querySelector('a[href^="/api/trades.csv"]');
+  if (exportLink) exportLink.href = "/api/trades.csv" + (f || to ? "?" + new URLSearchParams([...p].filter(([key]) => key !== "limit")).toString() : "");
+  try {
+    const response = await fetchDashboard("/api/trades?" + p.toString(), {signal: controller.signal});
+    if (!response.ok) throw new Error("trades_http_" + response.status);
+    const tr = await response.json();
+    if (!tradeRequestGate.isCurrent(requestSequence)) return false;
+    const stats = tr.stats || {n: 0, wins: 0, pnl: 0};
+    const rows = Array.isArray(tr.rows) ? tr.rows : [];
+    const total = Number.isFinite(Number(stats.n)) ? Number(stats.n) : 0;
+    const returned = Number.isFinite(Number(tr.returned)) ? Number(tr.returned) : rows.length;
+    const st = $("tr-stats"), scope = $("tr-scope");
+    lastTradeRows = rows;
+    if (scope) scope.textContent = PREFS.lang === "en"
+      ? `${returned} latest trades shown out of ${total} in period`
+      : `${returned} derniers trades affichés sur ${total} dans la période`;
+    scheduleRedraw("chart");
+    if (!total) { st.textContent = "0 trade"; $("trades").innerHTML = `<div class="empty">${t("no_trades")}</div>`; return true; }
+    const wr = Math.round(stats.wins / total * 100);
+    st.textContent = `${total} trades · ${wr} % ✓ · ${(stats.pnl >= 0 ? "+" : "") + fmt$(stats.pnl, 0)}`;
+    $("trades").innerHTML = `<table><thead><tr><th>Sortie</th><th>Système</th><th>Sens</th><th>PnL</th><th>Motif</th></tr></thead><tbody>` + rows.map(r => {
       const pnlCls = r.pnl > 0 ? "up" : r.pnl < 0 ? "down" : "";
       const badge = r.direction === "LONG" ? "long" : "short";
       const arrow = r.direction === "LONG" ? "▲" : "▼";
-      return `<tr>
-        <td class="num">${String(r.exit_ts).slice(5, 16).replace("T", " ")}</td>
-        <td>${esc(String(r.strategy).replace("trend_ls_", "D"))}</td>
-        <td><span class="badge ${badge}">${arrow} ${esc(r.direction)}</span></td>
-        <td class="num ${pnlCls}" style="font-weight:650">${(r.pnl >= 0 ? "+" : "") + fmt$(r.pnl, 1)}</td>
-        <td style="color:var(--muted);font-size:11.5px">${esc(r.reason)}</td></tr>`;
+      return `<tr><td class="num">${String(r.exit_ts).slice(5, 16).replace("T", " ")}</td><td>${esc(String(r.strategy).replace("trend_ls_", "D"))}</td><td><span class="badge ${badge}">${arrow} ${esc(r.direction)}</span></td><td class="num ${pnlCls}" style="font-weight:650">${(r.pnl >= 0 ? "+" : "") + fmt$(r.pnl, 1)}</td><td style="color:var(--muted);font-size:11.5px">${esc(r.reason)}</td></tr>`;
     }).join("") + "</tbody></table>";
+    return true;
+  } catch (error) {
+    if (!tradeRequestGate.isCurrent(requestSequence)) return false;
+    if (error.name === "AbortError") return false;
+    throw error;
+  } finally {
+    if (tradeRequestGate.isCurrent(requestSequence)) tradeAbortController = null;
+  }
 }
+
 
 let evFilter = "all", lastEvents = [];
 function renderEvents() {
@@ -868,9 +929,9 @@ function renderEvents() {
   }).join("") : '<div class="empty">Aucun événement — les moteurs sont en veille, c’est normal.</div>';
 }
 async function refreshEvents() {
-  lastEvents = await (await fetch("/api/events")).json();
+  const response = await fetchDashboard("/api/events"); if (!response.ok) throw new Error("events_http_" + response.status); lastEvents = await response.json();
   renderEvents();
-  drawChart();
+  scheduleRedraw("chart");
 }
 document.querySelectorAll("#evfilter .chip").forEach(b => b.onclick = () => {
   evFilter = b.dataset.f;
@@ -879,7 +940,7 @@ document.querySelectorAll("#evfilter .chip").forEach(b => b.onclick = () => {
 });
 
 async function refreshAnalytics() {
-  const a = await (await fetch("/api/analytics")).json();
+  const response = await fetchDashboard("/api/analytics"); if (!response.ok) throw new Error("analytics_http_" + response.status); const a = await response.json();
   const money = v => (v >= 0 ? "+" : "") + v.toLocaleString("fr-FR", {maximumFractionDigits:0}) + " $";
   // barres de répartition : largeur ∝ |PnL| relatif, couleur = signe
   function bars(rows) {
@@ -945,19 +1006,19 @@ function drawFunding(pts) {
     document.documentElement.setAttribute("data-theme", next);
     $("theme-btn").setAttribute("aria-pressed", String(next === "dark"));
     localStorage.setItem("btcq-theme", next);
-    drawChart(); drawSpark(); refreshPrice(); refreshAnalytics(); drawYearly();
+    scheduleRedraw("chart", "spark", "price", "yearly");
   };
 })();
 
 async function refreshEquity() {
-  const response = await fetch("/api/equity");
+  const response = await fetchDashboard("/api/equity");
   if (!response.ok) throw new Error("equity_http_" + response.status);
   chartData = await response.json();
-  drawChart(); drawSpark();
+  scheduleRedraw("chart", "spark");
 }
 
 async function refreshConformity() {
-  const c = await (await fetch("/api/conformity")).json();
+  const response = await fetchDashboard("/api/conformity"); if (!response.ok) throw new Error("conformity_http_" + response.status); const c = await response.json();
   const ref = c.reference, rz = c.realized, dd = c.drawdown;
   if (!ref) { $("conformity").innerHTML = '<div class="empty">Référence backtest absente.</div>'; return; }
   const pct = v => (v*100).toFixed(1).replace(".", ",") + " %";
@@ -1095,9 +1156,11 @@ function renderReadiness(report) {
 }
 
 async function refreshReadiness() {
+  let ok = false;
   try {
-    const response = await fetch("/api/readiness");
+    const response = await fetchDashboard("/api/readiness");
     lastReadiness = await response.json();
+    ok = response.ok && Array.isArray(lastReadiness && lastReadiness.checks);
     if (!response.ok && !Array.isArray(lastReadiness && lastReadiness.checks)) {
       lastReadiness = lastReadiness || {status: "UNKNOWN", checks: null};
     }
@@ -1106,13 +1169,14 @@ async function refreshReadiness() {
     lastReadiness = {status: "UNKNOWN", checks: null};
   }
   renderReadiness(lastReadiness);
+  return ok;
 }
 
 // ── années précédentes (backtest) : barres annuelles portefeuille vs BTC ──
 let yearlyData = null;
 async function refreshYearly() {
-  try { yearlyData = await (await fetch("/api/yearly")).json(); } catch (e) { yearlyData = null; }
-  drawYearly();
+  try { yearlyData = await (await fetchDashboard("/api/yearly")).json(); } catch (e) { yearlyData = null; }
+  scheduleRedraw("yearly");
 }
 function drawYearly() {
   const svg = $("ychart");
@@ -1181,8 +1245,8 @@ let pcData = null, pcRange = 200, pcView = null;
 const PC_CHCOL = {D20: "#3b82f6", D55: "#f59e0b", D100: "#a855f7"};
 
 async function refreshPrice() {
-  pcData = await (await fetch("/api/price")).json();
-  drawPChart();
+  const response = await fetchDashboard("/api/price"); if (!response.ok) throw new Error("price_http_" + response.status); pcData = await response.json();
+  scheduleRedraw("price");
 }
 
 // Compact, read-only decision summary. It uses only fields already exposed
@@ -1449,13 +1513,13 @@ function drawPChart() {
 document.querySelectorAll("#prange .chip").forEach(b => b.onclick = () => {
   pcRange = +b.dataset.n;
   setPressed("#prange", x => +x.dataset.n === pcRange);
-  drawPChart();
+  scheduleRedraw("price");
 });
 
 document.querySelectorAll("#range .chip").forEach(b => b.onclick = () => {
   range = +b.dataset.r;
   setPressed("#range", x => +x.dataset.r === range);
-  drawChart();
+  scheduleRedraw("chart");
 });
 document.querySelectorAll("#unit .chip").forEach(b => b.onclick = () => {
   setChartUnit(b.dataset.u);
@@ -1667,7 +1731,7 @@ function drawChart() {
 // ── métriques live (Sharpe/Sortino/Calmar) ─────────────────
 let lastCurDD = 0;
 async function refreshMetrics() {
-  const m = await (await fetch("/api/metrics")).json();
+  const response = await fetchDashboard("/api/metrics"); if (!response.ok) throw new Error("metrics_http_" + response.status); const m = await response.json();
   lastMetrics = m;
   lastCurDD = m.cur_dd || 0;
   if (lastSummary) renderViewFocus(lastSummary);
@@ -1779,7 +1843,7 @@ async function openDrill(name, trigger=null) {
   openLayer($("modal"), $("modal-bd"), trigger || document.activeElement);
   let d;
   try {
-    const response = await fetch("/api/strategy/" + encodeURIComponent(name));
+    const response = await fetchDashboard("/api/strategy/" + encodeURIComponent(name));
     if (!response.ok) throw new Error("strategy_http_" + response.status);
     d = await response.json();
   } catch (error) {
@@ -1929,7 +1993,23 @@ function applyCardVisibility() {
     c.setAttribute("data-hidden", PREFS.hidden[c.dataset.card] ? "1" : "0");
   });
 }
-function redrawAll() { drawChart(); drawSpark(); drawPChart(); drawYearly(); if (lastSummary) renderExposureHealth(lastSummary); }
+let redrawFrame = null;
+const redrawNeeds = new Set();
+function scheduleRedraw(...names) {
+  names.forEach(name => redrawNeeds.add(name));
+  if (redrawFrame != null) return;
+  redrawFrame = requestAnimationFrame(() => {
+    redrawFrame = null;
+    const needs = new Set(redrawNeeds);
+    redrawNeeds.clear();
+    if (needs.has("chart")) drawChart();
+    if (needs.has("spark")) drawSpark();
+    if (needs.has("price")) drawPChart();
+    if (needs.has("yearly")) drawYearly();
+  });
+}
+
+function redrawAll() { scheduleRedraw("chart", "spark", "price", "yearly"); if (lastSummary) renderExposureHealth(lastSummary); }
 
 $("settings-btn").onclick = () => {
   buildDrawer();
@@ -1942,10 +2022,10 @@ function closeDrawer() {
 }
 $("drawer-close").onclick = closeDrawer;
 $("drawer-bd").onclick = closeDrawer;
-$("pref-lang").onchange = e => { PREFS.lang = e.target.value; savePrefs(); applyI18n(); buildDrawer(); refreshMetrics(); redrawAll(); };
+$("pref-lang").onchange = e => { PREFS.lang = e.target.value; savePrefs(); applyI18n(); buildDrawer(); redrawAll(); };
 $("pref-currency").onchange = e => { PREFS.currency = e.target.value; savePrefs(); if (lastSummary) refreshSummary(); refreshTrades(); refreshAnalytics(); };
 $("pref-range").onchange = e => { PREFS.range = +e.target.value; range = PREFS.range;
-  setPressed("#range", x => +x.dataset.r === range); savePrefs(); drawChart(); };
+  setPressed("#range", x => +x.dataset.r === range); savePrefs(); scheduleRedraw("chart"); };
 $("pref-refresh").onchange = e => { PREFS.refresh = +e.target.value; savePrefs(); applyI18n(); restartTimer(); };
 $("pref-notif").onchange = async e => {
   if (e.target.checked && "Notification" in window) {
@@ -1962,20 +2042,45 @@ $("bh-toggle").onclick = () => {
   showBH = !showBH;
   $("bh-toggle").classList.toggle("on", showBH);
   $("bh-toggle").setAttribute("aria-pressed", String(showBH));
-  drawChart();
+  scheduleRedraw("chart");
 };
-$("tr-from").onchange = refreshTrades; $("tr-to").onchange = refreshTrades;
+$("tr-from").onchange = refreshTrades; $("tr-to").onchange = refreshTrades; $("tr-limit").onchange = e => { tradeLimit = Math.max(1, Math.min(500, Number(e.target.value) || 12)); refreshTrades(); };
 $("tr-clear").onclick = () => { $("tr-from").value = ""; $("tr-to").value = ""; refreshTrades(); };
 
-// ── boucle de rafraîchissement (fréquence configurable) ────
+// ── boucle de rafraîchissement : groupes visibles et fréquences ──
 let timer = null;
 let tickPromise = null;
 let refreshResetTimer = null;
+const PANEL_PERIODS = {summary: 0, events: 0, readiness: 0, equity: 0, price: 0, trades: 0, metrics: 60_000, analytics: 120_000, conformity: 120_000};
+const panelSuccessAt = new Map();
 function restartTimer() { if (timer) clearInterval(timer); if (PREFS.refresh) timer = setInterval(tick, PREFS.refresh); }
+function refreshPlan() {
+  const plan = [
+    ["summary", refreshSummary], ["events", refreshEvents], ["readiness", refreshReadiness],
+  ];
+  if (PREFS.view === "monitor") plan.push(["price", refreshPrice]);
+  if (PREFS.view === "performance") plan.push(["equity", refreshEquity], ["trades", refreshTrades], ["metrics", refreshMetrics], ["analytics", refreshAnalytics], ["conformity", refreshConformity]);
+  if (PREFS.view === "risk") plan.push(["equity", refreshEquity], ["price", refreshPrice], ["metrics", refreshMetrics]);
+  return plan;
+}
+async function runPanel(name, loader, force, now) {
+  const last = panelSuccessAt.get(name);
+  if (!force && last != null && now - last < PANEL_PERIODS[name]) return {name, ok: true, skipped: true};
+  try {
+    const result = await loader();
+    const ok = result !== false;
+    if (ok) panelSuccessAt.set(name, Date.now());
+    return {name, ok};
+  } catch (error) {
+    console.error(`${name}_refresh_failed`, error);
+    return {name, ok: false, error};
+  }
+}
 function refreshLabel(state) {
   const english = PREFS.lang === "en";
   if (state === "loading") return english ? "Refreshing…" : "Actualisation…";
   if (state === "success") return english ? "Up to date" : "À jour";
+  if (state === "partial") return english ? "Partial refresh" : "Actualisation partielle";
   if (state === "error") return english ? "Retry" : "Réessayer";
   return english ? "Refresh" : "Actualiser";
 }
@@ -1989,48 +2094,41 @@ function setRefreshState(state) {
   swapText($("refresh-label"), refreshLabel(state));
   if (refreshResetTimer) window.clearTimeout(refreshResetTimer);
   if (state === "success") {
-    check.dataset.state = "out";
-    void check.offsetWidth;
-    check.dataset.state = "in";
-    refreshResetTimer = window.setTimeout(() => setRefreshState("idle"), 1400);
-  } else {
-    check.dataset.state = "out";
-  }
+    check.dataset.state = "out"; void check.offsetWidth; check.dataset.state = "in";
+  } else check.dataset.state = "out";
+  if (state === "success" || state === "partial") refreshResetTimer = window.setTimeout(() => setRefreshState("idle"), state === "partial" ? 2600 : 1400);
 }
-window.addEventListener("resize", () => { drawChart(); drawSpark(); drawYearly(); });
-window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawChart(); drawSpark(); drawYearly(); });
-// PWA/onglet remis au premier plan : rafraîchir tout de suite plutôt que
-// d'afficher des données figées jusqu'au prochain tick (et remettre le timer
-// à zéro pour ne pas cumuler un tick immédiat + un tick programmé)
-document.addEventListener("visibilitychange", () => { if (!document.hidden) { tick(); restartTimer(); } });
+window.addEventListener("resize", () => scheduleRedraw("chart", "spark", "price", "yearly"));
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => scheduleRedraw("chart", "spark", "price", "yearly"));
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { tick({force:true}); restartTimer(); } });
 async function tick(options={}) {
   if (tickPromise) {
-    if (!options.feedback) return tickPromise;
+    if (!options.feedback) { const result = await tickPromise; if (options.force) { await new Promise(resolve => window.setTimeout(resolve, 0)); return tick(options); } return result.ok; }
     setRefreshState("loading");
     const result = await tickPromise;
-    setRefreshState(result ? "success" : "error");
-    return result;
+    setRefreshState(result.state);
+    return result.ok;
   }
   if (options.feedback) setRefreshState("loading");
+  const force = Boolean(options.force || options.feedback);
   tickPromise = (async () => {
-    try {
-      await Promise.all([refreshSummary(), refreshEvents(), refreshEquity(), refreshTrades(), refreshConformity(), refreshPrice(), refreshAnalytics(), refreshMetrics(), refreshReadiness()]);
-      if (options.feedback) setRefreshState("success");
-      else if ($("refresh-btn").dataset.state === "error") setRefreshState("idle");
-      return true;
-    } catch (error) {
-      console.error(error);
-      setRefreshState("error");
-      return false;
-    }
+    const now = Date.now();
+    const results = await Promise.all(refreshPlan().map(([name, loader]) => runPanel(name, loader, force, now)));
+    const failures = results.filter(result => !result.ok);
+    const essentialFailure = failures.some(result => result.name === "summary" || result.name === "readiness");
+    const state = essentialFailure ? "error" : failures.length ? "partial" : "success";
+    if (options.feedback) { if (state === "success") setRefreshState("success"); else setRefreshState(state); } else if (state === "error") setRefreshState("error");
+    else if ($("refresh-btn").dataset.state === "error") setRefreshState("idle");
+    return {ok: !essentialFailure, state, results};
   })();
   try {
-    return await tickPromise;
+    return (await tickPromise).ok;
   } finally {
     tickPromise = null;
   }
 }
 $("refresh-btn").onclick = () => tick({feedback:true});
+
 
 // ── init ───────────────────────────────────────────────────
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});

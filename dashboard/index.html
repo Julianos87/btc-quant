@@ -325,8 +325,11 @@
         <input type="date" id="tr-from" style="background:var(--surface-2);border:1px solid var(--ring);color:var(--ink);border-radius:8px;padding:4px 8px;font:inherit;font-size:12px">
         <label class="sk" for="tr-to" style="font-size:11.5px;color:var(--muted)" data-i18n="to">au</label>
         <input type="date" id="tr-to" style="background:var(--surface-2);border:1px solid var(--ring);color:var(--ink);border-radius:8px;padding:4px 8px;font:inherit;font-size:12px">
+        <label class="sk" for="tr-limit" style="font-size:11.5px;color:var(--muted)">Afficher</label>
+        <select id="tr-limit" aria-label="Nombre de trades affichés" style="background:var(--surface-2);border:1px solid var(--ring);color:var(--ink);border-radius:8px;padding:4px 8px;font:inherit;font-size:12px"><option value="12">12</option><option value="25">25</option><option value="50">50</option><option value="100">100</option></select>
         <button class="iconbtn" id="tr-clear" data-i18n="reset">Réinitialiser</button>
       </div>
+      <div id="tr-scope" class="trade-scope" role="status" aria-live="polite" style="margin-top:7px;color:var(--muted);font-size:11.5px">0 trade affiché sur 0 dans la période</div>
       <div id="trades" style="margin-top:10px"><div class="empty" data-i18n="no_trades">Aucun trade clôturé pour l’instant — le journal se remplit à la première sortie de position.</div></div>
     </div>
 
@@ -446,6 +449,7 @@
 
 <script src="/static/operational_state.js" defer></script>
 <script src="/static/dashboard_ux.js" defer></script>
+<script src="/static/dashboard_state.js" defer></script>
 <script src="/static/dashboard.js" defer></script>
 <script src="/static/effects.js" defer></script>
 

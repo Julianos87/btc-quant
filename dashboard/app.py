@@ -1692,7 +1692,7 @@ def trades():
     par stratégie (strategy=trend_ls_20…) et paginables (limit, défaut 12)."""
     df = _read_trades()
     if not len(df):
-        return jsonify({"stats": {"n": 0, "wins": 0, "pnl": 0.0}, "rows": []})
+        return jsonify({"stats": {"n": 0, "wins": 0, "pnl": 0.0}, "rows": [], "limit": 12, "returned": 0, "has_more": False})
     if "exit_ts" in df.columns:
         et = pd.to_datetime(df["exit_ts"], utc=True, errors="coerce")
         frm, to = request.args.get("from"), request.args.get("to")
@@ -1709,11 +1709,11 @@ def trades():
         "pnl": float(df["pnl"].sum()) if len(df) else 0.0,
     }
     try:
-        limit = min(int(request.args.get("limit", 12)), 500)
+        limit = max(1, min(int(request.args.get("limit", 12)), 500))
     except ValueError:
         limit = 12
     rows = df.tail(limit).iloc[::-1].to_dict("records") if len(df) else []
-    return jsonify({"stats": stats, "rows": rows})
+    return jsonify({"stats": stats, "rows": rows, "limit": limit, "returned": len(rows), "has_more": len(df) > len(rows)})
 
 
 @app.route("/api/strategy/<name>")
@@ -1751,6 +1751,13 @@ def strategy_detail(name: str):
 def trades_csv():
     """Export brut des trades clôturés (téléchargement)."""
     trades = _read_trades()
+    if not trades.empty and "exit_ts" in trades.columns:
+        et = pd.to_datetime(trades["exit_ts"], utc=True, errors="coerce")
+        frm, to = request.args.get("from"), request.args.get("to")
+        if frm:
+            trades = trades[et >= pd.Timestamp(frm, tz="UTC")]
+        if to:
+            trades = trades[et <= pd.Timestamp(to, tz="UTC") + pd.Timedelta(days=1)]
     if trades.empty:
         return Response("aucun trade\n", mimetype="text/csv")
     return Response(
