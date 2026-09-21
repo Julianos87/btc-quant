@@ -1338,6 +1338,10 @@
   .position-table-wrap { margin:9px 18px 17px; } .trend-footnote { margin:0 18px 18px; }
 
   .market-panel { padding:0 !important; overflow:hidden; } .market-panel-head { padding:17px 18px 12px; border-bottom:1px solid var(--grid); }
+  .trade-more { margin:10px 0 15px; }
+  .panel-source-state { margin:8px 18px 0; padding:7px 9px; border:1px solid color-mix(in srgb,var(--warn) 42%,var(--ring)); border-radius:6px; color:var(--warn); background:color-mix(in srgb,var(--warn) 8%,transparent); font-size:10.5px; line-height:1.35; }
+  .panel-source-state[data-state="error"] { color:var(--crit); border-color:color-mix(in srgb,var(--crit) 44%,var(--ring)); background:color-mix(in srgb,var(--crit) 8%,transparent); }
+  .panel-source-state[data-state="loading"] { color:var(--muted); border-color:var(--ring); background:var(--surface-2); }
   .market-symbol { color:var(--s1); font-size:9px; font-weight:750; letter-spacing:.1em; } .market-panel h2 { margin-top:3px; font-size:16px; } #market-price-panel { margin-left:7px; font-size:16px; color:var(--ink); }
   .market-readouts { display:flex; gap:12px; } .market-readouts span { display:grid; gap:2px; color:var(--muted); font-size:9px; text-transform:uppercase; letter-spacing:.07em; } .market-readouts strong { color:var(--ink); font-size:11px; }
   .market-panel .card-head { padding:10px 18px 0; } .market-subline { color:var(--muted); font-size:10px; } .market-panel .signal-guide, .market-panel .signal-key { margin-left:18px; margin-right:18px; } .market-panel .signal-guide { border-radius:7px; } .market-panel .price-chart-wrap { margin:10px 18px 0; border:1px solid var(--ring); border-radius:10px; overflow:hidden; background:var(--surface-2); } .market-panel .price-tech-details { margin:10px 18px 15px; }

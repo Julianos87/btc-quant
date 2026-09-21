@@ -50,6 +50,39 @@ def test_summary_error_stays_unavailable_until_a_real_success() -> None:
     assert result == {"afterError": "unavailable", "status": "available", "at": 200}
 
 
+def test_unavailable_source_stays_visible_during_retry() -> None:
+    result = _node(
+        "const source=new state.SourceRequestState();"
+        "const first=source.begin(); source.succeed(first, 100);"
+        "const failed=source.begin(); source.fail(failed, new Error('network'));"
+        "source.begin();"
+        "console.log(JSON.stringify({status:source.status, inFlight:source.inFlight}));"
+    )
+    assert result == {"status": "unavailable", "inFlight": True}
+
+
+def test_timeout_covers_stalled_json_and_next_request_can_succeed() -> None:
+    result = _node(
+        "let calls=0, aborted=0;"
+        "const fakeFetch=(url, options)=>{ calls++;"
+        "if(calls===1) return Promise.resolve({ok:true,json:()=>new Promise((resolve,reject)=>{"
+        "const abort=()=>{aborted++; const error=new Error('aborted'); error.name='AbortError'; reject(error);};"
+        "options.signal.addEventListener('abort', abort, {once:true});"
+        "})});"
+        "return Promise.resolve({ok:true,json:async()=>({ok:true})});};"
+        "(async()=>{const first=await state.fetchResponseWithTimeout(fakeFetch,'/stalled',{}, {timeoutMs:15});"
+        "let errorName=''; try{await first.json();}catch(error){errorName=error.name;}"
+        "const second=await state.fetchResponseWithTimeout(fakeFetch,'/next',{}, {timeoutMs:15});"
+        "console.log(JSON.stringify({errorName, calls, aborted, payload:await second.json()}));})();"
+    )
+    assert result == {
+        "errorName": "TimeoutError",
+        "calls": 2,
+        "aborted": 1,
+        "payload": {"ok": True},
+    }
+
+
 def test_old_trade_response_cannot_become_current_after_filter_change() -> None:
     result = _node(
         "const gate=new state.LatestRequestGate();"
@@ -80,4 +113,15 @@ def test_trades_endpoint_exposes_filtered_total_and_returned_rows(monkeypatch) -
     assert payload["stats"] == {"n": 3, "wins": 2, "pnl": 2.0}
     assert payload["limit"] == 2
     assert payload["returned"] == 2
+    assert payload["offset"] == 0
     assert payload["has_more"] is True
+
+    older = dashboard.app.test_client().get(
+        "/api/trades?from=2026-01-02&to=2026-01-04&limit=2&offset=2",
+        environ_base={"REMOTE_ADDR": "127.0.0.1"},
+    )
+    older_payload = older.get_json()
+    assert older_payload["returned"] == 1
+    assert older_payload["offset"] == 2
+    assert older_payload["has_more"] is False
+    assert older_payload["rows"][0]["exit_ts"] == "2026-01-02T00:00:00Z"

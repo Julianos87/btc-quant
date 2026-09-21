@@ -19,25 +19,10 @@ if (!DASHBOARD_STATE) throw new Error("dashboard_state_unavailable");
 
 const FETCH_TIMEOUT_MS = 12000;
 function fetchDashboard(url, options = {}) {
-  const controller = new AbortController();
-  let timedOut = false;
-  const timeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, FETCH_TIMEOUT_MS);
-  const externalSignal = options.signal;
-  const abort = () => controller.abort();
-  if (externalSignal) {
-    if (externalSignal.aborted) controller.abort();
-    else externalSignal.addEventListener("abort", abort, {once: true});
-  }
-  return fetch(url, {...options, signal: controller.signal}).catch(error => {
-    if (timedOut) {
-      const timeoutError = new Error(`dashboard_timeout_${url}`);
-      timeoutError.name = "TimeoutError";
-      throw timeoutError;
-    }
-    throw error;
-  }).finally(() => {
-    window.clearTimeout(timeout);
-    if (externalSignal) externalSignal.removeEventListener("abort", abort);
+  return DASHBOARD_STATE.fetchResponseWithTimeout(fetch, url, options, {
+    timeoutMs: FETCH_TIMEOUT_MS,
+    setTimeoutImpl: window.setTimeout,
+    clearTimeoutImpl: window.clearTimeout,
   });
 }
 
@@ -232,6 +217,7 @@ let tradeAbortController = null;
 let tradeLimit = 12;
 const cls = (el, v) => { el.classList.toggle("up", v > 0); el.classList.toggle("down", v < 0); };
 let range = PREFS.range, unit = "pct", chartData = null, showBH = false, lastSummary = null, lastTradeRows = [];
+let tradePageOffset = 0, tradeLoadedRows = [];
 let lastMetrics = null;
 let lastSummaryUpdatedAt = null;
 
@@ -871,17 +857,23 @@ function renderViewFocus(s) {
   renderMonitorPulse(s);
 }
 
-async function refreshTrades() {
+async function refreshTrades({append = false} = {}) {
   const requestSequence = tradeRequestGate.begin();
   if (tradeAbortController) tradeAbortController.abort();
   const controller = new AbortController();
   tradeAbortController = controller;
+  if (!append) {
+    tradePageOffset = 0;
+    tradeLoadedRows = [];
+  }
+  const offset = append ? tradePageOffset : 0;
   const p = new URLSearchParams();
   const f = $("tr-from") && $("tr-from").value, to = $("tr-to") && $("tr-to").value;
   if (f) p.set("from", f); if (to) p.set("to", to);
   p.set("limit", String(tradeLimit));
+  p.set("offset", String(offset));
   const exportLink = document.querySelector('a[href^="/api/trades.csv"]');
-  if (exportLink) exportLink.href = "/api/trades.csv" + (f || to ? "?" + new URLSearchParams([...p].filter(([key]) => key !== "limit")).toString() : "");
+  if (exportLink) exportLink.href = "/api/trades.csv" + (f || to ? "?" + new URLSearchParams([...p].filter(([key]) => key !== "limit" && key !== "offset")).toString() : "");
   try {
     const response = await fetchDashboard("/api/trades?" + p.toString(), {signal: controller.signal});
     if (!response.ok) throw new Error("trades_http_" + response.status);
@@ -890,17 +882,28 @@ async function refreshTrades() {
     const stats = tr.stats || {n: 0, wins: 0, pnl: 0};
     const rows = Array.isArray(tr.rows) ? tr.rows : [];
     const total = Number.isFinite(Number(stats.n)) ? Number(stats.n) : 0;
-    const returned = Number.isFinite(Number(tr.returned)) ? Number(tr.returned) : rows.length;
-    const st = $("tr-stats"), scope = $("tr-scope");
-    lastTradeRows = rows;
+    tradeLoadedRows = append ? tradeLoadedRows.concat(rows) : rows;
+    tradePageOffset = offset + rows.length;
+    const displayed = tradeLoadedRows.length;
+    const st = $("tr-stats"), scope = $("tr-scope"), more = $("tr-more");
+    lastTradeRows = tradeLoadedRows;
     if (scope) scope.textContent = PREFS.lang === "en"
-      ? `${returned} latest trades shown out of ${total} in period`
-      : `${returned} derniers trades affichés sur ${total} dans la période`;
+      ? `${displayed} latest trades shown out of ${total} in period`
+      : `${displayed} derniers trades affichés sur ${total} dans la période`;
+    if (more) {
+      more.hidden = !Boolean(tr.has_more);
+      more.textContent = PREFS.lang === "en" ? "Show older trades" : "Afficher les trades plus anciens";
+    }
     scheduleRedraw("chart");
-    if (!total) { st.textContent = "0 trade"; $("trades").innerHTML = `<div class="empty">${t("no_trades")}</div>`; return true; }
+    if (!total) {
+      st.textContent = "0 trade";
+      $("trades").innerHTML = `<div class="empty">${t("no_trades")}</div>`;
+      if (more) more.hidden = true;
+      return true;
+    }
     const wr = Math.round(stats.wins / total * 100);
     st.textContent = `${total} trades · ${wr} % ✓ · ${(stats.pnl >= 0 ? "+" : "") + fmt$(stats.pnl, 0)}`;
-    $("trades").innerHTML = `<table><thead><tr><th>Sortie</th><th>Système</th><th>Sens</th><th>PnL</th><th>Motif</th></tr></thead><tbody>` + rows.map(r => {
+    $("trades").innerHTML = `<table><thead><tr><th>Sortie</th><th>Système</th><th>Sens</th><th>PnL</th><th>Motif</th></tr></thead><tbody>` + tradeLoadedRows.map(r => {
       const pnlCls = r.pnl > 0 ? "up" : r.pnl < 0 ? "down" : "";
       const badge = r.direction === "LONG" ? "long" : "short";
       const arrow = r.direction === "LONG" ? "▲" : "▼";
@@ -1729,12 +1732,15 @@ function drawChart() {
 }
 
 // ── métriques live (Sharpe/Sortino/Calmar) ─────────────────
-let lastCurDD = 0;
+let lastCurDD = null;
 async function refreshMetrics() {
   const response = await fetchDashboard("/api/metrics"); if (!response.ok) throw new Error("metrics_http_" + response.status); const m = await response.json();
   lastMetrics = m;
-  lastCurDD = m.cur_dd || 0;
-  if (lastSummary) renderViewFocus(lastSummary);
+  lastCurDD = Number.isFinite(Number(m.cur_dd)) ? Number(m.cur_dd) : null;
+  if (lastSummary) {
+    renderViewFocus(lastSummary);
+    checkAlerts(lastSummary);
+  }
   if (m.sharpe == null && m.days < 1) {
     $("metrics").innerHTML = `<div class="empty" style="grid-column:1/-1">${t("collecting")}</div>`;
     return;
@@ -1958,10 +1964,12 @@ function checkAlerts(s) {
   }
   // seuil de drawdown
   const thr = -Math.abs(PREFS.ddAlert) / 100;
-  if (lastCurDD <= thr && !alertState.ddNotified) {
-    notify("▼ Drawdown", `Le portefeuille est à ${fmtPct(lastCurDD,1)} (seuil ${PREFS.ddAlert}%).`, "dd");
-    alertState.ddNotified = true;
-  } else if (lastCurDD > thr * 0.7) alertState.ddNotified = false;
+  if (Number.isFinite(lastCurDD)) {
+    if (lastCurDD <= thr && !alertState.ddNotified) {
+      notify("▼ Drawdown", `Le portefeuille est à ${fmtPct(lastCurDD,1)} (seuil ${PREFS.ddAlert}%).`, "dd");
+      alertState.ddNotified = true;
+    } else if (lastCurDD > thr * 0.7) alertState.ddNotified = false;
+  }
 }
 
 // ── panneau de préférences ─────────────────────────────────
@@ -2044,8 +2052,9 @@ $("bh-toggle").onclick = () => {
   $("bh-toggle").setAttribute("aria-pressed", String(showBH));
   scheduleRedraw("chart");
 };
-$("tr-from").onchange = refreshTrades; $("tr-to").onchange = refreshTrades; $("tr-limit").onchange = e => { tradeLimit = Math.max(1, Math.min(500, Number(e.target.value) || 12)); refreshTrades(); };
+$("tr-from").onchange = () => refreshTrades(); $("tr-to").onchange = () => refreshTrades(); $("tr-limit").onchange = e => { tradeLimit = Math.max(1, Math.min(500, Number(e.target.value) || 12)); refreshTrades(); };
 $("tr-clear").onclick = () => { $("tr-from").value = ""; $("tr-to").value = ""; refreshTrades(); };
+$("tr-more").onclick = () => refreshTrades({append: true});
 
 // ── boucle de rafraîchissement : groupes visibles et fréquences ──
 let timer = null;
@@ -2053,26 +2062,86 @@ let tickPromise = null;
 let refreshResetTimer = null;
 const PANEL_PERIODS = {summary: 0, events: 0, readiness: 0, equity: 0, price: 0, trades: 0, metrics: 60_000, analytics: 120_000, conformity: 120_000};
 const panelSuccessAt = new Map();
+const panelStates = new Map();
 function restartTimer() { if (timer) clearInterval(timer); if (PREFS.refresh) timer = setInterval(tick, PREFS.refresh); }
-function refreshPlan() {
+function cardIsVisible(name) {
+  return Boolean(VIEW_CARDS[PREFS.view]?.has(name) && !PREFS.hidden[name]);
+}
+function panelTime(ts) {
+  if (!ts) return PREFS.lang === "en" ? "none" : "aucune";
+  return new Date(ts).toLocaleTimeString(LOCALE(), {hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: "UTC"}) + " UTC";
+}
+function setPanelState(name, state) {
+  const previous = panelStates.get(name);
+  panelStates.set(name, state);
+  const root = document.querySelector(`[data-panel-status="${name}"]`);
+  if (!root) return;
+  if (state === "loading" && previous === "error") {
+    root.hidden = false;
+    root.dataset.state = "loading";
+    root.textContent = PREFS.lang === "en"
+      ? `Retrying… last successful data: ${panelTime(panelSuccessAt.get(name))}`
+      : `Nouvelle tentative… dernière donnée réussie : ${panelTime(panelSuccessAt.get(name))}`;
+    return;
+  }
+  if (state === "error") {
+    root.hidden = false;
+    root.dataset.state = "error";
+    root.textContent = PREFS.lang === "en"
+      ? `Source unavailable · last successful data: ${panelTime(panelSuccessAt.get(name))}`
+      : `Source indisponible · dernière donnée réussie : ${panelTime(panelSuccessAt.get(name))}`;
+    return;
+  }
+  if (state === "loading") {
+    root.hidden = false;
+    root.dataset.state = "loading";
+    root.textContent = PREFS.lang === "en" ? "Refreshing…" : "Actualisation…";
+    return;
+  }
+  root.hidden = true;
+  root.textContent = "";
+}
+function refreshPlan({background = document.hidden} = {}) {
+  // Summary, readiness, and metrics feed the cockpit status and notifications;
+  // they remain live even when the tab or their cards are not visible.
   const plan = [
-    ["summary", refreshSummary], ["events", refreshEvents], ["readiness", refreshReadiness],
+    ["summary", refreshSummary], ["readiness", refreshReadiness], ["metrics", refreshMetrics],
   ];
-  if (PREFS.view === "monitor") plan.push(["price", refreshPrice]);
-  if (PREFS.view === "performance") plan.push(["equity", refreshEquity], ["trades", refreshTrades], ["metrics", refreshMetrics], ["analytics", refreshAnalytics], ["conformity", refreshConformity]);
-  if (PREFS.view === "risk") plan.push(["equity", refreshEquity], ["price", refreshPrice], ["metrics", refreshMetrics]);
+  // A hidden tab keeps only operational dependencies alive. Returning to the
+  // foreground forces the visible secondary panels through visibilitychange.
+  if (background) return plan;
+  if (PREFS.view === "monitor") {
+    if (cardIsVisible("events")) plan.push(["events", refreshEvents]);
+    if (cardIsVisible("price")) plan.push(["price", refreshPrice]);
+  }
+  if (PREFS.view === "performance") {
+    if (cardIsVisible("chart")) plan.push(["equity", refreshEquity]);
+    if (cardIsVisible("trades")) plan.push(["trades", refreshTrades]);
+    if (cardIsVisible("breakdown")) plan.push(["analytics", refreshAnalytics]);
+    if (cardIsVisible("conformity")) plan.push(["conformity", refreshConformity]);
+  }
+  if (PREFS.view === "risk") {
+    if (cardIsVisible("chart")) plan.push(["equity", refreshEquity]);
+    if (cardIsVisible("price")) plan.push(["price", refreshPrice]);
+    if (cardIsVisible("events")) plan.push(["events", refreshEvents]);
+  }
   return plan;
 }
 async function runPanel(name, loader, force, now) {
   const last = panelSuccessAt.get(name);
   if (!force && last != null && now - last < PANEL_PERIODS[name]) return {name, ok: true, skipped: true};
+  setPanelState(name, "loading");
   try {
     const result = await loader();
     const ok = result !== false;
-    if (ok) panelSuccessAt.set(name, Date.now());
+    if (ok) {
+      panelSuccessAt.set(name, Date.now());
+      setPanelState(name, "success");
+    } else setPanelState(name, "error");
     return {name, ok};
   } catch (error) {
     console.error(`${name}_refresh_failed`, error);
+    setPanelState(name, "error");
     return {name, ok: false, error};
   }
 }
@@ -2113,12 +2182,14 @@ async function tick(options={}) {
   const force = Boolean(options.force || options.feedback);
   tickPromise = (async () => {
     const now = Date.now();
-    const results = await Promise.all(refreshPlan().map(([name, loader]) => runPanel(name, loader, force, now)));
+    const results = await Promise.all(refreshPlan({background: document.hidden}).map(([name, loader]) => runPanel(name, loader, force, now)));
     const failures = results.filter(result => !result.ok);
     const essentialFailure = failures.some(result => result.name === "summary" || result.name === "readiness");
     const state = essentialFailure ? "error" : failures.length ? "partial" : "success";
-    if (options.feedback) { if (state === "success") setRefreshState("success"); else setRefreshState(state); } else if (state === "error") setRefreshState("error");
-    else if ($("refresh-btn").dataset.state === "error") setRefreshState("idle");
+    if (options.feedback) { if (state === "success") setRefreshState("success"); else setRefreshState(state); }
+    else if (state === "error") setRefreshState("error");
+    else if (state === "partial") setRefreshState("partial");
+    else if ($("refresh-btn").dataset.state === "error" || $("refresh-btn").dataset.state === "partial") setRefreshState("idle");
     return {ok: !essentialFailure, state, results};
   })();
   try {

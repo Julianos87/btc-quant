@@ -1697,6 +1697,7 @@ def trades():
                 "stats": {"n": 0, "wins": 0, "pnl": 0.0},
                 "rows": [],
                 "limit": 12,
+                "offset": 0,
                 "returned": 0,
                 "has_more": False,
             }
@@ -1720,14 +1721,22 @@ def trades():
         limit = max(1, min(int(request.args.get("limit", 12)), 500))
     except ValueError:
         limit = 12
-    rows = df.tail(limit).iloc[::-1].to_dict("records") if len(df) else []
+    try:
+        offset = max(0, int(request.args.get("offset", 0)))
+    except ValueError:
+        offset = 0
+    # Newest first, with an explicit offset so the browser can load older
+    # rows without changing the period-wide statistics above.
+    ordered = df.iloc[::-1]
+    rows = ordered.iloc[offset : offset + limit].to_dict("records") if len(df) else []
     return jsonify(
         {
             "stats": stats,
             "rows": rows,
             "limit": limit,
+            "offset": offset,
             "returned": len(rows),
-            "has_more": len(df) > len(rows),
+            "has_more": offset + len(rows) < len(df),
         }
     )
 

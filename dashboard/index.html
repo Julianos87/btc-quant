@@ -174,6 +174,7 @@
         <div><span class="market-symbol">BTC-PERP / USDC</span><h2>Contexte marché <span id="market-price-panel" class="num">—</span></h2></div>
         <div class="market-readouts"><span>24 h <strong id="market-change-panel" class="num">—</strong></span><span>Régime <strong id="market-regime-panel">N/A</strong></span><span>Funding <strong id="market-funding-panel" class="num">—</strong></span></div>
       </div>
+      <div class="panel-source-state" data-panel-status="price" role="status" aria-live="polite" hidden></div>
       <div class="card-head">
       <span class="market-subline">Hyperliquid · 1 h <span id="pos-note">— aucune position ouverte</span></span>
         <span class="chips" id="prange">
@@ -331,10 +332,12 @@
       </div>
       <div id="tr-scope" class="trade-scope" role="status" aria-live="polite" style="margin-top:7px;color:var(--muted);font-size:11.5px">0 trade affiché sur 0 dans la période</div>
       <div id="trades" style="margin-top:10px"><div class="empty" data-i18n="no_trades">Aucun trade clôturé pour l’instant — le journal se remplit à la première sortie de position.</div></div>
+      <button class="iconbtn trade-more" id="tr-more" type="button" hidden aria-controls="trades">Afficher plus</button>
     </div>
 
     <div class="card" data-card="metrics">
       <h2 data-i18n="live_perf">Performance en direct <span style="color:var(--muted);font-weight:500;font-size:11px" data-i18n="realized">réalisé</span></h2>
+      <div class="panel-source-state" data-panel-status="metrics" role="status" aria-live="polite" hidden></div>
       <div class="metrics-grid" id="metrics"><div class="empty" style="grid-column:1/-1" data-i18n="collecting">Collecte en cours…</div></div>
     </div>
 
