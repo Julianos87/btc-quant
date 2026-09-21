@@ -50,6 +50,7 @@ from .external_settlement_runtime import ExternalSettlementRuntime
 from .funding_service import FundingService
 from .instance_lock import EngineInstanceLock
 from .order_service import OrderExecutionService, SubmittedOrder, SubmitMarketCommand
+from .operational_state_reader import OperationalStateReader
 from .paper_execution_evidence import (
     PaperExecutionEvidenceContext,
     build_paper_execution_evidence,
@@ -257,6 +258,7 @@ class LiveRunner:
         # constructor load. Refresh memory from that durable state before
         # reconstructing any legacy timeline or evaluating a strategy decision.
         self._load_state(reconstruct_legacy_timelines=True)
+        self._resolve_settled_funding_incident()
 
         self._startup_lock.release()
 
@@ -370,6 +372,44 @@ class LiveRunner:
             },
         )
         self.store.resolve_incident("accounting:trend:funding_uncertainty")
+
+    def _resolve_settled_funding_incident(self) -> None:
+        """Close a stale funding incident only when its event is durable.
+
+        A prior process may have committed the funding ledger and checkpoint,
+        then stopped before the incident lifecycle update. Replaying the same
+        event is not required on restart, but leaving the incident open would
+        keep readiness red forever. The exact event key is the proof; no
+        timestamp-only or current-price heuristic is used.
+        """
+
+        incidents = OperationalStateReader(self.store.path).read_incidents(
+            open_only=True, engine="trend"
+        )
+        funding_incident = next(
+            (
+                incident
+                for incident in incidents
+                if incident.get("fingerprint") == "accounting:trend:funding_uncertainty"
+            ),
+            None,
+        )
+        if funding_incident is None:
+            return
+        context = funding_incident.get("context")
+        if isinstance(context, str):
+            try:
+                context = json.loads(context)
+            except json.JSONDecodeError:
+                return
+        if not isinstance(context, dict):
+            return
+        funding_timestamp = context.get("funding_timestamp")
+        if not funding_timestamp:
+            return
+        expected_key = f"trend|{funding_event_id(self.exchange_id, self.symbol, funding_timestamp)}"
+        if any(row.get("event_key") == expected_key for row in self.store.read_funding_ledger()):
+            self.store.resolve_incident("accounting:trend:funding_uncertainty")
 
     def _load_state(self, *, reconstruct_legacy_timelines: bool = False) -> None:
         self.store.migrate_legacy_json("trend", self.legacy_state_path)

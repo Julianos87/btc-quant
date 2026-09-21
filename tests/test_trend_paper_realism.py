@@ -127,6 +127,50 @@ def test_restart_reconstructs_legacy_position_timeline_from_financial_ledger(tmp
         restarted._startup_lock.release()
 
 
+def test_restart_resolves_incident_when_funding_event_is_already_durable(tmp_path):
+    runner = _runner(tmp_path)
+    timestamp = pd.Timestamp.now(tz="UTC").floor("h")
+    runner.store.record_incident(
+        "accounting:trend:funding_uncertainty",
+        engine="trend",
+        severity="CRITICAL",
+        kind="funding_accounting_uncertainty",
+        message="reference was unavailable before the durable retry",
+        context={"funding_timestamp": timestamp.isoformat()},
+    )
+    runner.store.apply_carry_accounting_event_and_checkpoint(
+        {
+            "event_key": f"trend|hyperliquid|BTC/USDC:USDC|{timestamp.isoformat()}",
+            "venue": "hyperliquid",
+            "instrument": "BTC/USDC:USDC",
+            "funding_timestamp": timestamp.isoformat(),
+            "native_funding_rate": 0.0,
+            "position_generation": "FLAT",
+            "funding_notional": 0.0,
+            "funding_notional_price": None,
+            "funding_notional_price_source": "not_required_flat",
+            "funding_notional_price_timestamp": None,
+            "funding_pnl": 0.0,
+            "borrow_principal": 0.0,
+            "borrow_rate_ann": 0.0,
+            "borrow_dt_seconds": 0.0,
+            "borrow_cost": 0.0,
+            "applied_at": timestamp.isoformat(),
+        },
+        runner._state_payload(),
+        engine="trend",
+    )
+    runner._startup_lock.release()
+
+    restarted = _runner(tmp_path)
+    try:
+        assert not OperationalStateReader(restarted.store.path).read_incidents(
+            open_only=True, engine="trend"
+        )
+    finally:
+        restarted._startup_lock.release()
+
+
 def test_funding_replay_uses_event_prices_and_exposure_at_each_timestamp(tmp_path, monkeypatch):
     runner = _runner(tmp_path)
     slot = runner.slots[0]
