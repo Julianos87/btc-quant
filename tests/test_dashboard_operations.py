@@ -538,10 +538,17 @@ def test_summary_distinguishes_carry_two_leg_gross_and_funding_ledger(tmp_path, 
         "read_funding_ledger",
         lambda _self: [
             {
+                "event_key": f"trend|hyperliquid|BTC/USDC:USDC|{now.isoformat()}",
+                "funding_timestamp": now.isoformat(),
+                "funding_pnl": -7.0,
+                "borrow_cost": 0.0,
+            },
+            {
+                "event_key": f"hyperliquid|BTC/USDC:USDC|{now.isoformat()}",
                 "funding_timestamp": now.isoformat(),
                 "funding_pnl": 100.0,
                 "borrow_cost": 2.5,
-            }
+            },
         ],
     )
     store = StateStore(tmp_path / "btcquant.db")

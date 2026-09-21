@@ -1326,7 +1326,13 @@ class LiveRunner:
                 amount = float(details[slot.strategy.name]["amount"])
                 slot.cash -= amount
             self.last_funding_ts = payment.timestamp
-            event_key = funding_event_id(self.exchange_id, self.symbol, payment.timestamp)
+            # Carry and Trend share one SQLite funding ledger, but they have
+            # independent position generations. Keep the historical carry key
+            # format unchanged and namespace Trend events so one engine cannot
+            # reject the other engine's valid accounting event.
+            event_key = (
+                f"trend|{funding_event_id(self.exchange_id, self.symbol, payment.timestamp)}"
+            )
             ledger = {
                 "event_key": event_key,
                 "venue": self.exchange_id,

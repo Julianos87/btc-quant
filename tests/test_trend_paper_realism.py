@@ -171,6 +171,9 @@ def test_funding_replay_uses_event_prices_and_exposure_at_each_timestamp(tmp_pat
     assert slot.cash == pytest.approx(20_000.0 - 0.2 - 0.2)
     ledger = runner.store.read_funding_ledger()
     assert [row["funding_notional_price"] for row in ledger] == [100.0, 200.0]
+    assert [row["event_key"] for row in ledger] == [
+        f"trend|hyperliquid|BTC/USDC:USDC|{timestamp.isoformat()}" for timestamp in (first, second)
+    ]
     assert all(row["funding_notional_price_source"] == "recorded-oracle-fixture" for row in ledger)
     assert (
         len([e for e in runner.store.read_events("trend") if e["event_type"] == "funding_payment"])

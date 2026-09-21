@@ -1115,7 +1115,14 @@ def summary():
     funding_ledger = None
     if store is not None:
         try:
-            funding_ledger = store.read_funding_ledger()
+            # The shared ledger contains carry rows (legacy unprefixed keys)
+            # and namespaced Trend rows. Carry reporting must not count Trend
+            # funding a second time on top of the Trend engine equity.
+            funding_ledger = [
+                row
+                for row in store.read_funding_ledger()
+                if not str(row.get("event_key", "")).startswith("trend|")
+            ]
         except sqlite3.Error:
             funding_ledger = None
 

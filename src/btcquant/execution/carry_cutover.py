@@ -293,7 +293,15 @@ def _count_carry_funding_ledger(connection: Any) -> int:
     }
     if "funding_ledger" not in tables:
         raise CutoverRefused("CUTOVER_BLOCKED: table funding_ledger absente")
-    return int(connection.execute("SELECT COUNT(*) FROM funding_ledger").fetchone()[0])
+    # Trend and Carry share the physical ledger. Trend uses a namespaced
+    # event key; carry cutover must only consider carry's legacy/unprefixed
+    # rows, otherwise a Trend funding payment would block an unrelated carry
+    # cutover.
+    return int(
+        connection.execute(
+            "SELECT COUNT(*) FROM funding_ledger WHERE event_key NOT LIKE 'trend|%'"
+        ).fetchone()[0]
+    )
 
 
 def _open_critical_carry_incidents(connection: Any) -> list[str]:
