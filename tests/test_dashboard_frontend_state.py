@@ -125,3 +125,21 @@ def test_trades_endpoint_exposes_filtered_total_and_returned_rows(monkeypatch) -
     assert older_payload["offset"] == 2
     assert older_payload["has_more"] is False
     assert older_payload["rows"][0]["exit_ts"] == "2026-01-02T00:00:00Z"
+
+
+def test_dashboard_contains_accounting_realism_and_operational_journal_surfaces() -> None:
+    html = (ROOT / "dashboard" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "dashboard" / "static" / "dashboard.js").read_text(encoding="utf-8")
+    for marker in (
+        'id="portfolio-accounting-grid"',
+        'id="accounting-alerts"',
+        'id="realism-band"',
+        'id="trend-accounting-grid"',
+        'id="carry-two-leg-grid"',
+        'id="journal-rows"',
+        'id="contribution-table"',
+    ):
+        assert marker in html
+    assert 'fetchDashboard("/api/operational-journal")' in script
+    assert "renderAccountingPanel" in script
+    assert "renderCarryTwoLeg" in script

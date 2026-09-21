@@ -264,9 +264,9 @@ function applyAccent() {
 }
 
 const VIEW_CARDS = {
-  monitor: new Set(["monitor_pulse", "price", "events", "trend", "carry", "exposure", "readiness"]),
-  performance: new Set(["performance_brief", "chart", "breakdown", "conformity", "yearly", "trades", "metrics", "readiness"]),
-  risk: new Set(["risk_radar", "chart", "price", "events", "trend", "carry", "exposure"]),
+  monitor: new Set(["monitor_pulse", "accounting", "price", "events", "journal", "trend", "carry", "exposure", "readiness"]),
+  performance: new Set(["performance_brief", "accounting", "chart", "breakdown", "conformity", "yearly", "trades", "metrics", "readiness"]),
+  risk: new Set(["risk_radar", "accounting", "chart", "price", "events", "journal", "trend", "carry", "exposure"]),
 };
 const VIEW_TILES = {
   monitor: new Set(["equity", "day", "funding", "allocation"]),
@@ -410,6 +410,11 @@ async function refreshSummary() {
   if (s.carry.daily_lockout) issues.push(["warn", "Carry : limite de perte journalière atteinte — plus d'entrées avant demain (UTC)"]);
   if (s.trend.daily_lockout) issues.push(["warn", "limite de perte journalière atteinte — plus de nouvelles entrées avant demain (UTC)"]);
   if (pendingDeposit > 0) issues.push(["warn", `apport en attente : ${fmt$(pendingDeposit)} — nouvelle tentative quotidienne à 04:30 UTC`]);
+  for (const item of (s.alerts || [])) {
+    if (["CARRY_NOT_HEDGED", "RECONCILIATION_REQUIRED", "ORDER_AMBIGUOUS", "FUNDING_NOT_RECONSTRUCTIBLE", "CARRY_NOT_QUALIFIED"].includes(item.code)) {
+      issues.push([item.severity === "CRITICAL" ? "crit" : "warn", item.message || item.code]);
+    }
+  }
   const a = $("alert");
   if (issues.length) {
     a.style.display = "flex";
@@ -465,6 +470,10 @@ async function refreshSummary() {
   }
 
   renderTrendOverview(s);
+  renderAccountingPanel(s);
+  renderTrendAccounting(s);
+  renderCarryTwoLeg(s.carry || {});
+  renderContributions(s.performance_contributions || {});
   $("slots").innerHTML = (s.trend.slots || []).map(sl => {
     const badge = sl.state === "LONG" ? "long" : sl.state === "SHORT" ? "short" : sl.state === "FLAT" ? "flat" : "unknown";
     const arrow = sl.state === "LONG" ? "▲ " : sl.state === "SHORT" ? "▼ " : sl.state === "UNKNOWN" ? "? " : "";
@@ -928,6 +937,99 @@ async function refreshTrades({append = false} = {}) {
 }
 
 
+
+function dashboardValue(value, formatter = v => fmt$(v, 0)) {
+  return value == null || !Number.isFinite(Number(value)) ? "N/A" : formatter(Number(value));
+}
+function statusClass(value) {
+  const text = String(value || "UNKNOWN").toUpperCase();
+  return text.includes("CRIT") || text.includes("UNSAFE") || text.includes("REQUIRED") ? "down"
+    : text.includes("WARN") || text.includes("UNKNOWN") || text.includes("N/A") || text.includes("NON_") ? "warn" : "";
+}
+function renderAccountingPanel(s) {
+  const portfolio = s.portfolio || {};
+  const grid = $("portfolio-accounting-grid");
+  if (!grid) return;
+  const row = (label, value, note = "", tone = "") =>
+    `<div class="accounting-cell"><span>${label}</span><strong class="num ${tone}">${value}</strong><small>${note}</small></div>`;
+  grid.innerHTML = [
+    row("Equity totale", dashboardValue(portfolio.equity), "cash + actifs valorisés − passifs"),
+    row("PnL réalisé", dashboardValue(portfolio.realized_pnl), "trades clôturés persistés"),
+    row("PnL latent", dashboardValue(portfolio.unrealized_pnl), "deux jambes et positions marquées"),
+    row("Cash disponible", dashboardValue(portfolio.cash_available), "comptes dont le solde est connu"),
+    row("Collatéral immobilisé", dashboardValue(portfolio.collateral_locked), "réservé par la comptabilité carry"),
+    row("Dette + intérêts", dashboardValue(portfolio.debt), "passif explicite, sans double comptage"),
+    row("Exposition brute", dashboardValue(portfolio.gross_exposure), "notionnels absolus"),
+    row("Exposition nette", dashboardValue(portfolio.net_exposure), "long − short"),
+    row("Marge disponible", dashboardValue(portfolio.margin_available), "N/A si le modèle n’est pas qualifié"),
+    row("Réconciliation", portfolio.last_reconciliation ? fmtTimeUTC(portfolio.last_reconciliation.ts) : "N/A", portfolio.last_reconciliation ? portfolio.last_reconciliation.event_type : "aucune preuve durable")
+  ].join("");
+  const state = $("portfolio-accounting-state");
+  if (state) {
+    state.textContent = portfolio.status || "UNKNOWN";
+    state.className = "panel-kind " + statusClass(portfolio.status);
+  }
+  const alerts = $("accounting-alerts");
+  if (alerts) {
+    const items = Array.isArray(s.alerts) ? s.alerts : [];
+    alerts.innerHTML = items.length ? items.map(item =>
+      `<div class="accounting-alert ${item.severity === "CRITICAL" ? "critical" : "warning"}"><strong>${item.severity === "CRITICAL" ? "ACTION" : "SURVEILLER"}</strong><span>${esc(item.message || item.code || "État à vérifier")}</span></div>`
+    ).join("") : '<div class="accounting-ok">Aucune alerte comptable active dans la source durable.</div>';
+  }
+  const decisions = $("decision-explanation");
+  if (decisions) {
+    const decisionGrid = decisions.querySelector(".decision-explanation-grid");
+    const entries = [["Trend", s.decisions && s.decisions.trend], ["Carry", s.decisions && s.decisions.carry]];
+    decisionGrid.innerHTML = entries.map(([engine, decision]) => decision
+      ? `<div class="decision-explanation-item"><span>${engine} · ${esc(decision.event_type || "événement")}</span><strong>${esc(decision.reason || "motif non renseigné")}</strong><small>${fmtTimeUTC(decision.ts)} · ${esc(decision.correlation_id || "sans corrélation")}</small></div>`
+      : `<div class="decision-explanation-item unknown"><span>${engine}</span><strong>Décision non persistée</strong><small>aucun motif durable exposé</small></div>`
+    ).join("");
+  }
+  const realism = $("realism-band");
+  if (realism) {
+    const models = [["Trend", s.execution_realism && s.execution_realism.trend], ["Carry", s.execution_realism && s.execution_realism.carry]];
+    const item = (engine, data) => {
+      data = data || {};
+      const assumptions = Array.isArray(data.uncertainties) && data.uncertainties.length ? data.uncertainties.join(" · ") : "aucune signalée";
+      return `<div class="realism-item"><strong>${engine}</strong><span>simulateur</span><b>${esc(data.simulator_version || "N/A")}</b><span>profil / liquidité</span><b>${esc([data.profile, data.liquidity_model].filter(Boolean).join(" · ") || "N/A")}</b><span>latence</span><b>${data.latency_ms == null ? "N/A" : esc(String(data.latency_ms)) + " ms"}</b><span>hypothèses</span><small>${esc(assumptions)}</small></div>`;
+    };
+    realism.innerHTML = models.map(([engine, data]) => item(engine, data)).join("");
+  }
+}
+function renderTrendAccounting(s) {
+  const root = $("trend-accounting-grid");
+  if (!root) return;
+  const slots = (s.trend && s.trend.slots) || [];
+  const money = value => dashboardValue(value);
+  root.innerHTML = slots.map(slot => {
+    const order = slot.market_order || {};
+    const stop = slot.stop_order || {};
+    const stopStatus = slot.protection_status || "UNKNOWN";
+    return `<article class="trend-accounting-row"><div class="trend-accounting-head"><strong>${esc(String(slot.name || "").replace("trend_ls_", "Donchian "))}</strong><span class="badge ${statusClass(stopStatus)}">${esc(stopStatus)}</span></div><div class="trend-accounting-values"><span>sens / qty<strong>${esc(slot.state || "UNKNOWN")} · ${fmtQty(slot.qty)}</strong></span><span>prix moyen / notionnel<strong>${dashboardValue(slot.avg_price, v => fmt$(v, 0))} · ${dashboardValue(slot.notional)}</strong></span><span>PnL réalisé / latent<strong>${money(slot.realized_pnl)} · ${money(slot.upnl)}</strong></span><span>frais / funding<strong>${money(slot.fees)} · ${money(slot.funding_pnl)}</strong></span><span>stop demandé / protégé<strong>${dashboardValue(slot.stop_requested, v => fmt$(v, 0))} · ${dashboardValue(slot.protected_qty, v => fmtQty(v))}</strong></span><span>ordre / restant<strong>${esc(order.status || stop.status || "N/A")} · ${dashboardValue(slot.remaining_qty, v => fmtQty(v))}</strong></span><span>risque stop<strong>${money(slot.risk_to_stop)} <small>slippage profil visible ci-dessus</small></strong></span></div></article>`;
+  }).join("") || '<div class="empty">Aucune position Trend exposée.</div>';
+}
+function renderCarryTwoLeg(carry) {
+  const root = $("carry-two-leg-grid");
+  if (!root) return;
+  const two = carry.two_leg || {};
+  const money = value => dashboardValue(value);
+  const qty = value => dashboardValue(value, v => fmtQty(v));
+  const state = two.state || carry.execution_state || "UNKNOWN";
+  const venue = two.venue_spec || {};
+  root.innerHTML = `<div class="carry-leg-block"><span>Jambe spot · ${esc(venue.spot_symbol || "BTC/USDC")}</span><strong>${qty(two.spot_qty)} · prix ${dashboardValue(two.spot_price, v => fmt$(v, 0))}</strong><small>coût d’acquisition ${money(two.spot_cost_basis)} · PnL latent ${money(two.spot_unrealized_pnl)}</small></div><div class="carry-leg-block"><span>Jambe perp · ${esc(venue.perp_symbol || "BTC/USDC:USDC")}</span><strong>${qty(two.perp_qty)} · prix moyen ${dashboardValue(two.perp_avg_price, v => fmt$(v, 0))}</strong><small>prix de marché ${dashboardValue(two.perp_price, v => fmt$(v, 0))} · PnL latent ${money(two.perp_unrealized_pnl)}</small></div><div class="carry-leg-block"><span>Écart spot / perp</span><strong>${dashboardValue(two.basis, v => fmt$(v, 2))} · ${dashboardValue(two.basis_pct, v => fmtPct(v, 2))}</strong><small>N/A si l’un des deux marks horodatés manque</small></div><div class="carry-leg-block"><span>Couverture résiduelle</span><strong class="${two.residual_qty != null && two.residual_qty > 0 ? "down" : ""}">${qty(two.residual_qty)}</strong><small>état ${esc(state)} · durée ${durationNA(two.duration_s)}</small></div><div class="carry-leg-block"><span>Cash / collatéral</span><strong>${money(two.cash_available)} / ${money(two.cash_locked)}</strong><small>compte perp ${esc(venue.perp_account || "N/A")}</small></div><div class="carry-leg-block"><span>Dette / intérêts</span><strong>${money(two.debt)} / ${money(two.accrued_interest)}</strong><small>taux emprunt ${two.borrow_rate_ann == null ? "N/A" : fmtPct(two.borrow_rate_ann, 2)}</small></div><div class="carry-leg-block"><span>Funding / frais</span><strong>${money(two.funding_net)} / ${money(two.fees)}</strong><small>portage net attendu ${money(two.expected_net)} · comptabilisé ${money(two.booked_net)}</small></div><div class="carry-leg-block"><span>Marge / liquidation</span><strong>${esc((two.margin && two.margin.status) || "NOT_CALCULATED")}</strong><small>${esc((two.margin && two.margin.reason) || "N/A")}</small></div>`;
+}
+function renderContributions(contributions) {
+  const root = $("contribution-table");
+  if (!root) return;
+  const labels = {market_realized_unrealized:"Marché réalisé + latent", funding:"Funding", trading_fees:"Frais trading", borrow_cost:"Coût d’emprunt"};
+  const money = value => dashboardValue(value);
+  const rows = Object.entries(labels).map(([key, label]) => {
+    const row = contributions[key] || {};
+    return `<tr><th>${label}</th><td>${money(row.trend)}</td><td>${money(row.carry)}</td><td>${money(row.total)}</td></tr>`;
+  }).join("");
+  root.innerHTML = `<table class="contribution-table"><thead><tr><th>Contribution</th><th>Trend</th><th>Carry</th><th>Total</th></tr></thead><tbody>${rows}</tbody></table><small class="table-footnote">Slippage reste une mesure d’exécution lorsqu’il est déjà dans le prix du fill ; il n’est pas soustrait une seconde fois.</small>`;
+}
+
 let evFilter = "all", lastEvents = [];
 function renderEvents() {
   const evs = lastEvents.filter(e => evFilter === "all" || e.source === evFilter);
@@ -949,6 +1051,30 @@ document.querySelectorAll("#evfilter .chip").forEach(b => b.onclick = () => {
   setPressed("#evfilter", x => x.dataset.f === evFilter);
   renderEvents();
 });
+
+let lastJournal = null;
+function renderJournal() {
+  const root = $("journal-rows");
+  if (!root || !lastJournal) return;
+  const events = Array.isArray(lastJournal.events) ? lastJournal.events.slice(-8).reverse() : [];
+  const orders = Array.isArray(lastJournal.orders) ? lastJournal.orders.slice(-5).reverse() : [];
+  const eventRows = events.map(event => {
+    const details = event.details || {};
+    const severity = event.event_type && (event.event_type.includes("RECONCILIATION") || event.event_type.includes("ERROR")) ? "critical" : "";
+    return `<div class="journal-row ${severity}"><span class="journal-time num">${fmtTimeUTC(event.ts)}</span><span class="journal-engine">${esc(event.engine || "?")}</span><strong>${esc(event.event_type || "event")}</strong><span>${esc(event.reason || "")}</span><small>${esc(event.correlation_id || details.intent_id || "sans corrélation")}</small></div>`;
+  });
+  const orderRows = orders.map(order => `<div class="journal-row journal-order"><span class="journal-time num">${fmtTimeUTC(order.updated_at || order.created_at)}</span><span class="journal-engine">${esc(order.engine || "?")}</span><strong>${esc(order.order_type || "ORDER")} ${esc(order.side || "")}</strong><span>${esc(order.status || order.local_state || "N/A")} · ${dashboardValue(order.filled_qty, v => fmtQty(v))} exécuté · ${dashboardValue(order.remaining_qty, v => fmtQty(v))} restant</span><small>${esc(order.error || order.reason || order.intent_id || "")}</small></div>`);
+  root.innerHTML = eventRows.concat(orderRows).join("") || '<div class="empty">Aucun événement durable disponible.</div>';
+  const sequence = $("journal-sequence");
+  if (sequence) sequence.textContent = lastJournal.sequence || "decision → intent → submission → fills → accounting → protection";
+}
+async function refreshJournal() {
+  const response = await fetchDashboard("/api/operational-journal");
+  if (!response.ok) throw new Error("journal_http_" + response.status);
+  lastJournal = await response.json();
+  renderJournal();
+  return true;
+}
 
 async function refreshAnalytics() {
   const response = await fetchDashboard("/api/analytics"); if (!response.ok) throw new Error("analytics_http_" + response.status); const a = await response.json();
@@ -1996,7 +2122,7 @@ function buildDrawer() {
   $("pref-notif-pos").checked = PREFS.notifPos;
   $("pref-dd").value = PREFS.ddAlert;
   // cartes visibles
-  const CARDS = ["performance_brief","risk_radar","monitor_pulse","chart","price","events","trend","carry","breakdown","conformity","yearly","trades","metrics","exposure","readiness"];
+  const CARDS = ["performance_brief","risk_radar","monitor_pulse","accounting","chart","price","events","journal","trend","carry","breakdown","conformity","yearly","trades","metrics","exposure","readiness"];
   $("pref-cards").innerHTML = CARDS.map(k =>
     `<div class="setrow"><span class="sk">${(t("cards")||{})[k]||k}</span>
      <label class="toggle"><input type="checkbox" data-card-k="${k}" aria-label="${esc((t("cards")||{})[k]||k)}" ${PREFS.hidden[k]?"":"checked"}><span class="sl"></span></label></div>`).join("");
@@ -2068,7 +2194,7 @@ $("tr-more").onclick = () => refreshTrades({append: true});
 let timer = null;
 let tickPromise = null;
 let refreshResetTimer = null;
-const PANEL_PERIODS = {summary: 0, events: 0, readiness: 0, equity: 0, price: 0, trades: 0, metrics: 60_000, analytics: 120_000, conformity: 120_000};
+const PANEL_PERIODS = {summary: 0, events: 0, journal: 30_000, readiness: 0, equity: 0, price: 0, trades: 0, metrics: 60_000, analytics: 120_000, conformity: 120_000};
 const panelSuccessAt = new Map();
 const panelStates = new Map();
 function restartTimer() { if (timer) clearInterval(timer); if (PREFS.refresh) timer = setInterval(tick, PREFS.refresh); }
@@ -2120,6 +2246,7 @@ function refreshPlan({background = document.hidden} = {}) {
   if (background) return plan;
   if (PREFS.view === "monitor") {
     if (cardIsVisible("events")) plan.push(["events", refreshEvents]);
+    if (cardIsVisible("journal")) plan.push(["journal", refreshJournal]);
     if (cardIsVisible("price")) plan.push(["price", refreshPrice]);
   }
   if (PREFS.view === "performance") {
@@ -2132,6 +2259,7 @@ function refreshPlan({background = document.hidden} = {}) {
     if (cardIsVisible("chart")) plan.push(["equity", refreshEquity]);
     if (cardIsVisible("price")) plan.push(["price", refreshPrice]);
     if (cardIsVisible("events")) plan.push(["events", refreshEvents]);
+    if (cardIsVisible("journal")) plan.push(["journal", refreshJournal]);
   }
   return plan;
 }

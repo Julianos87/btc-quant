@@ -1634,3 +1634,78 @@
       grid-template-columns:1fr;
     }
   }
+
+
+/* Reconciled accounting and provenance surfaces */
+.accounting-panel, .journal-panel { min-width:0; }
+.accounting-panel { grid-area:accounting; }
+.journal-panel { grid-area:journal; }
+.panel-caption { margin:5px 0 12px; color:var(--muted); font-size:11px; line-height:1.45; }
+.accounting-grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:1px; background:var(--grid); border:1px solid var(--grid); }
+.accounting-cell { min-width:0; padding:10px 11px; background:var(--surface-2); }
+.accounting-cell span, .accounting-cell small { display:block; color:var(--muted); font-size:10px; line-height:1.35; }
+.accounting-cell strong { display:block; margin:4px 0 2px; color:var(--ink); font-size:15px; overflow-wrap:anywhere; }
+.accounting-cell small { min-height:27px; }
+.accounting-alerts { display:grid; gap:6px; margin-top:10px; }
+.accounting-alert, .accounting-ok { display:flex; gap:8px; align-items:flex-start; padding:8px 10px; border:1px solid var(--ring); border-radius:7px; font-size:11px; line-height:1.35; }
+.accounting-alert strong { flex:none; font-size:9px; letter-spacing:.08em; }
+.accounting-alert.critical { color:var(--crit); border-color:color-mix(in srgb,var(--crit) 42%,var(--ring)); background:color-mix(in srgb,var(--crit) 7%,transparent); }
+.accounting-alert.warning { color:var(--warn); border-color:color-mix(in srgb,var(--warn) 42%,var(--ring)); background:color-mix(in srgb,var(--warn) 7%,transparent); }
+.accounting-ok { color:var(--good-text); background:color-mix(in srgb,var(--good) 6%,transparent); }
+.decision-explanation { margin-top:12px; }
+.decision-explanation-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:7px; }
+.decision-explanation-item { min-width:0; padding:9px 10px; border:1px solid var(--ring); border-radius:7px; background:var(--surface-2); }
+.decision-explanation-item span, .decision-explanation-item small { display:block; color:var(--muted); font-size:10px; }
+.decision-explanation-item strong { display:block; margin:4px 0; font-size:11px; overflow-wrap:anywhere; }
+.decision-explanation-item.unknown strong { color:var(--warn); }
+.realism-details { margin-top:11px; }
+.realism-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:10px; }
+.realism-item { min-width:0; display:grid; grid-template-columns:auto 1fr; gap:3px 10px; padding:9px 10px; border:1px solid var(--ring); border-radius:7px; background:var(--surface-2); }
+.realism-item strong { grid-row:1 / span 5; align-self:start; color:var(--s1); font-size:11px; }
+.realism-item span { color:var(--muted); font-size:10px; }
+.realism-item b, .realism-item small { min-width:0; overflow-wrap:anywhere; font-size:10.5px; }
+.trend-accounting-grid { display:grid; gap:1px; margin:0 18px 9px; background:var(--grid); border:1px solid var(--grid); }
+.trend-accounting-row { min-width:0; padding:10px 11px; background:var(--surface-2); }
+.trend-accounting-head { display:flex; justify-content:space-between; gap:8px; align-items:center; margin-bottom:8px; }
+.trend-accounting-head strong { font-size:11px; }
+.trend-accounting-values { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; }
+.trend-accounting-values span, .carry-leg-block span { display:block; color:var(--muted); font-size:9px; text-transform:uppercase; letter-spacing:.05em; }
+.trend-accounting-values strong, .carry-leg-block strong { display:block; margin-top:3px; color:var(--ink); font-size:11px; overflow-wrap:anywhere; }
+.trend-accounting-values small { display:block; color:var(--muted); font-size:9px; font-weight:400; }
+.carry-two-leg-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1px; margin:0 0 11px; background:var(--grid); border:1px solid var(--grid); }
+.carry-leg-block { min-width:0; padding:9px 10px; background:var(--surface-2); }
+.carry-leg-block small { display:block; margin-top:3px; color:var(--muted); font-size:10px; line-height:1.35; overflow-wrap:anywhere; }
+.contribution-table-wrap { margin-bottom:11px; }
+.contribution-table { width:100%; border-collapse:collapse; font-size:10.5px; }
+.contribution-table th, .contribution-table td { padding:6px 5px; border-bottom:1px solid var(--grid); text-align:right; }
+.contribution-table th:first-child, .contribution-table td:first-child { text-align:left; color:var(--muted); }
+.contribution-table thead th { color:var(--muted); font-size:9px; text-transform:uppercase; letter-spacing:.06em; }
+.table-footnote { display:block; margin-top:7px; color:var(--muted); font-size:10px; line-height:1.4; }
+.journal-sequence { margin:0 0 9px; padding:8px 10px; border:1px solid var(--ring); border-radius:7px; color:var(--muted); font:600 10px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace; overflow-wrap:anywhere; }
+#journal-rows { display:grid; gap:1px; max-height:360px; overflow:auto; background:var(--grid); border:1px solid var(--grid); }
+.journal-row { display:grid; grid-template-columns:125px 48px minmax(120px,.55fr) minmax(150px,1fr) minmax(80px,.5fr); gap:8px; align-items:center; min-width:0; padding:8px 9px; background:var(--surface-2); font-size:10.5px; }
+.journal-row strong, .journal-row span, .journal-row small { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.journal-row small { color:var(--muted); }
+.journal-row.critical { color:var(--crit); }
+.journal-engine { color:var(--s1); font-size:9px; text-transform:uppercase; letter-spacing:.05em; }
+@media (min-width:900px) {
+  body[data-view="monitor"] .decision-board { grid-template-areas:"accounting accounting" "trend trend" "pulse price" "carry exposure" "events events" "journal journal" "readiness readiness"; }
+  body[data-view="performance"] .decision-board { grid-template-areas:"accounting accounting" "brief brief" "chart chart" "metrics breakdown" "conformity yearly" "trades trades" "readiness readiness"; }
+  body[data-view="risk"] .decision-board { grid-template-areas:"radar radar" "accounting accounting" "trend trend" "exposure carry" "chart price" "events events" "journal journal"; }
+}
+@media (max-width:899px) {
+  .accounting-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .accounting-cell:first-child { grid-column:1/-1; }
+  .trend-accounting-values { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .journal-row { grid-template-columns:90px 42px minmax(110px,.8fr) minmax(120px,1fr); }
+  .journal-row small { grid-column:3/-1; }
+}
+@media (max-width:560px) {
+  .accounting-grid, .decision-explanation-grid, .realism-grid, .carry-two-leg-grid { grid-template-columns:1fr; }
+  .trend-accounting-grid { margin-inline:14px; }
+  .trend-accounting-values { grid-template-columns:1fr 1fr; }
+  .journal-row { grid-template-columns:1fr 1fr; gap:4px 8px; }
+  .journal-row strong, .journal-row span, .journal-row small { white-space:normal; overflow:visible; text-overflow:clip; }
+  .journal-row strong { grid-column:1/-1; }
+  .journal-row small { grid-column:1/-1; }
+}

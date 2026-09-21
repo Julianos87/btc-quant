@@ -679,6 +679,301 @@ def _timed(label: str, fn):
         _cache[f"{label}_ms"] = round((time.time() - t0) * 1000, 1)
 
 
+def _dashboard_number(value: object) -> float | None:
+    """Return a finite number for reporting, never a fabricated zero."""
+
+    try:
+        if value is None or isinstance(value, bool):
+            return None
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _dashboard_timestamp(value: object) -> str | None:
+    """Normalize a persisted timestamp to an explicit UTC ISO string."""
+
+    if value is None:
+        return None
+    try:
+        timestamp = pd.Timestamp(value)
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.tz_localize("UTC")
+        else:
+            timestamp = timestamp.tz_convert("UTC")
+        return timestamp.isoformat()
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _dashboard_event_payload(row: dict) -> dict:
+    raw = row.get("payload")
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            decoded = json.loads(raw)
+        except (TypeError, ValueError):
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+    return {}
+
+
+def _durable_event_projection(row: dict) -> dict:
+    payload = _dashboard_event_payload(row)
+    reason = (
+        payload.get("reason")
+        or payload.get("resolution")
+        or payload.get("error")
+        or payload.get("message")
+        or row.get("event_type")
+    )
+    return {
+        "id": row.get("id"),
+        "ts": _dashboard_timestamp(row.get("ts")),
+        "engine": row.get("engine"),
+        "event_type": row.get("event_type"),
+        "aggregate_type": row.get("aggregate_type"),
+        "aggregate_id": row.get("aggregate_id"),
+        "correlation_id": row.get("correlation_id"),
+        "reason": str(reason) if reason is not None else None,
+        "payload": payload,
+    }
+
+
+def _latest_durable_decision(store: StateStore, engine: str) -> dict | None:
+    """Expose the latest persisted motive; the browser never recomputes it."""
+
+    try:
+        events = store.read_events(engine, limit=160)
+    except (OSError, sqlite3.Error):
+        return None
+    if not events:
+        return None
+    meaningful = [
+        row for row in events if row.get("event_type") not in {"checkpoint", "engine_state_saved"}
+    ]
+    row = (meaningful or events)[-1]
+    return _durable_event_projection(row)
+
+
+def _order_projection(store: StateStore, engine: str) -> dict[str, dict]:
+    """Group durable order facts by slot for read-only dashboard rendering."""
+
+    try:
+        orders = store.read_orders(engine)
+    except (OSError, sqlite3.Error):
+        return {}
+    projected: dict[str, dict] = {}
+    for row in orders:
+        slot = str(row.get("slot") or "")
+        if not slot:
+            continue
+        candidate = {
+            "id": row.get("id"),
+            "intent_id": row.get("intent_id"),
+            "broker_order_id": row.get("broker_order_id"),
+            "order_type": row.get("order_type"),
+            "side": row.get("side"),
+            "reason": row.get("reason"),
+            "status": row.get("status"),
+            "local_state": row.get("local_state"),
+            "external_state": row.get("external_state"),
+            "requested_qty": _dashboard_number(row.get("requested_qty")),
+            "filled_qty": _dashboard_number(row.get("filled_qty")),
+            "remaining_qty": _dashboard_number(row.get("remaining_qty")),
+            "price": _dashboard_number(row.get("price")),
+            "reference_price": _dashboard_number(row.get("reference_price")),
+            "fee": _dashboard_number(row.get("fee")),
+            "error": row.get("error"),
+            "created_at": _dashboard_timestamp(row.get("created_at")),
+            "updated_at": _dashboard_timestamp(row.get("updated_at")),
+        }
+        current = projected.setdefault(slot, {"latest": None, "market": None, "stop": None})
+        current["latest"] = candidate
+        bucket = "stop" if str(row.get("order_type", "")).upper() == "STOP" else "market"
+        current[bucket] = candidate
+    return projected
+
+
+def _trend_funding_by_slot(store: StateStore) -> dict[str, float | None]:
+    """Attribute Trend funding from the durable event payload when available."""
+
+    totals: dict[str, float] = {}
+    try:
+        rows = store.read_events("trend", limit=500)
+    except (OSError, sqlite3.Error):
+        return {}
+    for row in rows:
+        if row.get("event_type") != "funding_payment":
+            continue
+        amounts = _dashboard_event_payload(row).get("amounts")
+        if not isinstance(amounts, dict):
+            continue
+        for slot, detail in amounts.items():
+            if not isinstance(detail, dict):
+                continue
+            amount = _dashboard_number(detail.get("amount"))
+            if amount is not None:
+                # Trend's durable amount is the cash-side sign; invert it to
+                # expose the PnL contribution with the normal PnL convention.
+                totals[str(slot)] = totals.get(str(slot), 0.0) - amount
+    return totals
+
+
+def _sum_trade_pnl(strategy: str, trades: pd.DataFrame) -> tuple[float | None, str]:
+    if not isinstance(trades, pd.DataFrame):
+        return None, "UNAVAILABLE"
+    if "strategy" not in trades.columns or "pnl" not in trades.columns:
+        return None, "UNAVAILABLE"
+    scoped = trades[trades["strategy"].astype(str) == strategy]
+    values = pd.to_numeric(scoped["pnl"], errors="coerce")
+    if values.isna().any():
+        return None, "INVALID"
+    return float(values.sum()), "AVAILABLE"
+
+
+def _carry_two_leg_projection(carry_state: dict, carry_two_leg: dict) -> dict:
+    balance = carry_two_leg.get("balance") if isinstance(carry_two_leg, dict) else None
+    balance = balance if isinstance(balance, dict) else {}
+    spec = carry_two_leg.get("venue_spec") if isinstance(carry_two_leg, dict) else None
+    spec = spec if isinstance(spec, dict) else {}
+    active_intent = carry_two_leg.get("active_intent") if isinstance(carry_two_leg, dict) else None
+    active_intent = active_intent if isinstance(active_intent, dict) else None
+    economics = active_intent.get("economics") if active_intent else None
+    economics = economics if isinstance(economics, dict) else {}
+    state = str(carry_two_leg.get("state") or carry_state.get("execution_state") or "UNKNOWN")
+    spot_qty = _dashboard_number(balance.get("spot_qty"))
+    perp_qty = _dashboard_number(balance.get("perp_qty"))
+    residual = abs(spot_qty - perp_qty) if spot_qty is not None and perp_qty is not None else None
+    funding_received = _dashboard_number(balance.get("funding_received"))
+    funding_paid = _dashboard_number(balance.get("funding_paid"))
+    spot_fees = _dashboard_number(balance.get("spot_fees"))
+    perp_fees = _dashboard_number(balance.get("perp_fees"))
+    fees = spot_fees + perp_fees if spot_fees is not None and perp_fees is not None else None
+    booked = _dashboard_number(balance.get("equity"))
+    initial_cash = _dashboard_number(balance.get("initial_cash"))
+    booked_net = booked - initial_cash if booked is not None and initial_cash is not None else None
+    return {
+        "state": state,
+        "qualification": carry_two_leg.get("qualification"),
+        "model_version": carry_two_leg.get("model_version"),
+        "venue_spec": spec,
+        "balance": balance,
+        "active_intent": active_intent,
+        "spot_qty": spot_qty,
+        "perp_qty": perp_qty,
+        "residual_qty": residual,
+        "spot_price": _dashboard_number(balance.get("spot_mark")),
+        "perp_price": _dashboard_number(balance.get("perp_mark")),
+        "basis": (
+            _dashboard_number(balance.get("perp_mark"))
+            - _dashboard_number(balance.get("spot_mark"))
+            if _dashboard_number(balance.get("perp_mark")) is not None
+            and _dashboard_number(balance.get("spot_mark")) is not None
+            else None
+        ),
+        "basis_pct": (
+            (
+                _dashboard_number(balance.get("perp_mark"))
+                - _dashboard_number(balance.get("spot_mark"))
+            )
+            / _dashboard_number(balance.get("spot_mark"))
+            if _dashboard_number(balance.get("perp_mark")) is not None
+            and _dashboard_number(balance.get("spot_mark")) not in (None, 0)
+            else None
+        ),
+        "spot_cost_basis": _dashboard_number(balance.get("spot_cost_basis")),
+        "perp_avg_price": _dashboard_number(balance.get("perp_entry_price")),
+        "spot_unrealized_pnl": _dashboard_number(balance.get("spot_unrealized_pnl")),
+        "perp_unrealized_pnl": _dashboard_number(balance.get("perp_unrealized_pnl")),
+        "cash_available": _dashboard_number(balance.get("cash_available")),
+        "cash_locked": _dashboard_number(balance.get("cash_locked")),
+        "debt": _dashboard_number(balance.get("debt_principal")),
+        "accrued_interest": _dashboard_number(balance.get("accrued_interest")),
+        "funding_received": funding_received,
+        "funding_paid": funding_paid,
+        "funding_net": funding_received - funding_paid
+        if funding_received is not None and funding_paid is not None
+        else None,
+        "fees": fees,
+        "borrow_rate_ann": _dashboard_number(
+            (carry_two_leg.get("cost_provenance") or {}).get("borrow_rate_ann")
+            if isinstance(carry_two_leg.get("cost_provenance"), dict)
+            else None
+        ),
+        "expected_net": _dashboard_number(economics.get("net_expected")),
+        "booked_net": booked_net,
+        "margin": {
+            "status": "NOT_CALCULATED",
+            "available": None,
+            "initial": None,
+            "maintenance": None,
+            "reason": "Règles de marge venue non persistées ou non qualifiées",
+            "account": spec.get("perp_account"),
+        },
+        "duration_s": None,
+    }
+
+
+def _performance_contributions(
+    *,
+    trend_slots: list[dict],
+    trend_funding: float | None,
+    trend_fees: float | None,
+    trend_realized: float | None,
+    carry: dict,
+) -> dict:
+    open_slots = [slot for slot in trend_slots if slot.get("state") != "FLAT"]
+    trend_upnl_values = [slot.get("upnl") for slot in open_slots]
+    trend_unrealized = (
+        sum(float(value) for value in trend_upnl_values)
+        if all(value is not None for value in trend_upnl_values)
+        else None
+    )
+    carry_values = [carry.get("spot_unrealized_pnl"), carry.get("perp_unrealized_pnl")]
+    carry_unrealized = (
+        sum(float(value) for value in carry_values)
+        if all(value is not None for value in carry_values)
+        else None
+    )
+    carry_funding = carry.get("funding_net")
+    carry_fees = -carry.get("fees") if carry.get("fees") is not None else None
+    carry_borrow = (
+        -carry.get("accrued_interest") if carry.get("accrued_interest") is not None else None
+    )
+    trend_market = (
+        trend_realized + trend_unrealized
+        if trend_realized is not None and trend_unrealized is not None
+        else None
+    )
+    return {
+        "market_realized_unrealized": {
+            "trend": trend_market,
+            "carry": carry_unrealized,
+            "total": trend_market + carry_unrealized
+            if trend_market is not None and carry_unrealized is not None
+            else None,
+        },
+        "funding": {
+            "trend": trend_funding,
+            "carry": carry_funding,
+            "total": trend_funding + carry_funding
+            if trend_funding is not None and carry_funding is not None
+            else None,
+        },
+        "trading_fees": {
+            "trend": -trend_fees if trend_fees is not None else None,
+            "carry": carry_fees,
+            "total": (-trend_fees + carry_fees)
+            if trend_fees is not None and carry_fees is not None
+            else None,
+        },
+        "borrow_cost": {"trend": 0.0, "carry": carry_borrow, "total": carry_borrow},
+    }
+
+
 def _combined_equity(net_of_flows: bool = False) -> pd.Series:
     """Équity combinée trend + carry, alignée à la minute.
 
@@ -1240,6 +1535,261 @@ def summary():
     carry_spec = carry_two_leg.get("venue_spec")
     carry_cost_provenance = carry_two_leg.get("cost_provenance")
 
+    # Read-only operational projections. These are assembled server-side from
+    # durable SQLite facts so the browser never recomputes strategy decisions.
+    trend_orders = _order_projection(store, "trend") if store is not None else {}
+    trend_funding_by_slot = _trend_funding_by_slot(store) if store is not None else {}
+    trend_ledger_rows = []
+    if store is not None:
+        try:
+            trend_ledger_rows = [
+                row
+                for row in store.read_funding_ledger()
+                if str(row.get("event_key", "")).startswith("trend|")
+            ]
+        except (OSError, sqlite3.Error):
+            trend_ledger_rows = []
+    all_trades = _read_trades()
+    trend_realized_by_slot: dict[str, float | None] = {}
+    for slot in slots:
+        realized, realized_status = _sum_trade_pnl(slot["name"], all_trades)
+        order_bundle = trend_orders.get(slot["name"], {})
+        market_order = order_bundle.get("market")
+        stop_order = order_bundle.get("stop")
+        fee_values = []
+        for order in (market_order, stop_order):
+            if isinstance(order, dict) and order.get("fee") is not None:
+                fee_values.append(order["fee"])
+        if slot.get("entry_fee") is not None:
+            fee_values.append(slot["entry_fee"])
+        slot["avg_price"] = slot.get("entry")
+        slot["realized_pnl"] = realized
+        slot["realized_pnl_status"] = realized_status
+        slot["funding_pnl"] = trend_funding_by_slot.get(slot["name"])
+        slot["fees"] = sum(fee_values) if fee_values else (0.0 if store is not None else None)
+        slot["stop_requested"] = slot.get("stop")
+        slot["stop_order"] = stop_order
+        slot["market_order"] = market_order
+        slot["executed_qty"] = (
+            market_order.get("filled_qty") if isinstance(market_order, dict) else None
+        )
+        slot["remaining_qty"] = (
+            market_order.get("remaining_qty") if isinstance(market_order, dict) else None
+        )
+        slot["protected_qty"] = (
+            slot.get("qty") if slot.get("protection_protected") is True else None
+        )
+        slot["risk_to_stop"] = (
+            max(0.0, -float(slot["stop_pnl"])) if slot.get("stop_pnl") is not None else None
+        )
+        slot["last_decision"] = None
+        trend_realized_by_slot[slot["name"]] = realized
+
+    trend_realized_total = None
+    if isinstance(all_trades, pd.DataFrame) and "strategy" in all_trades.columns:
+        realized_values = [value for value in trend_realized_by_slot.values() if value is not None]
+        if len(realized_values) == len(slots):
+            trend_realized_total = sum(realized_values)
+    trend_fee_values = []
+    if store is not None:
+        try:
+            trend_order_rows = store.read_orders("trend")
+            for row in trend_order_rows:
+                fee = _dashboard_number(row.get("fee"))
+                if fee is None:
+                    trend_fee_values = []
+                    break
+                trend_fee_values.append(fee)
+        except (OSError, sqlite3.Error):
+            trend_fee_values = []
+    trend_fees_total = sum(trend_fee_values) if store is not None else None
+    trend_funding_total = (
+        sum(_dashboard_number(row.get("funding_pnl")) or 0.0 for row in trend_ledger_rows)
+        if trend_ledger_rows
+        and all(_dashboard_number(row.get("funding_pnl")) is not None for row in trend_ledger_rows)
+        else 0.0
+        if store is not None and not trend_ledger_rows
+        else None
+    )
+    carry_projection = _carry_two_leg_projection(carry_state, carry_two_leg)
+    trend_decision = _latest_durable_decision(store, "trend") if store is not None else None
+    carry_decision = _latest_durable_decision(store, "carry") if store is not None else None
+    for slot in slots:
+        slot["last_decision"] = trend_decision
+
+    reconciliation_events = []
+    if store is not None:
+        try:
+            for engine in ("trend", "carry"):
+                reconciliation_events.extend(
+                    row
+                    for row in store.read_events(engine, limit=240)
+                    if "reconcil" in str(row.get("event_type", "")).lower()
+                )
+        except (OSError, sqlite3.Error):
+            reconciliation_events = []
+    reconciliation_event = (
+        _durable_event_projection(max(reconciliation_events, key=lambda row: row.get("id", 0)))
+        if reconciliation_events
+        else None
+    )
+    trend_realism = trend_state.get("execution_realism")
+    trend_realism = trend_realism if isinstance(trend_realism, dict) else {}
+    carry_realism = {
+        "simulator_version": carry_two_leg.get("model_version"),
+        "profile": "carry_two_leg" if carry_mode == "PAPER_TWO_LEG" else "synthetic_historical",
+        "liquidity_model": "order_book"
+        if carry_mode == "PAPER_TWO_LEG"
+        else "historical_synthetic",
+        "latency_ms": None,
+        "funding": "observed_events" if carry_mode == "PAPER_TWO_LEG" else "observed_venue_rate",
+        "margin_liquidation": carry_projection["margin"],
+        "cost_provenance": carry_cost_provenance,
+        "uncertainties": [
+            carry_spec.get("qualification_reason")
+            if isinstance(carry_spec, dict) and carry_spec.get("qualified") is not True
+            else None
+        ],
+    }
+    carry_realism["uncertainties"] = [item for item in carry_realism["uncertainties"] if item]
+    trend_margin = trend_realism.get("last_margin_snapshot")
+    if not isinstance(trend_margin, dict):
+        trend_margin = None
+    accounting_alerts = []
+    if trend_protection_status in {"UNSAFE", "UNKNOWN", "PENDING"} and open_slots:
+        accounting_alerts.append(
+            {
+                "severity": "CRITICAL" if trend_protection_status == "UNSAFE" else "WARNING",
+                "code": "TREND_PROTECTION_INCOMPLETE",
+                "message": "Position Trend ouverte sans protection confirmée suffisante",
+            }
+        )
+    if carry_mode == "PAPER_TWO_LEG" and carry_is_open and carry_projection["state"] != "HEDGED":
+        accounting_alerts.append(
+            {
+                "severity": "CRITICAL",
+                "code": "CARRY_NOT_HEDGED",
+                "message": "Carry ouvert mais couverture des deux jambes incomplète",
+            }
+        )
+    if carry_mode == "PAPER_TWO_LEG" and carry_projection["qualification"] != "QUALIFIED":
+        accounting_alerts.append(
+            {
+                "severity": "WARNING",
+                "code": "CARRY_NOT_QUALIFIED",
+                "message": "Carry deux jambes non qualifié : financement ou marge inconnus",
+            }
+        )
+    if (
+        trend_state.get("reconciliation_required")
+        or carry_state.get("reconciliation_required")
+        or carry_state.get("accounting_uncertain")
+    ):
+        accounting_alerts.append(
+            {
+                "severity": "CRITICAL",
+                "code": "RECONCILIATION_REQUIRED",
+                "message": "Une réconciliation durable est requise avant toute interprétation économique",
+            }
+        )
+    if market_valuation_status != "MARK_TO_MARKET_ESTIMATE":
+        accounting_alerts.append(
+            {
+                "severity": "WARNING"
+                if market_valuation_status.startswith("STALE")
+                else "CRITICAL",
+                "code": "VALUATION_NOT_FRESH",
+                "message": "Valorisation mark-to-market périmée ou indisponible",
+            }
+        )
+    if funding_ledger_status in {"UNAVAILABLE", "INVALID", "PARTIAL"}:
+        accounting_alerts.append(
+            {
+                "severity": "WARNING",
+                "code": "FUNDING_NOT_RECONSTRUCTIBLE",
+                "message": "Funding non entièrement reconstructible depuis le ledger durable",
+            }
+        )
+    unresolved_orders = sum(
+        len(item.get("unresolved_order_ids", []))
+        for item in operational.get("execution", {}).values()
+        if isinstance(item, dict)
+    )
+    if unresolved_orders:
+        accounting_alerts.append(
+            {
+                "severity": "CRITICAL",
+                "code": "ORDER_AMBIGUOUS",
+                "message": f"{unresolved_orders} ordre(s) non résolu(s) dans le journal d'exécution",
+            }
+        )
+    trend_cash_values = [_dashboard_number(slot.get("cash")) for slot in slots]
+    trend_cash_available = (
+        sum(value for value in trend_cash_values if value is not None)
+        if trend_cash_values and all(value is not None for value in trend_cash_values)
+        else None
+    )
+    carry_cash_available = carry_projection.get("cash_available")
+    cash_available = (
+        trend_cash_available + carry_cash_available
+        if trend_cash_available is not None and carry_cash_available is not None
+        else None
+    )
+    debt = carry_projection.get("debt")
+    if debt is not None and carry_projection.get("accrued_interest") is not None:
+        debt += carry_projection["accrued_interest"]
+    collateral_locked = carry_projection.get("cash_locked")
+    margin_available = trend_margin.get("available_initial_margin") if trend_margin else None
+    if margin_available is None:
+        margin_available = carry_projection.get("margin", {}).get("available")
+    performance_contributions = _performance_contributions(
+        trend_slots=slots,
+        trend_funding=trend_funding_total,
+        trend_fees=trend_fees_total,
+        trend_realized=trend_realized_total,
+        carry=carry_projection,
+    )
+    portfolio_accounting = {
+        "status": "RECONCILIATION_REQUIRED"
+        if any(item["code"] == "RECONCILIATION_REQUIRED" for item in accounting_alerts)
+        else accounting_status,
+        "equity": total if accounting_available else None,
+        "realized_pnl": trend_realized_total,
+        "unrealized_pnl": (
+            trend_total_upnl
+            + sum(
+                value
+                for value in (
+                    carry_projection.get("spot_unrealized_pnl"),
+                    carry_projection.get("perp_unrealized_pnl"),
+                )
+                if value is not None
+            )
+            if trend_total_upnl is not None
+            and all(
+                value is not None
+                for value in (
+                    carry_projection.get("spot_unrealized_pnl"),
+                    carry_projection.get("perp_unrealized_pnl"),
+                )
+            )
+            else None
+        ),
+        "cash_available": cash_available,
+        "collateral_locked": collateral_locked,
+        "debt": debt,
+        "gross_exposure": portfolio_gross_notional,
+        "net_exposure": portfolio_directional_net,
+        "margin_available": margin_available,
+        "last_reconciliation": reconciliation_event,
+        "definitions": {
+            "equity": "cash + mark-to-market assets - liabilities; no double-counted funding",
+            "cash_available": "sum of explicitly persisted engine cash balances only",
+            "collateral_locked": "cash reserved as persisted by the two-leg accounting state",
+            "margin_available": "venue margin model output; N/A when not qualified",
+        },
+    }
+
     return jsonify(
         {
             "api_schema_version": 2,
@@ -1248,6 +1798,11 @@ def summary():
             if price_snapshot.observed_at
             else None,
             "mode": "PAPER",
+            "portfolio": portfolio_accounting,
+            "alerts": accounting_alerts,
+            "decisions": {"trend": trend_decision, "carry": carry_decision},
+            "execution_realism": {"trend": trend_realism, "carry": carry_realism},
+            "performance_contributions": performance_contributions,
             "sources": {
                 "price": price_snapshot.to_dict(),
                 "candles_1h": candles_snapshot.to_dict(),
@@ -1304,6 +1859,14 @@ def summary():
                 "pending_protection_slots": pending_protection_count,
                 "protection_status": trend_protection_status,
                 "protection_mode": trend_health.protection_mode if trend_health else None,
+                "accounting": {
+                    "realized_pnl": trend_realized_total,
+                    "unrealized_pnl": trend_total_upnl,
+                    "funding_pnl": trend_funding_total,
+                    "fees": trend_fees_total,
+                    "margin": trend_margin,
+                    "last_decision": trend_decision,
+                },
             },
             "carry": {
                 "alive": carry_age is not None and carry_age < 900,
@@ -1379,6 +1942,8 @@ def summary():
                 if last_funding_ledger
                 else None,
                 "other_costs": None,
+                "two_leg": carry_projection,
+                "last_decision": carry_decision,
             },
             "totals": {
                 "equity": total if accounting_available else None,
@@ -1418,6 +1983,10 @@ def summary():
                 "trend_directional_net_notional": trend_directional_net
                 if mark_price is not None
                 else None,
+                "cash_available": portfolio_accounting["cash_available"],
+                "collateral_locked": portfolio_accounting["collateral_locked"],
+                "debt": portfolio_accounting["debt"],
+                "margin_available": portfolio_accounting["margin_available"],
             },
             "health": {
                 "server_uptime_s": max(0.0, time.monotonic() - START_TIME),
@@ -1426,6 +1995,9 @@ def summary():
                 "safety_status": safety_status.value,
                 "valuation_status": market_valuation_status,
                 "source_skew": state_price_temporal["max_source_skew_seconds"],
+                "alerts": accounting_alerts,
+                "latest_decisions": {"trend": trend_decision, "carry": carry_decision},
+                "last_reconciliation": reconciliation_event,
                 **operational,
             },
             "fx": {
@@ -1438,6 +2010,76 @@ def summary():
                 "freshness": fx_snapshot.freshness.value,
                 "display_only": True,
             },
+        }
+    )
+
+
+@app.route("/api/operational-journal")
+def operational_journal():
+    """Durable execution timeline for diagnosis, never a trading command."""
+
+    database = STATE / "btcquant.db"
+    if not database.exists():
+        return jsonify(
+            {"status": "SOURCE_UNAVAILABLE", "events": [], "orders": [], "incidents": []}
+        ), 503
+    try:
+        store = StateStore(database, initialize=False, read_only=True)
+        event_rows = store.read_events(limit=120)
+        events = []
+        for row in event_rows:
+            projected = _durable_event_projection(row)
+            payload = projected.pop("payload", {})
+            if isinstance(payload, dict):
+                payload = {key: value for key, value in payload.items() if key != "state"}
+            projected["details"] = payload
+            events.append(projected)
+        order_rows = store.read_orders()
+        orders = []
+        for row in order_rows[-80:]:
+            orders.append(
+                {
+                    "id": row.get("id"),
+                    "engine": row.get("engine"),
+                    "slot": row.get("slot"),
+                    "intent_id": row.get("intent_id"),
+                    "order_type": row.get("order_type"),
+                    "side": row.get("side"),
+                    "status": row.get("status"),
+                    "local_state": row.get("local_state"),
+                    "external_state": row.get("external_state"),
+                    "requested_qty": _dashboard_number(row.get("requested_qty")),
+                    "filled_qty": _dashboard_number(row.get("filled_qty")),
+                    "remaining_qty": _dashboard_number(row.get("remaining_qty")),
+                    "price": _dashboard_number(row.get("price")),
+                    "fee": _dashboard_number(row.get("fee")),
+                    "reason": row.get("reason"),
+                    "error": row.get("error"),
+                    "created_at": _dashboard_timestamp(row.get("created_at")),
+                    "updated_at": _dashboard_timestamp(row.get("updated_at")),
+                }
+            )
+        incidents = OperationalStateReader(database).read_incidents(open_only=True)
+        for incident in incidents:
+            context = incident.get("context")
+            if isinstance(context, str):
+                try:
+                    incident["context"] = json.loads(context)
+                except ValueError:
+                    incident["context"] = {"raw": context}
+    except (OSError, sqlite3.Error, ValueError):
+        app.logger.exception("Operational journal source unavailable")
+        return jsonify(
+            {"status": "SOURCE_CORRUPT", "events": [], "orders": [], "incidents": []}
+        ), 503
+    return jsonify(
+        {
+            "status": "OK",
+            "generated_at": pd.Timestamp.now(tz="UTC").isoformat(),
+            "sequence": "decision → intent → submission → fills → accounting → protection",
+            "events": events,
+            "orders": orders,
+            "incidents": incidents,
         }
     )
 

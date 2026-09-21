@@ -577,6 +577,14 @@ class CarryAccountingState:
         data.update(
             {
                 "initial_cash": self.initial_cash,
+                # Keep the two independent marks in the durable projection so
+                # readers never infer one leg's valuation from the other leg
+                # or from the current perp price.
+                "spot_mark": self.spot_mark,
+                "perp_mark": self.perp_mark,
+                "last_timestamp": self.last_timestamp.isoformat()
+                if self.last_timestamp is not None
+                else None,
                 "applied_event_ids": list(self.applied_event_ids),
                 "transfers": list(self.transfers),
             }

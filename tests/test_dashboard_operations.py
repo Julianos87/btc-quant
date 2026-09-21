@@ -983,3 +983,123 @@ def test_positive_quantities_without_persisted_legs_use_modelled_pair(tmp_path, 
     assert carry["perp_notional_derived"] == pytest.approx(315.0)
     assert carry["gross_notional"] == pytest.approx(525.0)
     assert carry["net_notional"] == pytest.approx(-105.0)
+
+
+def test_summary_exposes_reconciled_two_leg_accounting_and_realism(tmp_path, monkeypatch):
+    carry_state = {
+        "equity": 4_000.0,
+        "in_position": True,
+        "carry_model": "two_leg_execution_v1",
+        "execution_state": "PARTIALLY_HEDGED",
+        "two_leg": {
+            "model_version": "carry_two_leg_execution_v1",
+            "state": "PARTIALLY_HEDGED",
+            "venue_spec": {
+                "venue": "test-venue",
+                "spot_symbol": "BTC/USDC",
+                "perp_symbol": "BTC/USDC:USDC",
+                "perp_account": "perp",
+                "qualified": False,
+                "qualification_reason": "marge venue non documentée",
+            },
+            "balance": {
+                "initial_cash": 4_000.0,
+                "equity": 3_995.0,
+                "cash_available": 2_500.0,
+                "cash_locked": 500.0,
+                "spot_qty": 1.0,
+                "spot_cost_basis": 100.0,
+                "spot_mark": 105.0,
+                "perp_qty": 0.5,
+                "perp_entry_price": 100.0,
+                "perp_mark": 110.0,
+                "spot_unrealized_pnl": 5.0,
+                "perp_unrealized_pnl": -5.0,
+                "debt_principal": 1_000.0,
+                "accrued_interest": 2.0,
+                "funding_received": 3.0,
+                "funding_paid": 1.0,
+                "spot_fees": 0.5,
+                "perp_fees": 0.7,
+            },
+            "cost_provenance": {"borrow_rate_ann": 0.12},
+        },
+    }
+    payload = _summary_fixture(
+        tmp_path,
+        monkeypatch,
+        _trend_state_with_positions(mode="SOFTWARE"),
+        carry_state,
+    )
+
+    two_leg = payload["carry"]["two_leg"]
+    assert two_leg["state"] == "PARTIALLY_HEDGED"
+    assert two_leg["spot_price"] == pytest.approx(105.0)
+    assert two_leg["perp_price"] == pytest.approx(110.0)
+    assert two_leg["basis"] == pytest.approx(5.0)
+    assert two_leg["basis_pct"] == pytest.approx(5.0 / 105.0)
+    assert two_leg["residual_qty"] == pytest.approx(0.5)
+    assert two_leg["debt"] == pytest.approx(1_000.0)
+    assert two_leg["accrued_interest"] == pytest.approx(2.0)
+    assert payload["portfolio"]["collateral_locked"] == pytest.approx(500.0)
+    assert payload["portfolio"]["debt"] == pytest.approx(1_002.0)
+    assert payload["portfolio"]["margin_available"] is None
+    assert payload["execution_realism"]["carry"]["uncertainties"] == ["marge venue non documentée"]
+    codes = {item["code"] for item in payload["alerts"]}
+    assert {"CARRY_NOT_HEDGED", "CARRY_NOT_QUALIFIED"} <= codes
+
+
+def test_operational_journal_exposes_correlated_events_without_checkpoint_state(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(dashboard_app, "STATE", tmp_path)
+    store = StateStore(tmp_path / "btcquant.db")
+    store.save_engine_state(
+        "trend",
+        {"slots": {}, "private_state": "not-for-browser"},
+        event_type="decision_recorded",
+        event_payload={
+            "reason": "signal valide — entrée refusée : marge insuffisante",
+            "intent_id": "intent-dashboard-1",
+            "state": {"should_be_removed": True},
+        },
+        event_aggregate_type="decision",
+        event_aggregate_id="decision-dashboard-1",
+    )
+    order_id = store.begin_order(
+        "trend",
+        "trend_ls_20",
+        "intent-dashboard-1",
+        "MARKET",
+        "BUY",
+        0.25,
+        "entry",
+        reference_price=100.0,
+    )
+    store.complete_order(
+        order_id,
+        status="PARTIAL",
+        filled_qty=0.1,
+        remaining_qty=0.15,
+        price=101.0,
+        fee=0.02,
+        broker_order_id="paper-1",
+    )
+
+    response = dashboard_app.app.test_client().get(
+        "/api/operational-journal",
+        environ_base={"REMOTE_ADDR": "127.0.0.1"},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "OK"
+    assert payload["sequence"].startswith("decision")
+    event = next(item for item in payload["events"] if item["event_type"] == "decision_recorded")
+    assert event["reason"].startswith("signal valide")
+    assert event["details"]["intent_id"] == "intent-dashboard-1"
+    assert "state" not in event["details"]
+    order = next(item for item in payload["orders"] if item["id"] == order_id)
+    assert order["status"] == "PARTIAL"
+    assert order["filled_qty"] == pytest.approx(0.1)
+    assert order["remaining_qty"] == pytest.approx(0.15)

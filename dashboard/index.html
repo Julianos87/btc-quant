@@ -143,6 +143,19 @@
       <div class="ops-grid" id="monitor-pulse"><div class="empty" style="grid-column:1/-1">Chargement…</div></div>
     </div>
 
+    <div class="card accounting-panel" data-card="accounting">
+      <div class="panel-title-row"><h2>Comptabilité réconciliée</h2><span class="panel-kind" id="portfolio-accounting-state">—</span></div>
+      <p class="panel-caption">Bilan lu depuis les états durables. Une donnée non qualifiée reste visible comme N/A.</p>
+      <div class="accounting-grid" id="portfolio-accounting-grid"><div class="empty">En attente du bilan…</div></div>
+      <div class="accounting-alerts" id="accounting-alerts" role="status" aria-live="polite"></div>
+      <div class="decision-explanation" id="decision-explanation"><span class="section-label">Dernières décisions persistées</span><div class="decision-explanation-grid"></div></div>
+      <details class="technical-details realism-details">
+        <summary>Degré de réalisme PAPER</summary>
+        <div class="realism-grid" id="realism-band"><div class="empty">N/A</div></div>
+        <div class="technical-note">Les courbes portant une méthode différente restent séparées ; le navigateur ne recalcule pas les décisions.</div>
+      </details>
+    </div>
+
     <div class="card performance-stage" data-card="chart">
       <div class="stage-heading"><div><h2 data-i18n="cards.chart">Courbe d’équity</h2><p>Équity et drawdown sur le même horizon réalisé.</p></div><span class="stage-tag">PERFORMANCE</span></div>
       <div class="controls">
@@ -215,6 +228,13 @@
       <div id="events" tabindex="0" aria-label="Journal des événements défilable"><div class="empty">Chargement…</div></div>
     </div>
 
+    <div class="card journal-panel" data-card="journal">
+      <div class="panel-title-row"><h2>Journal opérationnel</h2><span class="panel-kind panel-kind-health">SQLITE</span></div>
+      <p class="panel-caption">Décision → intention → soumission → fills → comptabilité → protection.</p>
+      <div class="journal-sequence" id="journal-sequence">—</div>
+      <div id="journal-rows"><div class="empty">Journal durable en attente…</div></div>
+    </div>
+
     <div class="card trend-hero-panel" data-card="trend">
       <div class="trend-hero-topline"><div><span class="trend-engine-label">MOTEUR TREND · 4×</span><span class="estate" id="trend-state"><span class="dot"></span>—</span></div><span class="trend-hero-guard" id="trend-guard">—</span></div>
       <div class="trend-hero-grid">
@@ -238,6 +258,7 @@
         <div class="summary-item"><span>PnL latent estimé</span><strong class="num" id="trend-total-upnl">—</strong><small id="trend-total-upnl-pct">% du notionnel d’entrée</small></div>
         <div class="summary-item"><span>Équity Trend</span><strong class="num" id="trend-eq">—</strong><small><span id="trend-beat"></span></small></div>
       </div>
+      <div class="trend-accounting-grid" id="trend-accounting-grid"><div class="empty">Bilan Trend en attente…</div></div>
       <div class="position-visuals" id="position-visuals" aria-live="polite"><div class="empty">Position et protection en attente…</div></div>
       <div class="table-wrap position-table-wrap">
       <table class="position-table">
@@ -269,6 +290,7 @@
         <div class="carry-metric"><span>Emprunt cumulé</span><strong class="num" id="carry-borrow-cost">N/A</strong></div>
       </div>
       <div class="carry-pnl-note">Funding <span class="num" id="carry-funding-gross-note">N/A</span> · Emprunt <span class="num" id="carry-borrow-cost-note">N/A</span></div>
+      <div class="carry-two-leg-grid" id="carry-two-leg-grid"><div class="empty">Bilan des deux jambes en attente…</div></div>
       <div class="carry-open-age"><span id="carry-entry-age">—</span><span class="carry-age-separator">·</span><span>dernier funding <span id="carry-funding-age">—</span></span></div>
       <div class="rdy-note" id="carry-uncertain" style="display:none" data-i18n="carry_uncertain">Comptabilité Carry incertaine — pas d'exposition venue</div>
       <div class="carry-chart-head"><span>Courbe PnL Carry cumulé</span><strong class="num" id="carry-funding">—</strong></div>
@@ -294,7 +316,8 @@
 
     <div class="card" data-card="breakdown">
       <h2>Répartition &amp; records</h2>
-      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.9px;margin:6px 0 4px;font-weight:700">Par sous-système</div>
+      <div class="contribution-table-wrap"><div class="section-label">Contributions comptables</div><div id="contribution-table"><div class="empty" style="padding:8px 0">N/A</div></div></div>
+      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.9px;margin:10px 0 4px;font-weight:700">Par sous-système</div>
       <div id="brk-strat"><div class="empty" style="padding:10px 0">en attente de trades</div></div>
       <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.9px;margin:12px 0 4px;font-weight:700">Par direction</div>
       <div id="brk-dir"><div class="empty" style="padding:10px 0">en attente de trades</div></div>
