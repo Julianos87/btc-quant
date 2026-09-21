@@ -1819,3 +1819,48 @@ canvas, svg, img { max-width:100%; }
   .system-rail .truth-node:last-child { border-bottom:0; }
   .trend-accounting-values { grid-template-columns:1fr; }
 }
+
+
+/* Wide monitor composition: keep the truth rail inside navigation and let
+   unequal operational cards pack independently. JavaScript supplies each
+   card's measured row span; narrow layouts retain their linear flow. */
+@media (min-width:1121px) {
+  .system-rail { left:15px; }
+
+  body[data-view="monitor"] .decision-board.monitor-masonry {
+    grid-template-columns:minmax(0,1.08fr) minmax(390px,.92fr);
+    grid-template-areas:none;
+    grid-auto-flow:row dense;
+    grid-auto-rows:1px;
+    align-items:start;
+  }
+  body[data-view="monitor"] .decision-board.monitor-masonry > .card {
+    grid-area:auto;
+    align-self:start;
+    height:auto;
+  }
+  body[data-view="monitor"] .decision-board.monitor-masonry > [data-card="accounting"],
+  body[data-view="monitor"] .decision-board.monitor-masonry > [data-card="trend"],
+  body[data-view="monitor"] .decision-board.monitor-masonry > [data-card="readiness"] {
+    grid-column:1 / -1;
+  }
+  body[data-view="monitor"] .decision-board.monitor-masonry > [data-card="monitor_pulse"],
+  body[data-view="monitor"] .decision-board.monitor-masonry > [data-card="carry"],
+  body[data-view="monitor"] .decision-board.monitor-masonry > [data-card="events"] {
+    grid-column:1;
+  }
+  body[data-view="monitor"] .decision-board.monitor-masonry > [data-card="price"],
+  body[data-view="monitor"] .decision-board.monitor-masonry > [data-card="exposure"],
+  body[data-view="monitor"] .decision-board.monitor-masonry > [data-card="journal"] {
+    grid-column:2;
+  }
+  body[data-view="monitor"] .decision-board.monitor-masonry > [data-card="accounting"] { order:1; }
+  body[data-view="monitor"] .decision-board.monitor-masonry > [data-card="trend"] { order:2; }
+  body[data-view="monitor"] .decision-board.monitor-masonry > [data-card="monitor_pulse"] { order:3; }
+  body[data-view="monitor"] .decision-board.monitor-masonry > [data-card="price"] { order:4; }
+  body[data-view="monitor"] .decision-board.monitor-masonry > [data-card="carry"] { order:5; }
+  body[data-view="monitor"] .decision-board.monitor-masonry > [data-card="exposure"] { order:6; }
+  body[data-view="monitor"] .decision-board.monitor-masonry > [data-card="events"] { order:7; }
+  body[data-view="monitor"] .decision-board.monitor-masonry > [data-card="journal"] { order:8; }
+  body[data-view="monitor"] .decision-board.monitor-masonry > [data-card="readiness"] { order:9; }
+}

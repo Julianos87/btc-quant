@@ -52,3 +52,46 @@ def test_trend_summary_preserves_explicit_unknown_states(trend: dict, expected: 
     assert result == expected
     if "UNKNOWN" in expected:
         assert "FLAT" not in result
+
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is required for JS regression cases")
+def test_monitor_masonry_span_tracks_rendered_card_height() -> None:
+    javascript = (dashboard.ROOT / "dashboard" / "static" / "dashboard.js").read_text(
+        encoding="utf-8"
+    )
+    start = javascript.index("function monitorGridSpan")
+    end = javascript.index("\n\nfunction layoutMonitorBoard", start)
+    helper = javascript[start:end]
+    script = (
+        f"{helper}\n"
+        "process.stdout.write(JSON.stringify(["
+        "monitorGridSpan(0, 1, 14),"
+        "monitorGridSpan(1, 1, 14),"
+        "monitorGridSpan(239, 1, 14),"
+        "monitorGridSpan(616, 1, 14)"
+        "]));"
+    )
+    result = subprocess.run(
+        ["node", "--input-type=commonjs", "--eval", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert json.loads(result.stdout) == [1, 1, 17, 42]
+
+
+def test_wide_monitor_layout_keeps_sidebar_and_columns_independent() -> None:
+    css = (dashboard.ROOT / "dashboard" / "static" / "dashboard.css").read_text(
+        encoding="utf-8"
+    )
+    javascript = (dashboard.ROOT / "dashboard" / "static" / "dashboard.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert ".system-rail { left:15px; }" in css
+    assert ".decision-board.monitor-masonry" in css
+    assert '> [data-card="carry"],\n  body[data-view="monitor"] .decision-board.monitor-masonry > [data-card="events"]' in css
+    assert '> [data-card="exposure"],\n  body[data-view="monitor"] .decision-board.monitor-masonry > [data-card="journal"]' in css
+    assert 'card.style.gridRowEnd = rowEnd' in javascript
+    assert 'ResizeObserver(scheduleMonitorLayout)' in javascript

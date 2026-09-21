@@ -274,6 +274,51 @@ const VIEW_TILES = {
   risk: new Set(),
 };
 
+const monitorBoard = document.querySelector(".decision-board");
+let monitorLayoutFrame = 0;
+
+function monitorGridSpan(height, rowHeight, rowGap) {
+  const safeHeight = Math.max(0, Number(height) || 0);
+  const safeRow = Math.max(1, Number(rowHeight) || 1);
+  const safeGap = Math.max(0, Number(rowGap) || 0);
+  return Math.max(1, Math.ceil((safeHeight + safeGap) / (safeRow + safeGap)));
+}
+
+function layoutMonitorBoard() {
+  monitorLayoutFrame = 0;
+  if (!monitorBoard) return;
+  const useMasonry = document.body.dataset.view === "monitor"
+    && window.matchMedia("(min-width:1121px)").matches;
+  monitorBoard.classList.toggle("monitor-masonry", useMasonry);
+  const cards = [...monitorBoard.querySelectorAll(":scope > .card")];
+  if (!useMasonry) {
+    cards.forEach(card => card.style.removeProperty("grid-row-end"));
+    return;
+  }
+  const boardStyle = getComputedStyle(monitorBoard);
+  const rowHeight = Number.parseFloat(boardStyle.gridAutoRows) || 1;
+  const rowGap = Number.parseFloat(boardStyle.rowGap) || 0;
+  cards.forEach(card => {
+    if (card.dataset.viewHidden === "1" || !card.getClientRects().length) {
+      card.style.removeProperty("grid-row-end");
+      return;
+    }
+    const span = monitorGridSpan(card.getBoundingClientRect().height, rowHeight, rowGap);
+    const rowEnd = `span ${span}`;
+    if (card.style.gridRowEnd !== rowEnd) card.style.gridRowEnd = rowEnd;
+  });
+}
+
+function scheduleMonitorLayout() {
+  if (monitorLayoutFrame) return;
+  monitorLayoutFrame = requestAnimationFrame(layoutMonitorBoard);
+}
+
+if (monitorBoard && "ResizeObserver" in window) {
+  const monitorLayoutObserver = new ResizeObserver(scheduleMonitorLayout);
+  monitorBoard.querySelectorAll(":scope > .card").forEach(card => monitorLayoutObserver.observe(card));
+}
+
 function applyDashboardView() {
   const view = VIEW_CARDS[PREFS.view] ? PREFS.view : "monitor";
   PREFS.view = view;
@@ -295,6 +340,7 @@ function applyDashboardView() {
     if (active) $("dashboard-content").setAttribute("aria-labelledby", button.id);
   });
   setPressed("#unit", button => button.dataset.u === unit);
+  scheduleMonitorLayout();
   requestAnimationFrame(() => {
     if (typeof drawChart === "function") scheduleRedraw("chart");
     if (typeof drawPChart === "function") scheduleRedraw("price");
@@ -2303,7 +2349,7 @@ function setRefreshState(state) {
   } else check.dataset.state = "out";
   if (state === "success" || state === "partial") refreshResetTimer = window.setTimeout(() => setRefreshState("idle"), state === "partial" ? 2600 : 1400);
 }
-window.addEventListener("resize", () => scheduleRedraw("chart", "spark", "price", "yearly"));
+window.addEventListener("resize", () => { scheduleRedraw("chart", "spark", "price", "yearly"); scheduleMonitorLayout(); });
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => scheduleRedraw("chart", "spark", "price", "yearly"));
 document.addEventListener("visibilitychange", () => { if (!document.hidden) { tick({force:true}); restartTimer(); } });
 async function tick(options={}) {
