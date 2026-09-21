@@ -1692,7 +1692,15 @@ def trades():
     par stratégie (strategy=trend_ls_20…) et paginables (limit, défaut 12)."""
     df = _read_trades()
     if not len(df):
-        return jsonify({"stats": {"n": 0, "wins": 0, "pnl": 0.0}, "rows": [], "limit": 12, "returned": 0, "has_more": False})
+        return jsonify(
+            {
+                "stats": {"n": 0, "wins": 0, "pnl": 0.0},
+                "rows": [],
+                "limit": 12,
+                "returned": 0,
+                "has_more": False,
+            }
+        )
     if "exit_ts" in df.columns:
         et = pd.to_datetime(df["exit_ts"], utc=True, errors="coerce")
         frm, to = request.args.get("from"), request.args.get("to")
@@ -1713,7 +1721,15 @@ def trades():
     except ValueError:
         limit = 12
     rows = df.tail(limit).iloc[::-1].to_dict("records") if len(df) else []
-    return jsonify({"stats": stats, "rows": rows, "limit": limit, "returned": len(rows), "has_more": len(df) > len(rows)})
+    return jsonify(
+        {
+            "stats": stats,
+            "rows": rows,
+            "limit": limit,
+            "returned": len(rows),
+            "has_more": len(df) > len(rows),
+        }
+    )
 
 
 @app.route("/api/strategy/<name>")
