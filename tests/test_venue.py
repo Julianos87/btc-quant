@@ -74,6 +74,30 @@ def test_binance_venue_keeps_8h_conventions():
     assert v.payments_per_year == 3 * 365
 
 
+def test_hyperliquid_funding_reference_uses_previous_completed_spot_candle():
+    class RecordingExchange(_StubExchange):
+        def __init__(self):
+            super().__init__(price=61_234.5)
+            self.calls = []
+
+        def fetch_ohlcv(self, symbol, timeframe, since=None, limit=None):
+            self.calls.append((symbol, timeframe, since, limit))
+            return super().fetch_ohlcv(symbol, timeframe, since=since, limit=limit)
+
+    venue = Venue("hyperliquid", "BTC/USDC:USDC")
+    exchange = RecordingExchange()
+    venue.exchange = exchange
+    event = pd.Timestamp(exchange.now_ms, unit="ms", tz="UTC")
+    resolved = venue.funding_reference_price(event)
+
+    assert resolved == {
+        "price": pytest.approx(61_234.5),
+        "timestamp": event - pd.Timedelta(hours=1),
+        "source": "HYPERLIQUID_PREVIOUS_1H_CLOSE_APPROXIMATION",
+    }
+    assert exchange.calls == [("BTC/USDC", "1h", exchange.now_ms - 7_200_000, 3)]
+
+
 def test_hyperliquid_price_from_candle():
     """Pas de fetch_ticker sur Hyperliquid (~12 s) : prix = clôture 1m."""
     v = _stub_venue(Venue("hyperliquid", "BTC/USDC:USDC"), price=61_234.5)

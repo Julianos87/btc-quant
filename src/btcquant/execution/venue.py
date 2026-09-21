@@ -185,15 +185,49 @@ class Venue:
         return float(funding["fundingRate"])
 
     def funding_reference_price(self, timestamp: pd.Timestamp) -> object:
-        """Return the venue's accounting price when an exact public source exists.
+        """Resolve an explicit as-of spot reference for a funding event.
 
-        Hyperliquid funding is valued with its spot oracle price, not the perp
-        mark. This adapter does not currently expose a historical oracle
-        series, so returning ``None`` makes the Trend runner block accounting
-        rather than silently substituting a current or perp price.
+        Hyperliquid's exact historical oracle series is not exposed by this
+        public adapter. PAPER therefore uses the documented conservative
+        approximation already used by the carry model: the close of the
+        completed spot 1h candle immediately preceding the funding slot. The
+        provenance is returned with the value; a missing or non-causal candle
+        remains unresolved and the accounting layer blocks.
         """
 
-        del timestamp
+        event = pd.Timestamp(timestamp)
+        event = event.tz_localize("UTC") if event.tzinfo is None else event.tz_convert("UTC")
+        slot = event.floor("h")
+        if abs(event - slot) > pd.Timedelta(seconds=1):
+            return None
+        completed_open = slot - pd.Timedelta(hours=1)
+        exchange = self.exchange
+        fetch = getattr(exchange, "fetch_ohlcv", None)
+        if not callable(fetch):
+            return None
+        since_ms = int((completed_open - pd.Timedelta(hours=1)).timestamp() * 1000)
+        rows = self._retry.call(
+            fetch,
+            self.spot_symbol,
+            "1h",
+            since=since_ms,
+            limit=3,
+            retry_on=NETWORK_ERRORS,
+        )
+        for row in rows or []:
+            if not isinstance(row, (list, tuple)) or len(row) < 5:
+                continue
+            opened = pd.Timestamp(row[0], unit="ms", tz="UTC")
+            if opened != completed_open:
+                continue
+            close = float(row[4])
+            if not pd.notna(close) or close <= 0:
+                return None
+            return {
+                "price": close,
+                "timestamp": completed_open,
+                "source": "HYPERLIQUID_PREVIOUS_1H_CLOSE_APPROXIMATION",
+            }
         return None
 
     def execution_price_after(self, decision_timestamp: pd.Timestamp, latency_ms: int) -> object:
