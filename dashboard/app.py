@@ -1673,11 +1673,18 @@ def summary():
             }
         )
     if carry_mode == "PAPER_TWO_LEG" and carry_projection["qualification"] != "QUALIFIED":
+        qualification_reason = (
+            carry_spec.get("qualification_reason") if isinstance(carry_spec, dict) else None
+        )
+        detail = str(qualification_reason or "financement et marge du compte non vérifiés")
         accounting_alerts.append(
             {
                 "severity": "WARNING",
                 "code": "CARRY_NOT_QUALIFIED",
-                "message": "Carry deux jambes non qualifié : financement ou marge inconnus",
+                "message": (
+                    "Carry PAPER en attente de qualification : "
+                    f"{detail}. Aucune nouvelle entrée ne sera ouverte."
+                ),
             }
         )
     if (

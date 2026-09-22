@@ -1047,6 +1047,13 @@ def test_summary_exposes_reconciled_two_leg_accounting_and_realism(tmp_path, mon
     assert payload["execution_realism"]["carry"]["uncertainties"] == ["marge venue non documentée"]
     codes = {item["code"] for item in payload["alerts"]}
     assert {"CARRY_NOT_HEDGED", "CARRY_NOT_QUALIFIED"} <= codes
+    qualification_alert = next(
+        item for item in payload["alerts"] if item["code"] == "CARRY_NOT_QUALIFIED"
+    )
+    assert qualification_alert["message"] == (
+        "Carry PAPER en attente de qualification : marge venue non documentée. "
+        "Aucune nouvelle entrée ne sera ouverte."
+    )
 
 
 def test_operational_journal_exposes_correlated_events_without_checkpoint_state(

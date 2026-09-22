@@ -1244,7 +1244,10 @@ class CarryRunner:
                 engine="carry",
                 severity="WARNING",
                 kind="carry_entry_blocked",
-                message="Entrée carry bloquée : opération non finançable ou non qualifiée",
+                message=(
+                    "Carry PAPER en attente de qualification : aucun ordre ne sera émis "
+                    "tant que le financement et la marge ne sont pas vérifiés"
+                ),
                 context={
                     "spec_reason": self.two_leg_spec.qualification_reason,
                     "leverage_supported": leverage_supported,
