@@ -15,7 +15,12 @@ from btcquant.execution.carry_paper import (
 from btcquant.execution.carry_runner import CarryRunner
 
 
-def _market(timestamp: str = "2030-01-01T10:00:00Z") -> CarryMarketState:
+def _market(
+    timestamp: str = "2030-01-01T10:00:00Z",
+    *,
+    spot_bid_volume: float = 200.0,
+    perp_ask_volume: float = 200.0,
+) -> CarryMarketState:
     return CarryMarketState(
         timestamp=timestamp,
         spot_bid=99.0,
@@ -25,8 +30,14 @@ def _market(timestamp: str = "2030-01-01T10:00:00Z") -> CarryMarketState:
         spot_mark=100.0,
         perp_mark=101.0,
         source="audit-fixture",
-        spot_order_book={"bids": [[99.0, 200.0]], "asks": [[101.0, 200.0]]},
-        perp_order_book={"bids": [[100.0, 200.0]], "asks": [[102.0, 200.0]]},
+        spot_order_book={
+            "bids": [[99.0, spot_bid_volume]],
+            "asks": [[101.0, 200.0]],
+        },
+        perp_order_book={
+            "bids": [[100.0, 200.0]],
+            "asks": [[102.0, perp_ask_volume]],
+        },
     )
 
 
@@ -84,6 +95,31 @@ def _qualified_runner(tmp_path, venue: _QualifiedVenue) -> CarryRunner:
         ),
         notifier=lambda _message: True,
     )
+
+
+def _seed_exit_position(
+    runner: CarryRunner,
+    *,
+    start: pd.Timestamp,
+    spot_qty: float,
+    perp_qty: float,
+    debt: float = 0.0,
+) -> None:
+    balance = CarryAccountingState(initial_cash=5_000.0, debt_principal=debt)
+    balance.spot_qty = spot_qty
+    balance.spot_cost_basis = spot_qty * 1_000.0
+    balance.perp_qty = perp_qty
+    balance.perp_entry_price = 101.0
+    balance.last_interest_timestamp = start
+    runner.two_leg_balance = balance
+    runner.two_leg_state = CarryExecutionState.PARTIALLY_HEDGED
+    runner.entry_timestamp = start
+    runner.entry_price = 101.0
+    runner.entry_equity = balance.equity
+    runner.position_generation = "audit-entry"
+    runner.last_funding_ts = start
+    runner._sync_two_leg_legacy_fields()
+    runner._save_state()
 
 
 def test_restored_paper_stop_ids_never_collide_with_new_stops():
@@ -191,3 +227,94 @@ def test_interest_is_accrued_as_liability_then_settled_once():
     assert balance.accrued_interest == pytest.approx(0.0)
     assert balance.cash_available == pytest.approx(10_000.0 - expected)
     assert balance.equity == pytest.approx(before - expected)
+
+
+def test_exit_closes_orphaned_spot_without_zero_quantity_orders(tmp_path):
+    market = _market("2030-01-01T10:30:00Z")
+    venue = _QualifiedVenue(market)
+    runner = _qualified_runner(tmp_path, venue)
+    _seed_exit_position(
+        runner,
+        start=pd.Timestamp("2030-01-01T10:00:00Z"),
+        spot_qty=2.0,
+        perp_qty=1.0,
+    )
+
+    runner._close_two_leg(
+        reason="unhedged_timeout",
+        market=market,
+        decision_timestamp=market.timestamp,
+    )
+
+    assert runner.two_leg_state is CarryExecutionState.FLAT
+    assert runner.two_leg_balance.spot_qty == pytest.approx(0.0)
+    assert runner.two_leg_balance.perp_qty == pytest.approx(0.0)
+    assert not runner.in_position
+
+
+def test_partial_exit_persists_and_resumes_after_restart(tmp_path):
+    first_market = _market(
+        "2030-01-01T10:30:00Z",
+        spot_bid_volume=0.5,
+    )
+    venue = _QualifiedVenue(first_market)
+    runner = _qualified_runner(tmp_path, venue)
+    _seed_exit_position(
+        runner,
+        start=pd.Timestamp("2030-01-01T10:00:00Z"),
+        spot_qty=2.0,
+        perp_qty=1.0,
+    )
+
+    runner._close_two_leg(
+        reason="unhedged_timeout",
+        market=first_market,
+        decision_timestamp=first_market.timestamp,
+    )
+
+    assert runner.two_leg_state is CarryExecutionState.PARTIALLY_HEDGED
+    assert runner.two_leg_balance.perp_qty == pytest.approx(0.0)
+    assert runner.two_leg_balance.spot_qty == pytest.approx(1.5)
+
+    second_market = _market("2030-01-01T10:31:00Z")
+    venue.market = second_market
+    revived = _qualified_runner(tmp_path, venue)
+    assert not revived.accounting_uncertain
+
+    handled = revived._enforce_two_leg_timeout(
+        now=second_market.timestamp + pd.Timedelta(minutes=10),
+        market=second_market,
+        decision_timestamp=second_market.timestamp,
+    )
+
+    assert handled
+    assert revived.two_leg_state is CarryExecutionState.FLAT
+    assert revived.two_leg_balance.spot_qty == pytest.approx(0.0)
+    assert revived.two_leg_balance.perp_qty == pytest.approx(0.0)
+
+
+def test_exit_accrues_interest_until_the_debt_repayment_fill(tmp_path):
+    close_market = _market("2030-01-01T10:30:00Z")
+    venue = _QualifiedVenue(close_market)
+    runner = _qualified_runner(tmp_path, venue)
+    _seed_exit_position(
+        runner,
+        start=pd.Timestamp("2030-01-01T10:00:00Z"),
+        spot_qty=1.0,
+        perp_qty=1.0,
+        debt=1_000.0,
+    )
+
+    runner._close_two_leg(
+        reason="funding_exit",
+        market=close_market,
+        decision_timestamp=close_market.timestamp,
+    )
+
+    expected_interest = 1_000.0 * 0.10 * 1_800.0 / (365.25 * 24 * 3600)
+    # Perp close loses 1.00 at the ask; spot close receives 99.00 and repays
+    # 1,000.00 of principal. The remaining cash difference is the final
+    # 30-minute interest, settled exactly once.
+    assert runner.two_leg_balance.cash_available == pytest.approx(4_098.0 - expected_interest)
+    assert runner.two_leg_balance.accrued_interest == pytest.approx(0.0)
+    assert runner.two_leg_state is CarryExecutionState.FLAT

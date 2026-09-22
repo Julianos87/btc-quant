@@ -289,12 +289,24 @@ class CarryRunner:
             self.in_position = (
                 self.two_leg_balance.spot_qty > 0 or self.two_leg_balance.perp_qty > 0
             )
-            if self.two_leg_state != CarryExecutionState.HEDGED:
+            resumable_exit = (
+                self.two_leg_state
+                in {CarryExecutionState.PARTIALLY_HEDGED, CarryExecutionState.EXIT_PENDING}
+                and isinstance(self.two_leg_intent, dict)
+                and bool(self.two_leg_intent.get("reason"))
+                and isinstance(self.two_leg_intent.get("decision_timestamp"), str)
+            )
+            if self.two_leg_state != CarryExecutionState.HEDGED and not resumable_exit:
                 self.accounting_uncertain = True
                 self.accounting_uncertainty_reason = (
                     self.accounting_uncertainty_reason
                     or "reprise d'une transition two-leg non terminale"
                 )
+            elif resumable_exit:
+                # A durable exit plan can only reduce quantities recorded in
+                # the checkpoint, so it is safe to resume automatically.
+                self.accounting_uncertain = False
+                self.accounting_uncertainty_reason = None
 
     def _load_state(self) -> None:
         self.store.migrate_legacy_json("carry", self.legacy_state_path)
@@ -345,7 +357,15 @@ class CarryRunner:
             elif raw.get("carry_model") == "two_leg_execution_v1" and not self.in_position:
                 self.two_leg_balance = CarryAccountingState(initial_cash=self.equity)
                 self.two_leg_state = CarryExecutionState.FLAT
-        if self.in_position and not self.accounting_uncertain:
+        resumable_exit = (
+            self.paper_model == "two_leg_execution_v1"
+            and self.two_leg_state
+            in {CarryExecutionState.PARTIALLY_HEDGED, CarryExecutionState.EXIT_PENDING}
+            and isinstance(self.two_leg_intent, dict)
+            and bool(self.two_leg_intent.get("reason"))
+            and isinstance(self.two_leg_intent.get("decision_timestamp"), str)
+        )
+        if self.in_position and not self.accounting_uncertain and not resumable_exit:
             required = (
                 self.entry_equity,
                 self.entry_timestamp,
@@ -1368,52 +1388,115 @@ class CarryRunner:
             return
         intent_id = f"carry-two-leg-exit:{pd.Timestamp.now(tz='UTC').value}"
         self.two_leg_state = CarryExecutionState.EXIT_PENDING
-        self.two_leg_intent = {"intent_id": intent_id, "reason": reason}
-        self._two_leg_persist("carry_exit_intent", {"intent_id": intent_id, "reason": reason})
+        self.two_leg_intent = {
+            "intent_id": intent_id,
+            "reason": reason,
+            "decision_timestamp": str(decision_timestamp),
+            "spot_qty": self.two_leg_balance.spot_qty,
+            "perp_qty": self.two_leg_balance.perp_qty,
+        }
+        self._two_leg_persist(
+            "carry_exit_intent",
+            {
+                "intent_id": intent_id,
+                "reason": reason,
+                "decision_timestamp": str(decision_timestamp),
+                "spot_qty": self.two_leg_balance.spot_qty,
+                "perp_qty": self.two_leg_balance.perp_qty,
+            },
+        )
         executor = PaperTwoLegExecutor(self._two_leg_execution_config(), CausalMarketTape([market]))
+        close_timestamp = pd.Timestamp(decision_timestamp)
         try:
-            perp = executor.execute(
-                leg=CarryLeg.PERP,
-                side="BUY",
-                qty=self.two_leg_balance.perp_qty,
-                decision_timestamp=decision_timestamp,
-                event_id=f"{intent_id}:perp",
-            )
-            if perp.filled_qty > 0:
-                self.two_leg_balance.apply_perp_fill(
+            perp = None
+            if self.two_leg_balance.perp_qty > 1e-12:
+                perp = executor.execute(
+                    leg=CarryLeg.PERP,
                     side="BUY",
-                    qty=perp.filled_qty,
-                    price=perp.price,
-                    fee=perp.fee,
-                    event_id=perp.event_id,
+                    qty=self.two_leg_balance.perp_qty,
+                    decision_timestamp=decision_timestamp,
+                    event_id=f"{intent_id}:perp",
                 )
-            spot = executor.execute(
-                leg=CarryLeg.SPOT,
-                side="SELL",
-                qty=min(self.two_leg_balance.spot_qty, perp.filled_qty),
-                decision_timestamp=perp.timestamp,
-                event_id=f"{intent_id}:spot",
-            )
-            if spot.filled_qty > 0:
-                self.two_leg_balance.apply_spot_fill(
+                close_timestamp = pd.Timestamp(perp.timestamp)
+                if perp.filled_qty > 0:
+                    self.two_leg_balance.apply_perp_fill(
+                        side="BUY",
+                        qty=perp.filled_qty,
+                        price=perp.price,
+                        fee=perp.fee,
+                        event_id=perp.event_id,
+                    )
+                self._two_leg_persist(
+                    "carry_exit_perp_fill",
+                    {
+                        "status": perp.status,
+                        "filled_qty": perp.filled_qty,
+                        "requested_qty": perp.requested_qty,
+                        "timestamp": close_timestamp.isoformat(),
+                    },
+                )
+
+            spot = None
+            if self.two_leg_balance.spot_qty > 1e-12:
+                spot_decision_timestamp = (
+                    pd.Timestamp(perp.timestamp) if perp is not None else decision_timestamp
+                )
+                spot = executor.execute(
+                    leg=CarryLeg.SPOT,
                     side="SELL",
-                    qty=spot.filled_qty,
-                    price=spot.price,
-                    fee=spot.fee,
-                    event_id=spot.event_id,
+                    qty=self.two_leg_balance.spot_qty,
+                    decision_timestamp=spot_decision_timestamp,
+                    event_id=f"{intent_id}:spot",
                 )
+                close_timestamp = pd.Timestamp(spot.timestamp)
+                # Debt is reduced inside apply_spot_fill. Accrue through the
+                # actual spot fill/attempt before that principal changes.
+                self.two_leg_balance.accrue_interest(
+                    annual_rate=self.borrow_rate_ann,
+                    until=close_timestamp,
+                    event_id=f"{intent_id}:borrow",
+                )
+                if spot.filled_qty > 0:
+                    self.two_leg_balance.apply_spot_fill(
+                        side="SELL",
+                        qty=spot.filled_qty,
+                        price=spot.price,
+                        fee=spot.fee,
+                        event_id=spot.event_id,
+                    )
+                self._two_leg_persist(
+                    "carry_exit_spot_fill",
+                    {
+                        "status": spot.status,
+                        "filled_qty": spot.filled_qty,
+                        "requested_qty": spot.requested_qty,
+                        "timestamp": close_timestamp.isoformat(),
+                    },
+                )
+
             if self.two_leg_balance.perp_qty <= 1e-12 and self.two_leg_balance.spot_qty <= 1e-12:
                 self.two_leg_balance.settle_interest(
                     event_id=f"{intent_id}:interest",
-                    until=pd.Timestamp(spot.timestamp),
+                    until=close_timestamp,
                 )
                 self.two_leg_balance.release_margin()
                 self.two_leg_state = CarryExecutionState.FLAT
                 self.two_leg_intent = None
-                self._two_leg_persist("carry_exit_complete", {"reason": reason})
+                self._two_leg_persist(
+                    "carry_exit_complete",
+                    {"reason": reason, "timestamp": close_timestamp.isoformat()},
+                )
             else:
                 self.two_leg_state = CarryExecutionState.PARTIALLY_HEDGED
-                self._two_leg_persist("carry_exit_partial", {"reason": reason})
+                self._two_leg_persist(
+                    "carry_exit_partial",
+                    {
+                        "reason": reason,
+                        "timestamp": close_timestamp.isoformat(),
+                        "spot_remaining": self.two_leg_balance.spot_qty,
+                        "perp_remaining": self.two_leg_balance.perp_qty,
+                    },
+                )
         except Exception as error:
             self.two_leg_state = CarryExecutionState.RECONCILIATION_REQUIRED
             self.accounting_uncertain = True
@@ -1483,11 +1566,32 @@ class CarryRunner:
         market: CarryMarketState | None,
         decision_timestamp: pd.Timestamp,
     ) -> bool:
+        if self.two_leg_state == CarryExecutionState.EXIT_PENDING:
+            if self.in_position and market is not None:
+                reason = (
+                    str(self.two_leg_intent.get("reason", "exit_recovery"))
+                    if self.two_leg_intent
+                    else "exit_recovery"
+                )
+                self._close_two_leg(
+                    reason=reason,
+                    market=market,
+                    decision_timestamp=decision_timestamp,
+                )
+            else:
+                self.two_leg_state = CarryExecutionState.RECONCILIATION_REQUIRED
+                self.accounting_uncertain = True
+                self.accounting_uncertainty_reason = (
+                    "sortie two-leg en attente sans marché de reprise"
+                )
+                self._two_leg_persist(
+                    "carry_reconciliation_required", {"reason": "exit_market_unavailable"}
+                )
+            return True
         if self.two_leg_state not in {
             CarryExecutionState.ENTRY_PENDING,
             CarryExecutionState.ONE_LEG_FILLED,
             CarryExecutionState.PARTIALLY_HEDGED,
-            CarryExecutionState.EXIT_PENDING,
         }:
             return False
         intent_ts_raw = (

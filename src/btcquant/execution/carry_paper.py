@@ -529,6 +529,8 @@ class CarryAccountingState:
         until_ts = _utc(until)
         if event_id in self.applied_event_ids:
             return 0.0
+        if self.debt_principal > 1e-12 and self.last_interest_timestamp is None:
+            raise CarryPaperError("checkpoint intérêt absent pour une dette active")
         previous = self.last_interest_timestamp or until_ts
         seconds = max(0.0, (until_ts - previous).total_seconds())
         cost = (
