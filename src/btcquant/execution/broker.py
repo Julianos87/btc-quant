@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -387,9 +388,16 @@ class PaperBroker(Broker):
             return
         if order_id in self._stops:
             return
+        client = client_order_id or order_id
+        existing_for_client = self._stop_by_client_id.get(client)
+        if existing_for_client is not None and existing_for_client != order_id:
+            raise ValueError(f"Identifiant client de stop déjà associé : {client}")
+        match = re.fullmatch(r"paper-stop-(\d+)", str(order_id))
+        if match is not None:
+            self._sequence = max(self._sequence, int(match.group(1)))
         self._stops[order_id] = {
             "id": order_id,
-            "client_order_id": client_order_id or order_id,
+            "client_order_id": client,
             "qty": float(qty),
             "stop_price": float(stop_price),
             "direction": int(direction),
@@ -399,7 +407,7 @@ class PaperBroker(Broker):
             "average_price": None,
             "fee": 0.0,
         }
-        self._stop_by_client_id[client_order_id or order_id] = order_id
+        self._stop_by_client_id[client] = order_id
 
     def place_stop(
         self,
@@ -415,8 +423,13 @@ class PaperBroker(Broker):
             raise ValueError("Stop PAPER invalide")
         if client_order_id and client_order_id in self._stop_by_client_id:
             return self._stop_by_client_id[client_order_id]
-        self._sequence += 1
-        order_id = f"paper-stop-{self._sequence}"
+        # A restart restores stops before new placements. Never overwrite
+        # a durable stop if a legacy counter starts below a restored id.
+        while True:
+            self._sequence += 1
+            order_id = f"paper-stop-{self._sequence}"
+            if order_id not in self._stops:
+                break
         client = client_order_id or order_id
         self._stops[order_id] = {
             "id": order_id,

@@ -157,9 +157,15 @@ class CarryFundingEvent:
     native_rate: float
     reference_price: float | None
     reference_source: str
+    reference_timestamp: pd.Timestamp | str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "timestamp", _utc(self.timestamp))
+        object.__setattr__(
+            self,
+            "reference_timestamp",
+            self.timestamp if self.reference_timestamp is None else _utc(self.reference_timestamp),
+        )
         _finite(self.native_rate, "native_rate")
         if not self.event_id or not self.venue or not self.instrument:
             raise CarryPaperError("un événement funding doit être identifié")
@@ -351,6 +357,9 @@ class CarryAccountingState:
     spot_mark: float | None = None
     perp_mark: float | None = None
     last_timestamp: pd.Timestamp | None = None
+    # Independent from generic event/mark time: funding and marks must not
+    # reset the borrow-interest clock.
+    last_interest_timestamp: pd.Timestamp | None = None
     _reserved_margin: float = field(default=0.0, repr=False)
 
     def __post_init__(self) -> None:
@@ -520,7 +529,7 @@ class CarryAccountingState:
         until_ts = _utc(until)
         if event_id in self.applied_event_ids:
             return 0.0
-        previous = self.last_timestamp or until_ts
+        previous = self.last_interest_timestamp or until_ts
         seconds = max(0.0, (until_ts - previous).total_seconds())
         cost = (
             self.debt_principal
@@ -529,9 +538,22 @@ class CarryAccountingState:
             / (365.25 * 24 * 3600)
         )
         self.accrued_interest += cost
-        self._debit_cash(cost)
+        # Accrual creates a liability. Cash moves only when the liability is
+        # explicitly settled; otherwise equity is reduced twice.
+        self.last_interest_timestamp = until_ts
         self._touch(event_id, until_ts)
         return cost
+
+    def settle_interest(self, *, event_id: str, until: pd.Timestamp | str | None = None) -> float:
+        """Pay accrued interest once and clear its liability."""
+
+        self._once(event_id)
+        amount = self.accrued_interest
+        if amount > 0:
+            self._debit_cash(amount)
+            self.accrued_interest = 0.0
+        self._touch(event_id, _utc(until) if until is not None else None)
+        return amount
 
     def mark(self, market: CarryMarketState) -> None:
         self.spot_mark = market.spot_mark
@@ -585,6 +607,12 @@ class CarryAccountingState:
                 "last_timestamp": self.last_timestamp.isoformat()
                 if self.last_timestamp is not None
                 else None,
+                "last_interest_timestamp": (
+                    self.last_interest_timestamp.isoformat()
+                    if self.last_interest_timestamp is not None
+                    else None
+                ),
+                "reserved_margin": self._reserved_margin,
                 "applied_event_ids": list(self.applied_event_ids),
                 "transfers": list(self.transfers),
             }

@@ -24,6 +24,7 @@ import pandas as pd
 from ..config import HYPERLIQUID_TESTNET_API_URL
 from .resilience import RetryPolicy
 from .carry_paper import CarryMarketState
+from .ports import FundingReference
 
 
 def _assert_hyperliquid_testnet_endpoint(exchange: object) -> None:
@@ -184,7 +185,7 @@ class Venue:
         )
         return float(funding["fundingRate"])
 
-    def funding_reference_price(self, timestamp: pd.Timestamp) -> object:
+    def funding_reference_price(self, timestamp: pd.Timestamp) -> FundingReference | None:
         """Resolve an explicit as-of spot reference for a funding event.
 
         Hyperliquid's exact historical oracle series is not exposed by this

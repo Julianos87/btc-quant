@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Mapping
 from dataclasses import asdict, replace
 from contextlib import nullcontext
 import uuid
@@ -264,6 +265,15 @@ class CarryRunner:
                 transfers=list(balance_raw.get("transfers", [])),
                 applied_event_ids=list(balance_raw.get("applied_event_ids", [])),
             )
+            last_timestamp = balance_raw.get("last_timestamp")
+            balance.last_timestamp = pd.Timestamp(last_timestamp) if last_timestamp else None
+            last_interest_timestamp = balance_raw.get("last_interest_timestamp")
+            balance.last_interest_timestamp = (
+                pd.Timestamp(last_interest_timestamp) if last_interest_timestamp else None
+            )
+            balance.spot_mark = balance_raw.get("spot_mark")
+            balance.perp_mark = balance_raw.get("perp_mark")
+            balance._reserved_margin = float(balance_raw.get("reserved_margin", 0.0))
             self.two_leg_balance = balance
         intent = payload.get("active_intent")
         self.two_leg_intent = dict(intent) if isinstance(intent, dict) else None
@@ -1191,6 +1201,18 @@ class CarryRunner:
     def _open_two_leg(
         self, *, smooth_ann: float, market: CarryMarketState, decision_timestamp: pd.Timestamp
     ) -> None:
+        if self.halted or self.daily_lockout:
+            reason = "kill-switch actif" if self.halted else "lockout journalier actif"
+            self.store.record_incident(
+                "execution:carry:entry_blocked_by_risk",
+                engine="carry",
+                severity="WARNING",
+                kind="carry_entry_blocked",
+                message=f"Entrée carry bloquée : {reason}",
+                context={"halted": self.halted, "daily_lockout": self.daily_lockout},
+            )
+            self._two_leg_persist("carry_entry_blocked", {"reason": reason})
+            return
         plan = self._two_leg_plan(market)
         leverage_supported = (
             self.two_leg_spec.max_leverage is None
@@ -1316,6 +1338,23 @@ class CarryRunner:
                     "requested_qty": perp.requested_qty,
                 },
             )
+            if perp.filled_qty > 0:
+                # Funding eligibility starts at the latest fill. Events
+                # published before both legs existed are never attributed.
+                entry_timestamp = max(pd.Timestamp(spot.timestamp), pd.Timestamp(perp.timestamp))
+                self.entry_timestamp = entry_timestamp
+                self.entry_price = perp.price
+                self.entry_equity = plan.capital_available
+                self.position_generation = intent_id
+                self.funding_notional_price = market.perp_mark
+                self.funding_notional_price_source = "PAPER_ENTRY_MARK"
+                self.funding_notional_price_timestamp = entry_timestamp
+                self.last_funding_ts = entry_timestamp
+                self.two_leg_balance.last_interest_timestamp = entry_timestamp
+                self._two_leg_persist(
+                    "carry_entry_checkpoint",
+                    {"entry_timestamp": entry_timestamp.isoformat(), "intent_id": intent_id},
+                )
         except Exception as error:
             self.two_leg_state = CarryExecutionState.RECONCILIATION_REQUIRED
             self.accounting_uncertain = True
@@ -1364,6 +1403,10 @@ class CarryRunner:
                     event_id=spot.event_id,
                 )
             if self.two_leg_balance.perp_qty <= 1e-12 and self.two_leg_balance.spot_qty <= 1e-12:
+                self.two_leg_balance.settle_interest(
+                    event_id=f"{intent_id}:interest",
+                    until=pd.Timestamp(spot.timestamp),
+                )
                 self.two_leg_balance.release_margin()
                 self.two_leg_state = CarryExecutionState.FLAT
                 self.two_leg_intent = None
@@ -1380,6 +1423,8 @@ class CarryRunner:
     def _apply_two_leg_funding(self, funding: pd.Series) -> None:
         if self.two_leg_balance.perp_qty <= 0:
             return
+        if self.in_position and self.last_funding_ts is None:
+            raise RuntimeError("checkpoint funding absent pour une position two-leg")
         resolver = getattr(self.venue, "funding_reference_price", None)
         if not callable(resolver):
             raise RuntimeError("référence funding absente")
@@ -1392,6 +1437,13 @@ class CarryRunner:
             reference = resolver(timestamp)
             if reference is None:
                 raise RuntimeError(f"prix oracle funding absent pour {timestamp}")
+            if not isinstance(reference, Mapping):
+                raise TypeError("référence funding venue invalide")
+            reference_price = reference.get("price")
+            reference_timestamp = reference.get("timestamp")
+            reference_source = reference.get("source")
+            if reference_price is None or reference_timestamp is None or not reference_source:
+                raise RuntimeError(f"référence funding incomplète pour {timestamp}")
             event = __import__(
                 "btcquant.execution.carry_paper", fromlist=["CarryFundingEvent"]
             ).CarryFundingEvent(
@@ -1400,8 +1452,9 @@ class CarryRunner:
                 instrument=self.two_leg_spec.perp_symbol,
                 timestamp=timestamp,
                 native_rate=float(rate),
-                reference_price=float(reference),
-                reference_source="venue_funding_reference_price",
+                reference_price=float(reference_price),
+                reference_source=str(reference_source),
+                reference_timestamp=reference_timestamp,
             )
             self.two_leg_balance.apply_funding(event)
             self.two_leg_balance.accrue_interest(
@@ -1410,6 +1463,17 @@ class CarryRunner:
                 event_id=f"{event.event_id}:borrow",
             )
             self.last_funding_ts = timestamp
+            # Persist the accounting mutation and its checkpoint together.
+            self._two_leg_persist(
+                "carry_funding_payment",
+                {
+                    "event_id": event.event_id,
+                    "payment_timestamp": timestamp.isoformat(),
+                    "reference_timestamp": event.reference_timestamp.isoformat(),
+                    "reference_source": event.reference_source,
+                    "reference_price": event.reference_price,
+                },
+            )
         self._sync_two_leg_legacy_fields()
 
     def _enforce_two_leg_timeout(
@@ -1517,6 +1581,20 @@ class CarryRunner:
                 )
                 return
         self._update_kill_switches()
+        if self.halted:
+            # A hard halt is an exit instruction, never an entry condition.
+            if self.in_position and market is not None:
+                self._close_two_leg(
+                    reason="kill_switch",
+                    market=market,
+                    decision_timestamp=decision_timestamp,
+                )
+            else:
+                self._save_state()
+            return
+        if self.daily_lockout and not self.in_position:
+            self._save_state()
+            return
         smoothing = smooth_funding_events(
             funding, smooth_days=self.smooth_days, funding_interval=self._native_funding_interval()
         )

@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Protocol, runtime_checkable
+from typing import Protocol, TypedDict, runtime_checkable
 
 import pandas as pd
 
 from .financial_fill_application import FinancialFillCommitResult
 
 Notifier = Callable[[str], bool]
+
+
+class FundingReference(TypedDict):
+    """Causal reference used to value one native funding event."""
+
+    price: float
+    timestamp: pd.Timestamp
+    source: str
 
 
 class MarketDataPort(Protocol):
@@ -30,7 +38,7 @@ class MarketDataPort(Protocol):
 
     # Optional at runtime: funding accounting must fail closed when this
     # resolver is not exposed for an event with an active position.
-    def funding_reference_price(self, timestamp: pd.Timestamp) -> object: ...
+    def funding_reference_price(self, timestamp: pd.Timestamp) -> FundingReference | None: ...
 
     def execution_price_after(
         self, decision_timestamp: pd.Timestamp, latency_ms: int
