@@ -19,7 +19,7 @@ from collections.abc import Callable
 
 from btcquant.execution.paper_technical_qualification import active_paper_release
 from btcquant.execution.readiness import paper_maturity_status
-from btcquant.execution.readonly_state_db import open_state_db_readonly
+from btcquant.execution.readonly_state_db import open_state_db_readonly, sqlite_error_metadata
 from btcquant.execution.state_store import StateStore
 from btcquant.operations.alerts import evaluate_alerts
 from btcquant.operations.retention import measure_footprints, plan_retention
@@ -236,7 +236,11 @@ def _read_qualification(root: Path, release: dict[str, Any]) -> dict[str, Any]:
             "matches_active_release": matches,
         }
     except Exception as error:
-        return {"status": UNKNOWN, "reason": type(error).__name__}
+        return {
+            "status": UNKNOWN,
+            "reason": type(error).__name__,
+            **sqlite_error_metadata(error),
+        }
 
 
 def _read_maturity(root: Path, now: datetime) -> dict[str, Any]:
@@ -246,7 +250,11 @@ def _read_maturity(root: Path, now: datetime) -> dict[str, Any]:
         campaign = store.active_qualification_campaign() or store.latest_passed_qualification()
         maturity = paper_maturity_status(store, root=root, now=now)
     except Exception as error:
-        return {"status": UNKNOWN, "reason": type(error).__name__}
+        return {
+            "status": UNKNOWN,
+            "reason": type(error).__name__,
+            **sqlite_error_metadata(error),
+        }
     status = maturity.get("status")
     binding = maturity.get("binding_status")
     if binding in {"FAIL", "MISMATCH"}:
@@ -363,7 +371,12 @@ def _read_database(root: Path) -> dict[str, Any]:
             "open_critical_incidents": critical,
         }
     except Exception as error:
-        return {"status": UNKNOWN, "path": str(database), "reason": type(error).__name__}
+        return {
+            "status": UNKNOWN,
+            "path": str(database),
+            "reason": type(error).__name__,
+            **sqlite_error_metadata(error),
+        }
 
 
 def _read_backup(root: Path, now: datetime) -> dict[str, Any]:
@@ -380,6 +393,7 @@ def _read_backup(root: Path, now: datetime) -> dict[str, Any]:
     latest = backups[-1]
     age_seconds = max(0.0, now.timestamp() - latest.stat().st_mtime)
     verification: dict[str, Any] | None = None
+    verification_error: dict[str, Any] | None = None
     try:
         store = StateStore(root / "state" / "btcquant.db", initialize=False, read_only=True)
         record = store.latest_paper_technical_qualification_record()
@@ -387,8 +401,12 @@ def _read_backup(root: Path, now: datetime) -> dict[str, Any]:
             candidate = record["payload"].get("backup_verification")
             if isinstance(candidate, dict) and candidate.get("archive_name") == latest.name:
                 verification = candidate
-    except Exception:
+    except Exception as error:
         verification = None
+        verification_error = {
+            "reason": type(error).__name__,
+            **sqlite_error_metadata(error),
+        }
     if verification is None:
         state = UNKNOWN
     elif verification.get("status") != PASS:
@@ -399,7 +417,7 @@ def _read_backup(root: Path, now: datetime) -> dict[str, Any]:
         state = WATCH
     else:
         state = FAIL
-    return {
+    result = {
         "status": state,
         "latest_archive": latest.name,
         "age_hours": round(age_seconds / 3600, 2),
@@ -407,6 +425,9 @@ def _read_backup(root: Path, now: datetime) -> dict[str, Any]:
         or {"status": UNKNOWN, "reason": "no_matching_verified_record"},
         "freshness_policy": {"fresh_hours": 26, "stale_days": 7},
     }
+    if verification_error is not None:
+        result["verification_error"] = verification_error
+    return result
 
 
 def _read_capacity(
