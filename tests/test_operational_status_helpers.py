@@ -297,3 +297,27 @@ def test_backup_reader_requires_matching_verified_archive(
     monkeypatch.setattr(status, "StateStore", FakeStore)
     result = status._read_backup(tmp_path, datetime.now(UTC))
     assert result["status"] == status.PASS
+
+
+def test_backup_reader_preserves_sqlite_code_when_verification_read_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    (backups / "state-20260915-0840.tar.gz.enc").write_bytes(b"isolated fixture")
+    error = _sqlite_operational_error()
+
+    def fail(*args: object, **kwargs: object) -> None:
+        raise error
+
+    monkeypatch.setattr(status, "StateStore", fail)
+    result = status._read_backup(tmp_path, datetime.now(UTC))
+
+    assert result["status"] == status.UNKNOWN
+    assert result["verification"]["reason"] == "no_matching_verified_record"
+    assert result["verification_error"] == {
+        "reason": "OperationalError",
+        "sqlite_errorcode": sqlite3.SQLITE_ERROR,
+        "sqlite_errorname": "SQLITE_ERROR",
+    }
+    assert "private_fixture_table" not in repr(result)
