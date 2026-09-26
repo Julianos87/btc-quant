@@ -19,7 +19,7 @@ from collections.abc import Callable
 
 from btcquant.execution.paper_technical_qualification import active_paper_release
 from btcquant.execution.readiness import paper_maturity_status
-from btcquant.execution.readonly_state_db import open_state_db_readonly
+from btcquant.execution.readonly_state_db import open_state_db_readonly, sqlite_error_metadata
 from btcquant.execution.state_store import StateStore
 from btcquant.operations.alerts import evaluate_alerts
 from btcquant.operations.retention import measure_footprints, plan_retention
@@ -236,7 +236,11 @@ def _read_qualification(root: Path, release: dict[str, Any]) -> dict[str, Any]:
             "matches_active_release": matches,
         }
     except Exception as error:
-        return {"status": UNKNOWN, "reason": type(error).__name__}
+        return {
+            "status": UNKNOWN,
+            "reason": type(error).__name__,
+            **sqlite_error_metadata(error),
+        }
 
 
 def _read_maturity(root: Path, now: datetime) -> dict[str, Any]:
@@ -246,7 +250,11 @@ def _read_maturity(root: Path, now: datetime) -> dict[str, Any]:
         campaign = store.active_qualification_campaign() or store.latest_passed_qualification()
         maturity = paper_maturity_status(store, root=root, now=now)
     except Exception as error:
-        return {"status": UNKNOWN, "reason": type(error).__name__}
+        return {
+            "status": UNKNOWN,
+            "reason": type(error).__name__,
+            **sqlite_error_metadata(error),
+        }
     status = maturity.get("status")
     binding = maturity.get("binding_status")
     if binding in {"FAIL", "MISMATCH"}:
@@ -363,7 +371,12 @@ def _read_database(root: Path) -> dict[str, Any]:
             "open_critical_incidents": critical,
         }
     except Exception as error:
-        return {"status": UNKNOWN, "path": str(database), "reason": type(error).__name__}
+        return {
+            "status": UNKNOWN,
+            "path": str(database),
+            "reason": type(error).__name__,
+            **sqlite_error_metadata(error),
+        }
 
 
 def _read_backup(root: Path, now: datetime) -> dict[str, Any]:

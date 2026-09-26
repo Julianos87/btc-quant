@@ -78,6 +78,56 @@ def _create_state_database(path: Path, *, unresolved: bool = False) -> None:
         )
 
 
+def _sqlite_operational_error() -> sqlite3.Error:
+    connection = sqlite3.connect(":memory:")
+    try:
+        connection.execute("SELECT confidential_value FROM private_fixture_table")
+    except sqlite3.Error as error:
+        return error
+    raise AssertionError("fixture query unexpectedly succeeded")
+
+
+def test_sqlite_error_metadata_does_not_expose_error_message() -> None:
+    error = _sqlite_operational_error()
+
+    assert status.sqlite_error_metadata(error) == {
+        "sqlite_errorcode": sqlite3.SQLITE_ERROR,
+        "sqlite_errorname": "SQLITE_ERROR",
+    }
+    assert "private_fixture_table" not in repr(status.sqlite_error_metadata(error))
+
+
+@pytest.mark.parametrize("reader", ["qualification", "maturity", "database"])
+def test_status_database_readers_preserve_sqlite_code_without_message(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, reader: str
+) -> None:
+    error = _sqlite_operational_error()
+
+    def fail(*args: object, **kwargs: object) -> None:
+        raise error
+
+    if reader == "qualification":
+        monkeypatch.setattr(status, "StateStore", fail)
+        result = status._read_qualification(
+            tmp_path, {"active_sha": "a" * 40, "active_tree": "b" * 40, "schema_version": 14}
+        )
+    elif reader == "maturity":
+        monkeypatch.setattr(status, "StateStore", fail)
+        result = status._read_maturity(tmp_path, datetime.now(UTC))
+    else:
+        state = tmp_path / "state"
+        state.mkdir()
+        (state / "btcquant.db").touch()
+        monkeypatch.setattr(status, "open_state_db_readonly", fail)
+        result = status._read_database(tmp_path)
+
+    assert result["status"] == status.UNKNOWN
+    assert result["reason"] == "OperationalError"
+    assert result["sqlite_errorcode"] == sqlite3.SQLITE_ERROR
+    assert result["sqlite_errorname"] == "SQLITE_ERROR"
+    assert "private_fixture_table" not in repr(result)
+
+
 def test_database_reader_is_read_only_and_checks_all_safety_facts(tmp_path: Path) -> None:
     state = tmp_path / "state"
     state.mkdir()
