@@ -73,6 +73,8 @@ from .venue import NETWORK_ERRORS, Venue
 log = logging.getLogger(__name__)
 
 TICK_SECONDS = 300
+# The durable events table keeps history; checkpoints retain only a recent view.
+TWO_LEG_JOURNAL_LIMIT = 128
 #: Marge de rattrapage au premier tick d'une base neuve : sans checkpoint, on
 #: ne réclame que de quoi amorcer le lissage, jamais tout l'historique.
 BOOTSTRAP_MARGIN_DAYS = 1
@@ -278,7 +280,9 @@ class CarryRunner:
         intent = payload.get("active_intent")
         self.two_leg_intent = dict(intent) if isinstance(intent, dict) else None
         journal = payload.get("journal")
-        self.two_leg_journal = list(journal) if isinstance(journal, list) else []
+        self.two_leg_journal = (
+            list(journal[-TWO_LEG_JOURNAL_LIMIT:]) if isinstance(journal, list) else []
+        )
         if self.two_leg_state in {
             CarryExecutionState.ENTRY_PENDING,
             CarryExecutionState.ONE_LEG_FILLED,
@@ -1199,6 +1203,7 @@ class CarryRunner:
 
     def _two_leg_persist(self, event_type: str, payload: dict[str, object]) -> None:
         self.two_leg_journal.append({"event_type": event_type, **payload})
+        del self.two_leg_journal[:-TWO_LEG_JOURNAL_LIMIT]
         self._sync_two_leg_legacy_fields()
         self._save_state(event_type=event_type, event_payload=payload)
 
@@ -1274,7 +1279,7 @@ class CarryRunner:
             self.store.record_incident(
                 "accounting:carry:net_edge_negative",
                 engine="carry",
-                severity="INFO",
+                severity="WARNING",
                 kind="carry_entry_blocked",
                 message="Entrée carry bloquée : portage net attendu négatif",
                 context={"economics": economics},
