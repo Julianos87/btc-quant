@@ -2,9 +2,9 @@
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
   "version": 1,
-  "serialNumber": "urn:uuid:ec7f2244-098d-47eb-b2bd-ce07192762f7",
+  "serialNumber": "urn:uuid:1baf82aa-34f3-4fc0-bde6-4ae5c76176ab",
   "metadata": {
-    "timestamp": "2026-08-07T20:18:24.923454286Z",
+    "timestamp": "2026-10-10T14:08:44.825888566Z",
     "tools": [
       {
         "vendor": "Astral Software Inc.",
@@ -187,10 +187,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "multidict-23@6.7.1",
+      "bom-ref": "multidict-23@6.9.1",
       "name": "multidict",
-      "version": "6.7.1",
-      "purl": "pkg:pypi/multidict@6.7.1"
+      "version": "6.9.1",
+      "purl": "pkg:pypi/multidict@6.9.1"
     },
     {
       "type": "library",
@@ -309,10 +309,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "urllib3-37@2.7.0",
+      "bom-ref": "urllib3-37@2.8.0",
       "name": "urllib3",
-      "version": "2.7.0",
-      "purl": "pkg:pypi/urllib3@2.7.0"
+      "version": "2.8.0",
+      "purl": "pkg:pypi/urllib3@2.8.0"
     },
     {
       "type": "library",
@@ -329,10 +329,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "werkzeug-39@3.1.8",
+      "bom-ref": "werkzeug-39@3.1.9",
       "name": "werkzeug",
-      "version": "3.1.8",
-      "purl": "pkg:pypi/werkzeug@3.1.8"
+      "version": "3.1.9",
+      "purl": "pkg:pypi/werkzeug@3.1.9"
     },
     {
       "type": "library",
@@ -373,7 +373,7 @@
         "aiosignal-5@1.4.0",
         "attrs-6@26.1.0",
         "frozenlist-17@1.8.0",
-        "multidict-23@6.7.1",
+        "multidict-23@6.9.1",
         "propcache-29@0.5.2",
         "typing-extensions-35@4.16.0",
         "yarl-41@1.24.2"
@@ -426,13 +426,13 @@
         "cryptography-15@50.0.0",
         "frozenlist-17@1.8.0",
         "idna-19@3.18",
-        "multidict-23@6.7.1",
+        "multidict-23@6.9.1",
         "orjson-26@3.11.9",
         "propcache-29@0.5.2",
         "pycparser-30@3.0",
         "requests-33@2.34.2",
         "typing-extensions-35@4.16.0",
-        "urllib3-37@2.7.0",
+        "urllib3-37@2.8.0",
         "uvloop-38@0.22.1",
         "winloop-40@0.6.3",
         "yarl-41@1.24.2",
@@ -477,7 +477,7 @@
         "itsdangerous-20@2.2.0",
         "jinja2-21@3.1.6",
         "markupsafe-22@3.0.3",
-        "werkzeug-39@3.1.8"
+        "werkzeug-39@3.1.9"
       ]
     },
     {
@@ -505,7 +505,7 @@
       "ref": "markupsafe-22@3.0.3"
     },
     {
-      "ref": "multidict-23@6.7.1"
+      "ref": "multidict-23@6.9.1"
     },
     {
       "ref": "numpy-24@2.4.6"
@@ -549,7 +549,7 @@
         "certifi-9@2026.6.17",
         "charset-normalizer-11@3.4.7",
         "idna-19@3.18",
-        "urllib3-37@2.7.0"
+        "urllib3-37@2.8.0"
       ]
     },
     {
@@ -562,13 +562,13 @@
       "ref": "tzdata-36@2026.3"
     },
     {
-      "ref": "urllib3-37@2.7.0"
+      "ref": "urllib3-37@2.8.0"
     },
     {
       "ref": "uvloop-38@0.22.1"
     },
     {
-      "ref": "werkzeug-39@3.1.8",
+      "ref": "werkzeug-39@3.1.9",
       "dependsOn": [
         "markupsafe-22@3.0.3"
       ]
@@ -580,7 +580,7 @@
       "ref": "yarl-41@1.24.2",
       "dependsOn": [
         "idna-19@3.18",
-        "multidict-23@6.7.1",
+        "multidict-23@6.9.1",
         "propcache-29@0.5.2"
       ]
     },

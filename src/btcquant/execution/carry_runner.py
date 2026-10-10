@@ -104,6 +104,11 @@ class CarryRunner:
         carry_execution: object | None = None,
         paper_execution_config=None,
     ) -> None:
+        if (
+            getattr(carry_execution, "financing_mode", "declared") == "paper_simulated"
+            and live_broker is not None
+        ):
+            raise ValueError("Le financement simulé interdit tout broker externe")
         self.symbol = symbol_perp
         self.carry_execution = carry_execution
         self.paper_execution_config = paper_execution_config
@@ -229,7 +234,9 @@ class CarryRunner:
                 )
             ),
             qualification_reason=(
-                "capacités d'emprunt, comptes et marge explicitement déclarés"
+                "hypothèses PAPER simulées ; aucune capacité réelle de compte attestée"
+                if getattr(configured, "financing_mode", "declared") == "paper_simulated"
+                else "capacités d'emprunt, comptes et marge explicitement déclarés"
                 if bool(getattr(configured, "borrow_enabled", False))
                 else "capacités d'emprunt spot ou partage de collatéral non qualifiés"
             ),
@@ -433,6 +440,7 @@ class CarryRunner:
             "accounting_uncertain": self.accounting_uncertain,
             "accounting_uncertainty_reason": self.accounting_uncertainty_reason,
             "carry_model": self.paper_model,
+            "financing_mode": getattr(self.carry_execution, "financing_mode", "declared"),
             "historical_series_label": (
                 "synthetic_historical"
                 if self.paper_model != "two_leg_execution_v1"
@@ -1262,6 +1270,7 @@ class CarryRunner:
             self.two_leg_state = CarryExecutionState.FLAT
             self._two_leg_persist("carry_entry_blocked", {"reason": plan.reason})
             return
+        self.store.resolve_incident("accounting:carry:financing_not_qualified")
         configured = self.carry_execution
         holding_days = float(getattr(configured, "holding_days", 30.0))
         reserve = plan.target_notional * float(getattr(configured, "uncertainty_reserve_rate", 0.0))
@@ -1284,9 +1293,17 @@ class CarryRunner:
                 message="Entrée carry bloquée : portage net attendu négatif",
                 context={"economics": economics},
             )
-            self._two_leg_persist("carry_entry_blocked", {"reason": "net_expected_non_positive"})
+            self._two_leg_persist(
+                "carry_entry_blocked",
+                {
+                    "reason": "net_expected_non_positive",
+                    "economics": economics,
+                    "plan": plan.as_dict(),
+                },
+            )
             return
 
+        self.store.resolve_incident("accounting:carry:net_edge_negative")
         try:
             self.two_leg_balance.reserve_margin(plan.perp_initial_margin)
         except Exception as error:

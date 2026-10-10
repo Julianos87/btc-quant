@@ -1,0 +1,42 @@
+{
+  "purpose": "Dependency-only source provenance refresh; frozen market data, cutoff, strategy, fee model unchanged",
+  "changes": {
+    "pyproject.toml": {
+      "previous": "67874f8a85af8d469563dc587980adeb2bd802fa1c6b1b19a55c458ad8ce8a0c",
+      "current": "e5b217b9f6696a427d05fa7ede0f0dbb07316a30ffa1f79c69520b9d10f730dd"
+    },
+    "uv.lock": {
+      "previous": "c95dd635305ba32f058b9c4e81ea4f21ecb223efa5654e4626a9b7e576100e46",
+      "current": "02ec358c2185c260e1225ed1e3a369904d53dcfa7d658ecbd31979367dc589b3"
+    }
+  },
+  "dependency_changes": {
+    "multidict": [
+      "6.7.1",
+      "6.9.1"
+    ],
+    "urllib3": [
+      "2.7.0",
+      "2.8.0"
+    ],
+    "werkzeug": [
+      "3.1.8",
+      "3.1.9"
+    ]
+  },
+  "comparison": "Identical backtest equity CSV hash and trade count on frozen 5000-hour Hyperliquid OHLCV fixture with fixed configured funding; dependency compatibility check, not new performance evidence",
+  "before": {
+    "trend_ls_55": {
+      "equity_sha256": "f8070419e4b800baefa33f220dbd2577a4ee2e48edd1ae2ba197d0fecf47c245",
+      "final_equity": 993.6073093262044,
+      "trades": 11
+    }
+  },
+  "after": {
+    "trend_ls_55": {
+      "equity_sha256": "f8070419e4b800baefa33f220dbd2577a4ee2e48edd1ae2ba197d0fecf47c245",
+      "final_equity": 993.6073093262044,
+      "trades": 11
+    }
+  }
+}

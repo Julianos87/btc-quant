@@ -50,6 +50,7 @@ _RUNTIME_EXECUTION_KEYS = {
 }
 
 _CARRY_EXECUTION_KEYS = {
+    "financing_mode",
     "model",
     "spot_symbol",
     "perp_symbol",
@@ -181,6 +182,7 @@ class CarryExecutionConfig:
     Les capacités absentes restent None et rendent le modèle non qualifié.
     """
 
+    financing_mode: str = "declared"
     model: str = "synthetic_historical"
     spot_symbol: str = "BTC/USDC"
     perp_symbol: str = "BTC/USDC:USDC"
@@ -200,6 +202,12 @@ class CarryExecutionConfig:
     financing_source: str = "UNSPECIFIED"
 
     def __post_init__(self) -> None:
+        if self.financing_mode not in {"declared", "paper_simulated"}:
+            raise ValueError("carry_execution.financing_mode inconnu")
+        if self.financing_mode == "paper_simulated" and not self.financing_source.startswith(
+            "PAPER_SIMULATED_"
+        ):
+            raise ValueError("Le financement simulé exige une provenance PAPER_SIMULATED_")
         if self.model not in {"synthetic_historical", "two_leg_execution_v1"}:
             raise ValueError("carry_execution.model inconnu")
         if self.holding_days <= 0 or self.max_unhedged_seconds <= 0:
@@ -224,7 +232,12 @@ def carry_execution_from_config(cfg: dict[str, Any]) -> CarryExecutionConfig:
     if not isinstance(raw, dict):
         raise ValueError("carry_execution doit être un mapping YAML")
     _unknown_keys("carry_execution", raw, _CARRY_EXECUTION_KEYS)
-    return CarryExecutionConfig(**raw)
+    result = CarryExecutionConfig(**raw)
+    if result.financing_mode == "paper_simulated" and (
+        cfg.get("environment") != "paper" or cfg.get("execution", {}).get("mode") != "paper"
+    ):
+        raise ValueError("Le financement simulé est réservé au profil PAPER")
+    return result
 
 
 def load_config(path: str | Path = "environments/dev/config.yaml") -> dict[str, Any]:
