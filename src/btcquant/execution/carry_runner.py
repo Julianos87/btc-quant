@@ -314,10 +314,9 @@ class CarryRunner:
                     self.accounting_uncertainty_reason
                     or "reprise d'une transition two-leg non terminale"
                 )
-            elif resumable_exit:
-                # A durable exit plan can only reduce quantities recorded in
-                # the checkpoint, so it is safe to resume automatically.
-                self.accounting_uncertain = False
+            elif resumable_exit and not self.accounting_uncertain:
+                # A durable exit plan permits quantity reduction, but it must
+                # never clear an independently recorded funding uncertainty.
                 self.accounting_uncertainty_reason = None
 
     def _load_state(self) -> None:
@@ -1420,6 +1419,8 @@ class CarryRunner:
                     "carry_entry_checkpoint",
                     {"entry_timestamp": entry_timestamp.isoformat(), "intent_id": intent_id},
                 )
+        except ReconciliationRequired:
+            raise
         except Exception as error:
             self.two_leg_state = CarryExecutionState.RECONCILIATION_REQUIRED
             self.accounting_uncertain = True
@@ -1542,6 +1543,8 @@ class CarryRunner:
                         "perp_remaining": self.two_leg_balance.perp_qty,
                     },
                 )
+        except ReconciliationRequired:
+            raise
         except Exception as error:
             self.two_leg_state = CarryExecutionState.RECONCILIATION_REQUIRED
             self.accounting_uncertain = True
@@ -1675,6 +1678,27 @@ class CarryRunner:
     def _tick_two_leg(self) -> None:
         if (
             self.accounting_uncertain
+            and self.accounting_uncertainty_reason
+            == "Sortie de risque avec funding non intégralement vérifié"
+            and self.in_position
+            and isinstance(self.two_leg_intent, dict)
+            and bool(self.two_leg_intent.get("reason"))
+            and isinstance(self.two_leg_intent.get("decision_timestamp"), str)
+        ):
+            # Continue only the already committed protective exit. Historical
+            # funding cannot be applied to quantities reduced during outage.
+            decision_timestamp = pd.Timestamp.now(tz="UTC")
+            market = self._two_leg_market()
+            if market is not None:
+                self._close_two_leg(
+                    reason=str(self.two_leg_intent["reason"]),
+                    market=market,
+                    decision_timestamp=decision_timestamp,
+                )
+            self._save_state()
+            return
+        if (
+            self.accounting_uncertain
             or self.two_leg_state == CarryExecutionState.RECONCILIATION_REQUIRED
         ):
             return
@@ -1715,6 +1739,27 @@ class CarryRunner:
                 <= decision_timestamp - latest_timestamp
                 <= interval + pd.Timedelta(minutes=5)
             )
+        if (
+            funding_ready
+            and self.in_position
+            and interval is not None
+            and self.last_funding_ts is not None
+        ):
+            checkpoint_slot = (
+                funding_slot(self.last_funding_ts, interval=interval)
+                if self.last_funding_ts in funding.index
+                else pd.Timestamp(
+                    (self.last_funding_ts.value // interval.value) * interval.value,
+                    unit="ns",
+                    tz="UTC",
+                )
+            )
+            current_slot = pd.Timestamp(
+                (decision_timestamp.value // interval.value) * interval.value, unit="ns", tz="UTC"
+            )
+            # A fresh signal can still precede an already due, unpublished
+            # payment. A risk exit must not silently discard that liability.
+            funding_ready = current_slot <= checkpoint_slot
         if not funding_ready:
             self.store.record_incident(
                 "accounting:carry:signal_unavailable",
@@ -1724,10 +1769,15 @@ class CarryRunner:
                 message="Signal funding vide, incomplet ou périmé : nouvelle entrée suspendue",
                 context={"latest_timestamp": str(funding.index[-1]) if not funding.empty else None},
             )
-        exposed_before_risk = self.in_position
+        exposure_before_risk = (self.two_leg_balance.spot_qty, self.two_leg_balance.perp_qty)
 
         def record_unsettled_exit() -> None:
-            if exposed_before_risk and not self.in_position and not funding_ready:
+            exposure_after_risk = (self.two_leg_balance.spot_qty, self.two_leg_balance.perp_qty)
+            reduced = any(
+                after < before - 1e-12
+                for before, after in zip(exposure_before_risk, exposure_after_risk, strict=True)
+            )
+            if reduced and not funding_ready:
                 self._mark_accounting_uncertain(
                     "Sortie de risque avec funding non intégralement vérifié",
                     {"classification": "RISK_EXIT_FUNDING_UNSETTLED"},
