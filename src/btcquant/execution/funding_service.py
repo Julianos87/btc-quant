@@ -7,6 +7,7 @@ from typing import Any
 
 import pandas as pd
 
+from ..carry import funding_slot, normalize_funding_events
 from .ports import ClockPort, MarketDataPort
 
 
@@ -35,6 +36,55 @@ class FundingPoll:
     checkpoint: pd.Timestamp
     payments: tuple[FundingPayment, ...]
     initialized: bool = False
+    missing_timestamp: pd.Timestamp | None = None
+
+
+def native_funding_interval(venue: MarketDataPort) -> pd.Timedelta | None:
+    explicit = getattr(venue, "native_funding_interval", None)
+    if explicit is not None:
+        interval = pd.Timedelta(explicit)
+    else:
+        daily = getattr(venue, "payments_per_day", None)
+        if not isinstance(daily, (int, float)) or daily <= 0:
+            return None
+        interval = pd.Timedelta(seconds=86_400 / daily)
+    if interval <= pd.Timedelta(0):
+        raise ValueError("funding interval must be positive")
+    return interval
+
+
+def contiguous_funding(
+    raw: pd.Series, since: pd.Timestamp, interval: pd.Timedelta | None
+) -> tuple[pd.Series, pd.Timestamp | None]:
+    """Keep raw event identities and stop before the first missing native slot."""
+    values = normalize_funding_events(raw, context="funding accounting")
+    checkpoint_is_event = since in values.index
+    values = values[values.index > since]
+    if interval is None or values.empty:
+        return values, None
+    # Checkpoints may be arbitrary initialization/entry times, or a raw event
+    # a few milliseconds after its nominal slot. Floor, never round a mid-slot
+    # checkpoint into the next payment's slot.
+    checkpoint_slot = funding_slot(since, interval=interval) if checkpoint_is_event else None
+    floor = pd.Timestamp((since.value // interval.value) * interval.value, unit="ns", tz="UTC")
+    expected = (checkpoint_slot if checkpoint_slot is not None else floor) + interval
+    accepted = []
+    seen = {checkpoint_slot} if checkpoint_slot is not None else set()
+    for timestamp in values.index:
+        slot = funding_slot(timestamp, interval=interval)
+        if slot in seen:
+            raise ValueError("duplicate native funding slot")
+        seen.add(slot)
+        if slot < expected:
+            # An event published just after an arbitrary checkpoint in that
+            # same slot remains a real payment; do not rewrite its timestamp.
+            accepted.append(timestamp)
+            continue
+        if slot != expected:
+            return values.loc[accepted], expected
+        accepted.append(timestamp)
+        expected += interval
+    return values.loc[accepted], None
 
 
 class FundingService:
@@ -60,14 +110,19 @@ class FundingService:
             return FundingPoll(current, (), initialized=True)
 
         since = _as_utc(since)
-        raw = self.venue.funding_history_since(since).copy()
+        interval = native_funding_interval(self.venue)
+        # Include the prior raw checkpoint to distinguish a slightly early
+        # payment timestamp from an arbitrary initialization time.
+        request_since = since - interval if interval is not None else since
+        raw = self.venue.funding_history_since(request_since).copy()
         raw.index = pd.to_datetime(raw.index, utc=True)
-        raw = raw[(raw.index > since) & (raw.index <= current)].sort_index()
+        raw = raw[raw.index <= current].sort_index()
+        raw, missing = contiguous_funding(raw, since, interval)
         payments = tuple(
             self._payment(_as_utc(timestamp), float(rate)) for timestamp, rate in raw.items()
         )
         checkpoint = payments[-1].timestamp if payments else since
-        return FundingPoll(checkpoint, payments)
+        return FundingPoll(checkpoint, payments, missing_timestamp=missing)
 
     def _payment(self, timestamp: pd.Timestamp, rate: float) -> FundingPayment:
         """Attach an explicit venue price when the data port can provide one.

@@ -62,7 +62,8 @@ from .carry_paper import (
     expected_net_carry,
     serialize_two_leg_state,
 )
-from .errors import AccountingIdentityCollision
+from .errors import AccountingIdentityCollision, ReconciliationRequired
+from .funding_service import contiguous_funding
 from .instance_lock import EngineInstanceLock
 from .ports import MarketDataPort, Notifier
 from .risk_service import PortfolioRiskService, PortfolioRiskState
@@ -368,6 +369,20 @@ class CarryRunner:
             elif raw.get("carry_model") == "two_leg_execution_v1" and not self.in_position:
                 self.two_leg_balance = CarryAccountingState(initial_cash=self.equity)
                 self.two_leg_state = CarryExecutionState.FLAT
+        if (
+            self.paper_model == "two_leg_execution_v1"
+            and self.accounting_uncertain
+            and self.accounting_uncertainty_reason == "Signal carry two-leg incertain"
+            and self.two_leg_state == CarryExecutionState.FLAT
+            and not self.in_position
+            and self.two_leg_balance.spot_qty == 0
+            and self.two_leg_balance.perp_qty == 0
+            and self.two_leg_balance.debt_principal == 0
+        ):
+            self.accounting_uncertain = False
+            self.accounting_uncertainty_reason = None
+            self._save_state(event_type="flat_signal_gate_recovered")
+            self.store.resolve_incident("accounting:carry:funding_uncertainty")
         resumable_exit = (
             self.paper_model == "two_leg_execution_v1"
             and self.two_leg_state
@@ -1213,7 +1228,12 @@ class CarryRunner:
         self.two_leg_journal.append({"event_type": event_type, **payload})
         del self.two_leg_journal[:-TWO_LEG_JOURNAL_LIMIT]
         self._sync_two_leg_legacy_fields()
-        self._save_state(event_type=event_type, event_payload=payload)
+        try:
+            self._save_state(event_type=event_type, event_payload=payload)
+        except Exception as error:
+            # Do not let the next loop/finalizer persist a mutation whose
+            # accounting event failed to commit.
+            raise ReconciliationRequired("Checkpoint carry two-leg non persisté") from error
 
     def _two_leg_plan(self, market: CarryMarketState) -> FinancingPlan:
         configured = self.carry_execution
@@ -1658,34 +1678,68 @@ class CarryRunner:
             or self.two_leg_state == CarryExecutionState.RECONCILIATION_REQUIRED
         ):
             return
-        funding = self._recent_funding()
-        if funding.empty:
-            return
+        funding = pd.Series(dtype=float)
+        funding_ready = False
         try:
-            self._apply_two_leg_funding(funding)
+            funding = normalize_funding_events(self._recent_funding(), context="carry funding")
+            funding = funding[funding.index <= pd.Timestamp.now(tz="UTC")]
+            if not funding.empty:
+                if self.in_position and self.last_funding_ts is not None:
+                    contiguous, missing = contiguous_funding(
+                        funding, self.last_funding_ts, self._native_funding_interval()
+                    )
+                    self._apply_two_leg_funding(contiguous)
+                    funding_ready = missing is None
+                else:
+                    funding_ready = True
+                if funding_ready:
+                    self.store.resolve_incident("accounting:carry:funding_unavailable")
+        except ReconciliationRequired:
+            raise
         except Exception as error:
-            if self.in_position:
-                self._mark_accounting_uncertain(
-                    "Funding two-leg non reconstructible",
-                    {"classification": "TWO_LEG_FUNDING_UNCERTAIN", "detail": str(error)},
-                )
-            else:
-                self.store.record_incident(
-                    "accounting:carry:funding_unavailable",
-                    engine="carry",
-                    severity="WARNING",
-                    kind="carry_funding_unavailable",
-                    message=str(error),
-                    context={"model": "carry_two_leg_execution_v1"},
-                )
-            return
+            self.store.record_incident(
+                "accounting:carry:funding_unavailable",
+                engine="carry",
+                severity="WARNING",
+                kind="carry_funding_unavailable",
+                message=str(error),
+                context={"model": "carry_two_leg_execution_v1"},
+            )
         decision_timestamp = pd.Timestamp.now(tz="UTC")
+        interval = self._native_funding_interval()
+        if funding_ready and interval is not None:
+            latest_timestamp = pd.Timestamp(funding.index[-1])
+            # One native interval plus five minutes of publication tolerance.
+            funding_ready = (
+                pd.Timedelta(0)
+                <= decision_timestamp - latest_timestamp
+                <= interval + pd.Timedelta(minutes=5)
+            )
+        if not funding_ready:
+            self.store.record_incident(
+                "accounting:carry:signal_unavailable",
+                engine="carry",
+                severity="WARNING",
+                kind="carry_signal_unavailable",
+                message="Signal funding vide, incomplet ou périmé : nouvelle entrée suspendue",
+                context={"latest_timestamp": str(funding.index[-1]) if not funding.empty else None},
+            )
+        exposed_before_risk = self.in_position
+
+        def record_unsettled_exit() -> None:
+            if exposed_before_risk and not self.in_position and not funding_ready:
+                self._mark_accounting_uncertain(
+                    "Sortie de risque avec funding non intégralement vérifié",
+                    {"classification": "RISK_EXIT_FUNDING_UNSETTLED"},
+                )
+
         market = self._two_leg_market()
         if self._enforce_two_leg_timeout(
             now=decision_timestamp,
             market=market,
             decision_timestamp=decision_timestamp,
         ):
+            record_unsettled_exit()
             return
         if market is not None:
             self.two_leg_balance.mark(market)
@@ -1705,6 +1759,7 @@ class CarryRunner:
                     decision_timestamp=decision_timestamp,
                 )
                 self.halted = True
+                record_unsettled_exit()
                 self._save_state(
                     event_type="carry_liquidation", event_payload={"margin": asdict(margin)}
                 )
@@ -1720,8 +1775,12 @@ class CarryRunner:
                 )
             else:
                 self._save_state()
+            record_unsettled_exit()
             return
         if self.daily_lockout and not self.in_position:
+            self._save_state()
+            return
+        if not funding_ready:
             self._save_state()
             return
         smoothing = smooth_funding_events(
@@ -1729,14 +1788,20 @@ class CarryRunner:
         )
         latest = smoothing.coverage.iloc[-1]
         if int(latest["missing_events"]) > 0 or str(latest["status"]) != "OK":
-            self._mark_accounting_uncertain(
-                "Signal carry two-leg incertain",
-                {
+            self.store.record_incident(
+                "accounting:carry:signal_unavailable",
+                engine="carry",
+                severity="WARNING",
+                kind="carry_signal_unavailable",
+                message="Historique du signal funding incomplet : nouvel essai au prochain cycle",
+                context={
                     "classification": str(latest["status"]),
                     "missing_events": int(latest["missing_events"]),
                 },
             )
+            self._save_state()
             return
+        self.store.resolve_incident("accounting:carry:signal_unavailable")
         smooth_ann = float(smoothing.annualized.iloc[-1])
         if self.in_position and smooth_ann < self.exit_ann and market is not None:
             self._close_two_leg(
@@ -1752,6 +1817,7 @@ class CarryRunner:
     def _tick(self) -> None:
         if self.paper_model == "two_leg_execution_v1" and self.live_broker is None:
             self._tick_two_leg()
+            self._append_equity()
             return
         funding = self._recent_funding()
         if self.accounting_uncertain or funding.empty:
@@ -1860,14 +1926,19 @@ class CarryRunner:
                 self.enter_ann * 100,
                 self.exit_ann * 100,
             )
+            clean_shutdown = False
             try:
                 while not stop_event.is_set():
                     try:
                         self._tick()
+                    except ReconciliationRequired:
+                        raise
                     except Exception:
                         log.exception("Erreur carry (on continue)")
                     stop_event.wait(TICK_SECONDS)
+                clean_shutdown = True
             finally:
-                self._save_state()
-                self._append_equity()
-                log.info("Carry arrêté proprement ; checkpoint final enregistré")
+                if clean_shutdown:
+                    self._save_state()
+                    self._append_equity()
+                    log.info("Carry arrêté proprement ; checkpoint final enregistré")

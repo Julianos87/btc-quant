@@ -1280,9 +1280,27 @@ class LiveRunner:
         """Settle venue funding from event prices and a durable exposure timeline."""
 
         del _mark_price  # current marks are never funding accounting inputs
-        poll = self.funding_service.poll(self.last_funding_ts)
+        try:
+            poll = self.funding_service.poll(self.last_funding_ts)
+        except ReconciliationRequired:
+            raise
+        except Exception as error:
+            # Acquisition has not mutated accounting. Keep protective stops
+            # and kill switches running, but do not add exposure during outage.
+            self._funding_data_unavailable = True
+            self.store.record_incident(
+                "accounting:trend:funding_unavailable",
+                engine="trend",
+                severity="WARNING",
+                kind="funding_unavailable",
+                message=str(error),
+                context={"checkpoint": str(self.last_funding_ts)},
+            )
+            return
         if poll is None:
             return
+        self._funding_data_unavailable = poll.missing_timestamp is not None
+        self.store.resolve_incident("accounting:trend:funding_unavailable")
         if poll.initialized:
             if any(slot.position is not None for slot in self.slots):
                 reason = "Position ouverte sans checkpoint funding durable"
@@ -1303,6 +1321,17 @@ class LiveRunner:
                 event_payload={"last_funding_ts": poll.checkpoint.isoformat()},
             )
             return
+        if poll.missing_timestamp is not None:
+            self.store.record_incident(
+                "accounting:trend:funding_gap",
+                engine="trend",
+                severity="WARNING",
+                kind="funding_history_gap",
+                message="Paiement funding manquant : curseur conservé avant la lacune",
+                context={"missing_timestamp": poll.missing_timestamp.isoformat()},
+            )
+        else:
+            self.store.resolve_incident("accounting:trend:funding_gap")
         if not poll.payments:
             return
         for payment in poll.payments:
@@ -2398,7 +2427,9 @@ class LiveRunner:
             slot.strategy.params.get("funding_long_max") is not None
             or slot.strategy.params.get("funding_short_min") is not None
         )
-        allow_new_exposure = funding_available or not uses_funding_filter
+        allow_new_exposure = (funding_available or not uses_funding_filter) and not getattr(
+            self, "_funding_data_unavailable", False
+        )
         row = data.loc[last_ts]
 
         if slot.position is not None:
