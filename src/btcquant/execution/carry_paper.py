@@ -103,10 +103,10 @@ class CarryVenueSpec:
                 )
                 if getattr(self, name) is None
             ]
-            if missing or not self.borrow_enabled:
+            if missing or (not self.borrow_enabled and self.max_borrow != 0):
                 raise CarryPaperError(
                     "un compte qualifié doit déclarer l'emprunt et les règles de marge : "
-                    + ", ".join(missing or ["borrow_enabled"])
+                    + ", ".join(missing or ["max_borrow doit être nul sans emprunt"])
                 )
 
     @classmethod
@@ -439,7 +439,14 @@ class CarryAccountingState:
         self._reserved_margin = max(0.0, self._reserved_margin - amount)
 
     def apply_spot_fill(
-        self, *, side: str, qty: float, price: float, fee: float, event_id: str
+        self,
+        *,
+        side: str,
+        qty: float,
+        price: float,
+        fee: float,
+        event_id: str,
+        max_debt_principal: float | None = None,
     ) -> None:
         self._once(event_id)
         qty, price, fee = (
@@ -454,6 +461,10 @@ class CarryAccountingState:
             available = self._cash()
             own_cash = min(available, notional + fee)
             borrowed = notional + fee - own_cash
+            if max_debt_principal is not None and (
+                self.debt_principal + borrowed > max_debt_principal
+            ):
+                raise CarryPaperError("fill spot dépasserait la capacité d'emprunt déclarée")
             self.cash_available = available - own_cash
             self.debt_principal += borrowed
             self.spot_cost_basis += notional

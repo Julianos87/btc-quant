@@ -51,6 +51,7 @@ _RUNTIME_EXECUTION_KEYS = {
 
 _CARRY_EXECUTION_KEYS = {
     "financing_mode",
+    "cash_utilization",
     "model",
     "spot_symbol",
     "perp_symbol",
@@ -183,6 +184,7 @@ class CarryExecutionConfig:
     """
 
     financing_mode: str = "declared"
+    cash_utilization: float = 1.0
     model: str = "synthetic_historical"
     spot_symbol: str = "BTC/USDC"
     perp_symbol: str = "BTC/USDC:USDC"
@@ -202,6 +204,10 @@ class CarryExecutionConfig:
     financing_source: str = "UNSPECIFIED"
 
     def __post_init__(self) -> None:
+        if not math.isfinite(self.cash_utilization) or not 0 < self.cash_utilization <= 1:
+            raise ValueError("cash_utilization doit être dans ]0, 1]")
+        if not self.borrow_enabled and self.max_borrow not in (None, 0):
+            raise ValueError("max_borrow doit être nul lorsque l'emprunt est désactivé")
         if self.financing_mode not in {"declared", "paper_simulated"}:
             raise ValueError("carry_execution.financing_mode inconnu")
         if self.financing_mode == "paper_simulated" and not self.financing_source.startswith(

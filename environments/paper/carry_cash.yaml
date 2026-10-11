@@ -1,0 +1,178 @@
+# PAPER Carry financé en cash, sans emprunt
+environment: paper
+# Profil prospectif sans emprunt ; aucune performance historique du ×3
+# ne qualifie ce profil. Les paramètres Trend et ses budgets restent identiques.
+
+exchange: binance
+symbol: BTC/USDT
+quote_currency: USDT
+
+portfolio:
+  total_capital: 10000
+  trend_fraction: 0.60
+  carry_fraction: 0.40
+
+carry:
+  leverage: 1.0
+  enter_ann: 0.03
+  exit_ann: 0.0
+  smooth_days: 14
+  borrow_rate_ann: 0.10
+
+# Scénario PAPER sans dette : spot et marge perp sont financés séparément.
+# La réserve économique de 2 % est conservée, sans être un frais comptabilisé.
+carry_execution:
+  model: two_leg_execution_v1
+  financing_mode: paper_simulated
+  spot_symbol: BTC/USDC
+  perp_symbol: BTC/USDC:USDC
+  spot_account: spot
+  perp_account: perp
+  collateral_asset: USDC
+  borrow_asset: USDC
+  borrow_enabled: false
+  max_borrow: 0.0
+  cash_utilization: 0.98 # budget spot + marge + coûts ; 2 % de cash libre
+  max_leverage: 1.0
+  initial_margin_rate: 0.50 # short à marge renforcée, budget séparé du spot
+  maintenance_margin_rate: 0.05
+  holding_days: 30
+  max_unhedged_seconds: 300
+  uncertainty_reserve_rate: 0.02
+  fee_source: PAPER_SIMULATED_CONFIGURED_COSTS
+  financing_source: PAPER_SIMULATED_CASH_FUNDED_SEPARATE_ACCOUNTS_V1
+
+data:
+  dir: data
+  base_timeframe: 1h
+  since: "2019-01-01"
+
+costs:
+  fee_rate: 0.001
+  perp_fee_rate: 0.0005
+  funding_rate_8h: 0.0001
+  slippage_bps: 5.0
+
+risk:
+  initial_capital: 6000   # 60 % d'un portefeuille de 10 000 (les 40 % restants : carry, btcquant-carry)
+  risk_per_trade: 0.06    # 4 × 1.5 % — perte typique par trade stoppé ~6 %
+  max_position_pct: 0.95
+  vol_target_annual: 1.60 # 4 × 0.40
+  max_leverage: 4.0       # transmis à Binance Futures
+  max_drawdown_halt: 0.60 # DD historique -55,3 % : halt à 60 % = protection
+                          # catastrophe uniquement, ne coupe pas un creux "normal"
+  daily_loss_limit: 0.12  # bloque les nouvelles entrées du jour au-delà de -12 %
+
+strategies:
+  trend_ls_20:
+    enabled: true
+    type: trend_ls
+    market: perp
+    timeframe: 4h
+    capital_fraction: 0.3333
+    params:
+      donchian: 20
+      adx_min: 20
+      funding_long_max: 0.0008
+      funding_short_min: -0.0008
+      pyramid_atr_step: 0.5
+      pyramid_add_fraction: 0.30
+      pyramid_max_adds: 1
+      adaptive_regime_enabled: true
+      adaptive_efficiency_bars: 30
+      adaptive_volatility_bars: 30
+      adaptive_reference_bars: 540
+      adaptive_smoothing_span: 12
+      adaptive_min_multiplier: 0.50
+      adaptive_max_multiplier: 1.00
+      adaptive_volatility_shock_ratio: 2.00
+  trend_ls_55:
+    enabled: true
+    type: trend_ls
+    market: perp
+    timeframe: 4h
+    capital_fraction: 0.3333
+    params:
+      donchian: 55
+      adx_min: 20
+      funding_long_max: 0.0008
+      funding_short_min: -0.0008
+      pyramid_atr_step: 0.5
+      pyramid_add_fraction: 0.30
+      pyramid_max_adds: 1
+      adaptive_regime_enabled: true
+      adaptive_efficiency_bars: 30
+      adaptive_volatility_bars: 30
+      adaptive_reference_bars: 540
+      adaptive_smoothing_span: 12
+      adaptive_min_multiplier: 0.50
+      adaptive_max_multiplier: 1.00
+      adaptive_volatility_shock_ratio: 2.00
+  trend_ls_100:
+    enabled: true
+    type: trend_ls
+    market: perp
+    timeframe: 4h
+    capital_fraction: 0.3334
+    params:
+      donchian: 100
+      adx_min: 20
+      funding_long_max: 0.0008
+      funding_short_min: -0.0008
+      pyramid_atr_step: 0.5
+      pyramid_add_fraction: 0.30
+      pyramid_max_adds: 1
+      adaptive_regime_enabled: true
+      adaptive_efficiency_bars: 30
+      adaptive_volatility_bars: 30
+      adaptive_reference_bars: 540
+      adaptive_smoothing_span: 12
+      adaptive_min_multiplier: 0.50
+      adaptive_max_multiplier: 1.00
+      adaptive_volatility_shock_ratio: 2.00
+
+execution:
+  # Le code rejette toute autre valeur tant que le moteur transactionnel
+  # (journal d'ordres, reprise et réconciliation stricte) n'est pas livré.
+  mode: paper
+  testnet: true
+  state_file: state/btcquant.db
+  legacy_state_file: state/live_state_4x.json
+  poll_buffer_seconds: 20
+  simulation:
+    profile: normal
+    profiles:
+      normal:
+        max_volume_participation: 0.05
+        market_impact_bps: 15.0
+        volatility_impact_bps: 1.5
+        volatility_reference_annual: 0.40
+        volatility_multiplier_cap: 3.0
+        liquidity_model: aggregate
+        latency_ms: 0
+      degraded:
+        # Requires a timestamped post-decision stream; the runner fails closed
+        # if the selected venue cannot provide it. It is not the active profile.
+        latency_ms: 250
+        rejection_rate: 0.02
+        max_volume_participation: 0.02
+        market_impact_bps: 40.0
+        volatility_impact_bps: 3.0
+        volatility_reference_annual: 0.40
+        volatility_multiplier_cap: 4.0
+        liquidity_model: aggregate
+      stress:
+        rejection_rate: 0.01
+        max_volume_participation: 0.01
+        market_impact_bps: 75.0
+        volatility_impact_bps: 6.0
+        volatility_reference_annual: 0.40
+        volatility_multiplier_cap: 5.0
+        liquidity_model: aggregate
+        latency_ms: 0
+  # Venue LIVE depuis le 17/07/2026 : Hyperliquid (funding horaire, converti en
+  # équivalent 8 h par venue.py). La référence backtest reste Binance 2019-2026
+  # (exchange: ci-dessus) — écart documenté au protocole : la comparaison
+  # paper-vs-backtest du funding est indicative, pas exacte.
+  live_exchange: hyperliquid
+  live_symbol: "BTC/USDC:USDC"
