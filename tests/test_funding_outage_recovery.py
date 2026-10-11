@@ -196,3 +196,68 @@ def test_two_distinct_raw_events_in_one_native_slot_are_not_paid_twice():
     raw = pd.Series([0.1, 0.2], index=[checkpoint, pd.Timestamp("2026-10-11T01:00:00.020Z")])
     with pytest.raises(ValueError, match="duplicate native"):
         contiguous_funding(raw, checkpoint, pd.Timedelta(hours=1))
+
+
+def test_partial_risk_exit_preserves_funding_uncertainty_and_only_reduces_after_restart(tmp_path):
+    from btcquant.execution.carry_paper import CarryExecutionState
+    from test_audit_carry_paper_regressions import _seed_exit_position
+
+    runner = _runner(tmp_path)
+    _seed_exit_position(
+        runner,
+        start=pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=1),
+        spot_qty=1,
+        perp_qty=1,
+        debt=100,
+    )
+    runner.two_leg_state = CarryExecutionState.HEDGED
+    runner.halted = True
+    runner.venue.current_carry_market_state = lambda: _market(
+        str(pd.Timestamp.now(tz="UTC")), perp_ask_volume=0.4
+    )
+    runner._recent_funding = lambda: pd.Series(dtype=float)
+    runner._tick()
+    assert runner.two_leg_balance.perp_qty == pytest.approx(0.6)
+    assert runner.accounting_uncertain
+    checkpoint = runner.last_funding_ts
+    restored = _runner(tmp_path)
+    assert restored.accounting_uncertain
+    restored.venue.current_carry_market_state = lambda: _market(str(pd.Timestamp.now(tz="UTC")))
+    restored._recent_funding = lambda: pytest.fail("Cannot settle old funding on reduced exposure")
+    restored._tick()
+    assert not restored.in_position
+    assert restored.accounting_uncertain
+    assert restored.last_funding_ts == checkpoint
+    assert _runner(tmp_path).accounting_uncertain
+
+
+def test_risk_exit_during_publication_delay_keeps_due_funding_unsettled(tmp_path, monkeypatch):
+    from btcquant.execution import carry_runner
+    from btcquant.execution.carry_paper import CarryExecutionState
+    from test_audit_carry_paper_regressions import _seed_exit_position
+
+    runner = _runner(tmp_path)
+    now = pd.Timestamp("2026-10-11T12:02:00Z")
+
+    class FixedTimestamp(pd.Timestamp):
+        @classmethod
+        def now(cls, tz=None):
+            return now
+
+    monkeypatch.setattr(
+        carry_runner,
+        "pd",
+        SimpleNamespace(Timestamp=FixedTimestamp, Timedelta=pd.Timedelta, Series=pd.Series),
+    )
+    checkpoint = now.floor("h") - pd.Timedelta(hours=1)
+    _seed_exit_position(runner, start=checkpoint, spot_qty=1, perp_qty=1, debt=100)
+    runner.two_leg_state = CarryExecutionState.HEDGED
+    runner.halted = True
+    runner._recent_funding = lambda: pd.Series(
+        0.0001, index=pd.date_range(end=checkpoint, periods=49, freq="h")
+    )
+    runner._two_leg_market = lambda: _market(str(now))
+    runner._tick()
+    assert not runner.in_position
+    assert runner.accounting_uncertain
+    assert runner.last_funding_ts == checkpoint

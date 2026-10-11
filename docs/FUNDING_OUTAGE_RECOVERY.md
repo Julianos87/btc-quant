@@ -34,3 +34,14 @@ perp ni principal emprunté. Les autres incertitudes ne sont pas levées.
 Le chemin two-leg produit désormais un échantillon d'equity à chaque cycle
 terminé. Les échantillons historiques manquants ne sont pas reconstruits comme
 s'ils avaient été observés.
+
+Une sortie protectrice partielle pendant une panne conserve aussi l'incertitude
+sur le funding. Après redémarrage, seul le plan de sortie déjà enregistré peut
+réduire la quantité restante ; les anciens paiements ne sont pas appliqués à
+cette quantité réduite. L'incertitude reste explicite après fermeture complète,
+jusqu'à réconciliation. La reprise d'un plan de sortie ne lève jamais une
+incertitude comptable indépendante.
+
+La tolérance de publication du signal ne vaut pas preuve de paiement comptable :
+une position ouverte dont le paiement du créneau courant n'est pas encore publié
+reste protégée, mais une sortie de risque conserve ce montant comme non vérifié.
