@@ -15,6 +15,7 @@ from btcquant.config import (
 from btcquant.domain.execution import ExecutionConfig
 from btcquant.execution.carry_paper import CarryAccountingState, CarryPaperError, check_margin
 from btcquant.execution.carry_runner import CarryRunner
+from btcquant.execution.operational_state_reader import OperationalStateReader
 from test_audit_carry_paper_regressions import _market, _QualifiedVenue
 
 CONFIG = Path(__file__).resolve().parents[1] / "environments/paper/carry_cash.yaml"
@@ -193,6 +194,42 @@ def test_cash_market_gate_checks_instrument_identity_and_source_freshness(tmp_pa
     runner.venue = _QualifiedVenue(stale)
     runner.in_position = True
     assert runner._two_leg_market() == stale
+
+
+def test_fresh_market_resolves_previous_unavailable_incident(tmp_path):
+    runner = make_runner(tmp_path)
+    current = replace(
+        _market(),
+        spot_market_id="@142",
+        spot_base_name="UBTC",
+        spot_quote_asset="USDC",
+        spot_token_index=197,
+        spot_token_id="0x8f254b963e8468305d409b33aa137c67",
+        spot_evm_contract_address="0x9fdbda0a5e284c32744d2f17ee5c74b284993463",
+        spot_is_canonical=False,
+        perp_market_id="0",
+        perp_base_name="BTC",
+        perp_quote_asset="USDC",
+        perp_settle_asset="USDC",
+        spot_quantity_step=0.00001,
+        perp_quantity_step=0.00001,
+        spot_min_notional=10.0,
+        perp_min_notional=10.0,
+    )
+    runner.store.record_incident(
+        "accounting:carry:market_unavailable",
+        engine="carry",
+        severity="WARNING",
+        kind="paper_market_unavailable",
+        message="fixture failure before recovery",
+    )
+    runner.venue = _QualifiedVenue(current)
+
+    assert runner._two_leg_market() == current
+    assert not any(
+        item["fingerprint"] == "accounting:carry:market_unavailable"
+        for item in OperationalStateReader(runner.store.path).read_incidents(open_only=True)
+    )
 
 
 def test_cash_entry_cannot_bypass_freshness_gate(tmp_path):

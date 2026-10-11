@@ -1317,6 +1317,7 @@ class CarryRunner:
                     )
                 if market_is_fresh:
                     self.store.resolve_incident("accounting:carry:market_stale")
+                    self.store.resolve_incident("accounting:carry:market_unavailable")
             return market
         except Exception as error:
             if self.in_position:
