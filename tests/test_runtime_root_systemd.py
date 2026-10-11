@@ -137,6 +137,8 @@ def test_systemd_hardening_is_preserved() -> None:
                 assert needle in text, f"{name} missing {needle}"
             assert "ProtectHome=read-only" in text
             assert "User=root" not in text, name
+            if name == "btcquant-paper-qualification-inspect.service":
+                assert "ReadWritePaths=/opt/btcquant/state" in text
             continue
         for needle in A_PYTHON_HARDENING:
             if kind == CLASS_D_ISOLATED_RUNTIME and needle == "ReadWritePaths=/opt/btcquant/state":
