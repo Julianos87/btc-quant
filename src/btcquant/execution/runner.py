@@ -1079,20 +1079,44 @@ class LiveRunner:
         slot.stop_order_local_id = None
         slot.stop_intent_id = None
         slot.entry_fee = accounting.remaining_entry_fee
-        self.store.record_observed_fill_and_checkpoint(
-            engine="trend",
-            slot=slot.strategy.name,
-            intent_id=f"observed-stop-{snapshot.broker_order_id}",
-            broker_order_id=snapshot.broker_order_id,
-            side="SELL" if pos.direction == 1 else "BUY",
-            requested_qty=float(snapshot.requested_qty),
-            filled_qty=fill_qty,
-            price=fill_price,
-            fee=float(snapshot.fee),
-            reason="stop_exchange",
-            state=self._state_payload(),
-            trade=trade,
-        )
+        observed_intent = f"observed-stop-{snapshot.broker_order_id}"
+        if not any(item.get("intent_id") == observed_intent for item in slot.position_timeline):
+            slot.position_timeline.append(
+                {
+                    "effective_at": trade["exit_ts"],
+                    "intent_id": observed_intent,
+                    "qty": float(slot.position.qty) if slot.position is not None else 0.0,
+                    "direction": int(pos.direction),
+                    "generation": self._position_generation(pos),
+                }
+            )
+            slot.position_timeline.sort(
+                key=lambda item: (str(item["effective_at"]), str(item["intent_id"]))
+            )
+        # The exposure transition belongs to the same transaction as the stop
+        # fill, trade and balance. A failed write must never reach another tick.
+        try:
+            recorded = self.store.record_observed_fill_and_checkpoint(
+                engine="trend",
+                slot=slot.strategy.name,
+                intent_id=f"observed-stop-{snapshot.broker_order_id}",
+                broker_order_id=snapshot.broker_order_id,
+                side="SELL" if pos.direction == 1 else "BUY",
+                requested_qty=float(snapshot.requested_qty),
+                filled_qty=fill_qty,
+                price=fill_price,
+                fee=float(snapshot.fee),
+                reason="stop_exchange",
+                state=self._state_payload(),
+                trade=trade,
+            )
+        except Exception as error:
+            raise ReconciliationRequired(
+                "Stop exécuté mais checkpoint atomique impossible ; arrêt fail-closed"
+            ) from error
+        if not recorded:
+            self._load_state()
+            return
         if local_stop_order_id is not None:
             self.store.complete_order(
                 local_stop_order_id,
