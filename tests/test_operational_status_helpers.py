@@ -143,6 +143,52 @@ def test_maturity_reader_exposes_binding_and_limiting_dimension(
     assert result["limiting_dimension"] == "duration"
 
 
+def test_not_started_maturity_is_watch_when_absence_is_known(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class FakeStore:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def active_qualification_campaign(self) -> None:
+            return None
+
+        def latest_passed_qualification(self) -> None:
+            return None
+
+    monkeypatch.setattr(status, "StateStore", FakeStore)
+    monkeypatch.setattr(
+        status,
+        "paper_maturity_status",
+        lambda store, root, now: {
+            "status": "NOT_STARTED",
+            "qualified": False,
+            "campaign_id": None,
+            "protocol_version": None,
+            "binding_status": "NOT_STARTED",
+            "binding": None,
+            "observation_age_days": 0,
+            "required_observation_days": 90,
+            "terminal_orders": 0,
+            "required_terminal_orders": 50,
+            "trend_terminal_orders": 0,
+            "required_trend_terminal_orders": 5,
+            "closed_trades": 0,
+            "required_closed_trades": 30,
+            "unresolved_orders": 0,
+            "reconciliation_required": 0,
+            "open_critical_incidents": 0,
+        },
+    )
+
+    result = status._read_maturity(tmp_path, datetime.now(UTC))
+
+    assert result["status"] == status.WATCH
+    assert result["campaign_status"] == "NOT_STARTED"
+    assert result["campaign_id"] is None
+    assert result["binding_status"] == "NOT_STARTED"
+
+
 def test_qualification_reader_detects_release_mismatch(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

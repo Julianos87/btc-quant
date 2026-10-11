@@ -20,10 +20,10 @@ activation. The JSON output is canonical (`sort_keys=true`) and includes
 `read_only: true`.
 
 `PASS` means the observed contract passed. `WATCH` means the system is safe to
-observe but needs operator attention (for example incomplete maturity or
-source/runtime drift). `FAIL` means a known safety or binding condition failed.
-`UNKNOWN` means evidence could not be established; it is never converted to
-`PASS` and exits non-zero.
+observe but needs operator attention (for example maturity not started or
+incomplete, or source/runtime drift). `FAIL` means a known safety or binding
+condition failed. `UNKNOWN` means evidence could not be established; it is
+never converted to `PASS` and exits non-zero.
 
 ## Identity and maturity interpretation
 

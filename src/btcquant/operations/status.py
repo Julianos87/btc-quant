@@ -255,7 +255,7 @@ def _read_maturity(root: Path, now: datetime) -> dict[str, Any]:
         state = UNKNOWN
     elif maturity.get("qualified"):
         state = PASS
-    elif status == "PAPER_MATURITY_IN_PROGRESS":
+    elif status in {"PAPER_MATURITY_IN_PROGRESS", "NOT_STARTED"}:
         state = WATCH
     else:
         state = UNKNOWN
