@@ -175,7 +175,7 @@ def test_funding_replay_uses_event_prices_and_exposure_at_each_timestamp(tmp_pat
     runner = _runner(tmp_path)
     slot = runner.slots[0]
     slot.position = None
-    first = pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=2)
+    first = pd.Timestamp.now(tz="UTC").floor("h") - pd.Timedelta(hours=2)
     second = first + pd.Timedelta(hours=1)
     slot.position_timeline = [
         {
@@ -247,14 +247,15 @@ def test_funding_without_historical_reference_blocks_and_does_not_advance(tmp_pa
     now = pd.Timestamp.now(tz="UTC")
     slot.position = None
     _timeline(slot, [("2026-01-01T00:00:00Z", "entry", 1.0, 1)])
-    payment = now - pd.Timedelta(minutes=1)
+    payment = now.floor("h") - pd.Timedelta(hours=1)
     runner.last_funding_ts = payment - pd.Timedelta(hours=1)
     monkeypatch.setattr(
         runner.venue,
         "funding_history_since",
         lambda _since: pd.Series([0.001], index=pd.DatetimeIndex([payment])),
     )
-    # Venue's default resolver returns unresolved rather than a current mark.
+    # An explicitly unresolved historical price must never use the current mark.
+    monkeypatch.setattr(runner.venue, "funding_reference_price", lambda _: None)
     with pytest.raises(ReconciliationRequired, match="Prix de référence funding"):
         runner._apply_funding_payments(123_456.0)
     assert runner.last_funding_ts == payment - pd.Timedelta(hours=1)

@@ -35,26 +35,27 @@ carry:
   smooth_days: 14
   borrow_rate_ann: 0.10
 
-# Le nouveau simulateur reste fail-closed tant que le compte spot/perp n'est
-# pas qualifié avec une capacité d'emprunt et une règle de marge vérifiables.
+# Scénario PAPER hypothétique, sans compte ni emprunt réel. Ces capacités ne
+# constituent PAS une qualification Hyperliquid. Intérêts, marge et coûts restent débités.
 carry_execution:
   model: two_leg_execution_v1
+  financing_mode: paper_simulated
   spot_symbol: BTC/USDC
   perp_symbol: BTC/USDC:USDC
   spot_account: spot
   perp_account: perp
   collateral_asset: USDC
   borrow_asset: USDC
-  borrow_enabled: false
-  max_borrow: null
-  max_leverage: null
-  initial_margin_rate: null
-  maintenance_margin_rate: null
+  borrow_enabled: true
+  max_borrow: 12000.0 # plafond de crédit simulé, pas un actif ajouté au capital
+  max_leverage: 3.0
+  initial_margin_rate: 0.10 # hypothèse de marge séparée du short
+  maintenance_margin_rate: 0.05
   holding_days: 30
   max_unhedged_seconds: 300
   uncertainty_reserve_rate: 0.02
-  fee_source: HYPERLIQUID_FEE_TIER_REQUIRED
-  financing_source: HYPERLIQUID_ACCOUNT_CAPACITY_NOT_PROVIDED
+  fee_source: PAPER_SIMULATED_CONFIGURED_COSTS
+  financing_source: PAPER_SIMULATED_SEPARATE_ACCOUNTS_V1
 
 data:
   dir: data

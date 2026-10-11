@@ -95,6 +95,7 @@ class CarryStatePayload(TypedDict):
     accounting_uncertain: NotRequired[bool]
     accounting_uncertainty_reason: NotRequired[str | None]
     carry_model: NotRequired[str]
+    financing_mode: NotRequired[str]
     historical_series_label: NotRequired[str]
     two_leg: NotRequired[dict[str, Any] | None]
 

@@ -192,8 +192,8 @@ def test_runner_applies_native_funding_payments_once(tmp_path, monkeypatch):
         tmp_path / "state.json",
     )
     now = pd.Timestamp.now(tz="UTC")
-    runner.last_funding_ts = now - pd.Timedelta(hours=2)
-    payment_ts = now - pd.Timedelta(hours=1)
+    payment_ts = now.floor("8h")
+    runner.last_funding_ts = payment_ts - pd.Timedelta(hours=8)
     payments = pd.Series([0.0001], index=pd.DatetimeIndex([payment_ts]))
     monkeypatch.setattr(runner.venue, "funding_history_since", lambda _since: payments)
     monkeypatch.setattr(

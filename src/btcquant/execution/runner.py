@@ -1079,20 +1079,44 @@ class LiveRunner:
         slot.stop_order_local_id = None
         slot.stop_intent_id = None
         slot.entry_fee = accounting.remaining_entry_fee
-        self.store.record_observed_fill_and_checkpoint(
-            engine="trend",
-            slot=slot.strategy.name,
-            intent_id=f"observed-stop-{snapshot.broker_order_id}",
-            broker_order_id=snapshot.broker_order_id,
-            side="SELL" if pos.direction == 1 else "BUY",
-            requested_qty=float(snapshot.requested_qty),
-            filled_qty=fill_qty,
-            price=fill_price,
-            fee=float(snapshot.fee),
-            reason="stop_exchange",
-            state=self._state_payload(),
-            trade=trade,
-        )
+        observed_intent = f"observed-stop-{snapshot.broker_order_id}"
+        if not any(item.get("intent_id") == observed_intent for item in slot.position_timeline):
+            slot.position_timeline.append(
+                {
+                    "effective_at": trade["exit_ts"],
+                    "intent_id": observed_intent,
+                    "qty": float(slot.position.qty) if slot.position is not None else 0.0,
+                    "direction": int(pos.direction),
+                    "generation": self._position_generation(pos),
+                }
+            )
+            slot.position_timeline.sort(
+                key=lambda item: (str(item["effective_at"]), str(item["intent_id"]))
+            )
+        # The exposure transition belongs to the same transaction as the stop
+        # fill, trade and balance. A failed write must never reach another tick.
+        try:
+            recorded = self.store.record_observed_fill_and_checkpoint(
+                engine="trend",
+                slot=slot.strategy.name,
+                intent_id=f"observed-stop-{snapshot.broker_order_id}",
+                broker_order_id=snapshot.broker_order_id,
+                side="SELL" if pos.direction == 1 else "BUY",
+                requested_qty=float(snapshot.requested_qty),
+                filled_qty=fill_qty,
+                price=fill_price,
+                fee=float(snapshot.fee),
+                reason="stop_exchange",
+                state=self._state_payload(),
+                trade=trade,
+            )
+        except Exception as error:
+            raise ReconciliationRequired(
+                "Stop exécuté mais checkpoint atomique impossible ; arrêt fail-closed"
+            ) from error
+        if not recorded:
+            self._load_state()
+            return
         if local_stop_order_id is not None:
             self.store.complete_order(
                 local_stop_order_id,
@@ -1256,9 +1280,27 @@ class LiveRunner:
         """Settle venue funding from event prices and a durable exposure timeline."""
 
         del _mark_price  # current marks are never funding accounting inputs
-        poll = self.funding_service.poll(self.last_funding_ts)
+        try:
+            poll = self.funding_service.poll(self.last_funding_ts)
+        except ReconciliationRequired:
+            raise
+        except Exception as error:
+            # Acquisition has not mutated accounting. Keep protective stops
+            # and kill switches running, but do not add exposure during outage.
+            self._funding_data_unavailable = True
+            self.store.record_incident(
+                "accounting:trend:funding_unavailable",
+                engine="trend",
+                severity="WARNING",
+                kind="funding_unavailable",
+                message=str(error),
+                context={"checkpoint": str(self.last_funding_ts)},
+            )
+            return
         if poll is None:
             return
+        self._funding_data_unavailable = poll.missing_timestamp is not None
+        self.store.resolve_incident("accounting:trend:funding_unavailable")
         if poll.initialized:
             if any(slot.position is not None for slot in self.slots):
                 reason = "Position ouverte sans checkpoint funding durable"
@@ -1279,6 +1321,17 @@ class LiveRunner:
                 event_payload={"last_funding_ts": poll.checkpoint.isoformat()},
             )
             return
+        if poll.missing_timestamp is not None:
+            self.store.record_incident(
+                "accounting:trend:funding_gap",
+                engine="trend",
+                severity="WARNING",
+                kind="funding_history_gap",
+                message="Paiement funding manquant : curseur conservé avant la lacune",
+                context={"missing_timestamp": poll.missing_timestamp.isoformat()},
+            )
+        else:
+            self.store.resolve_incident("accounting:trend:funding_gap")
         if not poll.payments:
             return
         for payment in poll.payments:
@@ -2374,7 +2427,9 @@ class LiveRunner:
             slot.strategy.params.get("funding_long_max") is not None
             or slot.strategy.params.get("funding_short_min") is not None
         )
-        allow_new_exposure = funding_available or not uses_funding_filter
+        allow_new_exposure = (funding_available or not uses_funding_filter) and not getattr(
+            self, "_funding_data_unavailable", False
+        )
         row = data.loc[last_ts]
 
         if slot.position is not None:

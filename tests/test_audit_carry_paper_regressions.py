@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pandas as pd
 import pytest
 
@@ -318,3 +320,50 @@ def test_exit_accrues_interest_until_the_debt_repayment_fill(tmp_path):
     assert runner.two_leg_balance.cash_available == pytest.approx(4_098.0 - expected_interest)
     assert runner.two_leg_balance.accrued_interest == pytest.approx(0.0)
     assert runner.two_leg_state is CarryExecutionState.FLAT
+
+
+def test_negative_net_carry_is_a_persisted_refusal_not_an_exception(tmp_path):
+    market = _market()
+    runner = _qualified_runner(tmp_path, _QualifiedVenue(market))
+    runner._open_two_leg(smooth_ann=0.001, market=market, decision_timestamp=market.timestamp)
+    assert not runner.in_position
+    events = runner.store.read_events("carry", limit=5)
+    assert any(row["event_type"] == "carry_entry_blocked" for row in events)
+    assert runner.two_leg_journal[-1]["reason"] == "net_expected_non_positive"
+
+
+def test_repeated_refusals_keep_bounded_checkpoint_but_all_durable_events(tmp_path):
+    market = _market()
+    runner = _qualified_runner(tmp_path, _QualifiedVenue(market))
+    for number in range(150):
+        runner._two_leg_persist("carry_entry_blocked", {"reason": "fixture", "number": number})
+    assert len(runner.two_leg_journal) <= 128
+    assert runner.two_leg_journal[-1]["number"] == 149
+    events = runner.store.read_events("carry", limit=200)
+    assert sum(row["event_type"] == "carry_entry_blocked" for row in events) == 150
+    revived = _qualified_runner(tmp_path, _QualifiedVenue(market))
+    assert revived.two_leg_journal == runner.two_leg_journal
+    assert revived.equity == runner.equity
+
+
+def test_legacy_oversized_journal_restores_without_changing_financial_state(tmp_path):
+    market = _market()
+    runner = _qualified_runner(tmp_path, _QualifiedVenue(market))
+    runner.two_leg_journal = [
+        {"event_type": "carry_entry_blocked", "reason": "legacy", "number": n} for n in range(4000)
+    ]
+    runner._save_state()
+    old_equity = runner.equity
+    revived = _qualified_runner(tmp_path, _QualifiedVenue(market))
+    assert len(revived.two_leg_journal) == 128
+    assert revived.two_leg_journal[-1]["number"] == 3999
+    assert revived.equity == old_equity
+    assert revived.two_leg_balance.debt_principal == runner.two_leg_balance.debt_principal
+    assert revived.last_funding_ts == runner.last_funding_ts
+    assert not revived.in_position
+    events = revived.store.read_events("carry", limit=200)
+    assert any(
+        len(json.loads(row["payload"]).get("state", {}).get("two_leg", {}).get("journal", []))
+        == 4000
+        for row in events
+    )
