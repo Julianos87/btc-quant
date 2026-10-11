@@ -136,6 +136,19 @@ def test_runner_uses_the_policy_switch_cost(tmp_path):
     assert runner.switch_cost == pytest.approx(expected * PAPER_CARRY_POLICY.leverage)
 
 
+def test_runner_switch_cost_uses_each_leg_fee_rate(tmp_path):
+    runner = _runner(
+        tmp_path,
+        _funding(60, 0.0002),
+        fee_rate=0.0005,
+        spot_fee_rate=0.001,
+        perp_fee_rate=0.0005,
+        slippage_bps=5.0,
+    )
+    expected = 0.001 + 0.0005 + 2 * 5 / 10_000
+    assert runner.switch_cost == pytest.approx(expected * runner.policy.leverage)
+
+
 def test_policy_rejects_incoherent_thresholds():
     with pytest.raises(ValueError, match="enter_ann"):
         CarryPolicy(enter_ann=0.0, exit_ann=0.05)

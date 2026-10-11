@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-10-11T14:20:17.145527+00:00",
+  "source_repository": {
+    "remote": "https://github.com/Julianos87/btc-quant.git",
+    "branch": "codex/carry-rework-20261011",
+    "base_main_sha": "439be9f32fc978f6d77bc604e96ca23f649d4d8b",
+    "working_tree_clean_at_capture": true
+  },
+  "vps": {
+    "release_sha": "0257ae5be60567f9c0d01d161be3bc5d512a3938",
+    "runtime_database": "/opt/btcquant/state/btcquant.db",
+    "services": {
+      "btcquant.service": "inactive (separate carry and trend services are used)",
+      "btcquant-carry.service": "active/running",
+      "btcquant-trend.service": "active/running",
+      "btcquant-dashboard.service": "active/running"
+    },
+    "release_and_dashboard_current_symlinks_match": true,
+    "dashboard_api_authentication": "required; unauthenticated API returned HTTP 401",
+    "note": "The 8080 /healthz and /readyz probes returned the SPA HTML, not health JSON; do not count them as readiness checks."
+  },
+  "carry": {
+    "state": "FLAT",
+    "financing_mode": "paper_simulated",
+    "financing_source": "PAPER_SIMULATED_CASH_FUNDED_SEPARATE_ACCOUNTS_V1",
+    "equity_usd": 4004.3561904202543,
+    "debt_usd": 0,
+    "latest_entry_decision": "rejected: net_expected_non_positive",
+    "latest_economics_usd": {
+      "funding_expected": 16.13328668633272,
+      "borrow_expected": 0,
+      "entry_cost": 5.220193705487349,
+      "exit_cost": 5.220193705487349,
+      "uncertainty_reserve": 52.18731814203355,
+      "net_expected_after_reserve": -46.494418866675524
+    },
+    "open_orders": 0,
+    "journal_length": 128,
+    "open_incident": "accounting:carry:net_edge_negative",
+    "interpretation": "Economic gate is correctly waiting; this is not evidence of a technical outage or realized loss."
+  },
+  "trend": {
+    "service": "btcquant-trend.service (active/running; the btcquant.service umbrella is inactive)",
+    "halted": false,
+    "reconciliation_required": false,
+    "slots": {
+      "trend_ls_20": {"cash_usd": 2069.260405793507, "position": null, "last_bar_utc": "2026-10-11T08:00:00+00:00"},
+      "trend_ls_55": {"cash_usd": 2084.7656091617428, "position": null, "last_bar_utc": "2026-10-11T08:00:00+00:00"},
+      "trend_ls_100": {"cash_usd": 1897.1763841254865, "position": null, "last_bar_utc": "2026-10-11T08:00:00+00:00"}
+    },
+    "orders": {"filled": 30, "canceled": 32},
+    "trend_budget_usd": 6000
+  },
+  "initial_code_findings": [
+    {
+      "file": "src/btcquant/config.py",
+      "issue": "carry_policy_from_config maps costs.perp_fee_rate into a single CarryPolicy.fee_rate; the configured spot costs.fee_rate is not represented in the carry policy."
+    },
+    {
+      "file": "src/btcquant/execution/carry_runner.py",
+      "issue": "two-leg execution builds one ExecutionConfig fee_rate and reuses it for spot and perp fills."
+    },
+    {
+      "file": "src/btcquant/execution/venue.py",
+      "issue": "CCXT aliases the non-canonical Unit Bitcoin spot pair @142 as BTC/USDC (baseName UBTC); the runner did not persist or validate that identity. The public market also requires 0.00001 quantity steps and 10 USDC minimum notional per leg, but carry config had no instrument-specific limits."
+    },
+    {
+      "file": "src/btcquant/execution/venue.py",
+      "issue": "CarryMarketState was timestamped at local receipt time and freshness defaulted to zero, hiding the source timestamps and true age of the sequential spot/perp books."
+    }
+  ],
+  "public_instrument_metadata": {
+    "observed_at_utc": "2026-10-11T14:24:45.910027+00:00",
+    "venue": "Hyperliquid mainnet public API",
+    "configured_spot_symbol": "BTC/USDC",
+    "ccxt_spot_market_id": "@142",
+    "ccxt_spot_market_base_name": "UBTC",
+    "spot_token_full_name": "Unit Bitcoin",
+    "spot_token_canonical": false,
+    "spot_token_id": "0x9fdbda0a5e284c32744d2f17ee5c74b284993463",
+    "spot_quote": "USDC",
+    "spot_pair_index": 142,
+    "spot_sz_decimals": 5,
+    "perp_symbol": "BTC/USDC:USDC",
+    "perp_coin_id": "BTC",
+    "perp_sz_decimals": 5,
+    "perp_max_leverage": 40,
+    "spot_and_perp_steps_btc": 0.00001,
+    "spot_min_notional_usdc": 10,
+    "perp_min_notional_usdc": 10,
+    "interpretation": "CCXT presents the non-canonical UBTC/USDC market under the alias BTC/USDC; the spot is Unit Bitcoin, not native BTC. Basis/depeg and redemption risk remain unqualified."
+  },
+  "historical_economics": {
+    "dataset_window": "2026-01 through 2026-08, previously inspected",
+    "status": "known development/validation data, not blind holdout",
+    "cash_scenario": "4 of 6 hypothetical windows negative before reserve; no window passed the retained reserve",
+    "profitability_proven": false
+  }
+}

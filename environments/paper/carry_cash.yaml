@@ -24,8 +24,27 @@ carry:
 carry_execution:
   model: two_leg_execution_v1
   financing_mode: paper_simulated
+  # CCXT exposes the public @142 Unit Bitcoin (UBTC) / USDC pair under this
+  # BTC/USDC alias. The live metadata is checked; UBTC is non-canonical and
+  # its basis/redemption risk versus the BTC perp remains explicit.
   spot_symbol: BTC/USDC
+  spot_quote_asset: USDC
   perp_symbol: BTC/USDC:USDC
+  spot_base_name: UBTC
+  spot_market_id: "@142"
+  spot_token_index: 197
+  spot_token_id: "0x9fdbda0a5e284c32744d2f17ee5c74b284993463"
+  spot_is_canonical: false
+  perp_base_name: BTC
+  perp_quote_asset: USDC
+  perp_settle_asset: USDC
+  perp_market_id: "0"
+  spot_quantity_step: 0.00001
+  perp_quantity_step: 0.00001
+  spot_min_notional: 10.0
+  perp_min_notional: 10.0
+  max_market_age_seconds: 15.0
+  max_market_timestamp_skew_seconds: 5.0
   spot_account: spot
   perp_account: perp
   collateral_asset: USDC
@@ -38,8 +57,8 @@ carry_execution:
   maintenance_margin_rate: 0.05
   holding_days: 30
   max_unhedged_seconds: 300
-  uncertainty_reserve_rate: 0.02
-  fee_source: PAPER_SIMULATED_CONFIGURED_COSTS
+  uncertainty_reserve_rate: 0.02 # 2 % du notionnel perp, distincts des 2 % de cash libre
+  fee_source: PAPER_SIMULATED_CONFIGURED_TAKER_ESTIMATES
   financing_source: PAPER_SIMULATED_CASH_FUNDED_SEPARATE_ACCOUNTS_V1
 
 data:

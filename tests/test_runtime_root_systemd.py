@@ -22,11 +22,14 @@ CLASS_A_PYTHON_RUNTIME = "A_python_runtime"
 CLASS_B_WRAPPER = "B_wrapper"
 CLASS_C_NO_RUNTIME_ROOT = "C_no_runtime_root"
 CLASS_C_READ_ONLY_PYTHON = "C_read_only_python"
+CLASS_D_ISOLATED_RUNTIME = "D_isolated_runtime"
 
 SERVICE_CLASSIFICATION: dict[str, str] = {
     "btcquant-dashboard.service": CLASS_A_PYTHON_RUNTIME,
     "btcquant-trend.service": CLASS_A_PYTHON_RUNTIME,
     "btcquant-carry.service": CLASS_A_PYTHON_RUNTIME,
+    "btcquant-carry-experimental.service": CLASS_D_ISOLATED_RUNTIME,
+    "btcquant-carry-data.service": CLASS_D_ISOLATED_RUNTIME,
     "btcquant-shadow.service": CLASS_A_PYTHON_RUNTIME,
     "btcquant-watchdog.service": CLASS_A_PYTHON_RUNTIME,
     "btcquant-digest.service": CLASS_A_PYTHON_RUNTIME,
@@ -74,16 +77,22 @@ def test_exhaustive_service_inventory_has_zero_unclassified_units() -> None:
         CLASS_B_WRAPPER,
         CLASS_C_READ_ONLY_PYTHON,
         CLASS_C_NO_RUNTIME_ROOT,
+        CLASS_D_ISOLATED_RUNTIME,
     }
 
 
 def test_class_a_units_set_explicit_btcquant_root() -> None:
     for name, kind in SERVICE_CLASSIFICATION.items():
-        if kind != CLASS_A_PYTHON_RUNTIME:
+        if kind not in {CLASS_A_PYTHON_RUNTIME, CLASS_D_ISOLATED_RUNTIME}:
             continue
         text = _service_text(name)
-        assert "Environment=BTCQUANT_ROOT=/opt/btcquant" in text, name
-        assert text.count("Environment=BTCQUANT_ROOT=/opt/btcquant") == 1, name
+        runtime_root = (
+            "/opt/btcquant/carry-experiment"
+            if kind == CLASS_D_ISOLATED_RUNTIME
+            else "/opt/btcquant"
+        )
+        assert f"Environment=BTCQUANT_ROOT={runtime_root}" in text, name
+        assert text.count("Environment=BTCQUANT_ROOT=") == 1, name
         assert ".service.d" not in text, name
         assert "btcquant-root.conf" not in text, name
 
@@ -130,7 +139,16 @@ def test_systemd_hardening_is_preserved() -> None:
             assert "User=root" not in text, name
             continue
         for needle in A_PYTHON_HARDENING:
+            if kind == CLASS_D_ISOLATED_RUNTIME and needle == "ReadWritePaths=/opt/btcquant/state":
+                continue
             assert needle in text, f"{name} missing {needle}"
+        if kind == CLASS_D_ISOLATED_RUNTIME:
+            expected_paths = (
+                "ReadWritePaths=/opt/btcquant/carry-experiment/state"
+                if name == "btcquant-carry-experimental.service"
+                else "ReadWritePaths=/opt/btcquant/carry-experiment/data /opt/btcquant/carry-experiment/reports"
+            )
+            assert expected_paths in text, name
         if name == "btcquant-backup.service":
             assert "ProtectHome=read-only" in text
         else:
@@ -241,7 +259,11 @@ def test_systemd_analyze_verify_source_units() -> None:
 
 def test_effective_environment_from_source_units_contains_runtime_root() -> None:
     for name, kind in SERVICE_CLASSIFICATION.items():
-        if kind not in {CLASS_A_PYTHON_RUNTIME, CLASS_C_READ_ONLY_PYTHON}:
+        if kind not in {
+            CLASS_A_PYTHON_RUNTIME,
+            CLASS_C_READ_ONLY_PYTHON,
+            CLASS_D_ISOLATED_RUNTIME,
+        }:
             continue
         env: dict[str, str] = {}
         for line in _service_text(name).splitlines():
@@ -249,7 +271,12 @@ def test_effective_environment_from_source_units_contains_runtime_root() -> None
                 assignment = line.split("=", 1)[1]
                 key, value = assignment.split("=", 1)
                 env[key] = value
-        assert env.get("BTCQUANT_ROOT") == "/opt/btcquant", name
+        expected_root = (
+            "/opt/btcquant/carry-experiment"
+            if kind == CLASS_D_ISOLATED_RUNTIME
+            else "/opt/btcquant"
+        )
+        assert env.get("BTCQUANT_ROOT") == expected_root, name
 
 
 def test_schema_version_is_unchanged() -> None:

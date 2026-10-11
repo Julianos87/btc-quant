@@ -1,0 +1,162 @@
+{
+  "schema_version": 1,
+  "mission": "MISSION_LUNA_CARRY_AUTONOME.md",
+  "updated_at_utc": "2026-10-11T15:11:54Z",
+  "status": "READY_FOR_PR_AND_PAPER_DEPLOYMENT",
+  "economic_verdict": "INSUFFICIENT_EVIDENCE",
+  "branch": "codex/carry-rework-20261011",
+  "base_sha": "439be9f32fc978f6d77bc604e96ca23f649d4d8b",
+  "phases": {
+    "A_baseline": {
+      "status": "DONE",
+      "artifact": "audit/carry_rework_baseline.json",
+      "trend_preserved": true,
+      "shared_venue_and_pyproject_baseline_hashes_preserved": true
+    },
+    "B_cost_model": {
+      "status": "DONE",
+      "finding": "The previous diagnostic passed the 0.05% perp fee to both legs and omitted the configured 0.10% spot fee. Fees now remain distinct in policy, plans, all four fills, ledger, dashboard, backtest switch cost, and fixed historical diagnostic.",
+      "corrected_artifact": "audit/carry_cash_diagnostic_fee_corrected_20261011.json",
+      "reconciliation": "audit/carry_rework_cost_reconciliation.json"
+    },
+    "C_data_quality_and_instrument": {
+      "status": "IMPLEMENTED_TESTED_PENDING_VPS_OBSERVATION",
+      "metadata": "audit/carry_instrument_metadata_20261011.json",
+      "finding": "BTC/USDC is CCXT alias @142 for non-canonical UBTC / Unit Bitcoin; identity, token ID, source timestamps, book age/skew, 0.00001 lot, 10 USDC minimum and runtime tick metadata are explicit."
+    },
+    "D_governed_protocol": {
+      "status": "REGISTERED_NO_TRIALS",
+      "protocol": "audit/carry_rework_protocol.json",
+      "registry": "audit/carry_rework_governance.sqlite3",
+      "fingerprint": "a471095ef3888db4272acccf6581ab29bfb287bac9105666d57e3689e6bff239",
+      "candidate_selection_started": false
+    },
+    "E_reserve_and_holding_period": {
+      "status": "INSUFFICIENT_EVIDENCE_NO_ADOPTION",
+      "canonical_reserve_rate": 0.02,
+      "reserve_base": "perp notional",
+      "canonical_holding_days": 30,
+      "economic_adoption_allowed": false
+    },
+    "F_two_leg_cycle_and_accounting": {
+      "status": "IMPLEMENTED_TESTED",
+      "coverage": [
+        "asymmetric spot/perp fees on entry and exit",
+        "cash and short margin sized together without spot collateral reuse",
+        "lot/minimum checks and explicit instrument identity",
+        "source-time freshness and stale-entry rejection",
+        "existing accounting/restart/partial-fill/funding recovery contracts preserved"
+      ]
+    },
+    "G_tests_and_comparison": {
+      "status": "DONE",
+      "full_suite": "2188 passed, 3 skipped",
+      "targeted_carry_tests": "62 passed",
+      "ruff": "PASS",
+      "format": "PASS",
+      "mypy": "PASS, 129 source files",
+      "baseline_provenance": "PASS",
+      "sbom": "PASS",
+      "dependency_lock": "PASS",
+      "node_and_shell_syntax": "PASS",
+      "historical_diagnostic": "Six known 30-day cash windows; four negative before reserve, two slightly positive, all six negative after reserve; zero pass entry gate; no selection."
+    },
+    "H_isolated_experimental_paper": {
+      "status": "IMPLEMENTED_PENDING_VPS_DEPLOYMENT",
+      "services": [
+        "btcquant-carry-experimental.service",
+        "btcquant-carry-data.service"
+      ],
+      "state_and_public_data_are_separate_from_canonical_trend_and_carry": true
+    },
+    "I_reporting": {
+      "status": "IMPLEMENTED_PENDING_AUTHENTICATED_VPS_CHECK",
+      "features": [
+        "flat entry refusal and reason",
+        "separate spot/perp fee assumptions",
+        "expected net before and after reserve",
+        "realized ledger and funding kept distinct",
+        "instrument identity and market freshness"
+      ]
+    },
+    "J_github_and_deployment": {
+      "status": "PENDING",
+      "plan": "Open PR, wait for CI, merge, recheck VPS flat/no debt/no ambiguous orders, fresh encrypted backup/restore evidence, then deploy exact merge SHA with deploy/update.sh --sha <SHA> --engines."
+    }
+  },
+  "decisions": [
+    "PAPER only; no account, exchange key, order, TESTNET, LIVE or real borrowing.",
+    "Keep canonical Carry at 4000 USDC, debt disabled, 50% simulated perp margin, 98% cash utilization, 30-day horizon, and 2% reserve of perp notional.",
+    "Keep Trend at 6000 USDC with its configuration, state, history and service lifecycle unchanged.",
+    "Do not call UBTC a canonical BTC token or assume redemption/peg equivalence with the BTC perp.",
+    "No economic candidate is selected or adopted; operation in PAPER will not force entries."
+  ],
+  "test_results": {
+    "full_suite_python_3_12": {"passed": 2188, "skipped": 3},
+    "focused_carry_and_runtime_root_suite": {"passed": 62},
+    "ruff_check": "PASS",
+    "ruff_format": "PASS",
+    "mypy_python_3_11": "PASS",
+    "baseline_provenance": "PASS",
+    "sbom": "PASS",
+    "uv_lock_check": "PASS",
+    "git_diff_check": "PASS",
+    "shell_syntax": "PASS",
+    "dashboard_javascript_syntax": "PASS"
+  },
+  "economic_reconciliation": {
+    "artifact": "audit/carry_rework_cost_reconciliation.json",
+    "old_estimate_entry_exit_cost_usdc": 5.220193705487349,
+    "corrected_same_notional_entry_exit_cost_usdc": 6.52335,
+    "corrected_net_before_reserve_usdc": 3.086586686332719,
+    "reserve_usdc": 52.1868,
+    "corrected_net_after_reserve_usdc": -49.10021331366728,
+    "corrected_break_even_funding_annualized_after_reserve": 0.304375
+  },
+  "modified_files": [
+    "audit/carry_cash_diagnostic_fee_corrected_20261011.json",
+    "audit/carry_instrument_metadata_20261011.json",
+    "audit/carry_rework_baseline.json",
+    "audit/carry_rework_cost_reconciliation.json",
+    "audit/carry_rework_governance.sqlite3",
+    "audit/carry_rework_progress.json",
+    "audit/carry_rework_protocol.json",
+    "dashboard/app.py",
+    "dashboard/index.html",
+    "dashboard/static/dashboard.js",
+    "deploy/btcquant-carry-data.service",
+    "deploy/btcquant-carry-experimental.service",
+    "deploy/update.sh",
+    "docs/CARRY_CASH_FUNDED_PAPER.md",
+    "environments/paper/carry_cash.yaml",
+    "scripts/diagnose_carry_cash.py",
+    "scripts/register_carry_rework_protocol.py",
+    "src/btcquant/carry.py",
+    "src/btcquant/config.py",
+    "src/btcquant/entrypoints/carry.py",
+    "src/btcquant/execution/carry_paper.py",
+    "src/btcquant/execution/carry_runner.py",
+    "src/btcquant/execution/carry_venue.py",
+    "src/btcquant/research/carry_market_collector.py",
+    "tests/test_audit_carry_paper_regressions.py",
+    "tests/test_carry_cash_diagnostic_costs.py",
+    "tests/test_carry_cash_funded.py",
+    "tests/test_carry_paper_two_leg.py",
+    "tests/test_carry_runner.py",
+    "tests/test_carry_venue.py",
+    "tests/test_carry_market_collector.py",
+    "tests/test_carry_rework_protocol.py",
+    "tests/test_dashboard_operations.py",
+    "tests/test_runtime_root_systemd.py"
+  ],
+  "experiments": [],
+  "deployment": {
+    "pre_change_release_sha": "0257ae5be60567f9c0d01d161be3bc5d512a3938",
+    "canonical_database": "/opt/btcquant/state/btcquant.db",
+    "carry_service": "btcquant-carry.service",
+    "trend_service": "btcquant-trend.service",
+    "status": "NOT_YET_DEPLOYED"
+  },
+  "next_check": "Open the reviewed PR, wait for green GitHub CI, merge, then repeat the live flat/debt/order/reconciliation checks and backup verification before exact-SHA PAPER deployment.",
+  "blockers": []
+}

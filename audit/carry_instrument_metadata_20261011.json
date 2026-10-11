@@ -1,0 +1,70 @@
+{
+  "observed_at_utc": "2026-10-11T14:30:27Z",
+  "venue": "Hyperliquid mainnet public metadata and order books",
+  "software_observer": "CCXT 4.5.71 plus Hyperliquid public info API",
+  "instruments": {
+    "spot": {
+      "configured_alias": "BTC/USDC",
+      "market_id": "@142",
+      "base_name": "UBTC",
+      "full_name": "Unit Bitcoin",
+      "quote": "USDC",
+      "token_index": 197,
+      "token_id": "0x9fdbda0a5e284c32744d2f17ee5c74b284993463",
+      "is_canonical": false,
+      "quantity_step": 0.00001,
+      "price_step_at_observation": 1.0,
+      "minimum_notional_usdc": 10.0,
+      "sample_book_at_utc": "2026-10-11T14:30:26.478Z",
+      "sample_best_bid": 82999,
+      "sample_best_ask": 83000
+    },
+    "perpetual": {
+      "symbol": "BTC/USDC:USDC",
+      "coin": "BTC",
+      "market_id": "0",
+      "quote": "USDC",
+      "settle": "USDC",
+      "quantity_step": 0.00001,
+      "price_step_at_observation": 1.0,
+      "minimum_notional_usdc": 10.0,
+      "sample_book_at_utc": "2026-10-11T14:30:27.011Z",
+      "sample_best_bid": 83039,
+      "sample_best_ask": 83040
+    }
+  },
+  "configured_paper_fee_estimates": {
+    "spot_taker": 0.001,
+    "perp_taker": 0.0005,
+    "personal_account_tier_verified": false,
+    "description": "Conservative scenario assumptions; not a personal fee quote."
+  },
+  "primary_sources": [
+    {
+      "title": "Hyperliquid spot metadata API",
+      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint/spot"
+    },
+    {
+      "title": "Hyperliquid tick and lot size",
+      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/tick-and-lot-size"
+    },
+    {
+      "title": "Hyperliquid trading fee schedule",
+      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/fees"
+    },
+    {
+      "title": "Hyperliquid order-size error reference",
+      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/error-responses"
+    },
+    {
+      "title": "Hyperliquid funding mechanics",
+      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/funding"
+    }
+  ],
+  "interpretation": [
+    "The BTC/USDC CCXT spot alias is a non-canonical UBTC token market, not native BTC.",
+    "The spot/perp basis, redemption path, token peg, and account-specific collateral usability remain unqualified.",
+    "Lot and minimum-notional constraints are explicit; market identity is checked at runtime before new entries.",
+    "Public fee schedules vary by account tier and discounts; configured rates remain paper assumptions."
+  ]
+}

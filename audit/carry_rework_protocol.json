@@ -1,0 +1,161 @@
+{
+  "protocol_version": "carry_reserve_duration_v1",
+  "experiment_id": "carry_reserve_duration_hl_public_20261011_v1",
+  "created_at": "2026-10-11T14:44:41Z",
+  "base_git_sha": "439be9f32fc978f6d77bc604e96ca23f649d4d8b",
+  "strategy_family": "cash_funded_ubtc_spot_btc_perp_carry",
+  "target_venue": "hyperliquid",
+  "target_network": "mainnet_public_data_only",
+  "dataset_ids": ["hl_carry_v2_known_history_20260114_20260810"],
+  "dataset_roles": {
+    "hl_carry_v2_known_history_20260114_20260810": "SEEN_RESEARCH_DATA"
+  },
+  "dataset_hashes": {
+    "hl_carry_v2_known_history_20260114_20260810": "ec37086d188fa52246498afe411cd22a38693fa8bc3f7525201e836e4a20c3da"
+  },
+  "data_cutoffs": {
+    "hl_carry_v2_known_history_20260114_20260810": "2026-08-10T20:00:00Z"
+  },
+  "feature_policy": {
+    "causal_only": true,
+    "funding": "native BTC funding observed at decision time; no forward fill; no annualization in stored feed",
+    "basis": "UBTC/USDC spot versus BTC/USDC perp; mark both legs at matched or prior observations only",
+    "execution": "observed bid/ask and depth at decision time; reject windows without required history",
+    "identity": "spot token is non-canonical Unit Bitcoin (UBTC), never relabel as native BTC"
+  },
+  "warmup_policy": {
+    "funding_smoothing_days": 14,
+    "required_history_before_signal_days": 14,
+    "missing_observation_policy": "reject window; never synthesize"
+  },
+  "split_policy": {
+    "type": "expanding",
+    "shuffle": false,
+    "chronological_fractions": {"train": 0.6, "validation": 0.2, "test": 0.2},
+    "initial_position": "FLAT",
+    "boundary_windows": "purge every holding window intersecting a split boundary"
+  },
+  "purge_policy": {
+    "mode": "fixed_max_candidate_horizon",
+    "duration_days": 30,
+    "rule": "purge a full candidate holding horizon on either side of every boundary"
+  },
+  "embargo_policy": {
+    "mode": "fixed_after_boundary",
+    "duration_days": 30,
+    "rule": "no outcome window may overlap the embargo"
+  },
+  "cost_assumptions": {
+    "capital_usd": 4000,
+    "leverage": 1.0,
+    "borrow_rate_effective": 0,
+    "borrow_enabled": false,
+    "fees": "per-leg assumptions in fee_assumptions",
+    "funding": "native published funding applied only to simulated open perp quantity at eligible event time",
+    "basis": "realized entry-to-exit spot/perp price changes included jointly in outcome residual",
+    "reserve": "risk admission buffer, not a realized cost or cash debit",
+    "cash_scope": "isolated experiment; never added to canonical Carry or Trend capital"
+  },
+  "fee_assumptions": {
+    "spot_taker_rate": 0.001,
+    "perp_taker_rate": 0.0005,
+    "source": "conservative configured PAPER estimates; public base schedule only; no account-specific tier or referral verified",
+    "execution_counted_once": "commission as fee; spread/depth through simulated fill price"
+  },
+  "slippage_assumptions": {
+    "model": "causal_order_book_walk_at_candidate_notional",
+    "fallback": "reject observation when captured depth is missing or insufficient",
+    "static_admission_cushion_bps": 5,
+    "double_count_rule": "never debit static slippage again when fill price already walks book"
+  },
+  "impact_assumptions": {
+    "model": "historical_visible_depth_consumption_per_leg",
+    "latency": "record capture and receive clocks; do not claim queue or latency reconstruction",
+    "missing_history": "no synthetic liquidity; mark evidence insufficient"
+  },
+  "parameter_space": {
+    "candidates": [
+      {"id": "control_current", "holding_days": 30, "reserve_policy": "fixed_2_percent"},
+      {"id": "h7_q95", "holding_days": 7, "reserve_policy": "joint_adverse_residual_quantile", "quantile": 0.95},
+      {"id": "h7_q975", "holding_days": 7, "reserve_policy": "joint_adverse_residual_quantile", "quantile": 0.975},
+      {"id": "h14_q95", "holding_days": 14, "reserve_policy": "joint_adverse_residual_quantile", "quantile": 0.95},
+      {"id": "h14_q975", "holding_days": 14, "reserve_policy": "joint_adverse_residual_quantile", "quantile": 0.975},
+      {"id": "h30_q95", "holding_days": 30, "reserve_policy": "joint_adverse_residual_quantile", "quantile": 0.95},
+      {"id": "h30_q975", "holding_days": 30, "reserve_policy": "joint_adverse_residual_quantile", "quantile": 0.975}
+    ],
+    "joint_residual": "max(0, model_net_before_reserve_at_entry - realized_net_after_all_observed_costs_and_basis), expressed as fraction of total allocated cash",
+    "candidate_count_includes_control": true
+  },
+  "search_method": "fixed_preregistered_candidate_set_no_adaptive_expansion",
+  "random_seed": 20261011,
+  "maximum_trial_budget": 7,
+  "selection_metric": "net_return_on_total_allocated_cash_after_joint_reserve",
+  "secondary_metrics": [
+    "max_drawdown_on_total_allocated_cash",
+    "joint_residual_95pct_and_975pct",
+    "funding_received_and_paid",
+    "basis_pnl",
+    "spot_and_perp_fees",
+    "execution_spread_and_depth_consumed",
+    "completed_non_overlapping_cycles",
+    "time_in_market",
+    "hedge_residual",
+    "margin_violations"
+  ],
+  "acceptance_rules": {
+    "minimum_independent_completed_windows_per_horizon": 30,
+    "minimum_holdout_windows_per_horizon": 10,
+    "minimum_regimes": 3,
+    "net_after_reserve": "positive lower 95% confidence bound in validation and final holdout after every preregistered stress",
+    "drawdown": "no more than 10% of total allocated cash and must improve or match control",
+    "operations": "zero unhedged, missing-funding, double-credit, minimum-size, or margin-limit violations",
+    "adoption": "no adoption without a separately frozen candidate and genuinely forward holdout"
+  },
+  "stress_tests": {
+    "scenarios": [
+      "configured spot/perp fees multiplied by 1.5",
+      "observed spread/depth cost multiplied by 2",
+      "funding forecast shortfall and adverse basis measured jointly at 97.5th percentile",
+      "UBTC versus BTC basis shock of -5%",
+      "one-sided missing or insufficient depth: reject entry and evaluate safe close behavior",
+      "funding negative, delayed, duplicated, and resumed after restart"
+    ],
+    "no_synthetic_liquidity": true,
+    "no_credit_for_unobserved_basis_convergence": true
+  },
+  "holdout_policy": {
+    "close_rule": "fixed calendar horizon, exit costs included, no extension to amortize fees",
+    "known_history_is_not_blind": true,
+    "forward_holdout": "after candidate freeze, first 10 fully matured non-overlapping windows per horizon, sealed before result access",
+    "retuning_after_holdout": "invalidates that holdout; register a new experiment and await new future data"
+  },
+  "code_provenance": {
+    "repository": "https://github.com/Julianos87/btc-quant.git",
+    "protocol_base_sha": "439be9f32fc978f6d77bc604e96ca23f649d4d8b",
+    "research_entrypoint": "scripts/register_carry_rework_protocol.py",
+    "runtime_release_must_be_recorded_before_any_trial": true,
+    "candidate_selection_is_currently_disabled": true
+  },
+  "sample_sufficiency_policy": {
+    "mode": "carry_non_overlapping_windows_by_horizon",
+    "min_completed_windows": 30,
+    "min_forward_holdout_windows": 10,
+    "window_spacing": "at least the candidate holding horizon; overlapping hourly bars do not count as independent observations",
+    "known_history_role": "SEEN_RESEARCH_DATA",
+    "missing_order_book_or_outcome": "INSUFFICIENT_EVIDENCE"
+  },
+  "candidate_selection_rule": "among candidates passing all pre-registered data, net-after-reserve, drawdown and cost-stress gates, select the one with the greatest net return on total allocated cash; ties select lower drawdown, then shorter horizon; if none pass, retain the current 2% reserve and 30-day ceiling",
+  "multiple_testing_policy": {
+    "trial_budget": 7,
+    "all_failed_or_rejected_trials_are_retained": true,
+    "no_grid_expansion_after_results": true,
+    "selection_is_single_pass_after_complete_data": true
+  },
+  "promotion_gates": {
+    "profitability_evidence": "positive lower 95% confidence bound on total-cash net after reserve and preregistered stress in an untouched forward holdout",
+    "technical_evidence": "all paper accounting and recovery invariants pass; two isolated paper cycles survive restart",
+    "maturity": "at least 30 development and 10 untouched forward completed non-overlapping windows for each candidate horizon across at least 3 regimes",
+    "risk": "no margin, unhedged, accounting, data-integrity, or double-counting violation",
+    "trend_isolation": "Trend allocation, rules, runtime state and service remain unchanged"
+  }
+}

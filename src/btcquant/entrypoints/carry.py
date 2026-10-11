@@ -19,7 +19,7 @@ from btcquant.config import (
     runtime_execution_from_config,
 )
 from btcquant.execution.carry_runner import CarryRunner
-from btcquant.execution.venue import Venue
+from btcquant.execution.carry_venue import CarryVenue
 
 ROOT = Path(os.environ.get("BTCQUANT_ROOT", Path.cwd())).resolve()
 
@@ -93,7 +93,7 @@ def main() -> None:
         state_file=ROOT / execution.require_state_file(),
         legacy_state_file=ROOT / "state" / "carry_state.json",
         live_broker=None,
-        venue=Venue(
+        venue=CarryVenue(
             live_exchange,
             live_symbol,
             spot_symbol=configured_carry_execution.spot_symbol,
