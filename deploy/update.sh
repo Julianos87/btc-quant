@@ -87,7 +87,8 @@ configure_carry_experiment_services() {
       --database "${root}/research/governance.sqlite3" >/dev/null
     chown btcquant:btcquant "${root}/research/governance.sqlite3"
     chmod 0640 "${root}/research/governance.sqlite3"
-    systemctl enable --now btcquant-carry-experimental.service btcquant-carry-data.service
+    systemctl enable btcquant-carry-experimental.service btcquant-carry-data.service
+    systemctl restart btcquant-carry-experimental.service btcquant-carry-data.service
   else
     systemctl disable --now btcquant-carry-experimental.service btcquant-carry-data.service \
       2>/dev/null || true

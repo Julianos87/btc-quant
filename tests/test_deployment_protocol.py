@@ -436,6 +436,10 @@ def test_deployment_scripts_expose_fail_closed_guards():
     assert "Python de migration absent dans la release cible" in migrate
     assert "migration release SHA != requested target SHA" in migrate
     assert "BTCQUANT_CURRENT n'est pas consulté" in migrate
+    assert (
+        "systemctl restart btcquant-carry-experimental.service btcquant-carry-data.service"
+        in update
+    )
     migrate_invocation = update.split('bash "${TARGET}/deploy/migrate.sh"', 1)[0]
     migrate_env = migrate_invocation.rsplit("BTCQUANT_DEPLOY_LOCK_HELD", 1)[-1]
     assert "BTCQUANT_CURRENT=" not in migrate_env
