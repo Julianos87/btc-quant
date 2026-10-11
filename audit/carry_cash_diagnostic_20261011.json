@@ -7,7 +7,7 @@
     "scripts/diagnose_carry_cash.py": "c6c3c2ab82968b656e1d9c021ab624e39a2a21ce4a3bdc712935f49e91fee0d2",
     "src/btcquant/config.py": "0a1bd1d3d5a7272371f7055ab606e86ff088fdb19062bde2c69d64bf59084727",
     "src/btcquant/execution/carry_paper.py": "ddef26262d4942c789004919c611eb52f1c4b6051f9536f3a2d3f74c27ea7ae1",
-    "src/btcquant/execution/carry_runner.py": "e4a7d10ca6755f15248826c42c50bbf0737cb6aa0c07a7aff4053d6e8371567d",
+    "src/btcquant/execution/carry_runner.py": "14faa0489e2d0e916eed55d7af7f3ecc3164a0c7cf7bdc05b161a68157d9d335",
     "src/btcquant/carry.py": "50467a6f32640f10376aafd9927b6e51817ebfecc35e133889313bd59e075843",
     "src/btcquant/research/carry_v2_replay.py": "de60b83ef73f5b77b42986eee24acde24a16b34ddfff63875e060363120d810a"
   },

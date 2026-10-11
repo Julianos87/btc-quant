@@ -1240,10 +1240,10 @@ class CarryRunner:
     def _two_leg_plan(self, market: CarryMarketState) -> FinancingPlan:
         configured = self.carry_execution
         target_notional = self.policy.capital * self.leverage
-        if configured is not None and not configured.borrow_enabled:
+        if configured is not None and not bool(getattr(configured, "borrow_enabled", False)):
             # Separate accounts: the same capital cannot buy spot and also
             # cover the short's initial margin and transaction costs.
-            margin_rate = configured.initial_margin_rate
+            margin_rate = getattr(configured, "initial_margin_rate", None)
             if margin_rate is not None:
                 perp_ratio = market.perp_mark / market.spot_ask
                 cash_per_spot_dollar = (
@@ -1253,7 +1253,11 @@ class CarryRunner:
                     * (self.policy.fee_rate + self.policy.slippage_bps / 10_000.0)
                 )
                 cash_budget = min(self.policy.capital, self.two_leg_balance.equity)
-                target_notional = cash_budget * configured.cash_utilization / cash_per_spot_dollar
+                target_notional = (
+                    cash_budget
+                    * float(getattr(configured, "cash_utilization", 1.0))
+                    / cash_per_spot_dollar
+                )
         return FinancingPlan.build(
             capital_available=self.two_leg_balance.equity,
             target_notional=target_notional,
