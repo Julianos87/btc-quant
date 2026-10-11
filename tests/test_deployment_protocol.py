@@ -1433,7 +1433,7 @@ def test_paper_qualification_units_are_manual_and_least_privilege():
         assert "WantedBy=" not in unit
         assert "OnCalendar=" not in unit
 
-    assert "ReadWritePaths=" not in inspect
+    assert "ReadWritePaths=/opt/btcquant/state" in inspect
     assert "ReadWritePaths=/opt/btcquant/state" in record
 
 

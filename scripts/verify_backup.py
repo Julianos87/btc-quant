@@ -4,13 +4,105 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
+import re
 import sqlite3
 import subprocess
 import tarfile
 import tempfile
 from contextlib import closing
 from pathlib import Path
+
+
+_PAPER_STOP_ID = re.compile(r"paper-stop-[0-9]+\Z")
+
+
+def _unresolved_order_count(
+    connection: sqlite3.Connection,
+    tables: set[str],
+    order_columns: set[str],
+) -> int | None:
+    """Count ambiguous external effects, excluding only a persisted PAPER stop.
+
+    A PAPER broker stop is restart-safe only when its exact broker id is linked
+    to the same open Trend position and all persisted protection fields are
+    valid. Missing/legacy schema details fail closed.
+    """
+
+    if "status" not in order_columns:
+        return None
+    rows = connection.execute(
+        "SELECT * FROM orders WHERE status IN ('PENDING', 'OPEN', 'UNBALANCED')"
+    ).fetchall()
+    required_order_columns = {
+        "engine",
+        "slot",
+        "broker_order_id",
+        "order_type",
+        "local_state",
+        "external_state",
+    }
+    required_position_columns = {
+        "engine",
+        "slot",
+        "status",
+        "qty",
+        "stop_price",
+        "direction",
+        "stop_order_id",
+    }
+    if (
+        "positions" not in tables
+        or not required_order_columns.issubset(order_columns)
+        or not required_position_columns.issubset(
+            {str(row[1]) for row in connection.execute("PRAGMA table_info(positions)")}
+        )
+    ):
+        return len(rows)
+
+    linked_stops: set[tuple[str, str, str]] = set()
+    for position in connection.execute(
+        "SELECT engine, slot, status, qty, stop_price, direction, stop_order_id FROM positions"
+    ):
+        stop_id = position[6]
+        try:
+            qty = float(position[3])
+            stop_price = float(position[4])
+            direction = int(position[5])
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if (
+            position[2] == "OPEN"
+            and isinstance(stop_id, str)
+            and _PAPER_STOP_ID.fullmatch(stop_id) is not None
+            and math.isfinite(qty)
+            and qty > 0
+            and math.isfinite(stop_price)
+            and stop_price > 0
+            and direction in (-1, 1)
+        ):
+            linked_stops.add((str(position[0]), str(position[1]), stop_id))
+
+    unresolved = 0
+    for order in rows:
+        safe_paper_stop = (
+            order["order_type"] == "STOP"
+            and order["status"] == "OPEN"
+            and order["local_state"] == "AWAITING_EXTERNAL"
+            and order["external_state"] == "OPEN"
+            and isinstance(order["broker_order_id"], str)
+            and _PAPER_STOP_ID.fullmatch(order["broker_order_id"]) is not None
+            and (
+                str(order["engine"]),
+                str(order["slot"]),
+                order["broker_order_id"],
+            )
+            in linked_stops
+        )
+        if not safe_paper_stop:
+            unresolved += 1
+    return unresolved
 
 
 def _safe_extract(archive: Path, destination: Path) -> None:
@@ -78,6 +170,7 @@ def verify_archive(archive: Path, extract_to: Path | None = None) -> dict[str, o
         # connexion. ``closing`` est indispensable pour pouvoir supprimer le
         # clean-room immédiatement, notamment sous Windows.
         with closing(sqlite3.connect(f"file:{database}?mode=ro", uri=True)) as connection:
+            connection.row_factory = sqlite3.Row
             integrity = str(connection.execute("PRAGMA integrity_check").fetchone()[0])
             if integrity != "ok":
                 raise RuntimeError(f"SQLite integrity_check : {integrity}")
@@ -109,16 +202,7 @@ def verify_archive(archive: Path, extract_to: Path | None = None) -> dict[str, o
                 if "orders" in tables
                 else set()
             )
-            unresolved_orders = (
-                int(
-                    connection.execute(
-                        "SELECT COUNT(*) FROM orders "
-                        "WHERE status IN ('PENDING', 'OPEN', 'UNBALANCED')"
-                    ).fetchone()[0]
-                )
-                if "status" in order_columns
-                else None
-            )
+            unresolved_orders = _unresolved_order_count(connection, set(tables), order_columns)
             engine_states = (
                 [
                     str(row[0])

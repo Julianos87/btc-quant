@@ -107,6 +107,56 @@ def test_restore_exposes_unresolved_external_effects(tmp_path):
     assert result["restart_safe"] is False
 
 
+@pytest.mark.parametrize("linked", [True, False])
+def test_restore_only_exempts_a_valid_open_paper_stop_linked_to_position(tmp_path, linked):
+    state = tmp_path / ("linked" if linked else "unlinked") / "state"
+    store = StateStore(state / "btcquant.db")
+    broker_order_id = "paper-stop-1"
+    store.save_engine_state(
+        "trend",
+        {
+            "equity": 1_000.0,
+            "cash": 900.0,
+            "halted": False,
+            "slots": {
+                "trend_ls_20": {
+                    "cash": 900.0,
+                    "position": {
+                        "entry_time": "2026-10-11T12:00:00Z",
+                        "entry_price": 100.0,
+                        "qty": 1.0,
+                        "stop_price": 98.0,
+                        "direction": 1,
+                        "bars_held": 0,
+                        "best_close": 100.0,
+                    },
+                    "stop_order_id": broker_order_id if linked else "paper-stop-2",
+                    "entry_fee": 0.1,
+                }
+            },
+        },
+    )
+    order_id = store.begin_order(
+        "trend", "trend_ls_20", "paper-stop-intent", "STOP", "SELL", 1.0, "entry_protection"
+    )
+    store.complete_order(
+        order_id,
+        status="OPEN",
+        remaining_qty=1.0,
+        broker_order_id=broker_order_id,
+        external_state="OPEN",
+        local_state="AWAITING_EXTERNAL",
+    )
+    archive = tmp_path / ("linked" if linked else "unlinked") / "backup.tar.gz"
+    with tarfile.open(archive, "w:gz") as bundle:
+        bundle.add(state, arcname="state")
+
+    result = verify_archive(archive)
+
+    assert result["unresolved_orders"] == (0 if linked else 1)
+    assert result["restart_safe"] is linked
+
+
 def test_legacy_sqlite_backup_is_readonly_and_checks_source_and_destination(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
