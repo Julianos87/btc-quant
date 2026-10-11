@@ -224,7 +224,10 @@ class CarryRunner:
             maintenance_margin_rate=getattr(configured, "maintenance_margin_rate", None),
             fee_source=str(getattr(configured, "fee_source", "UNSPECIFIED")),
             financing_source=str(getattr(configured, "financing_source", "UNSPECIFIED")),
-            qualified=bool(getattr(configured, "borrow_enabled", False))
+            qualified=(
+                bool(getattr(configured, "borrow_enabled", False))
+                or getattr(configured, "max_borrow", None) == 0
+            )
             and all(
                 getattr(configured, name, None) is not None
                 for name in (
@@ -1236,9 +1239,28 @@ class CarryRunner:
 
     def _two_leg_plan(self, market: CarryMarketState) -> FinancingPlan:
         configured = self.carry_execution
+        target_notional = self.policy.capital * self.leverage
+        if configured is not None and not bool(getattr(configured, "borrow_enabled", False)):
+            # Separate accounts: the same capital cannot buy spot and also
+            # cover the short's initial margin and transaction costs.
+            margin_rate = getattr(configured, "initial_margin_rate", None)
+            if margin_rate is not None:
+                perp_ratio = market.perp_mark / market.spot_ask
+                cash_per_spot_dollar = (
+                    1.0
+                    + margin_rate * perp_ratio
+                    + (1.0 + perp_ratio)
+                    * (self.policy.fee_rate + self.policy.slippage_bps / 10_000.0)
+                )
+                cash_budget = min(self.policy.capital, self.two_leg_balance.equity)
+                target_notional = (
+                    cash_budget
+                    * float(getattr(configured, "cash_utilization", 1.0))
+                    / cash_per_spot_dollar
+                )
         return FinancingPlan.build(
             capital_available=self.two_leg_balance.equity,
-            target_notional=self.policy.capital * self.leverage,
+            target_notional=target_notional,
             spot_price=market.spot_ask,
             perp_mark_price=market.perp_mark,
             leverage=self.leverage,
@@ -1357,6 +1379,7 @@ class CarryRunner:
                     price=spot.price,
                     fee=spot.fee,
                     event_id=spot.event_id,
+                    max_debt_principal=self.two_leg_spec.max_borrow,
                 )
                 self.two_leg_state = (
                     CarryExecutionState.ONE_LEG_FILLED

@@ -1,6 +1,6 @@
 """Lance le carry en paper trading (funding réels, exécution simulée).
 
-Usage : btcquant-carry [--config environments/paper/config.yaml]
+Usage : btcquant-carry [--config environments/paper/carry_cash.yaml]
 """
 
 import argparse
@@ -28,7 +28,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--config",
-        default=ROOT / "environments" / "paper" / "config.yaml",
+        default=(ROOT / "current" if (ROOT / "current").is_dir() else ROOT)
+        / "environments"
+        / "paper"
+        / "carry_cash.yaml",
     )
     cfg = load_config(parser.parse_known_args()[0].config)
     configured_policy = carry_policy_from_config(cfg)
@@ -46,7 +49,7 @@ def main() -> None:
         default=None,
         help="coût annuel des fonds empruntés pour financer la jambe spot "
         f"(configuré à {configured_policy.borrow_rate_ann * 100:.0f} %%). "
-        "Sans effet à --leverage 1.",
+        "Sans effet lorsque la dette effective est nulle.",
     )
     parser.add_argument(
         "--live",

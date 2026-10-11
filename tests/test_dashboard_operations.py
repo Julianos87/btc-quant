@@ -605,7 +605,10 @@ def test_summary_distinguishes_carry_two_leg_gross_and_funding_ledger(tmp_path, 
     totals = payload["totals"]
     assert totals["portfolio_gross_notional"] == pytest.approx(790.0)
     assert totals["portfolio_directional_net_notional"] == pytest.approx(230.0)
-    assert totals["risk_engine_notional"] == pytest.approx(12_210.0)
+    # Use the actual short notional, including for cash-funded Carry profiles;
+    # equity times the old 3x reference would report a fictitious exposure.
+    assert totals["carry_notional"] == pytest.approx(280.0)
+    assert totals["risk_engine_notional"] == pytest.approx(490.0)
     assert totals["risk_engine_notional"] != totals["portfolio_gross_notional"]
 
 

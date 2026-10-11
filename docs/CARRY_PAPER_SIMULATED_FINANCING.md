@@ -1,5 +1,8 @@
 # Carry 3× autonome en PAPER
 
+Ce document décrit le scénario ×3 conservé pour comparaison. Le service Carry
+utilise désormais le [profil PAPER sans emprunt](CARRY_CASH_FUNDED_PAPER.md).
+
 Le profil PAPER simule un crédit, sans compte Hyperliquid, adresse, clé ni ordre externe.
 Ce scénario ne qualifie pas une capacité de financement réelle et ne modélise pas
 le portfolio margin Hyperliquid. Il utilise deux comptes simulés avec une marge
