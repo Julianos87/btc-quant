@@ -6,6 +6,10 @@ Trend continue d'utiliser ce dernier fichier : son budget, ses règles et ses
 historiques ne changent pas. Les performances publiées de l'ancien portefeuille
 ne qualifient pas le nouveau Carry.
 
+Le dashboard calcule l'exposition depuis les notionnels des positions enregistrées,
+sans multiplier l'équité Carry par le ×3 de la référence historique. Son agrégat
+de risque compte la jambe perp une fois ; l'exposition brute compte les deux jambes.
+
 ## Financement simultané
 
 Le capital réservé au Carry reste 4 000 sur les 10 000 du portefeuille.

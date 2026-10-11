@@ -23,7 +23,7 @@ import pandas as pd
 from flask import Flask, Response, jsonify, make_response, redirect, request
 from dashboard.auth import DashboardAuthenticator
 from dashboard.web import web
-from btcquant.config import carry_policy_from_config, load_config, portfolio_from_config
+from btcquant.config import load_config, portfolio_from_config
 from btcquant.reporting.analytics import (
     best_and_worst_day,
     carry_funding_curve,
@@ -414,7 +414,6 @@ SYMBOL = "BTC/USDC:USDC"
 FOUR_HOURS_MS = 4 * 3_600_000
 PROFILE_CONFIG = load_config(ROOT / "environments" / "paper" / "config.yaml")
 PORTFOLIO = portfolio_from_config(PROFILE_CONFIG)
-CARRY_POLICY = carry_policy_from_config(PROFILE_CONFIG)
 INITIAL_CAPITAL = PORTFOLIO.total_capital
 
 
@@ -1449,15 +1448,10 @@ def summary():
     # funding horaire sur Hyperliquid : prochain paiement à l'heure pile
     next_funding = (int(time.time() // 3600) + 1) * 3600 * 1000
 
-    # exposition brute / levier effectif (somme des notionnels / équity totale)
+    # Compatibility risk aggregate counts the perp leg once. The portfolio
+    # gross aggregate below counts both legs. Neither assumes the old 3x policy.
     trend_notional = trend_total_notional
-    carry_notional = (
-        _number(carry_equity * CARRY_POLICY.leverage)
-        if carry_is_open
-        else 0.0
-        if carry_is_flat
-        else None
-    )
+    carry_notional = carry_perp_notional if carry_is_open else 0.0 if carry_is_flat else None
     gross_notional = (
         _number(trend_notional + carry_notional)
         if trend_notional is not None and carry_notional is not None
