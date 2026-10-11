@@ -33,7 +33,8 @@ carry_execution:
   spot_base_name: UBTC
   spot_market_id: "@142"
   spot_token_index: 197
-  spot_token_id: "0x9fdbda0a5e284c32744d2f17ee5c74b284993463"
+  spot_token_id: "0x8f254b963e8468305d409b33aa137c67"
+  spot_evm_contract_address: "0x9fdbda0a5e284c32744d2f17ee5c74b284993463"
   spot_is_canonical: false
   perp_base_name: BTC
   perp_quote_asset: USDC

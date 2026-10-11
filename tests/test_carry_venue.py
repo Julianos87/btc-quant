@@ -56,7 +56,12 @@ class FakeExchange:
 
     def currency(self, code: str) -> dict:
         assert code == "UBTC"
-        return {"info": {"tokenId": "0x9fdbda0a5e284c32744d2f17ee5c74b284993463"}}
+        return {
+            "info": {
+                "tokenId": "0x8f254b963e8468305d409b33aa137c67",
+                "evmContract": {"address": "0x9fdbda0a5e284c32744d2f17ee5c74b284993463"},
+            }
+        }
 
 
 def test_carry_venue_preserves_source_clocks_and_full_pair_identity() -> None:
@@ -70,7 +75,8 @@ def test_carry_venue_preserves_source_clocks_and_full_pair_identity() -> None:
     assert market.spot_market_id == "@142"
     assert market.spot_base_name == "UBTC"
     assert market.spot_token_index == 197
-    assert market.spot_token_id == "0x9fdbda0a5e284c32744d2f17ee5c74b284993463"
+    assert market.spot_token_id == "0x8f254b963e8468305d409b33aa137c67"
+    assert market.spot_evm_contract_address == "0x9fdbda0a5e284c32744d2f17ee5c74b284993463"
     assert market.spot_is_canonical is False
     assert market.perp_market_id == "0"
     assert market.perp_settle_asset == "USDC"

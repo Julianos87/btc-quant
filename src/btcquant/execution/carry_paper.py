@@ -75,6 +75,7 @@ class CarryVenueSpec:
     spot_token_index: int | None = None
     spot_is_canonical: bool | None = None
     spot_token_id: str | None = None
+    spot_evm_contract_address: str | None = None
     spot_account: str = "spot"
     perp_account: str = "perp"
     collateral_asset: str = "USDC"
@@ -134,7 +135,8 @@ class CarryVenueSpec:
             spot_market_id="@142",
             spot_token_index=197,
             spot_is_canonical=False,
-            spot_token_id="0x9fdbda0a5e284c32744d2f17ee5c74b284993463",
+            spot_token_id="0x8f254b963e8468305d409b33aa137c67",
+            spot_evm_contract_address="0x9fdbda0a5e284c32744d2f17ee5c74b284993463",
             collateral_asset="USDC",
             borrow_asset="USDC",
             financing_source="HYPERLIQUID_ACCOUNT_CAPACITY_NOT_PROVIDED",
@@ -219,6 +221,7 @@ class CarryMarketState:
     spot_quote_asset: str | None = None
     spot_token_index: int | None = None
     spot_token_id: str | None = None
+    spot_evm_contract_address: str | None = None
     spot_is_canonical: bool | None = None
     perp_market_id: str | None = None
     perp_base_name: str | None = None
@@ -285,6 +288,7 @@ class _FinancingMarketProvenance(TypedDict):
     spot_base_name: str | None
     spot_token_index: int | None
     spot_token_id: str | None
+    spot_evm_contract_address: str | None
     spot_is_canonical: bool | None
     perp_market_id: str | None
     spot_price_step: float | None
@@ -310,6 +314,7 @@ def _financing_market_provenance(
             "spot_base_name": None,
             "spot_token_index": None,
             "spot_token_id": None,
+            "spot_evm_contract_address": None,
             "spot_is_canonical": None,
             "perp_market_id": None,
             "spot_price_step": None,
@@ -327,6 +332,7 @@ def _financing_market_provenance(
         "spot_base_name": market.spot_base_name,
         "spot_token_index": market.spot_token_index,
         "spot_token_id": market.spot_token_id,
+        "spot_evm_contract_address": market.spot_evm_contract_address,
         "spot_is_canonical": market.spot_is_canonical,
         "perp_market_id": market.perp_market_id,
         "spot_price_step": market.spot_price_step,
@@ -370,6 +376,7 @@ class FinancingPlan:
     spot_base_name: str | None = None
     spot_token_index: int | None = None
     spot_token_id: str | None = None
+    spot_evm_contract_address: str | None = None
     spot_is_canonical: bool | None = None
     perp_market_id: str | None = None
     spot_price_step: float | None = None

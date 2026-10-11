@@ -155,7 +155,8 @@ def test_cash_market_gate_checks_instrument_identity_and_source_freshness(tmp_pa
         spot_base_name="UBTC",
         spot_quote_asset="USDC",
         spot_token_index=197,
-        spot_token_id="0x9fdbda0a5e284c32744d2f17ee5c74b284993463",
+        spot_token_id="0x8f254b963e8468305d409b33aa137c67",
+        spot_evm_contract_address="0x9fdbda0a5e284c32744d2f17ee5c74b284993463",
         spot_is_canonical=False,
         perp_market_id="0",
         perp_base_name="BTC",
@@ -174,6 +175,14 @@ def test_cash_market_gate_checks_instrument_identity_and_source_freshness(tmp_pa
 
     runner.venue = _QualifiedVenue(
         replace(current, spot_token_id="0x00000000000000000000000000000000")
+    )
+    assert runner._two_leg_market() is None
+
+    runner.venue = _QualifiedVenue(
+        replace(
+            current,
+            spot_evm_contract_address="0x8f254b963e8468305d409b33aa137c67",
+        )
     )
     assert runner._two_leg_market() is None
 

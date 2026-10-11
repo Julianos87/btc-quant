@@ -1,5 +1,7 @@
 {
   "observed_at_utc": "2026-10-11T14:30:27Z",
+  "identity_correction_verified_at_utc": "2026-10-11T15:46Z",
+  "identity_correction": "The prior record mislabeled evmContract.address as tokenId. The authoritative tokenId is 0x8f254b963e8468305d409b33aa137c67; 0x9fdbda0a5e284c32744d2f17ee5c74b284993463 is evmContract.address.",
   "venue": "Hyperliquid mainnet public metadata and order books",
   "software_observer": "CCXT 4.5.71 plus Hyperliquid public info API",
   "instruments": {
@@ -10,7 +12,9 @@
       "full_name": "Unit Bitcoin",
       "quote": "USDC",
       "token_index": 197,
-      "token_id": "0x9fdbda0a5e284c32744d2f17ee5c74b284993463",
+      "token_id": "0x8f254b963e8468305d409b33aa137c67",
+      "evm_contract_address": "0x9fdbda0a5e284c32744d2f17ee5c74b284993463",
+      "previously_mislabeled_token_id": "0x9fdbda0a5e284c32744d2f17ee5c74b284993463",
       "is_canonical": false,
       "quantity_step": 0.00001,
       "price_step_at_observation": 1.0,
@@ -64,7 +68,8 @@
   "interpretation": [
     "The BTC/USDC CCXT spot alias is a non-canonical UBTC token market, not native BTC.",
     "The spot/perp basis, redemption path, token peg, and account-specific collateral usability remain unqualified.",
-    "Lot and minimum-notional constraints are explicit; market identity is checked at runtime before new entries.",
+    "Lot and minimum-notional constraints are explicit; runtime separately checks tokenId and evmContract.address before new entries.",
+    "The prior record confused the EVM contract address with Hyperliquid tokenId; the identity mapping was corrected from spotMeta token index 197.",
     "Public fee schedules vary by account tier and discounts; configured rates remain paper assumptions."
   ]
 }

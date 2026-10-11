@@ -14,13 +14,20 @@ canonique ou à Trend.
 ## Instruments et financement simultané
 
 Hyperliquid/CCXT expose `BTC/USDC` comme marché spot `@142`, mais le token de
-base est **UBTC / Unit Bitcoin**, token d'index 197, non canonique, avec le token
-ID configuré. La jambe courte est le perp linéaire `BTC/USDC:USDC`, marché `0`,
-réglé en USDC. UBTC n'est donc pas renommé en BTC : sa parité, son basis et son
-chemin de rachat restent un risque distinct. L'adaptateur contrôle identité,
-précision, taille minimale et horodatages de chaque jambe avant une entrée.
-Les métadonnées observées indiquent un pas de quantité de `0,00001` et un
-minimum de 10 USDC par jambe. La précision de prix est relue au runtime.
+base est **UBTC / Unit Bitcoin**, token d'index 197, non canonique. Son
+`tokenId` Hyperliquid est `0x8f254b963e8468305d409b33aa137c67` ; son adresse de
+contrat EVM distincte est `0x9fdbda0a5e284c32744d2f17ee5c74b284993463`. Ces deux
+identifiants ne sont pas interchangeables. L'ancienne configuration avait
+utilisé l'adresse du contrat EVM comme `tokenId`, ce qui faisait échouer le
+contrôle d'identité du marché et bloquait les décisions Carry. L'adaptateur lit
+maintenant `tokenId` depuis les métadonnées de devise Hyperliquid et contrôle
+l'adresse du contrat séparément. La jambe courte est le perp linéaire
+`BTC/USDC:USDC`, marché `0`, réglé en USDC. UBTC n'est donc pas renommé en BTC :
+sa parité, son basis et son chemin de rachat restent un risque distinct.
+L'adaptateur contrôle identité, précision, taille minimale et horodatages de
+chaque jambe avant une entrée. Les métadonnées observées indiquent un pas de
+quantité de `0,00001` et un minimum de 10 USDC par jambe. La précision de prix
+est relue au runtime.
 
 Le budget disponible finance ensemble l'achat spot, la marge initiale du short,
 les commissions et les coûts d'entrée ; le spot n'est pas réutilisé comme

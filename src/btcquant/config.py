@@ -60,6 +60,7 @@ _CARRY_EXECUTION_KEYS = {
     "spot_market_id",
     "spot_token_index",
     "spot_token_id",
+    "spot_evm_contract_address",
     "spot_is_canonical",
     "perp_base_name",
     "perp_quote_asset",
@@ -209,6 +210,7 @@ class CarryExecutionConfig:
     spot_market_id: str | None = None
     spot_token_index: int | None = None
     spot_token_id: str | None = None
+    spot_evm_contract_address: str | None = None
     spot_is_canonical: bool | None = None
     perp_base_name: str | None = None
     perp_quote_asset: str | None = None
@@ -274,6 +276,7 @@ class CarryExecutionConfig:
             "spot_quote_asset",
             "spot_market_id",
             "spot_token_id",
+            "spot_evm_contract_address",
             "perp_base_name",
             "perp_quote_asset",
             "perp_settle_asset",
