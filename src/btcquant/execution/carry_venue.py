@@ -72,6 +72,9 @@ class CarryVenue(Venue):
         spot_currency_info = (
             spot_currency.get("info", {}) if isinstance(spot_currency, dict) else {}
         )
+        spot_evm_contract = (
+            spot_currency_info.get("evmContract") if isinstance(spot_currency_info, dict) else None
+        )
         spot_tokens = spot_info.get("tokens") if isinstance(spot_info, dict) else None
         spot_token_index = (
             int(spot_tokens[0]) if isinstance(spot_tokens, (list, tuple)) and spot_tokens else None
@@ -107,6 +110,11 @@ class CarryVenue(Venue):
             spot_token_id=(
                 str(spot_currency_info.get("tokenId"))
                 if isinstance(spot_currency_info, dict) and spot_currency_info.get("tokenId")
+                else None
+            ),
+            spot_evm_contract_address=(
+                str(spot_evm_contract.get("address"))
+                if isinstance(spot_evm_contract, dict) and spot_evm_contract.get("address")
                 else None
             ),
             spot_is_canonical=(
