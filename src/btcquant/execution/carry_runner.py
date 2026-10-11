@@ -21,6 +21,7 @@ liquidation : sa courbe ne qualifie pas ces risques d'exécution réelle.
 from __future__ import annotations
 
 import logging
+import math
 import threading
 from collections.abc import Mapping
 from dataclasses import asdict, replace
@@ -213,6 +214,15 @@ class CarryRunner:
             venue=str(getattr(self.venue, "exchange_id", "unknown")),
             spot_symbol=str(getattr(configured, "spot_symbol", "BTC/USDC")),
             perp_symbol=str(getattr(configured, "perp_symbol", self.symbol)),
+            spot_base_name=str(getattr(configured, "spot_base_name", "BTC")),
+            spot_quote_asset=str(getattr(configured, "spot_quote_asset", "USDC")),
+            perp_base_name=str(getattr(configured, "perp_base_name", "BTC")),
+            perp_quote_asset=str(getattr(configured, "perp_quote_asset", "USDC")),
+            perp_settle_asset=str(getattr(configured, "perp_settle_asset", "USDC")),
+            spot_market_id=getattr(configured, "spot_market_id", None),
+            spot_token_index=getattr(configured, "spot_token_index", None),
+            spot_is_canonical=getattr(configured, "spot_is_canonical", None),
+            spot_token_id=getattr(configured, "spot_token_id", None),
             spot_account=str(getattr(configured, "spot_account", "spot")),
             perp_account=str(getattr(configured, "perp_account", "perp")),
             collateral_asset=str(getattr(configured, "collateral_asset", "USDC")),
@@ -471,12 +481,17 @@ class CarryRunner:
                     active_intent=self.two_leg_intent,
                     journal=self.two_leg_journal,
                     cost_provenance={
-                        "spot_fee_rate": self.policy.fee_rate,
-                        "perp_fee_rate": self.policy.fee_rate,
+                        "spot_fee_rate": self.policy.spot_execution_fee_rate,
+                        "perp_fee_rate": self.policy.perp_execution_fee_rate,
                         "spot_slippage_bps": self.policy.slippage_bps,
                         "perp_slippage_bps": self.policy.slippage_bps,
                         "borrow_rate_ann": self.borrow_rate_ann,
                         "source": getattr(self.carry_execution, "fee_source", "policy"),
+                        "fee_basis": "configured conservative taker estimates; not account-specific",
+                        "realized_execution_cost": (
+                            "spread and depth impact are included once in fill prices; "
+                            "static slippage is an admission estimate, never a second ledger debit"
+                        ),
                     },
                 )
                 if self.paper_model == "two_leg_execution_v1"
@@ -984,8 +999,10 @@ class CarryRunner:
         else:
             assert self.entry_price is not None
             open_notional = abs(self.perp_qty * self.entry_price)
-            entry_cost = (
-                open_notional * 2.0 * (self.policy.fee_rate + self.policy.slippage_bps / 10_000.0)
+            entry_cost = open_notional * (
+                self.policy.spot_execution_fee_rate
+                + self.policy.perp_execution_fee_rate
+                + 2.0 * self.policy.slippage_bps / 10_000.0
             )
             self.equity -= entry_cost
 
@@ -1079,8 +1096,10 @@ class CarryRunner:
             if exit_notional is None or exit_notional <= 0:
                 raise ValueError("exit_price doit être strictement positif")
             close_notional = abs(self.perp_qty * exit_notional)
-            exit_cost = (
-                close_notional * 2.0 * (self.policy.fee_rate + self.policy.slippage_bps / 10_000.0)
+            exit_cost = close_notional * (
+                self.policy.spot_execution_fee_rate
+                + self.policy.perp_execution_fee_rate
+                + 2.0 * self.policy.slippage_bps / 10_000.0
             )
             self.equity -= exit_cost
         self._reset_position_accounting()
@@ -1167,10 +1186,23 @@ class CarryRunner:
                 return replace(configured, liquidity_model="order_book")
             return configured
         return ExecutionConfig(
-            fee_rate=self.policy.fee_rate,
+            fee_rate=self.policy.perp_execution_fee_rate,
             slippage_bps=self.policy.slippage_bps,
             liquidity_model="order_book",
             simulation_profile="carry_two_leg",
+        )
+
+    def _two_leg_executor(self, market: CarryMarketState) -> PaperTwoLegExecutor:
+        configured = self.carry_execution
+        return PaperTwoLegExecutor(
+            self._two_leg_execution_config(),
+            CausalMarketTape([market]),
+            spot_fee_rate=self.policy.spot_execution_fee_rate,
+            perp_fee_rate=self.policy.perp_execution_fee_rate,
+            spot_quantity_step=getattr(configured, "spot_quantity_step", None),
+            perp_quantity_step=getattr(configured, "perp_quantity_step", None),
+            spot_min_notional=getattr(configured, "spot_min_notional", None),
+            perp_min_notional=getattr(configured, "perp_min_notional", None),
         )
 
     def _two_leg_market(self) -> CarryMarketState | None:
@@ -1195,6 +1227,94 @@ class CarryRunner:
             market = provider()
             if not isinstance(market, CarryMarketState):
                 raise TypeError("current_carry_market_state ne renvoie pas CarryMarketState")
+            configured = self.carry_execution
+            if configured is not None:
+                expected_fields = (
+                    ("spot_market_id", market.spot_market_id),
+                    ("spot_base_name", market.spot_base_name),
+                    ("spot_quote_asset", market.spot_quote_asset),
+                    ("spot_token_index", market.spot_token_index),
+                    ("spot_token_id", market.spot_token_id),
+                    ("spot_is_canonical", market.spot_is_canonical),
+                    ("perp_market_id", market.perp_market_id),
+                    ("perp_base_name", market.perp_base_name),
+                    ("perp_quote_asset", market.perp_quote_asset),
+                    ("perp_settle_asset", market.perp_settle_asset),
+                    ("spot_quantity_step", market.spot_quantity_step),
+                    ("perp_quantity_step", market.perp_quantity_step),
+                    ("spot_min_notional", market.spot_min_notional),
+                    ("perp_min_notional", market.perp_min_notional),
+                )
+                for field, actual in expected_fields:
+                    expected = getattr(configured, field, None)
+                    if expected is None:
+                        continue
+                    if actual is None:
+                        raise ValueError(f"métadonnée instrument absente: {field}")
+                    if isinstance(expected, float) and isinstance(actual, (float, int)):
+                        matches = math.isclose(expected, float(actual), rel_tol=0.0, abs_tol=1e-12)
+                    else:
+                        matches = actual == expected
+                    if not matches:
+                        raise ValueError(
+                            f"métadonnée instrument modifiée pour {field}: "
+                            f"attendu={expected!r}, observé={actual!r}"
+                        )
+                max_age = float(getattr(configured, "max_market_age_seconds", 15.0))
+                market_is_fresh = True
+                if market.freshness_seconds > max_age:
+                    if not self.in_position:
+                        raise ValueError(
+                            f"carnet trop ancien: {market.freshness_seconds:.3f}s > {max_age:.3f}s"
+                        )
+                    market_is_fresh = False
+                    self.store.record_incident(
+                        "accounting:carry:market_stale",
+                        engine="carry",
+                        severity="WARNING",
+                        kind="paper_market_stale",
+                        message=(
+                            "Marché périmé : nouvelles entrées suspendues ; "
+                            "une réduction de risque reste autorisée"
+                        ),
+                        context={"freshness_seconds": market.freshness_seconds},
+                    )
+                max_skew = float(getattr(configured, "max_market_timestamp_skew_seconds", 5.0))
+                spot_market_timestamp = (
+                    market.timestamp
+                    if market.spot_market_timestamp is None
+                    else market.spot_market_timestamp
+                )
+                perp_market_timestamp = (
+                    market.timestamp
+                    if market.perp_market_timestamp is None
+                    else market.perp_market_timestamp
+                )
+                timestamp_skew = abs(
+                    (
+                        pd.Timestamp(spot_market_timestamp) - pd.Timestamp(perp_market_timestamp)
+                    ).total_seconds()
+                )
+                if timestamp_skew > max_skew:
+                    if not self.in_position:
+                        raise ValueError(
+                            f"carnets spot/perp désynchronisés: {timestamp_skew:.3f}s > "
+                            f"{max_skew:.3f}s"
+                        )
+                    market_is_fresh = False
+                    self.store.record_incident(
+                        "accounting:carry:market_stale",
+                        engine="carry",
+                        severity="WARNING",
+                        kind="paper_market_stale",
+                        message=(
+                            "Carnets spot/perp désynchronisés : nouvelles entrées suspendues ; "
+                            "une réduction de risque reste autorisée"
+                        ),
+                        context={"timestamp_skew_seconds": timestamp_skew},
+                    )
+                if market_is_fresh:
+                    self.store.resolve_incident("accounting:carry:market_stale")
             return market
         except Exception as error:
             if self.in_position:
@@ -1246,11 +1366,14 @@ class CarryRunner:
             margin_rate = getattr(configured, "initial_margin_rate", None)
             if margin_rate is not None:
                 perp_ratio = market.perp_mark / market.spot_ask
+                spot_cost_rate = (
+                    self.policy.spot_execution_fee_rate + self.policy.slippage_bps / 10_000.0
+                )
+                perp_cost_rate = (
+                    self.policy.perp_execution_fee_rate + self.policy.slippage_bps / 10_000.0
+                )
                 cash_per_spot_dollar = (
-                    1.0
-                    + margin_rate * perp_ratio
-                    + (1.0 + perp_ratio)
-                    * (self.policy.fee_rate + self.policy.slippage_bps / 10_000.0)
+                    1.0 + margin_rate * perp_ratio + spot_cost_rate + perp_ratio * perp_cost_rate
                 )
                 cash_budget = min(self.policy.capital, self.two_leg_balance.equity)
                 target_notional = (
@@ -1266,15 +1389,58 @@ class CarryRunner:
             leverage=self.leverage,
             max_borrow=getattr(configured, "max_borrow", None),
             initial_margin_rate=getattr(configured, "initial_margin_rate", None),
-            spot_fee_rate=self.policy.fee_rate,
-            perp_fee_rate=self.policy.fee_rate,
+            spot_fee_rate=self.policy.spot_execution_fee_rate,
+            perp_fee_rate=self.policy.perp_execution_fee_rate,
             spot_slippage_bps=self.policy.slippage_bps,
             perp_slippage_bps=self.policy.slippage_bps,
+            spot_quantity_step=float(getattr(configured, "spot_quantity_step", None) or 0.0),
+            perp_quantity_step=float(getattr(configured, "perp_quantity_step", None) or 0.0),
+            spot_min_notional=float(getattr(configured, "spot_min_notional", None) or 0.0),
+            perp_min_notional=float(getattr(configured, "perp_min_notional", None) or 0.0),
+            market=market,
         )
 
     def _open_two_leg(
         self, *, smooth_ann: float, market: CarryMarketState, decision_timestamp: pd.Timestamp
     ) -> None:
+        configured = self.carry_execution
+        max_age = float(getattr(configured, "max_market_age_seconds", 15.0))
+        max_skew = float(getattr(configured, "max_market_timestamp_skew_seconds", 5.0))
+        spot_market_timestamp = (
+            market.timestamp
+            if market.spot_market_timestamp is None
+            else market.spot_market_timestamp
+        )
+        perp_market_timestamp = (
+            market.timestamp
+            if market.perp_market_timestamp is None
+            else market.perp_market_timestamp
+        )
+        timestamp_skew = abs(
+            (
+                pd.Timestamp(spot_market_timestamp) - pd.Timestamp(perp_market_timestamp)
+            ).total_seconds()
+        )
+        if market.freshness_seconds > max_age or timestamp_skew > max_skew:
+            reason = (
+                "stale_market_data"
+                if market.freshness_seconds > max_age
+                else "market_timestamp_skew"
+            )
+            self.store.record_incident(
+                "accounting:carry:market_stale",
+                engine="carry",
+                severity="WARNING",
+                kind="carry_entry_blocked",
+                message="Entrée carry bloquée : carnets périmés ou désynchronisés",
+                context={
+                    "reason": reason,
+                    "freshness_seconds": market.freshness_seconds,
+                    "timestamp_skew_seconds": timestamp_skew,
+                },
+            )
+            self._two_leg_persist("carry_entry_blocked", {"reason": reason})
+            return
         if self.halted or self.daily_lockout:
             reason = "kill-switch actif" if self.halted else "lockout journalier actif"
             self.store.record_incident(
@@ -1312,12 +1478,11 @@ class CarryRunner:
             self._two_leg_persist("carry_entry_blocked", {"reason": plan.reason})
             return
         self.store.resolve_incident("accounting:carry:financing_not_qualified")
-        configured = self.carry_execution
         holding_days = float(getattr(configured, "holding_days", 30.0))
-        reserve = plan.target_notional * float(getattr(configured, "uncertainty_reserve_rate", 0.0))
+        reserve = plan.perp_notional * float(getattr(configured, "uncertainty_reserve_rate", 0.0))
         economics = expected_net_carry(
             funding_ann=smooth_ann,
-            notional=plan.target_notional,
+            notional=plan.perp_notional,
             borrow_rate_ann=self.borrow_rate_ann,
             debt=plan.borrow_principal,
             holding_days=holding_days,
@@ -1363,7 +1528,7 @@ class CarryRunner:
         self._two_leg_persist(
             "carry_entry_intent", {"intent_id": intent_id, "plan": plan.as_dict()}
         )
-        executor = PaperTwoLegExecutor(self._two_leg_execution_config(), CausalMarketTape([market]))
+        executor = self._two_leg_executor(market)
         try:
             spot = executor.execute(
                 leg=CarryLeg.SPOT,
@@ -1474,7 +1639,7 @@ class CarryRunner:
                 "perp_qty": self.two_leg_balance.perp_qty,
             },
         )
-        executor = PaperTwoLegExecutor(self._two_leg_execution_config(), CausalMarketTape([market]))
+        executor = self._two_leg_executor(market)
         close_timestamp = pd.Timestamp(decision_timestamp)
         try:
             perp = None

@@ -1059,6 +1059,75 @@ def test_summary_exposes_reconciled_two_leg_accounting_and_realism(tmp_path, mon
     )
 
 
+def test_flat_carry_dashboard_keeps_latest_rejected_economics_visible(tmp_path, monkeypatch):
+    carry_state = {
+        "equity": 4_000.0,
+        "in_position": False,
+        "carry_model": "two_leg_execution_v1",
+        "execution_state": "FLAT",
+        "two_leg": {
+            "model_version": "carry_two_leg_execution_v1",
+            "state": "FLAT",
+            "venue_spec": {
+                "spot_symbol": "BTC/USDC",
+                "spot_base_name": "UBTC",
+                "spot_quote_asset": "USDC",
+                "spot_is_canonical": False,
+                "perp_symbol": "BTC/USDC:USDC",
+            },
+            "balance": {
+                "initial_cash": 4_000.0,
+                "equity": 4_000.0,
+                "cash_available": 4_000.0,
+                "cash_locked": 0.0,
+                "spot_qty": 0.0,
+                "perp_qty": 0.0,
+                "funding_received": 0.0,
+                "funding_paid": 0.0,
+                "spot_fees": 0.0,
+                "perp_fees": 0.0,
+            },
+            "cost_provenance": {"spot_fee_rate": 0.001, "perp_fee_rate": 0.0005},
+            "journal": [
+                {
+                    "event_type": "carry_entry_blocked",
+                    "reason": "net_expected_non_positive",
+                    "economics": {
+                        "funding_expected": 18.0,
+                        "basis_expected": 0.0,
+                        "entry_cost": 12.0,
+                        "exit_cost": 12.0,
+                        "uncertainty_reserve": 80.0,
+                        "net_expected_before_reserve": -6.0,
+                        "net_expected_after_reserve": -86.0,
+                        "net_expected": -86.0,
+                    },
+                    "plan": {
+                        "market_timestamp": "2026-10-11T14:30:00Z",
+                        "received_timestamp": "2026-10-11T14:30:01Z",
+                        "market_freshness_seconds": 1.0,
+                        "spot_price_step": 1.0,
+                        "perp_price_step": 1.0,
+                    },
+                }
+            ],
+        },
+    }
+    payload = _summary_fixture(
+        tmp_path,
+        monkeypatch,
+        _trend_state_with_positions(mode="SOFTWARE"),
+        carry_state,
+    )
+    two_leg = payload["carry"]["two_leg"]
+    assert two_leg["expected_net_before_reserve"] == pytest.approx(-6.0)
+    assert two_leg["expected_net_after_reserve"] == pytest.approx(-86.0)
+    assert two_leg["spot_fee_rate"] == pytest.approx(0.001)
+    assert two_leg["last_decision_event"] == "carry_entry_blocked"
+    assert two_leg["last_decision_reason"] == "net_expected_non_positive"
+    assert two_leg["spot_price_step"] == pytest.approx(1.0)
+
+
 def test_operational_journal_exposes_correlated_events_without_checkpoint_state(
     tmp_path, monkeypatch
 ):

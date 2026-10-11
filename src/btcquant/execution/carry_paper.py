@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
-from typing import Any
+from typing import Any, TypedDict
 
 import pandas as pd
 
@@ -65,7 +65,16 @@ class CarryVenueSpec:
     spot_symbol: str
     perp_symbol: str
     base_asset: str = "BTC"
+    spot_base_name: str = "BTC"
     quote_asset: str = "USDC"
+    spot_quote_asset: str = "USDC"
+    perp_base_name: str = "BTC"
+    perp_quote_asset: str = "USDC"
+    perp_settle_asset: str = "USDC"
+    spot_market_id: str | None = None
+    spot_token_index: int | None = None
+    spot_is_canonical: bool | None = None
+    spot_token_id: str | None = None
     spot_account: str = "spot"
     perp_account: str = "perp"
     collateral_asset: str = "USDC"
@@ -117,6 +126,15 @@ class CarryVenueSpec:
             venue="hyperliquid",
             spot_symbol="BTC/USDC",
             perp_symbol="BTC/USDC:USDC",
+            spot_base_name="UBTC",
+            spot_quote_asset="USDC",
+            perp_base_name="BTC",
+            perp_quote_asset="USDC",
+            perp_settle_asset="USDC",
+            spot_market_id="@142",
+            spot_token_index=197,
+            spot_is_canonical=False,
+            spot_token_id="0x9fdbda0a5e284c32744d2f17ee5c74b284993463",
             collateral_asset="USDC",
             borrow_asset="USDC",
             financing_source="HYPERLIQUID_ACCOUNT_CAPACITY_NOT_PROVIDED",
@@ -194,18 +212,49 @@ class CarryMarketState:
     perp_order_book: Mapping[str, object] | None = None
     market_timestamp: pd.Timestamp | str | None = None
     received_timestamp: pd.Timestamp | str | None = None
+    spot_market_timestamp: pd.Timestamp | str | None = None
+    perp_market_timestamp: pd.Timestamp | str | None = None
+    spot_market_id: str | None = None
+    spot_base_name: str | None = None
+    spot_quote_asset: str | None = None
+    spot_token_index: int | None = None
+    spot_token_id: str | None = None
+    spot_is_canonical: bool | None = None
+    perp_market_id: str | None = None
+    perp_base_name: str | None = None
+    perp_quote_asset: str | None = None
+    perp_settle_asset: str | None = None
+    spot_quantity_step: float | None = None
+    perp_quantity_step: float | None = None
+    spot_min_notional: float | None = None
+    perp_min_notional: float | None = None
+    spot_price_step: float | None = None
+    perp_price_step: float | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "timestamp", _utc(self.timestamp))
-        object.__setattr__(
-            self,
-            "market_timestamp",
-            self.timestamp if self.market_timestamp is None else _utc(self.market_timestamp),
+        market_timestamp = (
+            self.timestamp if self.market_timestamp is None else _utc(self.market_timestamp)
         )
+        object.__setattr__(self, "market_timestamp", market_timestamp)
         object.__setattr__(
             self,
             "received_timestamp",
             self.timestamp if self.received_timestamp is None else _utc(self.received_timestamp),
+        )
+        object.__setattr__(
+            self,
+            "spot_market_timestamp",
+            market_timestamp
+            if self.spot_market_timestamp is None
+            else _utc(self.spot_market_timestamp),
+        )
+        object.__setattr__(
+            self,
+            "perp_market_timestamp",
+            market_timestamp
+            if self.perp_market_timestamp is None
+            else _utc(self.perp_market_timestamp),
         )
         for name in (
             "spot_bid",
@@ -223,6 +272,66 @@ class CarryMarketState:
         _finite(self.freshness_seconds, "freshness_seconds", non_negative=True)
         if not self.source.strip():
             raise CarryPaperError("la source du marché est obligatoire")
+
+
+class _FinancingMarketProvenance(TypedDict):
+    market_source: str | None
+    market_timestamp: str | None
+    received_timestamp: str | None
+    spot_market_timestamp: str | None
+    perp_market_timestamp: str | None
+    market_freshness_seconds: float | None
+    spot_market_id: str | None
+    spot_base_name: str | None
+    spot_token_index: int | None
+    spot_token_id: str | None
+    spot_is_canonical: bool | None
+    perp_market_id: str | None
+    spot_price_step: float | None
+    perp_price_step: float | None
+
+
+def _market_timestamp_iso(value: pd.Timestamp | str | None, fallback: pd.Timestamp | str) -> str:
+    return pd.Timestamp(fallback if value is None else value).isoformat()
+
+
+def _financing_market_provenance(
+    market: CarryMarketState | None,
+) -> _FinancingMarketProvenance:
+    if market is None:
+        return {
+            "market_source": None,
+            "market_timestamp": None,
+            "received_timestamp": None,
+            "spot_market_timestamp": None,
+            "perp_market_timestamp": None,
+            "market_freshness_seconds": None,
+            "spot_market_id": None,
+            "spot_base_name": None,
+            "spot_token_index": None,
+            "spot_token_id": None,
+            "spot_is_canonical": None,
+            "perp_market_id": None,
+            "spot_price_step": None,
+            "perp_price_step": None,
+        }
+    market_time = market.timestamp if market.market_timestamp is None else market.market_timestamp
+    return {
+        "market_source": market.source,
+        "market_timestamp": _market_timestamp_iso(market.market_timestamp, market.timestamp),
+        "received_timestamp": _market_timestamp_iso(market.received_timestamp, market.timestamp),
+        "spot_market_timestamp": _market_timestamp_iso(market.spot_market_timestamp, market_time),
+        "perp_market_timestamp": _market_timestamp_iso(market.perp_market_timestamp, market_time),
+        "market_freshness_seconds": market.freshness_seconds,
+        "spot_market_id": market.spot_market_id,
+        "spot_base_name": market.spot_base_name,
+        "spot_token_index": market.spot_token_index,
+        "spot_token_id": market.spot_token_id,
+        "spot_is_canonical": market.spot_is_canonical,
+        "perp_market_id": market.perp_market_id,
+        "spot_price_step": market.spot_price_step,
+        "perp_price_step": market.perp_price_step,
+    }
 
 
 @dataclass(frozen=True)
@@ -245,6 +354,26 @@ class FinancingPlan:
     total_cash_required: float | str
     qualified: bool
     reason: str
+    spot_notional: float = 0.0
+    perp_notional: float = 0.0
+    spot_fee_rate: float = 0.0
+    perp_fee_rate: float = 0.0
+    spot_slippage_bps: float = 0.0
+    perp_slippage_bps: float = 0.0
+    market_source: str | None = None
+    market_timestamp: str | None = None
+    received_timestamp: str | None = None
+    spot_market_timestamp: str | None = None
+    perp_market_timestamp: str | None = None
+    market_freshness_seconds: float | None = None
+    spot_market_id: str | None = None
+    spot_base_name: str | None = None
+    spot_token_index: int | None = None
+    spot_token_id: str | None = None
+    spot_is_canonical: bool | None = None
+    perp_market_id: str | None = None
+    spot_price_step: float | None = None
+    perp_price_step: float | None = None
 
     @classmethod
     def build(
@@ -261,6 +390,11 @@ class FinancingPlan:
         perp_fee_rate: float,
         spot_slippage_bps: float,
         perp_slippage_bps: float,
+        spot_quantity_step: float = 0.0,
+        perp_quantity_step: float = 0.0,
+        spot_min_notional: float = 0.0,
+        perp_min_notional: float = 0.0,
+        market: CarryMarketState | None = None,
     ) -> FinancingPlan:
         values = {
             "capital_available": capital_available,
@@ -273,12 +407,43 @@ class FinancingPlan:
             _finite(value, name)
         if target_notional <= 0 or spot_price <= 0 or perp_mark_price <= 0 or leverage < 1:
             raise CarryPaperError("plan de financement invalide")
+        for name, value in (
+            ("spot_fee_rate", spot_fee_rate),
+            ("perp_fee_rate", perp_fee_rate),
+            ("spot_slippage_bps", spot_slippage_bps),
+            ("perp_slippage_bps", perp_slippage_bps),
+        ):
+            _finite(value, name, non_negative=True)
+        spot_quantity_step = _finite(spot_quantity_step, "spot_quantity_step", non_negative=True)
+        perp_quantity_step = _finite(perp_quantity_step, "perp_quantity_step", non_negative=True)
+        spot_min_notional = _finite(spot_min_notional, "spot_min_notional", non_negative=True)
+        perp_min_notional = _finite(perp_min_notional, "perp_min_notional", non_negative=True)
+        if (
+            spot_quantity_step
+            and perp_quantity_step
+            and not math.isclose(spot_quantity_step, perp_quantity_step, rel_tol=0.0, abs_tol=1e-15)
+        ):
+            raise CarryPaperError("pas de quantité spot/perp incompatible avec un hedge exact")
+        quantity_step = spot_quantity_step or perp_quantity_step
         spot_qty = target_notional / spot_price
-        perp_qty = target_notional / spot_price
+        if quantity_step:
+            spot_qty = (
+                math.floor((spot_qty + quantity_step * 1e-10) / quantity_step) * quantity_step
+            )
+            spot_qty = round(spot_qty, max(0, int(math.ceil(-math.log10(quantity_step))) + 2))
+        perp_qty = spot_qty
+        actual_spot_notional = spot_qty * spot_price
+        perp_notional = perp_qty * perp_mark_price
+        minimums_met = (
+            spot_qty > 0
+            and actual_spot_notional + 1e-12 >= spot_min_notional
+            and perp_notional + 1e-12 >= perp_min_notional
+        )
+        market_provenance = _financing_market_provenance(market)
         if max_borrow is None or initial_margin_rate is None:
             return cls(
                 capital_available=capital_available,
-                target_notional=target_notional,
+                target_notional=actual_spot_notional,
                 spot_price=spot_price,
                 perp_mark_price=perp_mark_price,
                 leverage=leverage,
@@ -287,34 +452,49 @@ class FinancingPlan:
                 spot_qty=spot_qty,
                 perp_qty=perp_qty,
                 borrow_principal=0.0,
-                spot_cash_required=target_notional,
+                spot_cash_required=actual_spot_notional,
                 perp_initial_margin=0.0,
                 estimated_entry_cost=0.0,
                 total_cash_required="UNKNOWN",
                 qualified=False,
                 reason="capacités d'emprunt ou marge inconnues",
+                spot_notional=actual_spot_notional,
+                perp_notional=perp_notional,
+                spot_fee_rate=spot_fee_rate,
+                perp_fee_rate=perp_fee_rate,
+                spot_slippage_bps=spot_slippage_bps,
+                perp_slippage_bps=perp_slippage_bps,
+                **market_provenance,
             )
         max_borrow = _finite(max_borrow, "max_borrow", non_negative=True)
         initial_margin_rate = _finite(initial_margin_rate, "initial_margin_rate", non_negative=True)
-        perp_notional = perp_qty * perp_mark_price
         perp_margin = perp_notional * initial_margin_rate
-        entry_cost = target_notional * (
+        entry_cost = actual_spot_notional * (
             spot_fee_rate + spot_slippage_bps / 10_000.0
         ) + perp_notional * (perp_fee_rate + perp_slippage_bps / 10_000.0)
         cash_after_margin_and_cost = capital_available - perp_margin - entry_cost
-        required_borrow = max(0.0, target_notional - max(0.0, cash_after_margin_and_cost))
+        required_borrow = max(0.0, actual_spot_notional - max(0.0, cash_after_margin_and_cost))
         borrow = min(
-            target_notional, required_borrow if required_borrow <= max_borrow else max_borrow
+            actual_spot_notional,
+            required_borrow if required_borrow <= max_borrow else max_borrow,
         )
-        spot_cash = max(0.0, target_notional - borrow)
+        spot_cash = max(0.0, actual_spot_notional - borrow)
         total = spot_cash + perp_margin + entry_cost
-        qualified = required_borrow <= max_borrow + 1e-12 and capital_available >= total - 1e-12
+        qualified = (
+            minimums_met
+            and required_borrow <= max_borrow + 1e-12
+            and capital_available >= total - 1e-12
+        )
         reason = (
-            "financement équilibré" if qualified else "capital simultané spot + marge insuffisant"
+            "financement équilibré"
+            if qualified
+            else "quantité ou notionnel minimum instrument non respecté"
+            if not minimums_met
+            else "capital simultané spot + marge insuffisant"
         )
         return cls(
             capital_available=capital_available,
-            target_notional=target_notional,
+            target_notional=actual_spot_notional,
             spot_price=spot_price,
             perp_mark_price=perp_mark_price,
             leverage=leverage,
@@ -329,6 +509,13 @@ class FinancingPlan:
             total_cash_required=total,
             qualified=qualified,
             reason=reason,
+            spot_notional=actual_spot_notional,
+            perp_notional=perp_notional,
+            spot_fee_rate=spot_fee_rate,
+            perp_fee_rate=perp_fee_rate,
+            spot_slippage_bps=spot_slippage_bps,
+            perp_slippage_bps=perp_slippage_bps,
+            **market_provenance,
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -704,10 +891,36 @@ class CausalMarketTape:
 class PaperTwoLegExecutor:
     """Exécuteur PAPER commun aux deux jambes, fondé sur le simulateur de fills."""
 
-    def __init__(self, config: ExecutionConfig, tape: CausalMarketTape) -> None:
+    def __init__(
+        self,
+        config: ExecutionConfig,
+        tape: CausalMarketTape,
+        *,
+        spot_fee_rate: float | None = None,
+        perp_fee_rate: float | None = None,
+        spot_quantity_step: float | None = None,
+        perp_quantity_step: float | None = None,
+        spot_min_notional: float | None = None,
+        perp_min_notional: float | None = None,
+    ) -> None:
         self.config = config
         self.tape = tape
         self.simulator = ExecutionSimulator(config)
+
+        def leg_simulator(
+            fee_rate: float | None, quantity_step: float | None, min_notional: float | None
+        ) -> ExecutionSimulator:
+            leg_config = replace(
+                config,
+                fee_rate=config.fee_rate if fee_rate is None else fee_rate,
+                quantity_step=(config.quantity_step if quantity_step is None else quantity_step),
+                min_qty=config.min_qty if quantity_step is None else quantity_step,
+                min_notional=(config.min_notional if min_notional is None else min_notional),
+            )
+            return self.simulator if leg_config == config else ExecutionSimulator(leg_config)
+
+        self.spot_simulator = leg_simulator(spot_fee_rate, spot_quantity_step, spot_min_notional)
+        self.perp_simulator = leg_simulator(perp_fee_rate, perp_quantity_step, perp_min_notional)
 
     def execute(
         self,
@@ -725,7 +938,8 @@ class PaperTwoLegExecutor:
             bid, ask, book = market.perp_bid, market.perp_ask, market.perp_order_book
         order_side = OrderSide(side)
         reference = ask if order_side == OrderSide.BUY else bid
-        result = self.simulator.execute_market(
+        simulator = self.spot_simulator if leg == CarryLeg.SPOT else self.perp_simulator
+        result = simulator.execute_market(
             MarketOrder(
                 order_id=event_id,
                 side=order_side,
@@ -744,7 +958,15 @@ class PaperTwoLegExecutor:
             filled_qty=result.qty,
             price=result.price,
             fee=result.fee,
-            timestamp=_utc(market.market_timestamp or market.timestamp),
+            timestamp=_utc(
+                (
+                    market.spot_market_timestamp
+                    if leg == CarryLeg.SPOT
+                    else market.perp_market_timestamp
+                )
+                or market.market_timestamp
+                or market.timestamp
+            ),
             liquidity_source=result.liquidity_source or "unknown",
         )
 
@@ -759,6 +981,7 @@ def expected_net_carry(
     entry_cost: float,
     exit_cost: float,
     uncertainty_reserve: float,
+    basis_expected: float = 0.0,
 ) -> dict[str, float | bool]:
     """Décide sur le rendement net attendu, jamais sur le funding brut seul."""
 
@@ -767,13 +990,17 @@ def expected_net_carry(
     years = holding_days / 365.25
     funding = notional * funding_ann * years
     borrow = debt * borrow_rate_ann * years
-    net = funding - borrow - entry_cost - exit_cost - uncertainty_reserve
+    net_before_reserve = funding + basis_expected - borrow - entry_cost - exit_cost
+    net = net_before_reserve - uncertainty_reserve
     return {
         "funding_expected": funding,
+        "basis_expected": basis_expected,
         "borrow_expected": borrow,
         "entry_cost": entry_cost,
         "exit_cost": exit_cost,
         "uncertainty_reserve": uncertainty_reserve,
+        "net_expected_before_reserve": net_before_reserve,
+        "net_expected_after_reserve": net,
         "net_expected": net,
         "qualified": net > 0,
     }

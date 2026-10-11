@@ -1,0 +1,32 @@
+[Unit]
+Description=btcquant - collecte publique PAPER Carry isolée
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=btcquant
+WorkingDirectory=/opt/btcquant/current
+Environment=PYTHONIOENCODING=utf-8
+Environment=BTCQUANT_ROOT=/opt/btcquant/carry-experiment
+ExecStart=/opt/btcquant/current/venv/bin/python -m btcquant.research.carry_market_collector --data-dir /opt/btcquant/carry-experiment/data --interval-seconds 60
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/btcquant/carry-experiment/data /opt/btcquant/carry-experiment/reports
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryMax=256M
+CPUQuota=20%
+TasksMax=16
+
+[Install]
+WantedBy=multi-user.target

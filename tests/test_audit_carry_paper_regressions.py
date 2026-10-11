@@ -315,9 +315,14 @@ def test_exit_accrues_interest_until_the_debt_repayment_fill(tmp_path):
 
     expected_interest = 1_000.0 * 0.10 * 1_800.0 / (365.25 * 24 * 3600)
     # Perp close loses 1.00 at the ask; spot close receives 99.00 and repays
-    # 1,000.00 of principal. The remaining cash difference is the final
-    # 30-minute interest, settled exactly once.
-    assert runner.two_leg_balance.cash_available == pytest.approx(4_098.0 - expected_interest)
+    # 1,000.00 of principal. Both market-specific commissions and the final
+    # 30-minute interest are settled exactly once.
+    expected_close_fees = (
+        102.0 * runner.policy.perp_execution_fee_rate + 99.0 * runner.policy.spot_execution_fee_rate
+    )
+    assert runner.two_leg_balance.cash_available == pytest.approx(
+        4_098.0 - expected_interest - expected_close_fees
+    )
     assert runner.two_leg_balance.accrued_interest == pytest.approx(0.0)
     assert runner.two_leg_state is CarryExecutionState.FLAT
 

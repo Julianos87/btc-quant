@@ -581,6 +581,10 @@ class CarryPolicy:
     exit_ann: float = 0.0
     smooth_days: int = 14
     fee_rate: float = 0.0005
+    # Two-leg PAPER execution may use different fee schedules per market.
+    # ``fee_rate`` remains the legacy single-rate input for historical replays.
+    spot_fee_rate: float | None = None
+    perp_fee_rate: float | None = None
     slippage_bps: float = 5.0
     borrow_rate_ann: float = DEFAULT_BORROW_RATE_ANN
 
@@ -593,16 +597,36 @@ class CarryPolicy:
             raise ValueError("smooth_days doit valoir au moins 1 jour")
         if self.enter_ann < self.exit_ann:
             raise ValueError("enter_ann doit être supérieur ou égal à exit_ann")
-        for name in ("fee_rate", "slippage_bps", "borrow_rate_ann"):
+        for name in (
+            "fee_rate",
+            "spot_fee_rate",
+            "perp_fee_rate",
+            "slippage_bps",
+            "borrow_rate_ann",
+        ):
             value = getattr(self, name)
+            if value is None and name in {"spot_fee_rate", "perp_fee_rate"}:
+                continue
             if not np.isfinite(value) or value < 0:
                 raise ValueError(f"{name} doit être fini et positif ou nul")
+
+    @property
+    def spot_execution_fee_rate(self) -> float:
+        return self.fee_rate if self.spot_fee_rate is None else self.spot_fee_rate
+
+    @property
+    def perp_execution_fee_rate(self) -> float:
+        return self.fee_rate if self.perp_fee_rate is None else self.perp_fee_rate
 
     @property
     def switch_cost(self) -> float:
         """Coût d'une bascule ON/OFF : 2 jambes, proportionnel au levier."""
 
-        return 2 * (self.fee_rate + self.slippage_bps / 10_000.0) * self.leverage
+        return (
+            self.spot_execution_fee_rate
+            + self.perp_execution_fee_rate
+            + 2 * self.slippage_bps / 10_000.0
+        ) * self.leverage
 
 
 #: Profil exécuté en paper sur le VPS (cf. deploy/btcquant-carry.service).

@@ -40,6 +40,14 @@ def test_cash_plan_reserves_margin_and_buffer_and_scales_to_losses(tmp_path):
     plan = runner._two_leg_plan(_market())
     assert plan.qualified and plan.borrow_principal == 0
     assert plan.spot_qty == plan.perp_qty
+    assert plan.spot_qty / 0.00001 == pytest.approx(round(plan.spot_qty / 0.00001))
+    assert plan.spot_notional >= 10 and plan.perp_notional >= 10
+    assert plan.spot_fee_rate == pytest.approx(0.001)
+    assert plan.perp_fee_rate == pytest.approx(0.0005)
+    expected_entry_cost = plan.spot_notional * (0.001 + 5 / 10_000) + plan.perp_notional * (
+        0.0005 + 5 / 10_000
+    )
+    assert plan.estimated_entry_cost == pytest.approx(expected_entry_cost)
     assert plan.target_notional < 4000
     assert plan.total_cash_required == pytest.approx(3920)
     assert plan.perp_initial_margin > 0 and plan.estimated_entry_cost > 0
@@ -129,3 +137,58 @@ def test_cash_profile_preserves_trend_budget_and_parameters():
     assert cash["carry_execution"]["uncertainty_reserve_rate"] == 0.02
     with pytest.raises(ValueError, match="provenance"):
         replace(carry_execution_from_config(cash), financing_source="REAL_ACCOUNT")
+
+
+def test_cash_policy_keeps_spot_and_perp_fees_distinct():
+    cfg = load_config(CONFIG)
+    policy = carry_policy_from_config(cfg)
+    assert policy.fee_rate == pytest.approx(0.0005)  # legacy single-rate replay stays stable
+    assert policy.spot_execution_fee_rate == pytest.approx(0.001)
+    assert policy.perp_execution_fee_rate == pytest.approx(0.0005)
+
+
+def test_cash_market_gate_checks_instrument_identity_and_source_freshness(tmp_path):
+    runner = make_runner(tmp_path)
+    current = replace(
+        _market(),
+        spot_market_id="@142",
+        spot_base_name="UBTC",
+        spot_quote_asset="USDC",
+        spot_token_index=197,
+        spot_token_id="0x9fdbda0a5e284c32744d2f17ee5c74b284993463",
+        spot_is_canonical=False,
+        perp_market_id="0",
+        perp_base_name="BTC",
+        perp_quote_asset="USDC",
+        perp_settle_asset="USDC",
+        spot_quantity_step=0.00001,
+        perp_quantity_step=0.00001,
+        spot_min_notional=10.0,
+        perp_min_notional=10.0,
+    )
+    runner.venue = _QualifiedVenue(current)
+    assert runner._two_leg_market() == current
+
+    runner.venue = _QualifiedVenue(replace(current, spot_base_name="BTC"))
+    assert runner._two_leg_market() is None
+
+    runner.venue = _QualifiedVenue(
+        replace(current, spot_token_id="0x00000000000000000000000000000000")
+    )
+    assert runner._two_leg_market() is None
+
+    runner.venue = _QualifiedVenue(replace(current, freshness_seconds=15.01))
+    assert runner._two_leg_market() is None
+
+    stale = replace(current, freshness_seconds=15.01)
+    runner.venue = _QualifiedVenue(stale)
+    runner.in_position = True
+    assert runner._two_leg_market() == stale
+
+
+def test_cash_entry_cannot_bypass_freshness_gate(tmp_path):
+    runner = make_runner(tmp_path)
+    market = replace(_market(), freshness_seconds=15.01)
+    runner._open_two_leg(smooth_ann=1.0, market=market, decision_timestamp=market.timestamp)
+    assert not runner.in_position
+    assert runner.two_leg_journal[-1]["reason"] == "stale_market_data"

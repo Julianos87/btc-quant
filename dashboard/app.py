@@ -840,8 +840,48 @@ def _carry_two_leg_projection(carry_state: dict, carry_two_leg: dict) -> dict:
     spec = spec if isinstance(spec, dict) else {}
     active_intent = carry_two_leg.get("active_intent") if isinstance(carry_two_leg, dict) else None
     active_intent = active_intent if isinstance(active_intent, dict) else None
-    economics = active_intent.get("economics") if active_intent else None
+    journal = carry_two_leg.get("journal") if isinstance(carry_two_leg, dict) else None
+    journal = journal if isinstance(journal, list) else []
+    latest_economic_event = next(
+        (
+            item
+            for item in reversed(journal)
+            if isinstance(item, dict) and isinstance(item.get("economics"), dict)
+        ),
+        {},
+    )
+    latest_decision_event = next(
+        (
+            item
+            for item in reversed(journal)
+            if isinstance(item, dict)
+            and item.get("event_type")
+            in {
+                "carry_entry_blocked",
+                "carry_entry_intent",
+                "carry_entry_checkpoint",
+                "carry_exit_intent",
+                "carry_reconciliation_required",
+            }
+        ),
+        {},
+    )
+    economics = (
+        active_intent.get("economics")
+        if active_intent and isinstance(active_intent.get("economics"), dict)
+        else latest_economic_event.get("economics")
+    )
     economics = economics if isinstance(economics, dict) else {}
+    plan = (
+        active_intent.get("plan")
+        if active_intent and isinstance(active_intent.get("plan"), dict)
+        else latest_economic_event.get("plan")
+        if isinstance(latest_economic_event.get("plan"), dict)
+        else latest_decision_event.get("plan")
+    )
+    plan = plan if isinstance(plan, dict) else {}
+    cost_provenance = carry_two_leg.get("cost_provenance")
+    cost_provenance = cost_provenance if isinstance(cost_provenance, dict) else {}
     state = str(carry_two_leg.get("state") or carry_state.get("execution_state") or "UNKNOWN")
     spot_qty = _dashboard_number(balance.get("spot_qty"))
     perp_qty = _dashboard_number(balance.get("perp_qty"))
@@ -861,6 +901,8 @@ def _carry_two_leg_projection(carry_state: dict, carry_two_leg: dict) -> dict:
         "venue_spec": spec,
         "balance": balance,
         "active_intent": active_intent,
+        "latest_economic_event": latest_economic_event,
+        "latest_decision_event": latest_decision_event,
         "spot_qty": spot_qty,
         "perp_qty": perp_qty,
         "residual_qty": residual,
@@ -897,12 +939,33 @@ def _carry_two_leg_projection(carry_state: dict, carry_two_leg: dict) -> dict:
         if funding_received is not None and funding_paid is not None
         else None,
         "fees": fees,
-        "borrow_rate_ann": _dashboard_number(
-            (carry_two_leg.get("cost_provenance") or {}).get("borrow_rate_ann")
-            if isinstance(carry_two_leg.get("cost_provenance"), dict)
-            else None
-        ),
+        "borrow_rate_ann": _dashboard_number(cost_provenance.get("borrow_rate_ann")),
+        "spot_fee_rate": _dashboard_number(cost_provenance.get("spot_fee_rate")),
+        "perp_fee_rate": _dashboard_number(cost_provenance.get("perp_fee_rate")),
+        "fee_basis": cost_provenance.get("fee_basis"),
         "expected_net": _dashboard_number(economics.get("net_expected")),
+        "expected_net_before_reserve": _dashboard_number(
+            economics.get("net_expected_before_reserve")
+        ),
+        "expected_net_after_reserve": _dashboard_number(
+            economics.get("net_expected_after_reserve", economics.get("net_expected"))
+        ),
+        "expected_funding": _dashboard_number(economics.get("funding_expected")),
+        "expected_basis": _dashboard_number(economics.get("basis_expected")),
+        "expected_borrow": _dashboard_number(economics.get("borrow_expected")),
+        "expected_entry_cost": _dashboard_number(economics.get("entry_cost")),
+        "expected_exit_cost": _dashboard_number(economics.get("exit_cost")),
+        "uncertainty_reserve": _dashboard_number(economics.get("uncertainty_reserve")),
+        "last_decision_reason": latest_decision_event.get("reason")
+        or latest_economic_event.get("reason"),
+        "last_decision_event": latest_decision_event.get("event_type")
+        or latest_economic_event.get("event_type"),
+        "market_source": plan.get("market_source"),
+        "market_timestamp": plan.get("market_timestamp"),
+        "market_received_timestamp": plan.get("received_timestamp"),
+        "market_freshness_seconds": _dashboard_number(plan.get("market_freshness_seconds")),
+        "spot_price_step": _dashboard_number(plan.get("spot_price_step")),
+        "perp_price_step": _dashboard_number(plan.get("perp_price_step")),
         "booked_net": booked_net,
         "margin": {
             "status": "NOT_CALCULATED",

@@ -57,13 +57,20 @@ def diagnostic() -> dict:
             end = frame.iloc[i + 720]
             following = frame.iloc[i + 1 : i + 721]
             ratio = float(entry.perp_price / entry.spot_price)
-            cost_rate = policy.fee_rate + policy.slippage_bps / 10000
+            slip_rate = policy.slippage_bps / 10000
+            spot_cost_rate = policy.spot_execution_fee_rate + slip_rate
+            perp_cost_rate = policy.perp_execution_fee_rate + slip_rate
             notional = policy.capital * policy.leverage
             if not execution.borrow_enabled:
                 notional = (
                     policy.capital
                     * execution.cash_utilization
-                    / (1 + float(execution.initial_margin_rate) * ratio + cost_rate * (1 + ratio))
+                    / (
+                        1
+                        + float(execution.initial_margin_rate) * ratio
+                        + spot_cost_rate
+                        + ratio * perp_cost_rate
+                    )
                 )
             plan = FinancingPlan.build(
                 capital_available=policy.capital,
@@ -73,14 +80,14 @@ def diagnostic() -> dict:
                 leverage=policy.leverage,
                 max_borrow=execution.max_borrow,
                 initial_margin_rate=execution.initial_margin_rate,
-                spot_fee_rate=policy.fee_rate,
-                perp_fee_rate=policy.fee_rate,
+                spot_fee_rate=policy.spot_execution_fee_rate,
+                perp_fee_rate=policy.perp_execution_fee_rate,
                 spot_slippage_bps=policy.slippage_bps,
                 perp_slippage_bps=policy.slippage_bps,
             )
             economics = expected_net_carry(
                 funding_ann=float(signal.annualized.iloc[i]),
-                notional=notional,
+                notional=plan.perp_notional,
                 borrow_rate_ann=policy.borrow_rate_ann,
                 debt=plan.borrow_principal,
                 holding_days=execution.holding_days,
@@ -96,7 +103,9 @@ def diagnostic() -> dict:
             years = (pd.Timestamp(end.timestamp) - pd.Timestamp(entry.timestamp)).total_seconds()
             years /= 365.25 * 86400
             borrow_cost = plan.borrow_principal * policy.borrow_rate_ann * years
-            exit_cost = qty * float(end.spot_price + end.perp_price) * cost_rate
+            exit_cost = qty * float(
+                end.spot_price * spot_cost_rate + end.perp_price * perp_cost_rate
+            )
             # Separate perp account: spot gains are not available short collateral.
             perp_cash = (
                 float(plan.perp_initial_margin)

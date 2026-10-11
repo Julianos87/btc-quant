@@ -32,6 +32,7 @@ WRITER_UNITS=(
   btcquant-watchdog.service btcquant-compact.service btcquant-backup.service
   btcquant-rebalance.service btcquant-rebalance-pending.service btcquant-shadow.service
   btcquant-hyperliquid-testnet.service btcquant-hyperliquid-watchdog.service
+  btcquant-carry-experimental.service btcquant-carry-data.service
 )
 WRITER_TIMERS=(
   btcquant-watchdog.timer btcquant-hyperliquid-watchdog.timer btcquant-compact.timer
@@ -65,6 +66,31 @@ restart_selected_engines() {
     systemctl restart btcquant-hyperliquid-testnet
   else
     systemctl restart btcquant-trend btcquant-carry
+  fi
+  configure_carry_experiment_services
+}
+
+configure_carry_experiment_services() {
+  local root="${ROOT}/carry-experiment"
+  if [ -f "${CURRENT}/scripts/register_carry_rework_protocol.py" ] &&
+    [ -f "${CURRENT}/src/btcquant/research/carry_market_collector.py" ]; then
+    for path in "${root}" "${root}/state" "${root}/data" "${root}/reports" "${root}/research"; do
+      if [ -L "${path}" ] || { [ -e "${path}" ] && [ ! -d "${path}" ]; }; then
+        echo "Refus: chemin expérimental non-répertoire ou lien symbolique (${path})." >&2
+        return 1
+      fi
+    done
+    install -d -o btcquant -g btcquant -m 0750 \
+      "${root}/state" "${root}/data" "${root}/reports" "${root}/research"
+    "${CURRENT}/venv/bin/python" "${CURRENT}/scripts/register_carry_rework_protocol.py" \
+      --spec "${CURRENT}/audit/carry_rework_protocol.json" \
+      --database "${root}/research/governance.sqlite3" >/dev/null
+    chown btcquant:btcquant "${root}/research/governance.sqlite3"
+    chmod 0640 "${root}/research/governance.sqlite3"
+    systemctl enable --now btcquant-carry-experimental.service btcquant-carry-data.service
+  else
+    systemctl disable --now btcquant-carry-experimental.service btcquant-carry-data.service \
+      2>/dev/null || true
   fi
 }
 
@@ -516,6 +542,10 @@ if ${RESTART_ENGINES}; then
     systemctl is-active --quiet btcquant-carry
   fi
   wait_for_readiness
+  if [ -f "${CURRENT}/scripts/register_carry_rework_protocol.py" ]; then
+    systemctl is-active --quiet btcquant-carry-experimental
+    systemctl is-active --quiet btcquant-carry-data
+  fi
 fi
 
 trap - ERR

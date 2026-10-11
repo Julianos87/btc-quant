@@ -55,6 +55,22 @@ _CARRY_EXECUTION_KEYS = {
     "model",
     "spot_symbol",
     "perp_symbol",
+    "spot_base_name",
+    "spot_quote_asset",
+    "spot_market_id",
+    "spot_token_index",
+    "spot_token_id",
+    "spot_is_canonical",
+    "perp_base_name",
+    "perp_quote_asset",
+    "perp_settle_asset",
+    "perp_market_id",
+    "spot_quantity_step",
+    "perp_quantity_step",
+    "spot_min_notional",
+    "perp_min_notional",
+    "max_market_age_seconds",
+    "max_market_timestamp_skew_seconds",
     "spot_account",
     "perp_account",
     "collateral_asset",
@@ -188,6 +204,22 @@ class CarryExecutionConfig:
     model: str = "synthetic_historical"
     spot_symbol: str = "BTC/USDC"
     perp_symbol: str = "BTC/USDC:USDC"
+    spot_base_name: str | None = None
+    spot_quote_asset: str | None = None
+    spot_market_id: str | None = None
+    spot_token_index: int | None = None
+    spot_token_id: str | None = None
+    spot_is_canonical: bool | None = None
+    perp_base_name: str | None = None
+    perp_quote_asset: str | None = None
+    perp_settle_asset: str | None = None
+    perp_market_id: str | None = None
+    spot_quantity_step: float | None = None
+    perp_quantity_step: float | None = None
+    spot_min_notional: float | None = None
+    perp_min_notional: float | None = None
+    max_market_age_seconds: float = 15.0
+    max_market_timestamp_skew_seconds: float = 5.0
     spot_account: str = "spot"
     perp_account: str = "perp"
     collateral_asset: str = "USDC"
@@ -220,17 +252,59 @@ class CarryExecutionConfig:
             raise ValueError("holding_days et max_unhedged_seconds doivent être positifs")
         if self.uncertainty_reserve_rate < 0:
             raise ValueError("uncertainty_reserve_rate doit être positif ou nul")
+        if (
+            not math.isfinite(self.max_market_age_seconds)
+            or self.max_market_age_seconds <= 0
+            or not math.isfinite(self.max_market_timestamp_skew_seconds)
+            or self.max_market_timestamp_skew_seconds < 0
+        ):
+            raise ValueError("les limites de fraîcheur marché Carry sont invalides")
         if not isinstance(self.borrow_enabled, bool):
             raise TypeError("borrow_enabled doit être booléen")
+        if self.spot_is_canonical is not None and not isinstance(self.spot_is_canonical, bool):
+            raise TypeError("spot_is_canonical doit être booléen ou null")
+        if self.spot_token_index is not None and (
+            isinstance(self.spot_token_index, bool)
+            or not isinstance(self.spot_token_index, int)
+            or self.spot_token_index < 0
+        ):
+            raise ValueError("spot_token_index doit être un entier positif ou nul")
+        for name in (
+            "spot_base_name",
+            "spot_quote_asset",
+            "spot_market_id",
+            "spot_token_id",
+            "perp_base_name",
+            "perp_quote_asset",
+            "perp_settle_asset",
+            "perp_market_id",
+        ):
+            value = getattr(self, name)
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise ValueError(f"carry_execution.{name} invalide")
         for name in (
             "max_borrow",
             "max_leverage",
             "initial_margin_rate",
             "maintenance_margin_rate",
+            "spot_quantity_step",
+            "perp_quantity_step",
+            "spot_min_notional",
+            "perp_min_notional",
         ):
             value = getattr(self, name)
-            if value is not None and (not math.isfinite(float(value)) or float(value) < 0):
+            if value is not None and (
+                not math.isfinite(float(value))
+                or float(value) < 0
+                or (name.endswith("quantity_step") and float(value) == 0)
+            ):
                 raise ValueError(f"carry_execution.{name} invalide")
+        if (self.spot_quantity_step is None) != (self.perp_quantity_step is None):
+            raise ValueError("les pas de quantité spot et perp doivent être déclarés ensemble")
+        if self.spot_quantity_step is not None and not math.isclose(
+            self.spot_quantity_step, self.perp_quantity_step or 0.0, rel_tol=0.0, abs_tol=1e-15
+        ):
+            raise ValueError("les pas spot/perp doivent permettre un hedge BTC identique")
 
 
 def carry_execution_from_config(cfg: dict[str, Any]) -> CarryExecutionConfig:
@@ -448,10 +522,14 @@ def carry_policy_from_config(cfg: dict[str, Any]) -> CarryPolicy:
     unknown = sorted(set(raw) - allowed)
     if unknown:
         raise ValueError(f"carry : clé(s) inconnue(s) {unknown}")
+    costs = costs_from_config(cfg)
+    perp_fee_rate = costs.fee_rate if costs.perp_fee_rate is None else costs.perp_fee_rate
     try:
         return CarryPolicy(
             capital=portfolio.carry_capital,
-            fee_rate=float(cfg["costs"]["perp_fee_rate"]),
+            fee_rate=float(perp_fee_rate),
+            spot_fee_rate=float(costs.fee_rate),
+            perp_fee_rate=float(perp_fee_rate),
             slippage_bps=float(cfg["costs"]["slippage_bps"]),
             **raw,
         )

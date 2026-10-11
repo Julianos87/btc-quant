@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-10-11T15:11:54Z",
+  "status": "DIAGNOSTIC_ONLY_NOT_PROFITABILITY_QUALIFICATION",
+  "source_old_report": "/home/ubuntu/btcquant-carry-cash-20261011/RAPPORT.md",
+  "old_calculation": {
+    "spot_notional_usdc_approx": 2609.34,
+    "funding_expected_usdc_30d": 16.13328668633272,
+    "entry_cost_usdc": 5.220193705487349,
+    "exit_cost_usdc": 5.220193705487349,
+    "reserve_usdc": 52.18731814203355,
+    "net_before_reserve_usdc": 5.692899275358022,
+    "net_after_reserve_usdc": -46.494418866675524,
+    "issue": "The prior diagnostic used the 0.05% perp fee for both legs, omitting the configured 0.10% spot fee."
+  },
+  "corrected_same_notional_sensitivity": {
+    "spot_taker_fee_rate": 0.001,
+    "perp_taker_fee_rate": 0.0005,
+    "static_slippage_bps_per_leg_per_side": 5,
+    "funding_expected_usdc_30d_unchanged": 16.13328668633272,
+    "entry_cost_usdc": 6.52335,
+    "exit_cost_usdc": 6.52335,
+    "net_before_reserve_usdc": 3.086586686332719,
+    "reserve_rate": 0.02,
+    "reserve_usdc": 52.1868,
+    "net_after_reserve_usdc": -49.10021331366728,
+    "break_even_funding_annualized_before_reserve": 0.060875,
+    "break_even_funding_annualized_after_reserve": 0.304375,
+    "unit": "Funding and costs expressed in USDC; annualized funding threshold uses 30/365.25 years and the same approx 2609.34 USDC perp notional."
+  },
+  "corrected_historical_diagnostic": {
+    "artifact": "audit/carry_cash_diagnostic_fee_corrected_20261011.json",
+    "sha256": "d341ed99f051cf5b2837d54bfd081af49fa9919ed6efe2da84c5ffdb6dd05c09",
+    "cash_windows": 6,
+    "entry_eligible_windows": 0,
+    "net_before_reserve_usdc_by_window": [-6.686935541654218, -10.270582246509143, -14.215455355836484, -3.623737457261705, 0.3923162825039741, 4.508119518332167],
+    "negative_before_reserve_windows": 4,
+    "positive_before_reserve_windows": 2,
+    "after_reserve_negative_windows": 6,
+    "maintenance_breaches": 0,
+    "selection_performed": false,
+    "limitations": [
+      "Previously inspected history; not a blind holdout.",
+      "Only six non-overlapping 30-day windows; below the preregistered minimum of 30 development windows and 10 untouched future holdout windows per horizon.",
+      "Hourly closes proxy execution; the source data does not contain historical order-book depth.",
+      "The result is diagnostic and does not qualify future profitability."
+    ]
+  },
+  "adoption": "NOT_ALLOWED; retain the 2% reserve and report INSUFFICIENT_EVIDENCE."
+}
