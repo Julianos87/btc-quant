@@ -15,6 +15,7 @@ from typing import Any, Literal
 InstrumentKind = Literal["spot", "dated_future"]
 SettlementKind = Literal["daily", "expiry"]
 DecisionAction = Literal["OPEN", "WAIT"]
+SpotFeeCurrencyAssumption = Literal["UNKNOWN_WORST_CASE", "BASE", "QUOTE"]
 BOOK_FRESHNESS_SECONDS = Decimal("15")
 
 
@@ -86,6 +87,7 @@ class DatedInstrument:
     active: bool
     maker_commission: Decimal | None
     taker_commission: Decimal | None
+    fee_currency: str | None
     fee_provenance: str
     metadata_timestamp: datetime
     metadata_hash: str
@@ -218,6 +220,10 @@ class DatedCarryDecision:
     selected_instrument_id: str | None
     expiry_utc: datetime | None
     quantity: Decimal
+    spot_gross_quantity: Decimal
+    spot_expected_net_quantity: Decimal
+    expected_hedge_residual: Decimal
+    spot_fee_currency_assumption: SpotFeeCurrencyAssumption
     spot_estimated_price: Decimal | None
     future_estimated_price: Decimal | None
     spot_depth_quantity: Decimal
@@ -253,6 +259,8 @@ class DatedCarryDecision:
             raise ValueError("decision identity, reason code and policy version are required")
         if self.action not in ("OPEN", "WAIT"):
             raise ValueError("decision action must be OPEN or WAIT")
+        if self.spot_fee_currency_assumption not in ("UNKNOWN_WORST_CASE", "BASE", "QUOTE"):
+            raise ValueError("unsupported spot fee currency assumption")
         for name in ("decision_at", "as_of", "expiry_utc", "spot_market_timestamp", "future_market_timestamp"):
             value = getattr(self, name)
             if value is not None:
@@ -261,6 +269,8 @@ class DatedCarryDecision:
             raise ValueError("OPEN decision requires a selected dated instrument and expiry")
         for name in (
             "quantity",
+            "spot_gross_quantity",
+            "spot_expected_net_quantity",
             "spot_depth_quantity",
             "future_depth_quantity",
             "capital",
@@ -294,6 +304,11 @@ class DatedCarryDecision:
             value = getattr(self, name)
             if value is not None:
                 object.__setattr__(self, name, _signed_decimal(value, name))
+        object.__setattr__(
+            self,
+            "expected_hedge_residual",
+            _signed_decimal(self.expected_hedge_residual, "expected_hedge_residual"),
+        )
         if not self.fee_model_version or not self.margin_model_version:
             raise ValueError("fee and margin model versions are required")
         if not all(self.source_hashes):
@@ -304,6 +319,9 @@ class DatedCarryDecision:
 
         decimal_fields = (
             "quantity",
+            "spot_gross_quantity",
+            "spot_expected_net_quantity",
+            "expected_hedge_residual",
             "spot_estimated_price",
             "future_estimated_price",
             "spot_depth_quantity",
@@ -335,7 +353,7 @@ class DatedCarryDecision:
             "spot_market_timestamp",
             "future_market_timestamp",
         )
-        payload = {
+        payload: dict[str, Any] = {
             name: _decimal_string(getattr(self, name)) for name in decimal_fields
         }
         payload.update({name: _iso_string(getattr(self, name)) for name in time_fields})
@@ -343,6 +361,7 @@ class DatedCarryDecision:
             {
                 "decision_id": self.decision_id,
                 "action": self.action,
+                "spot_fee_currency_assumption": self.spot_fee_currency_assumption,
                 "reason_code": self.reason_code,
                 "reason_message": self.reason_message,
                 "selected_instrument_id": self.selected_instrument_id,
@@ -365,4 +384,5 @@ __all__ = [
     "InstrumentKind",
     "DecisionAction",
     "SettlementKind",
+    "SpotFeeCurrencyAssumption",
 ]
