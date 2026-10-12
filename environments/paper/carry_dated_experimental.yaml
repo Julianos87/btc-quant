@@ -1,0 +1,12 @@
+# Isolated paper-only scenario. This allocation is separate from Tandem's
+# canonical Trend + Carry capital and is never consolidated into those ledgers.
+strategy: carry_btc_dated
+mode: paper
+paper_only: true
+capital: "4000"
+database: state/carry-dated-experiment/carry_dated.db
+status_file: state/carry-dated-experiment/carry_dated_status.json
+poll_seconds: 30
+max_book_age_seconds: "15"
+max_book_skew_seconds: "5"
+max_metadata_age_seconds: "300"

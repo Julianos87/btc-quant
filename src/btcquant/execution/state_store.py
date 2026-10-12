@@ -2198,6 +2198,162 @@ class StateStore:
             ).fetchone()
         return row is not None
 
+    def apply_carry_dated_event_and_checkpoint(
+        self,
+        *,
+        event_type: str,
+        aggregate_id: str,
+        business_payload: Mapping[str, Any],
+        event_metadata: Mapping[str, Any] | None = None,
+        state: Mapping[str, Any],
+        engine: str = "carry_dated",
+    ) -> str:
+        """Atomically append one dated-carry event and its checkpoint.
+
+        Existing ``events`` storage is sufficient; this does not change the
+        database schema.  Replaying an identical business identity is a no-op.
+        Reusing the identity with different content durably latches accounting
+        uncertainty before raising, so callers cannot accidentally roll back
+        the evidence of a collision.
+        """
+
+        if engine != "carry_dated":
+            raise ValueError("Le journal dated est réservé au moteur carry_dated expérimental")
+        if not event_type or not aggregate_id:
+            raise ValueError("event_type et aggregate_id doivent être non vides")
+        if not isinstance(business_payload, Mapping):
+            raise TypeError("business_payload doit être un mapping")
+        canonical_business = json.dumps(
+            dict(business_payload),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        business_hash = hashlib.sha256(canonical_business.encode()).hexdigest()
+        now = utc_now()
+        collision = False
+        with self._transaction() as connection:
+            row = connection.execute(
+                """
+                SELECT id, payload FROM events
+                WHERE engine=? AND event_type=? AND aggregate_type='dated_carry'
+                  AND aggregate_id=?
+                ORDER BY id LIMIT 1
+                """,
+                (engine, event_type, aggregate_id),
+            ).fetchone()
+            if row is not None:
+                previous = json.loads(row["payload"])
+                previous_hash = previous.get("business_sha256")
+                if previous_hash == business_hash and previous.get("business") == dict(
+                    business_payload
+                ):
+                    return "replayed"
+
+                candidate = dict(state)
+                candidate.update(
+                    {
+                        "status": "ACCOUNTING_UNCERTAIN",
+                        "accounting_uncertain": True,
+                        "incident": {
+                            "kind": "DATED_EVENT_IDENTITY_COLLISION",
+                            "event_type": event_type,
+                            "aggregate_id": aggregate_id,
+                            "previous_event_id": int(row["id"]),
+                            "previous_business_sha256": previous_hash,
+                            "received_business_sha256": business_hash,
+                            "detected_at": now,
+                        },
+                    }
+                )
+                self._save_engine_state_in_transaction(
+                    connection,
+                    engine,
+                    candidate,
+                    now=now,
+                    event_type="accounting_identity_collision",
+                    event_payload={
+                        "event_type": event_type,
+                        "aggregate_id": aggregate_id,
+                        "previous_event_id": int(row["id"]),
+                        "previous_business_sha256": previous_hash,
+                        "received_business_sha256": business_hash,
+                    },
+                    event_aggregate_type="dated_carry_incident",
+                    event_aggregate_id=aggregate_id,
+                )
+                fingerprint = f"carry-dated-event-collision:{event_type}:{aggregate_id}"
+                connection.execute(
+                    """
+                    INSERT INTO incidents(
+                        fingerprint, engine, severity, kind, message, context,
+                        status, occurrences, first_seen, last_seen
+                    ) VALUES(?, ?, 'CRITICAL', 'ACCOUNTING_IDENTITY_COLLISION', ?, ?,
+                             'OPEN', 1, ?, ?)
+                    ON CONFLICT(fingerprint) DO UPDATE SET
+                        status='OPEN', occurrences=incidents.occurrences+1,
+                        last_seen=excluded.last_seen, resolved_at=NULL,
+                        context=excluded.context
+                    """,
+                    (
+                        fingerprint,
+                        engine,
+                        f"Identité comptable dated réutilisée avec un contenu différent: {aggregate_id}",
+                        self._json(
+                            {
+                                "event_type": event_type,
+                                "aggregate_id": aggregate_id,
+                                "previous_business_sha256": previous_hash,
+                                "received_business_sha256": business_hash,
+                            }
+                        ),
+                        now,
+                        now,
+                    ),
+                )
+                collision = True
+            else:
+                self._save_engine_state_in_transaction(
+                    connection,
+                    engine,
+                    state,
+                    now=now,
+                    event_type=event_type,
+                    event_payload={
+                        "business": dict(business_payload),
+                        "business_sha256": business_hash,
+                        **dict(event_metadata or {}),
+                    },
+                    event_aggregate_type="dated_carry",
+                    event_aggregate_id=aggregate_id,
+                )
+        if collision:
+            raise AccountingIdentityCollision(aggregate_id, event_type)
+        return "applied"
+
+    def save_carry_dated_checkpoint(self, state: Mapping[str, Any]) -> None:
+        """Atomically refresh PAPER telemetry without inventing a business event.
+
+        This narrow writer is for derived marks, WAIT status and health fields.
+        Money transitions must use ``apply_carry_dated_event_and_checkpoint`` so
+        their event and checkpoint remain one atomic transaction.
+        """
+
+        engine = "carry_dated"
+        now = utc_now()
+        with self._transaction() as connection:
+            checkpoint = self._checkpoint_payload(connection, engine, state)
+            connection.execute(
+                """
+                INSERT INTO engine_state(engine, payload, updated_at) VALUES(?, ?, ?)
+                ON CONFLICT(engine) DO UPDATE SET
+                    payload=excluded.payload, updated_at=excluded.updated_at
+                """,
+                (engine, self._json(checkpoint), now),
+            )
+            self._sync_positions(connection, engine, checkpoint, now)
+
     def save_states_and_flows(
         self,
         states: dict[str, dict[str, Any]],

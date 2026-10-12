@@ -25,6 +25,7 @@ btcquant-digest = "btcquant.entrypoints.digest:main"
 btcquant-rebalance = "btcquant.entrypoints.rebalance:main"
 btcquant-shadow = "btcquant.entrypoints.shadow:main"
 btcquant-qualify-paper = "btcquant.entrypoints.paper_qualification:main"
+btcquant-carry-dated-experimental = "btcquant.entrypoints.carry_dated_experimental:main"
 
 [tool.uv]
 # ccxt pins these transitive dependencies to versions rejected by pip-audit.
