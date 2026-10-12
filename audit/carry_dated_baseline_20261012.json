@@ -1,0 +1,62 @@
+{
+  "observed_at_utc": "2026-10-12T07:31:02.616249Z",
+  "repository": "https://github.com/Julianos87/btc-quant.git",
+  "baseline_main_sha": "2c22a36bccd868b2f43eb4aec8d2e28b41ffbe5b",
+  "baseline_tree_sha": "4eaa2660d75d402dc4a7d710e5f6a42e94cd4676",
+  "work_branch": "codex/carry-dated-v1-20261012",
+  "worktree": "/home/ubuntu/btcquant-carry-dated-v1",
+  "working_tree_clean_at_creation": true,
+  "config_sha256": {
+    "environments/paper/config.yaml": "2b45bc1a95030e4a9afe5949b551ddfdaab6ab4442fa47226357c51f2e488309",
+    "environments/paper/carry_cash.yaml": "1cc741691c32d2b8601d7e6a7983905904422a76d4950c9818e168706c0432de"
+  },
+  "vps_release": {
+    "active_sha": "2c22a36bccd868b2f43eb4aec8d2e28b41ffbe5b",
+    "active_tree_sha": "4eaa2660d75d402dc4a7d710e5f6a42e94cd4676",
+    "schema_version": 14,
+    "qualification_record_id": 37,
+    "qualification_status": "PASS",
+    "ops_overall": "WATCH",
+    "watch_reason": "PAPER maturity campaign NOT_STARTED",
+    "dashboard_health_ready": "PASS",
+    "database_integrity": "PASS",
+    "unresolved_orders": 0,
+    "critical_incidents": 0,
+    "backup": "state-20261012-0300.tar.gz.enc",
+    "backup_verification": "PASS integrity=ok restart_safe=true schema=14",
+    "free_disk_gib": 12.49
+  },
+  "services": {
+    "btcquant-trend.service": {"active": true, "pid": 1537675},
+    "btcquant-carry.service": {"active": true, "pid": 1553323},
+    "btcquant-carry-experimental.service": {"active": true, "pid": 1553327},
+    "btcquant-carry-data.service": {"active": true, "pid": 1553318}
+  },
+  "canonical_state": {
+    "carry": {
+      "updated_at": "2026-10-12T07:30:00.722121+00:00",
+      "equity_usdc": 4004.3561904202543,
+      "status": "FLAT",
+      "spot_qty": 0,
+      "perp_qty": 0,
+      "borrow_principal": 0,
+      "halted": false,
+      "accounting_uncertain": false
+    },
+    "trend": {
+      "updated_at": "2026-10-12T07:30:31.943994+00:00",
+      "open_position": {
+        "slot": "trend_ls_20",
+        "direction": "LONG",
+        "quantity": 0.06089459159821826,
+        "entry_price": 83832.9876368489,
+        "entry_time": "2026-10-11T16:01:06.106041+00:00",
+        "stop_price": 82062.60089459707,
+        "stop_order_id": "paper-stop-4"
+      },
+      "halted": false
+    }
+  },
+  "scope_boundary": "Read-only baseline; no restart, service/config/state change, live/testnet order, or canonical migration performed.",
+  "architecture_decision": "docs/ADR_CARRY_DATED_PAPER.md"
+}
