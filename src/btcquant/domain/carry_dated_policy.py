@@ -22,6 +22,7 @@ from btcquant.domain.carry_dated import (
     DatedBook,
     DatedCarryDecision,
     DatedInstrument,
+    SpotFeeCurrencyAssumption,
 )
 
 
@@ -107,7 +108,11 @@ def _levels_sorted(book: DatedBook) -> bool:
 def _common_step(left: Decimal, right: Decimal) -> Decimal:
     """Return the least common multiple of two finite decimal increments."""
 
-    exponent = min(left.as_tuple().exponent, right.as_tuple().exponent)
+    left_exponent = left.as_tuple().exponent
+    right_exponent = right.as_tuple().exponent
+    if not isinstance(left_exponent, int) or not isinstance(right_exponent, int):
+        raise DatedCarryPolicyError("amount steps must be finite decimal values")
+    exponent = min(left_exponent, right_exponent)
     scale = Decimal(10) ** (-exponent)
     left_units = int(left * scale)
     right_units = int(right * scale)
@@ -124,7 +129,7 @@ class FeeSchedule:
     future_taker_rate: Decimal = Decimal("0.00035")
     delivery_rate: Decimal = Decimal("0.00025")
     spot_exit_taker_rate: Decimal = Decimal("0.0005")
-    spot_fee_currency_assumption: str = "UNKNOWN_WORST_CASE"
+    spot_fee_currency_assumption: SpotFeeCurrencyAssumption = "UNKNOWN_WORST_CASE"
     fee_sources: tuple[str, ...] = FEE_SOURCES
 
     def __post_init__(self) -> None:
@@ -611,7 +616,9 @@ def evaluate_entry(
             margin_policy=margin_policy,
         )
     if any(len(item) != 4 for item in candidate_list):
-        raise DatedCarryPolicyError("each candidate must contain spot instrument, future instrument, and both books")
+        raise DatedCarryPolicyError(
+            "each candidate must contain spot instrument, future instrument, and both books"
+        )
 
     valid_quotes = [
         _Quote(spot_instrument, future_instrument, spot_book, future_book)
@@ -674,9 +681,8 @@ def evaluate_entry(
             margin_policy=margin_policy,
         )
 
-    if (
-        not _instrument_fresh(quote.spot_instrument, now)
-        or not _instrument_fresh(quote.future_instrument, now)
+    if not _instrument_fresh(quote.spot_instrument, now) or not _instrument_fresh(
+        quote.future_instrument, now
     ):
         return _wait(
             now=now,
@@ -701,8 +707,7 @@ def evaluate_entry(
         Decimal(
             str(
                 (
-                    quote.spot_book.market_timestamp
-                    - quote.future_book.market_timestamp
+                    quote.spot_book.market_timestamp - quote.future_book.market_timestamp
                 ).total_seconds()
             )
         )
@@ -778,18 +783,6 @@ def evaluate_entry(
     net_before = gross_premium - best.fees_total - best.exit_execution_reserve
     reserve = capital * ECONOMIC_RESERVE_RATE
     net_after = net_before - reserve
-    common = {
-        "quote": quote,
-        "spot_price": best.spot_vwap,
-        "future_price": best.future_vwap,
-        "spot_time": quote.spot_book.market_timestamp,
-        "future_time": quote.future_book.market_timestamp,
-        "sizing": best,
-        "gross_premium": gross_premium,
-        "spot_depth": sum((level.quantity for level in quote.spot_book.asks), ZERO),
-        "future_depth": sum((level.quantity for level in quote.future_book.bids), ZERO),
-        "net_before": net_before,
-    }
     if best.future_vwap <= best.spot_vwap:
         return _wait(
             now=now,
@@ -798,7 +791,16 @@ def evaluate_entry(
             message="La prime exécutable future moins spot est non positive.",
             fee_schedule=fee_schedule,
             margin_policy=margin_policy,
-            **common,
+            quote=quote,
+            spot_price=best.spot_vwap,
+            future_price=best.future_vwap,
+            spot_time=quote.spot_book.market_timestamp,
+            future_time=quote.future_book.market_timestamp,
+            sizing=best,
+            gross_premium=gross_premium,
+            spot_depth=sum((level.quantity for level in quote.spot_book.asks), ZERO),
+            future_depth=sum((level.quantity for level in quote.future_book.bids), ZERO),
+            net_before=net_before,
         )
     if net_after <= ZERO:
         reason = (
@@ -817,7 +819,16 @@ def evaluate_entry(
             ),
             fee_schedule=fee_schedule,
             margin_policy=margin_policy,
-            **common,
+            quote=quote,
+            spot_price=best.spot_vwap,
+            future_price=best.future_vwap,
+            spot_time=quote.spot_book.market_timestamp,
+            future_time=quote.future_book.market_timestamp,
+            sizing=best,
+            gross_premium=gross_premium,
+            spot_depth=sum((level.quantity for level in quote.spot_book.asks), ZERO),
+            future_depth=sum((level.quantity for level in quote.future_book.bids), ZERO),
+            net_before=net_before,
         )
 
     return DatedCarryDecision(
