@@ -126,11 +126,22 @@ price move: spot equity is not derivative collateral in the simulator. The
 stress amount, reserved margin, free cash and entry admission buffer stay as
 distinct values and are tested in cash units.
 
-Exit rules must be explicit in config/protocol and exercised in replay: expiry,
-protective margin/risk action, operational emergency and any early economics
-rule. No implicit roll. Missing official settlement leaves the position
+V1 has no early economic exit and no roll: hold the short through official expiry
+and sell the spot using an observed PAPER book. A protective early close is
+allowed only when modeled collateral/margin plus the funded adverse-move buffer
+exceeds actual free derivative cash; the short is covered then the spot is sold,
+with partial fills represented as UNBALANCED. Stale/missing market data blocks
+entries and starts a risk-review/pending state; it does not trigger a liquidation
+at an invented price. Missing official settlement leaves the position
 uncertain/pending; never infer the TWAP. Spot liquidation is priced from actual
-observed bids/depth in PAPER at the configured moment and includes fee/slippage.
+observed bids/depth and includes fees/impact.
+
+The public settlement lookup `get_last_settlements_by_instrument` rejects some
+expired instruments. For reconciliation, the market adapter may use the
+official public by-currency settlement history filtered by exact instrument,
+and the official delivery-price history after confirming the response identity.
+Pagination is bounded. Missing, ambiguous, or corrected-but-not-reconciled data
+fails closed; a candle or sampled midpoint is not a substitute for official TWAP.
 
 ## Evidence boundary and deployment
 
