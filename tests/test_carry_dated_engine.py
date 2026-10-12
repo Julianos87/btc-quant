@@ -605,7 +605,8 @@ def test_effective_instrument_fees_are_persisted_and_applied_on_entry_and_exit(
     market.instruments = tuple(
         replace(item, taker_commission=Decimal("0.01")) for item in market.instruments
     )
-    store, runner, clock = make_runner(tmp_path, market)
+    status_path = tmp_path / "carry_dated_status.json"
+    store, runner, clock = make_runner(tmp_path, market, status_path=status_path)
     opened = runner.run_once()
     assert opened["status"] == "OPEN"
     assert opened["spot_entry_fee_rate"] == "0.01"
@@ -634,7 +635,24 @@ def test_effective_instrument_fees_are_persisted_and_applied_on_entry_and_exit(
         now=close_at,
     )
     runner.run_once()
+    assert runner.ledger.state["status"] == "CLOSING"
+    assert state_decimal(runner.ledger.state, "future_qty") == 0
+    assert state_decimal(runner.ledger.state, "spot_qty") > 0
+
+    # The follow-up poll sells no future (already covered) and classifies the
+    # base-fee spot remainder as dust. Its fresh spot book must reach status
+    # before the dust branch returns FLAT.
+    dust_close_at = close_at + timedelta(seconds=30)
+    clock[0] = dust_close_at
+    market.books[SPOT_ID] = book(
+        SPOT_ID,
+        now=dust_close_at,
+        bid="109900",
+        ask="110000",
+        market_time=dust_close_at - timedelta(seconds=1),
+    )
     runner.run_once()
+    status = json.loads(status_path.read_text())
 
     close_fills = [
         json.loads(event["payload"])["business"]
@@ -645,6 +663,9 @@ def test_effective_instrument_fees_are_persisted_and_applied_on_entry_and_exit(
     assert {fill["fee_rate"] for fill in close_fills} == {"0.01"}
     assert runner.ledger.state["status"] == "FLAT"
     assert state_decimal(runner.ledger.state, "spot_dust_qty") > 0
+    assert status["decision"]["action"] == "OPEN"
+    assert status["market_timestamps"]["spot"] == utc_string(dust_close_at - timedelta(seconds=1))
+    assert status["market_timestamps"]["spot"] > status["decision"]["spot_market_timestamp"]
     assert state_decimal(runner.ledger.state, "fees_paid") > entry_fees
     assert state_decimal(runner.ledger.state, "fees_paid") == sum(
         Decimal(fill["fee_quote_equivalent"]) for fill in close_fills

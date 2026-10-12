@@ -882,6 +882,9 @@ class CarryDatedRunner:
                 now=now,
             )
             return
+        # Persist every accepted close snapshot before any partial-fill or dust
+        # branch can return with a newer market observation than the checkpoint.
+        self._set_market_timestamps(spot_book, future_book)
         future_qty = state_decimal(self.ledger.state, "future_qty")
         if future_qty > 0 and future_book is not None:
             amount = floor_to_step(future_qty, decimal(future_record["amount_step"]))
@@ -944,8 +947,6 @@ class CarryDatedRunner:
             if fill.filled_qty > 0:
                 self.ledger.apply_fill(fill, timestamp=now)
 
-        self._set_market_timestamps(spot_book, future_book)
-
     def _liquidate_spot_after_expiry(self, spot_id: str, now: datetime) -> None:
         try:
             spot_book = self._get_book(spot_id)
@@ -975,6 +976,7 @@ class CarryDatedRunner:
                 now=now,
             )
             return
+        self._set_market_timestamps(spot_book, None)
         future_record = (self.ledger.state.get("instrument") or {}).get("future") or {}
         expiry_raw = future_record.get("expiration_utc")
         if not expiry_raw:
