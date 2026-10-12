@@ -41,6 +41,15 @@ Un carnet vide, croisé, futur ou trop vieux n'est pas tradable.
 (`daily`/`expiry`), period_start/end UTC, official index/TWAP, source/provenance,
 received_at, correction/version. Ne pas confondre prix officiel avec fill.
 
+`DatedCarryDecision` is shared by engine and research code: decision_id, action,
+reason_code/message/as_of, instrument/expiry, common quantity, spot/future
+estimated execution, capital/free cash, initial margin, independent stress cash,
+fees, gross/net before and after reserve, policy version and both market times.
+Money and quantities are Decimal. The pure economic function
+`btcquant.domain.carry_dated_policy.evaluate_entry` accepts candidates,
+capital, fee schedule, margin policy and current UTC time, then returns a
+`DatedCarryDecision`; it performs no I/O.
+
 `DatedCarryDecision` : decision id/time, selected expiry, executable common BTC
 quantity, spot/future fill estimate/depth, capital, cash for spot, margin cash,
 fees and exit-cost assumptions, entry premium, risk reserve, net before/after
@@ -107,6 +116,15 @@ Only open if both books and instrument metadata are fresh, coherent and deep
 enough, the hedge after fills is within tolerance, available cash covers all
 obligations and net projected outcome after an evidence-justified risk reserve
 passes the frozen threshold. Otherwise WAIT with a precise code.
+
+For the derivative cash requirement, model the current public Deribit Segregated
+Standard Margin (S:SM) schedule, not a hard-coded percentage. The source updated
+2026-09-28 specifies IM=1/L(N), MM=2/3*IM; BTC dated futures are Tier 4. Read
+the applicable max amount and schedule from qualified official contract metadata
+and version/hash them. Independently reserve cash for a preregistered adverse
+price move: spot equity is not derivative collateral in the simulator. The
+stress amount, reserved margin, free cash and entry admission buffer stay as
+distinct values and are tested in cash units.
 
 Exit rules must be explicit in config/protocol and exercised in replay: expiry,
 protective margin/risk action, operational emergency and any early economics
