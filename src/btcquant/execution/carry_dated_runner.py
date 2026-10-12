@@ -379,6 +379,7 @@ class CarryDatedRunner:
                 now=now,
             )
             return
+        self._set_market_timestamps(spot_book, future_book)
         evidence_ids = (spot_evidence_id, future_evidence_id)
         candidates = [(spot, future, spot_book, future_book)]
 
@@ -881,6 +882,9 @@ class CarryDatedRunner:
                 now=now,
             )
             return
+        # Persist every accepted close snapshot before any partial-fill or dust
+        # branch can return with a newer market observation than the checkpoint.
+        self._set_market_timestamps(spot_book, future_book)
         future_qty = state_decimal(self.ledger.state, "future_qty")
         if future_qty > 0 and future_book is not None:
             amount = floor_to_step(future_qty, decimal(future_record["amount_step"]))
@@ -943,8 +947,6 @@ class CarryDatedRunner:
             if fill.filled_qty > 0:
                 self.ledger.apply_fill(fill, timestamp=now)
 
-        self._set_market_timestamps(spot_book, future_book)
-
     def _liquidate_spot_after_expiry(self, spot_id: str, now: datetime) -> None:
         try:
             spot_book = self._get_book(spot_id)
@@ -974,6 +976,7 @@ class CarryDatedRunner:
                 now=now,
             )
             return
+        self._set_market_timestamps(spot_book, None)
         future_record = (self.ledger.state.get("instrument") or {}).get("future") or {}
         expiry_raw = future_record.get("expiration_utc")
         if not expiry_raw:
@@ -1113,24 +1116,35 @@ class CarryDatedRunner:
     def _write_status(self, now: datetime) -> None:
         try:
             state = self.ledger.checkpoint
-            market = state.get("market") or {}
+            market = dict(state.get("market") or {})
+            decision = state.get("decision") or {}
+            # Checkpoint market timestamps are updated from every accepted
+            # entry/management/close book. The decision is a fallback for
+            # older or still-flat checkpoints that predate that publication.
+            spot_timestamp = (
+                state.get("spot_market_timestamp")
+                or market.get("spot_timestamp")
+                or decision.get("spot_market_timestamp")
+            )
+            future_timestamp = (
+                state.get("future_market_timestamp")
+                or market.get("future_timestamp")
+                or decision.get("future_market_timestamp")
+            )
+            market["spot_timestamp"] = spot_timestamp
+            market["future_timestamp"] = future_timestamp
             state.update(
                 {
                     "schema_version": 1,
                     "strategy": "carry_btc_dated",
                     "paper_only": True,
                     "status_updated_at": utc_string(now),
-                    "spot_market_timestamp": state.get(
-                        "spot_market_timestamp", market.get("spot_timestamp")
-                    ),
-                    "future_market_timestamp": state.get(
-                        "future_market_timestamp", market.get("future_timestamp")
-                    ),
+                    "market": market,
+                    "spot_market_timestamp": spot_timestamp,
+                    "future_market_timestamp": future_timestamp,
                     "market_timestamps": {
-                        "spot": state.get("spot_market_timestamp", market.get("spot_timestamp")),
-                        "future": state.get(
-                            "future_market_timestamp", market.get("future_timestamp")
-                        ),
+                        "spot": spot_timestamp,
+                        "future": future_timestamp,
                     },
                 }
             )

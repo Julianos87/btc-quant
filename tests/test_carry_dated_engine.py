@@ -332,6 +332,80 @@ def test_paper_entry_status_parses_and_preserves_trend(tmp_path: Path) -> None:
     market_connection.close()
 
 
+def test_wait_status_exposes_market_timestamps_from_decision(tmp_path: Path) -> None:
+    market = make_market()
+    future_book = market.books[FUTURE_ID]
+    market.books[FUTURE_ID] = replace(
+        future_book,
+        bids=(BookLevel(Decimal("100000"), Decimal("0.05")),),
+        asks=(BookLevel(Decimal("100100"), Decimal("0.05")),),
+        mark_price=Decimal("100000"),
+        index_price=Decimal("100000"),
+    )
+    status_path = tmp_path / "carry_dated_status.json"
+    _, runner, _ = make_runner(tmp_path, market, status_path=status_path)
+
+    snapshot = runner.run_once()
+    status = json.loads(status_path.read_text())
+
+    assert snapshot["status"] == "FLAT"
+    assert status["decision"]["action"] == "WAIT"
+    assert status["market"]["spot_timestamp"] == status["decision"]["spot_market_timestamp"]
+    assert status["market"]["future_timestamp"] == status["decision"]["future_market_timestamp"]
+    assert status["market_timestamps"] == {
+        "spot": status["decision"]["spot_market_timestamp"],
+        "future": status["decision"]["future_market_timestamp"],
+    }
+
+
+def test_flat_status_keeps_newer_market_timestamps_after_close(tmp_path: Path) -> None:
+    market = make_market()
+    future_book = market.books[FUTURE_ID]
+    market.books[FUTURE_ID] = replace(
+        future_book,
+        bids=(BookLevel(Decimal("100000"), Decimal("0.05")),),
+        asks=(BookLevel(Decimal("100100"), Decimal("0.05")),),
+        mark_price=Decimal("100000"),
+        index_price=Decimal("100000"),
+    )
+    status_path = tmp_path / "carry_dated_status.json"
+    _, runner, _ = make_runner(tmp_path, market, status_path=status_path)
+    runner.run_once()
+
+    # A closed position leaves its OPEN decision in the checkpoint. Its entry
+    # books are older than the market books observed during close.
+    newer_spot_timestamp = utc_string(NOW - timedelta(seconds=1))
+    newer_future_timestamp = utc_string(NOW - timedelta(seconds=1))
+    older_decision_timestamp = utc_string(NOW - timedelta(minutes=1))
+    state = runner.ledger.state
+    state["decision"].update(
+        {
+            "action": "OPEN",
+            "spot_market_timestamp": older_decision_timestamp,
+            "future_market_timestamp": older_decision_timestamp,
+        }
+    )
+    state["spot_market_timestamp"] = newer_spot_timestamp
+    state["future_market_timestamp"] = newer_future_timestamp
+    state["market"].update(
+        {
+            "spot_timestamp": newer_spot_timestamp,
+            "future_timestamp": newer_future_timestamp,
+        }
+    )
+
+    runner._write_status(NOW)
+    status = json.loads(status_path.read_text())
+
+    assert status["status"] == "FLAT"
+    assert status["market"]["spot_timestamp"] == newer_spot_timestamp
+    assert status["market"]["future_timestamp"] == newer_future_timestamp
+    assert status["market_timestamps"] == {
+        "spot": newer_spot_timestamp,
+        "future": newer_future_timestamp,
+    }
+
+
 @pytest.mark.parametrize("timestamp_metadata_on_response", [False, True])
 def test_entry_uses_clock_after_public_market_responses(
     tmp_path: Path, timestamp_metadata_on_response: bool
@@ -531,7 +605,8 @@ def test_effective_instrument_fees_are_persisted_and_applied_on_entry_and_exit(
     market.instruments = tuple(
         replace(item, taker_commission=Decimal("0.01")) for item in market.instruments
     )
-    store, runner, clock = make_runner(tmp_path, market)
+    status_path = tmp_path / "carry_dated_status.json"
+    store, runner, clock = make_runner(tmp_path, market, status_path=status_path)
     opened = runner.run_once()
     assert opened["status"] == "OPEN"
     assert opened["spot_entry_fee_rate"] == "0.01"
@@ -560,7 +635,24 @@ def test_effective_instrument_fees_are_persisted_and_applied_on_entry_and_exit(
         now=close_at,
     )
     runner.run_once()
+    assert runner.ledger.state["status"] == "CLOSING"
+    assert state_decimal(runner.ledger.state, "future_qty") == 0
+    assert state_decimal(runner.ledger.state, "spot_qty") > 0
+
+    # The follow-up poll sells no future (already covered) and classifies the
+    # base-fee spot remainder as dust. Its fresh spot book must reach status
+    # before the dust branch returns FLAT.
+    dust_close_at = close_at + timedelta(seconds=30)
+    clock[0] = dust_close_at
+    market.books[SPOT_ID] = book(
+        SPOT_ID,
+        now=dust_close_at,
+        bid="109900",
+        ask="110000",
+        market_time=dust_close_at - timedelta(seconds=1),
+    )
     runner.run_once()
+    status = json.loads(status_path.read_text())
 
     close_fills = [
         json.loads(event["payload"])["business"]
@@ -571,6 +663,9 @@ def test_effective_instrument_fees_are_persisted_and_applied_on_entry_and_exit(
     assert {fill["fee_rate"] for fill in close_fills} == {"0.01"}
     assert runner.ledger.state["status"] == "FLAT"
     assert state_decimal(runner.ledger.state, "spot_dust_qty") > 0
+    assert status["decision"]["action"] == "OPEN"
+    assert status["market_timestamps"]["spot"] == utc_string(dust_close_at - timedelta(seconds=1))
+    assert status["market_timestamps"]["spot"] > status["decision"]["spot_market_timestamp"]
     assert state_decimal(runner.ledger.state, "fees_paid") > entry_fees
     assert state_decimal(runner.ledger.state, "fees_paid") == sum(
         Decimal(fill["fee_quote_equivalent"]) for fill in close_fills
