@@ -25,6 +25,7 @@ from .carry_dated_ledger import (
     BOOK_DEPTH_LEVELS,
     BOOK_EVIDENCE_PROTOCOL_VERSION,
     DEFAULT_MARKET_EVIDENCE_QUOTA_BYTES,
+    DEFAULT_MARKET_EVIDENCE_MIN_FREE_BYTES,
     DatedLedgerError,
     common_quantity_step,
     decimal,
@@ -75,7 +76,7 @@ class CarryDatedRunner:
         max_metadata_age_seconds: Decimal = DEFAULT_MAX_METADATA_AGE_SECONDS,
         market_evidence_quota_bytes: int = DEFAULT_MARKET_EVIDENCE_QUOTA_BYTES,
         market_evidence_archive_dir: str | Path | None = None,
-        market_evidence_min_free_bytes: int = 0,
+        market_evidence_min_free_bytes: int = DEFAULT_MARKET_EVIDENCE_MIN_FREE_BYTES,
     ) -> None:
         if poll_seconds < 1:
             raise ValueError("poll_seconds must be positive")

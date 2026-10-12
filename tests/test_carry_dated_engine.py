@@ -1464,12 +1464,21 @@ def test_experimental_config_rejects_traversal_and_requires_isolated_db(tmp_path
         "book_depth_levels": 20,
         "market_evidence_protocol_version": "carry-dated-market-evidence-v2",
         "market_evidence_quota_bytes": 5 * 1024 * 1024 * 1024,
+        "market_evidence_min_free_bytes": 10 * 1024 * 1024 * 1024,
     }
     config_path.write_text(
         "\n".join(f"{key}: {json.dumps(value)}" for key, value in config.items()),
         encoding="utf-8",
     )
     assert load_experimental_config(config_path)["paper_only"] is True
+    config["market_evidence_min_free_bytes"] = 2 * 1024 * 1024 * 1024
+    config_path.write_text(
+        "\n".join(f"{key}: {json.dumps(value)}" for key, value in config.items()),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="10 GiB"):
+        load_experimental_config(config_path)
+    config["market_evidence_min_free_bytes"] = 10 * 1024 * 1024 * 1024
     config["database"] = "state/carry-dated-experiment/../../btcquant.db"
     config_path.write_text(
         "\n".join(f"{key}: {json.dumps(value)}" for key, value in config.items()),

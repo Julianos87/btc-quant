@@ -123,5 +123,6 @@ def test_collector_unit_uses_runner_books_and_consistent_storage_quota() -> None
     )
     assert "--books-from-runner" in unit
     assert "--max-total-bytes 5368709120" in unit
-    assert "--min-free-bytes 2147483648" in unit
+    assert "--min-free-bytes 10737418240" in unit
     assert "market_evidence_quota_bytes: 5368709120" in profile
+    assert "market_evidence_min_free_bytes: 10737418240" in profile

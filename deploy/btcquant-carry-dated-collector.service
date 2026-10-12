@@ -13,7 +13,7 @@ WorkingDirectory=/opt/btcquant/current
 Environment=PYTHONIOENCODING=utf-8
 Environment=BTCQUANT_LOG_LEVEL=INFO
 Environment=BTCQUANT_ROOT=/opt/btcquant
-ExecStart=/opt/btcquant/current/venv/bin/python -m btcquant.research.carry_dated_collector --database /opt/btcquant/state/carry-dated-experiment/market.sqlite3 --archive-dir /opt/btcquant/data/carry-dated-experiment/archive --status-path /opt/btcquant/state/carry-dated-experiment/collector_status.json --interval 30 --book-depth 20 --settlement-interval 1800 --archive-age-hours 24 --retention-days 700 --max-total-bytes 5368709120 --min-free-bytes 2147483648 --books-from-runner
+ExecStart=/opt/btcquant/current/venv/bin/python -m btcquant.research.carry_dated_collector --database /opt/btcquant/state/carry-dated-experiment/market.sqlite3 --archive-dir /opt/btcquant/data/carry-dated-experiment/archive --status-path /opt/btcquant/state/carry-dated-experiment/collector_status.json --interval 30 --book-depth 20 --settlement-interval 1800 --archive-age-hours 24 --retention-days 700 --max-total-bytes 5368709120 --min-free-bytes 10737418240 --books-from-runner
 Restart=on-failure
 RestartSec=15
 TimeoutStopSec=30

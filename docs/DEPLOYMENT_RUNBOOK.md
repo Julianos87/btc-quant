@@ -338,16 +338,24 @@ runner. S'il ne trouve pas les deux carnets récents attendus, son état est
 
 La cible de conservation est 700 jours pour couvrir le plancher causal de 560
 jours (30 cycles de développement + 10 cycles holdout, 14 jours minimum
-chacun). Le plafond global est 5 GiB et le collecteur garde au moins 2 GiB
-libres; il suspend explicitement l'écriture au seuil sans purge automatique.
+chacun). Le plafond global est 5 GiB et runner/collecteur gardent au moins
+10 GiB libres. Ce plancher protège la sauvegarde d'état : à la baseline VPS du
+12 octobre, son budget conservateur est d'environ 8,8 GiB (4× l'état courant,
+128 MiB de staging et 2,5 GiB de réserve après sauvegarde). La collecte se
+suspend au seuil sans purge automatique.
 Un test de 300 polls à carnets variables de 20 niveaux a projeté 1,52 GiB sur
 700 jours pour les snapshots runner et les cycles; une estimation indépendante
 plus conservatrice donne 1,88 GiB pour les snapshots seuls. Ces fixtures
 excluent les métadonnées/règlements et ne sont pas une mesure de réponses
-réelles de Deribit. Mesurer la croissance réelle après 24–72 h sur le VPS avant
-de valider la capacité 700 jours. La sauvegarde chiffrée du même volume exige
-de la place distincte : prévoir jusqu'à 5 GiB d'archive, 5 GiB de miroir
-chiffré et 2,5 GiB de réserve libre, en plus de l'état Trend.
+réelles de Deribit. Sur le VPS contrôlé, 14,56 GiB sont libres. La projection
+conservatrice de 1,88 GiB d'archive plus un miroir chiffré comparable donne
+3,76 GiB supplémentaires et laisse environ 10,8 GiB libres, au-dessus du
+plancher de 10 GiB. Le plafond de 5 GiB reste une limite de panne sûre, pas une
+promesse de capacité : si les réponses réelles dépassent cette projection, le
+collecteur suspendra la collecte avant de consommer l'espace requis par la
+sauvegarde. Mesurer la croissance réelle après 24–72 h et ne valider la cible
+700 jours qu'après comparaison avec ce budget; ne réduire ni cadence, ni
+profondeur, ni rétention pour contourner une suspension.
 
 Quand la baseline Trend/Carry et la sauvegarde vérifiée sont enregistrées,
 activer uniquement les deux unités expérimentales :

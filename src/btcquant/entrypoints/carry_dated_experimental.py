@@ -21,6 +21,7 @@ from btcquant.execution.carry_dated_runner import CarryDatedRunner
 from btcquant.execution.state_store import StateStore
 
 ROOT = Path(os.environ.get("BTCQUANT_ROOT", Path.cwd())).resolve()
+MIN_MARKET_EVIDENCE_FREE_BYTES = 10 * 1024 * 1024 * 1024
 CONFIG_KEYS = {
     "strategy",
     "mode",
@@ -35,6 +36,7 @@ CONFIG_KEYS = {
     "book_depth_levels",
     "market_evidence_protocol_version",
     "market_evidence_quota_bytes",
+    "market_evidence_min_free_bytes",
 }
 
 
@@ -128,6 +130,14 @@ def load_experimental_config(path: str | Path) -> dict[str, Any]:
         or config["market_evidence_quota_bytes"] < 1
     ):
         raise ValueError("market_evidence_quota_bytes must be a positive integer")
+    if (
+        not isinstance(config["market_evidence_min_free_bytes"], int)
+        or isinstance(config["market_evidence_min_free_bytes"], bool)
+        or config["market_evidence_min_free_bytes"] < MIN_MARKET_EVIDENCE_FREE_BYTES
+    ):
+        raise ValueError(
+            "market_evidence_min_free_bytes must preserve the 10 GiB verified backup headroom"
+        )
     for key in (
         "capital",
         "max_book_age_seconds",
@@ -200,7 +210,7 @@ def main() -> None:
         max_metadata_age_seconds=_decimal(config, "max_metadata_age_seconds"),
         market_evidence_quota_bytes=config["market_evidence_quota_bytes"],
         market_evidence_archive_dir=ROOT / "data" / "carry-dated-experiment" / "archive",
-        market_evidence_min_free_bytes=2 * 1024 * 1024 * 1024,
+        market_evidence_min_free_bytes=config["market_evidence_min_free_bytes"],
     )
     runner.run_forever()
 

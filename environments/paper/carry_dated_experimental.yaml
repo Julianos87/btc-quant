@@ -13,3 +13,4 @@ max_metadata_age_seconds: "300"
 book_depth_levels: 20
 market_evidence_protocol_version: carry-dated-market-evidence-v2
 market_evidence_quota_bytes: 5368709120
+market_evidence_min_free_bytes: 10737418240
