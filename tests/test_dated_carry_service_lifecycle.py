@@ -120,6 +120,54 @@ def test_sync_starts_only_isolated_paper_units_and_restarts_active_code(
     assert "mismatched collector/profile minimum free-space limits" in refused.stderr
     assert not log.read_text(encoding="utf-8")
 
+    profile_path = release / "environments" / "paper" / "carry_dated_experimental.yaml"
+    profile_source = (ROOT / "environments" / "paper" / "carry_dated_experimental.yaml").read_text(
+        encoding="utf-8"
+    )
+    collector_source = (ROOT / "deploy" / UNITS[0]).read_text(encoding="utf-8")
+
+    for profile_key, unit_flag, valid_value, invalid_value, error in (
+        (
+            "market_evidence_min_free_bytes",
+            "min-free-bytes",
+            "10737418240",
+            "2147483648",
+            "free-space floor below 10 GiB",
+        ),
+        (
+            "market_evidence_quota_bytes",
+            "max-total-bytes",
+            "5368709120",
+            "4294967296",
+            "quota other than the v2 5 GiB budget",
+        ),
+    ):
+        profile_path.write_text(
+            profile_source.replace(
+                f"{profile_key}: {valid_value}",
+                f"{profile_key}: {invalid_value}",
+            ),
+            encoding="utf-8",
+        )
+        collector.write_text(
+            collector_source.replace(
+                f"--{unit_flag} {valid_value}",
+                f"--{unit_flag} {invalid_value}",
+            ),
+            encoding="utf-8",
+        )
+        log.write_text("", encoding="utf-8")
+        refused = subprocess.run(
+            ["bash", str(helper), str(release), "true"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert refused.returncode != 0
+        assert error in refused.stderr
+        assert not log.read_text(encoding="utf-8")
+
 
 def test_update_syncs_target_services_without_restarting_canonical_engines() -> None:
     update = (ROOT / "deploy" / "update.sh").read_text(encoding="utf-8")

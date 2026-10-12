@@ -83,6 +83,10 @@ if unit_bytes("min-free-bytes") != configured_bytes("market_evidence_min_free_by
     raise SystemExit("Refusing mismatched collector/profile minimum free-space limits")
 if unit_bytes("max-total-bytes") != configured_bytes("market_evidence_quota_bytes"):
     raise SystemExit("Refusing mismatched collector/profile evidence quotas")
+if configured_bytes("market_evidence_min_free_bytes") < 10737418240:
+    raise SystemExit("Refusing a dated Carry collector free-space floor below 10 GiB")
+if configured_bytes("market_evidence_quota_bytes") != 5368709120:
+    raise SystemExit("Refusing a dated Carry evidence quota other than the v2 5 GiB budget")
 PY
 
 for unit in "${UNITS[@]}"; do
