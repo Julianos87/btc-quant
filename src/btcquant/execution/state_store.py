@@ -2251,6 +2251,15 @@ class StateStore:
                 ):
                     return "replayed"
 
+                settlement_correction = None
+                if event_type == "dated_future_settlement":
+                    settlement_correction = {
+                        "previous_business": previous.get("business"),
+                        "received_business": dict(business_payload),
+                        "previous_sha256": previous_hash,
+                        "received_sha256": business_hash,
+                    }
+
                 candidate = dict(state)
                 candidate.update(
                     {
@@ -2263,6 +2272,11 @@ class StateStore:
                             "previous_event_id": int(row["id"]),
                             "previous_business_sha256": previous_hash,
                             "received_business_sha256": business_hash,
+                            **(
+                                {"settlement_correction": settlement_correction}
+                                if settlement_correction is not None
+                                else {}
+                            ),
                             "detected_at": now,
                         },
                     }
@@ -2279,6 +2293,11 @@ class StateStore:
                         "previous_event_id": int(row["id"]),
                         "previous_business_sha256": previous_hash,
                         "received_business_sha256": business_hash,
+                        **(
+                            {"settlement_correction": settlement_correction}
+                            if settlement_correction is not None
+                            else {}
+                        ),
                     },
                     event_aggregate_type="dated_carry_incident",
                     event_aggregate_id=aggregate_id,
@@ -2306,6 +2325,11 @@ class StateStore:
                                 "aggregate_id": aggregate_id,
                                 "previous_business_sha256": previous_hash,
                                 "received_business_sha256": business_hash,
+                                **(
+                                    {"settlement_correction": settlement_correction}
+                                    if settlement_correction is not None
+                                    else {}
+                                ),
                             }
                         ),
                         now,

@@ -184,7 +184,11 @@ class DeribitPublicClient:
                         error = payload["error"]
                         data = error.get("data") if isinstance(error, dict) else None
                         rpc_reason = data.get("reason") if isinstance(data, dict) else None
-                        message = error.get("message", "JSON-RPC error") if isinstance(error, dict) else "JSON-RPC error"
+                        message = (
+                            error.get("message", "JSON-RPC error")
+                            if isinstance(error, dict)
+                            else "JSON-RPC error"
+                        )
                         code = error.get("code") if isinstance(error, dict) else None
                         try:
                             rpc_code = int(code) if code is not None else None
@@ -197,7 +201,8 @@ class DeribitPublicClient:
                         # and backoff used for HTTP 429/5xx and transport failures.
                         retryable = (
                             rpc_code == 10028
-                            or str(rpc_reason or "").casefold() in {"too_many_requests", "rate_limit"}
+                            or str(rpc_reason or "").casefold()
+                            in {"too_many_requests", "rate_limit"}
                             or "too_many_requests" in error_message.casefold()
                             or "too many requests" in error_message.casefold()
                         )
@@ -221,7 +226,9 @@ class DeribitPublicClient:
                     error_payload = json.loads(body, parse_float=Decimal, parse_int=int)
                     error = error_payload.get("error", {})
                     data = error.get("data", {}) if isinstance(error, dict) else {}
-                    message = str(error.get("message", message)) if isinstance(error, dict) else message
+                    message = (
+                        str(error.get("message", message)) if isinstance(error, dict) else message
+                    )
                     reason_value = data.get("reason") if isinstance(data, dict) else None
                     http_reason = str(reason_value) if reason_value is not None else None
                 except (ValueError, TypeError, AttributeError):
@@ -239,7 +246,9 @@ class DeribitPublicClient:
                     continue
                 raise DeribitPublicAPIError(method, type(exc).__name__) from None
             except (json.JSONDecodeError, UnicodeDecodeError, InvalidOperation) as exc:
-                raise DeribitPublicAPIError(method, f"malformed response: {type(exc).__name__}") from None
+                raise DeribitPublicAPIError(
+                    method, f"malformed response: {type(exc).__name__}"
+                ) from None
         raise DeribitPublicAPIError(method, "retry limit exceeded")
 
     def _instrument(self, raw: Any, received_at: datetime) -> DatedInstrument:
@@ -268,7 +277,9 @@ class DeribitPublicClient:
                 or name.endswith("-PERPETUAL")
                 or raw.get("settlement_period") == "perpetual"
             ):
-                raise DeribitPublicAPIError("get_instruments", "future is not linear BTC-USDC dated")
+                raise DeribitPublicAPIError(
+                    "get_instruments", "future is not linear BTC-USDC dated"
+                )
             kind = "dated_future"
             expiry = _timestamp_ms(raw.get("expiration_timestamp"), "expiration_timestamp")
         else:
@@ -350,7 +361,9 @@ class DeribitPublicClient:
 
     def get_book(self, instrument_id: str, *, depth: int = DEFAULT_BOOK_DEPTH) -> DatedBook:
         if not instrument_id or depth not in {1, 5, 10, 20, 50, 100, 1000, 10000}:
-            raise ValueError("instrument_id is required and depth must be an official supported value")
+            raise ValueError(
+                "instrument_id is required and depth must be an official supported value"
+            )
         result, received = self._get(
             "get_order_book", {"instrument_name": instrument_id, "depth": depth}
         )
@@ -393,7 +406,9 @@ class DeribitPublicClient:
             if not isinstance(row, list) or len(row) != 2:
                 raise DeribitPublicAPIError("get_order_book", f"malformed {side} level")
             try:
-                levels.append(BookLevel(_decimal(row[0], f"{side} price"), _decimal(row[1], f"{side} amount")))
+                levels.append(
+                    BookLevel(_decimal(row[0], f"{side} price"), _decimal(row[1], f"{side} amount"))
+                )
             except ValueError as exc:
                 raise DeribitPublicAPIError("get_order_book", str(exc)) from exc
         return tuple(levels)
@@ -466,7 +481,9 @@ class DeribitPublicClient:
                 normalized.append(settlement)
         if after_key is not None and not cursor_found:
             raise SettlementCursorMissing(
-                "get_last_settlements_by_currency" if not by_instrument else "get_last_settlements_by_instrument",
+                "get_last_settlements_by_currency"
+                if not by_instrument
+                else "get_last_settlements_by_instrument",
                 "persisted settlement cursor was not returned within the bounded history scan",
             )
         normalized = [
@@ -500,11 +517,19 @@ class DeribitPublicClient:
             )
             for row in page_rows:
                 timestamp = int(row["timestamp"])
-                if cursor_ms is not None and timestamp == cursor_ms and api_type == self._api_type_for_kind(cursor_kind):
+                if (
+                    cursor_ms is not None
+                    and timestamp == cursor_ms
+                    and api_type == self._api_type_for_kind(cursor_kind)
+                ):
                     cursor_event_found = True
                 if cursor_ms is None or timestamp >= cursor_ms:
                     rows.append((row, received))
-            if cursor_ms is not None and page_min_timestamp is not None and page_min_timestamp <= cursor_ms:
+            if (
+                cursor_ms is not None
+                and page_min_timestamp is not None
+                and page_min_timestamp <= cursor_ms
+            ):
                 break
             if not next_cursor:
                 break
@@ -513,7 +538,11 @@ class DeribitPublicClient:
                     "get_last_settlements_by_instrument", "history page limit reached before cursor"
                 )
             continuation = next_cursor
-        if cursor_ms is not None and api_type == self._api_type_for_kind(cursor_kind) and not cursor_event_found:
+        if (
+            cursor_ms is not None
+            and api_type == self._api_type_for_kind(cursor_kind)
+            and not cursor_event_found
+        ):
             raise SettlementCursorMissing(
                 "get_last_settlements_by_instrument", "persisted settlement cursor is absent"
             )
@@ -578,10 +607,14 @@ class DeribitPublicClient:
         all_timestamps: list[int] = []
         for row in result["settlements"]:
             if not isinstance(row, dict):
-                raise DeribitPublicAPIError("get_last_settlements_by_*", "settlement row is malformed")
+                raise DeribitPublicAPIError(
+                    "get_last_settlements_by_*", "settlement row is malformed"
+                )
             timestamp = row.get("timestamp")
             if not isinstance(timestamp, int):
-                raise DeribitPublicAPIError("get_last_settlements_by_*", "settlement timestamp is malformed")
+                raise DeribitPublicAPIError(
+                    "get_last_settlements_by_*", "settlement timestamp is malformed"
+                )
             all_timestamps.append(timestamp)
             if row.get("instrument_name") != instrument_id:
                 continue
@@ -600,8 +633,13 @@ class DeribitPublicClient:
         received_at: datetime,
     ) -> DatedSettlement:
         api_type = row.get("type")
-        if api_type not in {"settlement", "delivery"} or row.get("instrument_name") != instrument_id:
-            raise SettlementDataMismatch("get_last_settlements_by_*", "settlement response identity mismatch")
+        if (
+            api_type not in {"settlement", "delivery"}
+            or row.get("instrument_name") != instrument_id
+        ):
+            raise SettlementDataMismatch(
+                "get_last_settlements_by_*", "settlement response identity mismatch"
+            )
         kind: SettlementKind = "daily" if api_type == "settlement" else "expiry"
         event_at = _timestamp_ms(row.get("timestamp"), "settlement timestamp")
         official_price = _decimal(row.get("index_price"), "official settlement index price")
@@ -650,15 +688,20 @@ class DeribitPublicClient:
                 },
             )
             if not isinstance(result, dict) or not isinstance(result.get("data"), list):
-                raise SettlementDataMismatch("get_delivery_prices", "delivery price result is malformed")
+                raise SettlementDataMismatch(
+                    "get_delivery_prices", "delivery price result is malformed"
+                )
             for row in result["data"]:
                 if not isinstance(row, dict):
-                    raise SettlementDataMismatch("get_delivery_prices", "delivery price row is malformed")
+                    raise SettlementDataMismatch(
+                        "get_delivery_prices", "delivery price row is malformed"
+                    )
                 if row.get("date") == target_date:
                     price = _decimal(row.get("delivery_price"), "official delivery price")
                     if found and price != target_price:
                         raise SettlementDataMismatch(
-                            "get_delivery_prices", "multiple official prices conflict for expiry date"
+                            "get_delivery_prices",
+                            "multiple official prices conflict for expiry date",
                         )
                     found = True
                     target_price = price
@@ -671,7 +714,8 @@ class DeribitPublicClient:
             )
         if target_price != settlement.official_index_price:
             raise SettlementDataMismatch(
-                "get_delivery_prices", "currency settlement index and delivery price history disagree"
+                "get_delivery_prices",
+                "currency settlement index and delivery price history disagree",
             )
         digest = _canonical_hash(
             {

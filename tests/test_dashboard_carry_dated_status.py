@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import dashboard.app as dashboard_app
 from dashboard.carry_dated_status import (
+    DEFAULT_COLLECTOR_STATUS_RELATIVE_PATH,
     MAX_SNAPSHOT_AGE_SECONDS,
     STATUS_ENV,
     project_status,
@@ -85,13 +86,61 @@ def test_valid_snapshot_is_observable_but_not_operationally_ready(tmp_path):
     assert report["snapshot"]["status"] == "FLAT"
     assert report["readiness_status"] == "UNKNOWN"
     assert report["readiness_reason_codes"] == [
-        "COLLECTOR_HEALTH_NOT_BOUND",
+        "COLLECTOR_SYSTEMD_LIVENESS_NOT_PROBED",
         "RUNNER_UNIT_PROBE_NOT_BOUND",
         "DATABASE_INTEGRITY_NOT_BOUND",
-        "DISK_QUOTA_NOT_BOUND",
+        "BACKUP_RESTORE_NOT_BOUND",
     ]
     assert report["components"]["runner"]["unit"] == "btcquant-carry-dated-experimental.service"
-    assert report["components"]["collector"]["unit"] is None
+    assert report["components"]["collector"]["unit"] == "btcquant-carry-dated-collector.service"
+    assert report["components"]["collector"]["status"] == "UNKNOWN"
+    assert report["economic_evidence"] == "INSUFFICIENT_EVIDENCE"
+
+
+def test_collector_heartbeat_and_storage_are_projected_without_claiming_readiness(tmp_path):
+    now = datetime.now(UTC)
+    dated_dir = tmp_path / "carry-dated-experiment"
+    dated_dir.mkdir()
+    (dated_dir / "carry_dated_status.json").write_text(json.dumps(_snapshot(now=now)))
+    collector = {
+        "schema_version": 1,
+        "service": "btcquant-carry-dated-collector",
+        "paper_only": True,
+        "state": "OK",
+        "attempted_at": now.isoformat().replace("+00:00", "Z"),
+        "retention_goal_days": 365,
+        "retention_policy": "goal_only; no automatic archive purge",
+        "max_total_bytes": 2_000_000,
+        "min_free_bytes": 100,
+        "details": {
+            "total_bytes": 500,
+            "free_bytes": 500,
+            "freshest_market_timestamp": now.isoformat().replace("+00:00", "Z"),
+            "book_errors": [],
+            "book_quality": {"BTC_USDC": [], "BTC_USDC-11NOV26": []},
+            "settlement_errors": [],
+            "observed_coverage_start_utc": "2026-10-12T08:00:00Z",
+            "observed_coverage_end_utc": "2026-10-12T09:00:00Z",
+            "archive_segment_count": 1,
+            "invalid_archive_manifest_count": 0,
+            "archive_integrity_status": "NO_ARCHIVES",
+        },
+    }
+    (dated_dir / DEFAULT_COLLECTOR_STATUS_RELATIVE_PATH.name).write_text(json.dumps(collector))
+
+    report = project_status(tmp_path, now=now)
+
+    assert report["readiness_status"] == "UNKNOWN"
+    assert report["components"]["collector"]["status"] == "HEALTHY"
+    assert report["components"]["collector"]["unit"] == "btcquant-carry-dated-collector.service"
+    assert report["components"]["disk"] == {
+        "status": "OK",
+        "used_bytes": 500,
+        "free_bytes": 500,
+        "quota_bytes": 2_000_000,
+        "minimum_free_bytes": 100,
+    }
+    assert report["components"]["market_data"]["status"] == "HEALTHY"
     assert report["economic_evidence"] == "INSUFFICIENT_EVIDENCE"
 
 

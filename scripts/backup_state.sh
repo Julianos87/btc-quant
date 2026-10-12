@@ -17,9 +17,20 @@ if [ -z "${BTCQUANT_ROOT:-}" ]; then
 fi
 RUNTIME_ROOT="$(cd "${BTCQUANT_ROOT}" && pwd -P)"
 STATE_DIR="${RUNTIME_ROOT}/state"
+DATA_DIR="${RUNTIME_ROOT}/data"
+DATED_STATE_DIR="${STATE_DIR}/carry-dated-experiment"
+DATED_DATA_DIR="${DATA_DIR}/carry-dated-experiment"
 BACKUP_DIR="${RUNTIME_ROOT}/backups"
 if [ -L "${STATE_DIR}" ]; then
   echo "Refusing: runtime state path is a symlink: ${STATE_DIR}" >&2
+  exit 2
+fi
+if [ -L "${DATA_DIR}" ] || [ -L "${DATED_DATA_DIR}" ] || [ -L "${DATED_STATE_DIR}" ]; then
+  echo "Refusing: dated Carry backup path is a symlink" >&2
+  exit 2
+fi
+if [ -L "${BACKUP_DIR}" ]; then
+  echo "Refusing: backup destination is a symlink" >&2
   exit 2
 fi
 OFFHOST_REMOTE="${BACKUP_OFFHOST_REMOTE:-origin}"
@@ -39,6 +50,46 @@ cleanup() {
 }
 trap cleanup EXIT
 mkdir -p "${TMP_DIR}/state"
+POST_BACKUP_FREE_BYTES="${BTCQUANT_BACKUP_POST_FREE_BYTES:-2684354560}"
+if ! [[ "${POST_BACKUP_FREE_BYTES}" =~ ^[0-9]+$ ]]; then
+  echo "BTCQUANT_BACKUP_POST_FREE_BYTES must be a non-negative integer" >&2
+  exit 2
+fi
+# The collector publishes an archive manifest and removes live rows as one
+# protected snapshot operation. Hold its cycle lock while taking the SQLite
+# Online Backup snapshots. Immutable archives are mirrored separately later.
+DATED_SNAPSHOT_LOCK="${DATED_STATE_DIR}/market.sqlite3.snapshot.lock"
+DATED_SNAPSHOT_LOCK_ACQUIRED=false
+if [ -d "${DATED_STATE_DIR}" ]; then
+  exec 9>"${DATED_SNAPSHOT_LOCK}"
+  flock -x 9
+  DATED_SNAPSHOT_LOCK_ACQUIRED=true
+fi
+# Size checks happen after taking the same lock as the collector so the source
+# state cannot grow or compact between the measurement and its DB snapshots.
+# If staging and destination share a filesystem, account for their combined
+# peak rather than passing two checks against the same free-space pool.
+SOURCE_BYTES="$(du -sb -- "${STATE_DIR}" | awk '{ print $1 }')"
+TMP_FREE_BYTES="$(df -B1 --output=avail "${TMP_DIR}" | tail -n 1 | tr -d '[:space:]')"
+BACKUP_FREE_BYTES="$(df -B1 --output=avail "${BACKUP_DIR}" | tail -n 1 | tr -d '[:space:]')"
+STAGING_REQUIRED_BYTES="$((SOURCE_BYTES * 4 + 134217728))"
+TARGET_REQUIRED_BYTES="$((SOURCE_BYTES + 134217728 + POST_BACKUP_FREE_BYTES))"
+if [ "$(stat -c %d "${TMP_DIR}")" = "$(stat -c %d "${BACKUP_DIR}")" ]; then
+  COMBINED_REQUIRED_BYTES="$((STAGING_REQUIRED_BYTES + POST_BACKUP_FREE_BYTES))"
+  if [ "${TMP_FREE_BYTES}" -lt "${COMBINED_REQUIRED_BYTES}" ]; then
+    echo "Refusing backup: shared temporary/destination filesystem has ${TMP_FREE_BYTES} B, requires ${COMBINED_REQUIRED_BYTES} B including reserve." >&2
+    exit 75
+  fi
+else
+  if [ "${TMP_FREE_BYTES}" -lt "${STAGING_REQUIRED_BYTES}" ]; then
+    echo "Refusing backup: temporary space ${TMP_FREE_BYTES} B < conservative staging budget ${STAGING_REQUIRED_BYTES} B." >&2
+    exit 75
+  fi
+  if [ "${BACKUP_FREE_BYTES}" -lt "${TARGET_REQUIRED_BYTES}" ]; then
+    echo "Refusing backup: destination free space ${BACKUP_FREE_BYTES} B < artifact bound plus reserve ${TARGET_REQUIRED_BYTES} B." >&2
+    exit 75
+  fi
+fi
 # Generic state evidence may be copied, but SQLite files and every sidecar are
 # never eligible for raw rsync. Each allow-listed database below is captured
 # through the Online Backup API instead.
@@ -62,10 +113,28 @@ done < <(
        -o -name '*.sqlite-*' -o -name '*.sqlite3' -o -name '*.sqlite3-*' \) \
     -print
 )
+if [ -d "${DATED_STATE_DIR}" ]; then
+  while IFS= read -r candidate; do
+    relative="${candidate#"${STATE_DIR}/"}"
+    case "${relative}" in
+      carry-dated-experiment/carry_dated.db|carry-dated-experiment/market.sqlite3) ;;
+      *) echo "Ignoring unknown dated experiment SQLite artifact: ${relative}" >&2 ;;
+    esac
+  done < <(
+    find "${DATED_STATE_DIR}" -maxdepth 1 -type f \
+      \( -name '*.db' -o -name '*.db-*' -o -name '*.sqlite' \
+         -o -name '*.sqlite-*' -o -name '*.sqlite3' -o -name '*.sqlite3-*' \) \
+      -print
+  )
+fi
 
 "${PYBIN}" "${APP_ROOT}/scripts/backup_database.py" \
   "${STATE_DIR}/btcquant.db" "${TMP_DIR}/state/btcquant.db"
-for optional_db in execution-shadow.db btcquant-testnet.db; do
+for optional_db in \
+  execution-shadow.db \
+  btcquant-testnet.db \
+  carry-dated-experiment/carry_dated.db \
+  carry-dated-experiment/market.sqlite3; do
   if [ -e "${STATE_DIR}/${optional_db}" ]; then
     "${PYBIN}" "${APP_ROOT}/scripts/backup_database.py" \
       "${STATE_DIR}/${optional_db}" "${TMP_DIR}/state/${optional_db}"
@@ -73,6 +142,10 @@ for optional_db in execution-shadow.db btcquant-testnet.db; do
 done
 PLAIN_ARCHIVE="${TMP_DIR}/state-${STAMP}.tar.gz"
 tar -czf "${PLAIN_ARCHIVE}" -C "${TMP_DIR}" state
+if ${DATED_SNAPSHOT_LOCK_ACQUIRED}; then
+  flock -u 9
+  exec 9>&-
+fi
 ARCHIVE="${BACKUP_DIR}/state-${STAMP}.tar.gz.enc"
 ENCRYPTED_TMP="${TMP_DIR}/state-${STAMP}.tar.gz.enc"
 if [ -e "${ARCHIVE}" ]; then
@@ -105,6 +178,21 @@ find "${BACKUP_DIR}" \( -name 'state-*.tar.gz' -o -name 'state-*.tar.gz.enc' \) 
   -mtime +30 -delete
 echo "Sauvegarde : ${ARCHIVE}"
 
+# Archive immutable public market evidence incrementally, once per segment.
+# This keeps daily ledger backups small while retaining every replay input.
+if [ -d "${DATED_DATA_DIR}/archive" ]; then
+  EVIDENCE_BACKUP_DIR="${BACKUP_DIR}/carry-dated-evidence"
+  if [ -L "${EVIDENCE_BACKUP_DIR}" ]; then
+    echo "Refusing: encrypted evidence destination is a symlink" >&2
+    exit 2
+  fi
+  mkdir -p "${EVIDENCE_BACKUP_DIR}"
+  "${PYBIN}" "${APP_ROOT}/scripts/backup_carry_dated_evidence.py" \
+    --source "${DATED_DATA_DIR}/archive" \
+    --destination "${EVIDENCE_BACKUP_DIR}" \
+    --min-free-bytes "${POST_BACKUP_FREE_BYTES}"
+fi
+
 # ── copie hors-site : branche `backups` du dépôt GitHub (clé de déploiement,
 # ~btcquant/.ssh/backup_deploy). Best-effort : un échec réseau ne doit jamais
 # faire échouer la sauvegarde locale. ────────────────────────────────────────
@@ -112,7 +200,7 @@ REPO="${RUNTIME_ROOT}/backups-repo"
 if [ -d "${REPO}/.git" ] && [[ "${ARCHIVE}" == *.enc ]]; then
   (
     cd "${REPO}"
-    if find . -maxdepth 1 -type f \
+    if find . -type f \
       \( -name 'state-*.tar.gz' -o -name '*.db' -o -name '*.db-*' \
       -o -name '*.sqlite' -o -name '*.sqlite-*' \
       -o -name '*.sqlite3' -o -name '*.sqlite3-*' -o -name '.env' \) \
@@ -120,14 +208,25 @@ if [ -d "${REPO}/.git" ] && [[ "${ARCHIVE}" == *.enc ]]; then
       echo "Refusing: off-host repository contains an unauthorized plaintext artifact" >&2
       exit 4
     fi
-    if git ls-files | grep -Ev '^state-[0-9]{8}-[0-9]{4}\.tar\.gz\.enc$' | grep -q .; then
+    if git ls-files | grep -Ev '^(state-[0-9]{8}-[0-9]{4}\.tar\.gz\.enc|carry-dated-evidence/[^/]+\.enc)$' | grep -q .; then
       echo "Refusing: off-host repository contains a non-whitelisted tracked file" >&2
       exit 5
     fi
+    if find . -path './.git' -prune -o -type f \
+      ! -name 'state-*.tar.gz.enc' ! -path './carry-dated-evidence/*.enc' \
+      -print -quit | grep -q .; then
+      echo "Refusing: off-host repository contains an unapproved file" >&2
+      exit 6
+    fi
+    mkdir -p carry-dated-evidence
     cp -- "${ARCHIVE}" .
+    if [ -d "${BACKUP_DIR}/carry-dated-evidence" ]; then
+      while IFS= read -r -d '' evidence_file; do
+        cp -- "${evidence_file}" carry-dated-evidence/
+      done < <(find "${BACKUP_DIR}/carry-dated-evidence" -maxdepth 1 -type f -name '*.enc' -print0)
+    fi
     find . -maxdepth 1 -name 'state-*.tar.gz.enc' -mtime +30 -delete
-    git add -u -- '*.tar.gz.enc'
-    git add -- "$(basename "${ARCHIVE}")"
+    git add -A -- state-*.tar.gz.enc carry-dated-evidence
     git -c commit.gpgsign=false commit -q -m "backup ${STAMP}" || exit 0
     git push -q "${OFFHOST_REMOTE}" "HEAD:refs/heads/${OFFHOST_BRANCH}"
     echo "Off-host backup pushed."

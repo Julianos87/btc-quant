@@ -13,11 +13,14 @@ from typing import Any
 
 STATUS_ENV = "BTCQUANT_CARRY_DATED_STATUS_PATH"
 DEFAULT_STATUS_RELATIVE_PATH = Path("carry-dated-experiment/carry_dated_status.json")
+DEFAULT_COLLECTOR_STATUS_RELATIVE_PATH = Path("carry-dated-experiment/collector_status.json")
 STATUS_SCHEMA_VERSION = 1
 MAX_STATUS_BYTES = 256 * 1024
+MAX_COLLECTOR_STATUS_BYTES = 256 * 1024
 # This matches the existing Carry PAPER stale-state limit. The dated runner's
 # service/collector liveness is reported separately and is not inferred here.
 MAX_SNAPSHOT_AGE_SECONDS = 20 * 60
+MAX_COLLECTOR_AGE_SECONDS = 3 * 60
 ALLOWED_STATES = frozenset(
     {
         "FLAT",
@@ -120,6 +123,135 @@ def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _collector_projection(state_dir: Path, *, now: datetime) -> dict[str, Any]:
+    """Project the collector heartbeat without claiming systemd/process health."""
+
+    path = state_dir / DEFAULT_COLLECTOR_STATUS_RELATIVE_PATH
+    base = {
+        "unit": "btcquant-carry-dated-collector.service",
+        "status": "UNKNOWN",
+        "attempted_at": None,
+        "age_seconds": None,
+        "state": None,
+        "market_data": {"status": "UNKNOWN", "freshest_market_timestamp": None},
+        "disk": {"status": "UNKNOWN", "used_bytes": None, "free_bytes": None, "quota_bytes": None},
+        "coverage": {"start_utc": None, "end_utc": None, "archive_segments": None},
+        "error_counts": {"book": None, "settlement": None},
+    }
+    try:
+        metadata = path.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_COLLECTOR_STATUS_BYTES:
+            return {**base, "reason_code": "COLLECTOR_STATUS_INVALID_SIZE_OR_TYPE"}
+        with path.open("rb") as handle:
+            raw = handle.read(MAX_COLLECTOR_STATUS_BYTES + 1)
+        if len(raw) > MAX_COLLECTOR_STATUS_BYTES:
+            return {**base, "reason_code": "COLLECTOR_STATUS_INVALID_SIZE_OR_TYPE"}
+        payload = json.loads(raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys)
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema_version") != 1
+            or payload.get("service") != "btcquant-carry-dated-collector"
+            or payload.get("paper_only") is not True
+            or not isinstance(payload.get("details"), dict)
+        ):
+            return {**base, "reason_code": "COLLECTOR_STATUS_CONTRACT_INVALID"}
+        attempted = _timestamp_or_none(payload.get("attempted_at"), "collector.attempted_at")
+        if attempted is None:
+            return {**base, "reason_code": "COLLECTOR_STATUS_TIMESTAMP_MISSING"}
+        age = (now - attempted).total_seconds()
+        if age < -30:
+            return {**base, "reason_code": "COLLECTOR_STATUS_CLOCK_SKEW"}
+        details = payload["details"]
+        state = payload.get("state")
+        if not isinstance(state, str):
+            return {**base, "reason_code": "COLLECTOR_STATUS_STATE_INVALID"}
+        is_fresh = age <= MAX_COLLECTOR_AGE_SECONDS
+        archive_state = details.get("archive_integrity_status", "UNKNOWN")
+        status = (
+            "HEALTHY"
+            if is_fresh and state == "OK" and archive_state in {"VERIFIED", "NO_ARCHIVES"}
+            else "STALE"
+            if not is_fresh
+            else "DEGRADED"
+        )
+        book_errors = details.get("book_errors")
+        settlement_errors = details.get("settlement_errors")
+        book_quality = details.get("book_quality")
+        freshness = _timestamp_or_none(
+            details.get("freshest_market_timestamp"), "collector.freshest_market_timestamp"
+        )
+        max_bytes = payload.get("max_total_bytes")
+        total_bytes = details.get("total_bytes")
+        free_bytes = details.get("free_bytes")
+        min_free_bytes = payload.get("min_free_bytes")
+        numeric = (max_bytes, total_bytes, free_bytes, min_free_bytes)
+        valid_storage = all(type(item) is int and item >= 0 for item in numeric)
+        disk_status = (
+            "OK"
+            if valid_storage and total_bytes < max_bytes and free_bytes >= min_free_bytes
+            else "LIMIT_REACHED"
+            if valid_storage
+            else "UNKNOWN"
+        )
+        market_status = (
+            "HEALTHY"
+            if status == "HEALTHY"
+            and isinstance(book_errors, list)
+            and not book_errors
+            and isinstance(book_quality, dict)
+            and bool(book_quality)
+            and all(isinstance(reasons, list) and not reasons for reasons in book_quality.values())
+            and freshness is not None
+            else "DEGRADED"
+            if status in {"HEALTHY", "DEGRADED"}
+            else status
+        )
+        return {
+            **base,
+            "status": status,
+            "attempted_at": attempted.isoformat().replace("+00:00", "Z"),
+            "age_seconds": max(0.0, age),
+            "state": state,
+            "reason_code": details.get("reason"),
+            "market_data": {
+                "status": market_status,
+                "freshest_market_timestamp": (
+                    freshness.isoformat().replace("+00:00", "Z") if freshness else None
+                ),
+            },
+            "disk": {
+                "status": disk_status,
+                "used_bytes": total_bytes if type(total_bytes) is int else None,
+                "free_bytes": free_bytes if type(free_bytes) is int else None,
+                "quota_bytes": max_bytes if type(max_bytes) is int else None,
+                "minimum_free_bytes": min_free_bytes if type(min_free_bytes) is int else None,
+            },
+            "coverage": {
+                "start_utc": details.get("observed_coverage_start_utc"),
+                "end_utc": details.get("observed_coverage_end_utc"),
+                "archive_segments": details.get("archive_segment_count"),
+                "invalid_archive_manifests": details.get("invalid_archive_manifest_count"),
+            },
+            "error_counts": {
+                "book": len(book_errors) if isinstance(book_errors, list) else None,
+                "settlement": len(settlement_errors)
+                if isinstance(settlement_errors, list)
+                else None,
+            },
+            "archive_integrity": {
+                "status": archive_state,
+                "verified_segments": details.get("archive_verified_segment_count"),
+                "unverified_segments": details.get("archive_unverified_segment_count"),
+                "failed_segments": details.get("archive_failed_segment_count"),
+                "last_verified_at": details.get("archive_last_verification_at"),
+            },
+            "retention_goal_days": payload.get("retention_goal_days"),
+            "retention_policy": payload.get("retention_policy"),
+        }
+    except (OSError, UnicodeError, json.JSONDecodeError, CarryDatedStatusError):
+        return {**base, "reason_code": "COLLECTOR_STATUS_UNREADABLE"}
+
+
 def _decimal_or_none(value: Any, name: str) -> None:
     if value is None:
         return
@@ -220,7 +352,7 @@ def project_status(
     try:
         path = configured_status_path(state_dir, environ)
     except CarryDatedStatusError as error:
-        return _unavailable("UNKNOWN", str(error))
+        return _unavailable("UNKNOWN", str(error), state_dir=state_dir, now=current)
     try:
         metadata = path.lstat()
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_STATUS_BYTES:
@@ -233,16 +365,20 @@ def project_status(
         snapshot = validate_snapshot(payload)
     except (OSError, UnicodeError, json.JSONDecodeError, CarryDatedStatusError) as error:
         if isinstance(error, FileNotFoundError):
-            return _unavailable("NOT_DEPLOYED", "STATUS_SNAPSHOT_MISSING")
-        reason = str(error) if isinstance(error, CarryDatedStatusError) else "STATUS_SNAPSHOT_UNREADABLE"
-        return _unavailable("UNKNOWN", reason)
+            return _unavailable(
+                "NOT_DEPLOYED", "STATUS_SNAPSHOT_MISSING", state_dir=state_dir, now=current
+            )
+        reason = (
+            str(error) if isinstance(error, CarryDatedStatusError) else "STATUS_SNAPSHOT_UNREADABLE"
+        )
+        return _unavailable("UNKNOWN", reason, state_dir=state_dir, now=current)
 
     updated = _timestamp_or_none(snapshot["last_updated_at"], "last_updated_at")
     if updated is None:
-        return _unavailable("UNKNOWN", "STATUS_TIMESTAMP_MISSING")
+        return _unavailable("UNKNOWN", "STATUS_TIMESTAMP_MISSING", state_dir=state_dir, now=current)
     age = (current - updated).total_seconds()
     if age < -30:
-        return _unavailable("UNKNOWN", "STATUS_CLOCK_SKEW")
+        return _unavailable("UNKNOWN", "STATUS_CLOCK_SKEW", state_dir=state_dir, now=current)
     if age > MAX_SNAPSHOT_AGE_SECONDS:
         envelope_status = "STALE"
     elif snapshot["accounting_uncertain"] or snapshot["status"] == "ACCOUNTING_UNCERTAIN":
@@ -253,6 +389,7 @@ def project_status(
         envelope_status = "UNBALANCED"
     else:
         envelope_status = "AVAILABLE"
+    collector = _collector_projection(state_dir, now=current)
     return {
         "api_schema_version": 1,
         "kind": "CARRY_DATED_PAPER_STATUS",
@@ -264,21 +401,21 @@ def project_status(
         # database integrity, or economics. Keep overall readiness explicit.
         "readiness_status": "UNKNOWN",
         "readiness_reason_codes": [
-            "COLLECTOR_HEALTH_NOT_BOUND",
+            "COLLECTOR_SYSTEMD_LIVENESS_NOT_PROBED",
             "RUNNER_UNIT_PROBE_NOT_BOUND",
             "DATABASE_INTEGRITY_NOT_BOUND",
-            "DISK_QUOTA_NOT_BOUND",
+            "BACKUP_RESTORE_NOT_BOUND",
         ],
         "components": {
             "runner": {
                 "unit": "btcquant-carry-dated-experimental.service",
                 "status": "UNKNOWN",
             },
-            "collector": {"unit": None, "status": "UNKNOWN"},
+            "collector": collector,
             "database": {"integrity": "UNKNOWN"},
-            "disk": {"status": "UNKNOWN", "free_bytes": None, "quota_bytes": None},
+            "disk": collector["disk"],
             "market_data": {
-                "status": "UNKNOWN",
+                **collector["market_data"],
                 "spot_timestamp": snapshot["market"].get("spot_timestamp"),
                 "future_timestamp": snapshot["market"].get("future_timestamp"),
             },
@@ -289,7 +426,10 @@ def project_status(
     }
 
 
-def _unavailable(status: str, reason: str) -> dict[str, Any]:
+def _unavailable(
+    status: str, reason: str, *, state_dir: Path, now: datetime
+) -> dict[str, Any]:
+    collector = _collector_projection(state_dir, now=now)
     return {
         "api_schema_version": 1,
         "kind": "CARRY_DATED_PAPER_STATUS",
@@ -304,10 +444,14 @@ def _unavailable(status: str, reason: str) -> dict[str, Any]:
                 "unit": "btcquant-carry-dated-experimental.service",
                 "status": "UNKNOWN",
             },
-            "collector": {"unit": None, "status": "UNKNOWN"},
+            "collector": collector,
             "database": {"integrity": "UNKNOWN"},
-            "disk": {"status": "UNKNOWN", "free_bytes": None, "quota_bytes": None},
-            "market_data": {"status": "UNKNOWN", "spot_timestamp": None, "future_timestamp": None},
+            "disk": collector["disk"],
+            "market_data": {
+                **collector["market_data"],
+                "spot_timestamp": None,
+                "future_timestamp": None,
+            },
             "settlement_backlog": {"status": "UNKNOWN", "pending_count": None},
         },
         "economic_evidence": "INSUFFICIENT_EVIDENCE",
@@ -318,6 +462,7 @@ def _unavailable(status: str, reason: str) -> dict[str, Any]:
 __all__ = [
     "ALLOWED_STATES",
     "DEFAULT_STATUS_RELATIVE_PATH",
+    "DEFAULT_COLLECTOR_STATUS_RELATIVE_PATH",
     "MAX_SNAPSHOT_AGE_SECONDS",
     "STATUS_ENV",
     "CarryDatedStatusError",

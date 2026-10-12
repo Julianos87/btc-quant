@@ -58,9 +58,16 @@ def build_experiment_spec(
         dataset_roles={dataset.dataset_id: DatasetRole.SEEN_RESEARCH_DATA},
         dataset_hashes={dataset.dataset_id: dataset.sha256},
         data_cutoffs={dataset.dataset_id: cutoff},
-        feature_policy={"selection": "none", "market_inputs": "timestamped_depth_books_and_official_settlements"},
+        feature_policy={
+            "selection": "none",
+            "market_inputs": "timestamped_depth_books_and_official_settlements",
+        },
         warmup_policy={"not_applicable": "event-driven dated contract lifecycle"},
-        split_policy={"type": "expanding", "shuffle": False, "cycles": "chronological_non_overlapping"},
+        split_policy={
+            "type": "expanding",
+            "shuffle": False,
+            "cycles": "chronological_non_overlapping",
+        },
         purge_policy={"mode": "purge_overlapping_entry_to_expiry_cycles"},
         embargo_policy={"mode": "freeze_code_before_forward_holdout"},
         cost_assumptions={
@@ -77,14 +84,25 @@ def build_experiment_spec(
             "spot_exit_taker_rate": "0.0005; public standard-tier assumption",
             "personal_tier_eligibility": "unqualified",
         },
-        slippage_assumptions={"entry": "depth-weighted order-book walk", "terminal_basis": "unobserved until exit; separate +5% adverse stress"},
-        impact_assumptions={"entry": "finite observed depth only; no extrapolation", "future_exit": "observed asks for protective close"},
+        slippage_assumptions={
+            "entry": "depth-weighted order-book walk",
+            "terminal_basis": "unobserved until exit; separate +5% adverse stress",
+        },
+        impact_assumptions={
+            "entry": "finite observed depth only; no extrapolation",
+            "future_exit": "observed asks for protective close",
+        },
         parameter_space={"frozen_policy_version": ["carry_btc_dated_v1"]},
         search_method="single frozen policy; no parameter search or candidate ranking",
         random_seed=20261012,
         maximum_trial_budget=1,
         selection_metric="net_return_on_total_allocated_capital_after_reserve_and_stress",
-        secondary_metrics=("max_drawdown", "cash_immobilized", "unbalanced_events", "settlement_backlog"),
+        secondary_metrics=(
+            "max_drawdown",
+            "cash_immobilized",
+            "unbalanced_events",
+            "settlement_backlog",
+        ),
         acceptance_rules={
             "development_cycles_min": 30,
             "forward_holdout_cycles_min": 10,
@@ -121,7 +139,11 @@ def build_experiment_spec(
             "insufficient_status": "INSUFFICIENT_EVIDENCE",
         },
         candidate_selection_rule="no selection; one frozen candidate; choose earliest eligible expiry and tie-break by instrument_id before inspecting premium",
-        multiple_testing_policy={"trial_budget": 1, "adaptive_search": False, "multiple_testing_adjustment": "not_applicable_single_candidate"},
+        multiple_testing_policy={
+            "trial_budget": 1,
+            "adaptive_search": False,
+            "multiple_testing_adjustment": "not_applicable_single_candidate",
+        },
         promotion_gates={
             "development_lower_bound_after_frozen_stress": "> 0",
             "blind_holdout_lower_bound_after_frozen_stress": "> 0",

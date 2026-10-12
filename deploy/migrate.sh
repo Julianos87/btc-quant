@@ -72,6 +72,8 @@ WRITER_UNITS=(
   btcquant-shadow.service
   btcquant-hyperliquid-testnet.service
   btcquant-hyperliquid-watchdog.service
+  btcquant-carry-dated-experimental.service
+  btcquant-carry-dated-collector.service
 )
 WRITER_TIMERS=(
   btcquant-watchdog.timer

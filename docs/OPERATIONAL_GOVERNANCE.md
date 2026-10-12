@@ -76,17 +76,18 @@ accepts only schema version 1 for `strategy=carry_btc_dated` and
 20-minute Carry heartbeat bound is `STALE`. No absent value is inferred from
 equity, and this experimental capital is excluded from Tandem totals.
 
-`AVAILABLE` means only that the checkpoint file is recent and well-formed. The
-endpoint deliberately reports overall readiness as `UNKNOWN` until independent
-evidence covers the collector and runner process, market-data gaps/failures,
-settlement backlog, leg imbalance/accounting uncertainty, database integrity,
-disk quota and backup/restore state. C declared
-`btcquant-carry-dated-experimental.service` as the runner unit; the dashboard
-still leaves its unit health `UNKNOWN` until that unit is integrated and
-probed. B has not yet delivered a collector unit or health contract, so the
-collector identity remains null/`UNKNOWN`; do not map the legacy perp collector
-to it. An operator must inspect the integrated unit journals; the checkpoint
-alone is not a service-health probe.
+`AVAILABLE` means only that the runner checkpoint file is recent and
+well-formed. The endpoint separately reads
+`/opt/btcquant/state/carry-dated-experiment/collector_status.json` and reports
+the collector unit identity, heartbeat age, book-quality/errors, archive
+scrub state, data coverage and storage quota. `HEALTHY` describes only a recent
+successful public-data poll; it is not a systemd process probe. The endpoint
+deliberately keeps overall readiness `UNKNOWN` until an operator independently
+checks both unit states, runner/collector DB integrity, settlement backlog and
+backup/restore state. The runner is
+`btcquant-carry-dated-experimental.service`; the public collector is
+`btcquant-carry-dated-collector.service`. Never map the legacy perp collector
+to either identity.
 
 The panel distinguishes reserved margin, stress cash and the economic reserve.
 Reserved margin is not a booked loss; the reserve is a decision hurdle, not a

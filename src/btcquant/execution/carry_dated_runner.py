@@ -22,6 +22,9 @@ from typing import Any
 from ..domain.carry_dated import DatedBook, DatedInstrument
 from .carry_dated_ledger import (
     CarryDatedLedger,
+    BOOK_DEPTH_LEVELS,
+    BOOK_EVIDENCE_PROTOCOL_VERSION,
+    DEFAULT_MARKET_EVIDENCE_QUOTA_BYTES,
     DatedLedgerError,
     common_quantity_step,
     decimal,
@@ -70,6 +73,9 @@ class CarryDatedRunner:
         max_book_age_seconds: Decimal = DEFAULT_MAX_BOOK_AGE_SECONDS,
         max_book_skew_seconds: Decimal = DEFAULT_MAX_BOOK_SKEW_SECONDS,
         max_metadata_age_seconds: Decimal = DEFAULT_MAX_METADATA_AGE_SECONDS,
+        market_evidence_quota_bytes: int = DEFAULT_MARKET_EVIDENCE_QUOTA_BYTES,
+        market_evidence_archive_dir: str | Path | None = None,
+        market_evidence_min_free_bytes: int = 0,
     ) -> None:
         if poll_seconds < 1:
             raise ValueError("poll_seconds must be positive")
@@ -92,7 +98,26 @@ class CarryDatedRunner:
         )
         configured_status = status_path or os.environ.get("BTCQUANT_CARRY_DATED_STATUS_PATH")
         self.status_path = Path(configured_status) if configured_status else DEFAULT_STATUS_PATH
-        self.ledger = CarryDatedLedger(store, self.capital)
+        from ..research.carry_dated_collector import DatedMarketEvidenceRecorder
+
+        evidence_archive_dir = (
+            Path(market_evidence_archive_dir)
+            if market_evidence_archive_dir is not None
+            else store.path.parent / "archive"
+        )
+        evidence_recorder = DatedMarketEvidenceRecorder(
+            database=store.path.parent / "market.sqlite3",
+            archive_dir=evidence_archive_dir,
+            max_total_bytes=market_evidence_quota_bytes,
+            min_free_bytes=market_evidence_min_free_bytes,
+        )
+        self.ledger = CarryDatedLedger(
+            store,
+            self.capital,
+            market_evidence_quota_bytes=market_evidence_quota_bytes,
+            market_evidence_recorder=evidence_recorder,
+        )
+        self.market_snapshot_lock_path = store.path.parent / "market.sqlite3.snapshot.lock"
         self._lock = EngineInstanceLock(store.path, "carry_dated")
         self._stop = False
 
@@ -104,6 +129,17 @@ class CarryDatedRunner:
 
     def run_once(self) -> dict[str, Any]:
         """Advance one bounded cycle, then atomically publish its status view."""
+
+        from ..research.carry_dated_collector import exclusive_lock
+
+        # Coordinate the carry DB + market evidence writer with the collector
+        # and clean-room backup snapshot. A fill event must never be backed up
+        # without the exact book evidence it references.
+        with exclusive_lock(self.market_snapshot_lock_path, blocking=True):
+            return self._run_once_under_snapshot_lock()
+
+    def _run_once_under_snapshot_lock(self) -> dict[str, Any]:
+        """Run one cycle while holding the cross-database evidence snapshot lock."""
 
         now = self._now()
         try:
@@ -132,14 +168,23 @@ class CarryDatedRunner:
                 if state_decimal(self.ledger.state, "spot_qty") or state_decimal(
                     self.ledger.state, "future_qty"
                 ):
+                    quota_exceeded = "MARKET_EVIDENCE_QUOTA_EXCEEDED" in str(error)
                     self.ledger.mark_settlement_pending(
-                        reason_code="RUNNER_CYCLE_ERROR",
+                        reason_code=(
+                            "MARKET_EVIDENCE_QUOTA_EXCEEDED"
+                            if quota_exceeded
+                            else "RUNNER_CYCLE_ERROR"
+                        ),
                         reason_message=f"{type(error).__name__}: {str(error)[:240]}",
                         now=now,
                     )
                 else:
                     self.ledger.record_wait(
-                        reason_code="PUBLIC_DATA_OR_POLICY_ERROR",
+                        reason_code=(
+                            "MARKET_EVIDENCE_QUOTA_EXCEEDED"
+                            if "MARKET_EVIDENCE_QUOTA_EXCEEDED" in str(error)
+                            else "PUBLIC_DATA_OR_POLICY_ERROR"
+                        ),
                         reason_message=f"{type(error).__name__}: {str(error)[:240]}",
                         now=now,
                     )
@@ -196,12 +241,64 @@ class CarryDatedRunner:
                 now=now,
             )
             return
-        spot_book = self.market.get_book(spot.instrument_id)
+        spot_book = self._get_book(spot.instrument_id)
+        spot_evidence_id = self.ledger.persist_market_evidence(
+            spot_book,
+            purpose="ENTRY_DECISION",
+            requested_depth=BOOK_DEPTH_LEVELS,
+            protocol_version=BOOK_EVIDENCE_PROTOCOL_VERSION,
+            now=now,
+            required=False,
+        )
         reasons = self._book_quality_reasons(spot_book, now)
         if reasons:
             self.ledger.record_wait(
                 reason_code=reasons[0],
                 reason_message="Spot book is not eligible: " + ", ".join(reasons),
+                now=now,
+            )
+            return
+        if state_decimal(self.ledger.state, "spot_dust_qty") > 0:
+            dust_evidence_id = self.ledger.persist_market_evidence(
+                spot_book,
+                purpose="SPOT_DUST_SWEEP",
+                requested_depth=BOOK_DEPTH_LEVELS,
+                protocol_version=BOOK_EVIDENCE_PROTOCOL_VERSION,
+                now=now,
+                required=False,
+            )
+            self.ledger.mark_spot_dust(
+                spot_mark=spot_book.bids[0].price if spot_book.bids else None,
+                now=now,
+                market_timestamp=spot_book.market_timestamp,
+            )
+            exit_rate = self._effective_taker_rate(
+                self.fee_schedule.spot_exit_taker_rate, spot
+            )
+            self._sweep_residual_spot_dust(
+                spot,
+                spot_book,
+                exit_rate,
+                now=now,
+                market_evidence_id=dust_evidence_id,
+            )
+            dust_qty = state_decimal(self.ledger.state, "spot_dust_qty")
+            if dust_qty >= decimal(spot.min_amount):
+                self.ledger.record_wait(
+                    reason_code="SPOT_DUST_SWEEP_PENDING",
+                    reason_message=(
+                        "Residual spot exceeds the venue minimum but could not be fully sold "
+                        "from the current observed bid depth"
+                    ),
+                    now=now,
+                )
+                return
+        if not spot_evidence_id:
+            self.ledger.record_wait(
+                reason_code="MARKET_EVIDENCE_QUOTA_EXCEEDED",
+                reason_message=(
+                    "Entry is refused because the exact observed spot book could not be durably archived"
+                ),
                 now=now,
             )
             return
@@ -243,7 +340,7 @@ class CarryDatedRunner:
             )
             return
         try:
-            future_book = self.market.get_book(future.instrument_id)
+            future_book = self._get_book(future.instrument_id)
         except Exception as error:
             self.ledger.record_wait(
                 reason_code="SELECTED_FUTURE_BOOK_UNAVAILABLE",
@@ -251,6 +348,13 @@ class CarryDatedRunner:
                 now=now,
             )
             return
+        future_evidence_id = self.ledger.persist_market_evidence(
+            future_book,
+            purpose="ENTRY_DECISION",
+            requested_depth=BOOK_DEPTH_LEVELS,
+            protocol_version=BOOK_EVIDENCE_PROTOCOL_VERSION,
+            now=now,
+        )
         book_reasons = self._book_quality_reasons(future_book, now)
         if book_reasons:
             self.ledger.record_wait(
@@ -269,6 +373,7 @@ class CarryDatedRunner:
                 now=now,
             )
             return
+        evidence_ids = (spot_evidence_id, future_evidence_id)
         candidates = [(spot, future, spot_book, future_book)]
 
         decision = self.decision_evaluator(
@@ -278,7 +383,7 @@ class CarryDatedRunner:
             margin_policy=self.margin_policy,
             now=now,
         )
-        self.ledger.persist_decision(decision)
+        self.ledger.persist_decision(decision, market_evidence_ids=evidence_ids)
         if decision.action != "OPEN":
             return
         selected = next(
@@ -320,13 +425,46 @@ class CarryDatedRunner:
                 now=now,
             )
             return
+        evidence_ids = (
+            self.ledger.persist_market_evidence(
+                spot_book,
+                purpose="ENTRY_FILL_PREFLIGHT",
+                requested_depth=BOOK_DEPTH_LEVELS,
+                protocol_version=BOOK_EVIDENCE_PROTOCOL_VERSION,
+                now=now,
+            ),
+            self.ledger.persist_market_evidence(
+                future_book,
+                purpose="ENTRY_FILL_PREFLIGHT",
+                requested_depth=BOOK_DEPTH_LEVELS,
+                protocol_version=BOOK_EVIDENCE_PROTOCOL_VERSION,
+                now=now,
+            ),
+        )
+        decision_evidence_ids = tuple(
+            str(item)
+            for item in (self.ledger.state.get("decision") or {}).get(
+                "market_evidence_ids", ()
+            )
+        )
+        market_evidence_ids = tuple(dict.fromkeys((*decision_evidence_ids, *evidence_ids)))
+        if self.ledger.state.get("decision") is not None:
+            checkpoint = dict(self.ledger.state)
+            decision_payload = dict(checkpoint["decision"])
+            decision_payload["fill_preflight_market_evidence_ids"] = list(evidence_ids)
+            checkpoint["decision"] = decision_payload
+            self.store.save_carry_dated_checkpoint(checkpoint)
+            self.ledger.state = checkpoint
 
         fee_currency_assumption = decision.spot_fee_currency_assumption
         applied_scenario = (
             fee_currency_assumption if fee_currency_assumption in {"BASE", "QUOTE"} else "BASE"
         )
-        spot_rate = decimal(self.fee_schedule.spot_taker_rate, field="spot_taker_rate")
-        future_rate = decimal(self.fee_schedule.future_taker_rate, field="future_taker_rate")
+        spot_rate = self._effective_taker_rate(self.fee_schedule.spot_taker_rate, spot)
+        future_rate = self._effective_taker_rate(self.fee_schedule.future_taker_rate, future)
+        spot_exit_rate = self._effective_taker_rate(
+            self.fee_schedule.spot_exit_taker_rate, spot
+        )
         gross_spot_qty = decimal(decision.spot_gross_quantity, field="spot_gross_quantity")
         target_future_qty = decimal(decision.quantity, field="quantity")
         spot_check = fill_from_book(
@@ -354,6 +492,21 @@ class CarryDatedRunner:
                     f"Depth preflight incomplete: spot={decimal_string(spot_check.filled_qty)}"
                     f"/{decimal_string(gross_spot_qty)}, future="
                     f"{decimal_string(future_check.filled_qty)}/{decimal_string(target_future_qty)}"
+                ),
+                now=now,
+            )
+            return
+        if (
+            spot_check.fee_quote_equivalent
+            != decimal(decision.spot_fee, field="decision.spot_fee")
+            or future_check.fee_quote_equivalent
+            != decimal(decision.future_entry_fee, field="decision.future_entry_fee")
+        ):
+            self.ledger.record_wait(
+                reason_code="ENTRY_FEE_DECISION_MISMATCH",
+                reason_message=(
+                    "Effective instrument fee rates changed or no longer match the frozen "
+                    "decision budget"
                 ),
                 now=now,
             )
@@ -419,7 +572,11 @@ class CarryDatedRunner:
             delivery_fee_rate=delivery_rate,
             delivery_fee_model_version=self.fee_schedule.version,
             spot_fee_currency_scenario=applied_scenario,
+            spot_entry_fee_rate=spot_rate,
+            future_taker_fee_rate=future_rate,
+            spot_exit_fee_rate=spot_exit_rate,
             hedge_tolerance=tolerance,
+            market_evidence_ids=market_evidence_ids,
         )
         spot_fill = fill_from_book(
             book=spot_book,
@@ -429,6 +586,7 @@ class CarryDatedRunner:
             fee_rate=spot_rate,
             fee_currency=applied_scenario,
             fill_id=self.ledger.fill_id(leg="spot", side="BUY"),
+            market_evidence_id=evidence_ids[0],
         )
         future_fill = fill_from_book(
             book=future_book,
@@ -438,6 +596,7 @@ class CarryDatedRunner:
             fee_rate=future_rate,
             fee_currency="QUOTE",
             fill_id=self.ledger.fill_id(leg="future", side="SELL"),
+            market_evidence_id=evidence_ids[1],
         )
         self.ledger.apply_fill(spot_fill, timestamp=now)
         self.ledger.apply_fill(future_fill, timestamp=now)
@@ -514,9 +673,12 @@ class CarryDatedRunner:
             )
             return
 
+        settlement_audit_key = state.get("settlement_audit_start_key") or state.get(
+            "last_settlement_key"
+        )
         try:
             settlements = self.market.get_settlements(
-                str(future_id), after_key=state.get("last_settlement_key")
+                str(future_id), after_key=settlement_audit_key
             )
         except Exception as error:
             self.ledger.mark_settlement_pending(
@@ -568,8 +730,8 @@ class CarryDatedRunner:
                 return
 
         try:
-            spot_book = self.market.get_book(str(spot_id))
-            future_book = self.market.get_book(str(future_id))
+            spot_book = self._get_book(str(spot_id))
+            future_book = self._get_book(str(future_id))
         except Exception as error:
             self.ledger.mark_settlement_pending(
                 reason_code="POSITION_MARKET_DATA_UNAVAILABLE",
@@ -577,6 +739,15 @@ class CarryDatedRunner:
                 now=now,
             )
             return
+        for book in (spot_book, future_book):
+            self.ledger.persist_market_evidence(
+                book,
+                purpose="POSITION_RISK_CONTROL",
+                requested_depth=BOOK_DEPTH_LEVELS,
+                protocol_version=BOOK_EVIDENCE_PROTOCOL_VERSION,
+                now=now,
+                required=False,
+            )
         spot_reasons = self._book_quality_reasons(spot_book, now)
         future_reasons = self._book_quality_reasons(future_book, now)
         if spot_reasons or future_reasons:
@@ -639,6 +810,7 @@ class CarryDatedRunner:
                 spot_mark=spot_book.mark_price,
                 future_mark=future_book.mark_price,
                 now=now,
+                spot_market_timestamp=spot_book.market_timestamp,
             )
 
     def _execute_close(
@@ -662,9 +834,9 @@ class CarryDatedRunner:
             )
             return
         try:
-            spot_book = spot_book or self.market.get_book(spot_id)
+            spot_book = spot_book or self._get_book(spot_id)
             if state_decimal(self.ledger.state, "future_qty") > 0:
-                future_book = future_book or self.market.get_book(future_id)
+                future_book = future_book or self._get_book(future_id)
         except Exception as error:
             self.ledger.mark_settlement_pending(
                 reason_code="CLOSE_BOOK_UNAVAILABLE",
@@ -672,6 +844,23 @@ class CarryDatedRunner:
                 now=now,
             )
             return
+        spot_evidence_id = self.ledger.persist_market_evidence(
+            spot_book,
+            purpose="CLOSE_EXECUTION",
+            requested_depth=BOOK_DEPTH_LEVELS,
+            protocol_version=BOOK_EVIDENCE_PROTOCOL_VERSION,
+            now=now,
+            required=False,
+        )
+        if future_book is not None:
+            future_evidence_id = self.ledger.persist_market_evidence(
+                future_book,
+                purpose="CLOSE_EXECUTION",
+                requested_depth=BOOK_DEPTH_LEVELS,
+                protocol_version=BOOK_EVIDENCE_PROTOCOL_VERSION,
+                now=now,
+                required=False,
+            )
         spot_reasons = self._book_quality_reasons(spot_book, now)
         future_reasons = (
             self._book_quality_reasons(future_book, now) if future_book is not None else ()
@@ -684,7 +873,6 @@ class CarryDatedRunner:
                 now=now,
             )
             return
-
         future_qty = state_decimal(self.ledger.state, "future_qty")
         if future_qty > 0 and future_book is not None:
             amount = floor_to_step(future_qty, decimal(future_record["amount_step"]))
@@ -701,9 +889,14 @@ class CarryDatedRunner:
                     leg="future",
                     side="BUY",
                     quantity=amount,
-                    fee_rate=decimal(self.fee_schedule.future_taker_rate),
+                    fee_rate=self._position_fee_rate(
+                        "future_taker_fee_rate",
+                        self.fee_schedule.future_taker_rate,
+                        future_record,
+                    ),
                     fee_currency="QUOTE",
                     fill_id=self.ledger.fill_id(leg="future", side="BUY"),
+                    market_evidence_id=future_evidence_id,
                 )
                 if fill.filled_qty > 0:
                     self.ledger.apply_fill(fill, timestamp=now)
@@ -712,15 +905,20 @@ class CarryDatedRunner:
 
         spot_qty = state_decimal(self.ledger.state, "spot_qty")
         if spot_qty > 0:
-            rate = decimal(self.fee_schedule.spot_exit_taker_rate)
+            rate = self._position_fee_rate(
+                "spot_exit_fee_rate",
+                self.fee_schedule.spot_exit_taker_rate,
+                spot_record,
+            )
             scenario = "BASE"  # routed spot fee currency remains publicly unknown
             order_amount = floor_to_step(
                 spot_qty / (Decimal("1") + rate), decimal(spot_record["amount_step"])
             )
             if order_amount < decimal(spot_record["min_amount"]):
-                self.ledger.mark_settlement_pending(
-                    reason_code="SPOT_DUST_REQUIRES_REVIEW",
-                    reason_message="Remaining spot amount is below the executable amount step",
+                self.ledger.classify_spot_dust(
+                    minimum_amount=decimal(spot_record["min_amount"]),
+                    orderable_quantity=order_amount,
+                    market_book=spot_book,
                     now=now,
                 )
                 return
@@ -732,6 +930,7 @@ class CarryDatedRunner:
                 fee_rate=rate,
                 fee_currency=scenario,
                 fill_id=self.ledger.fill_id(leg="spot", side="SELL"),
+                market_evidence_id=spot_evidence_id,
             )
             if fill.filled_qty > 0:
                 self.ledger.apply_fill(fill, timestamp=now)
@@ -740,7 +939,7 @@ class CarryDatedRunner:
 
     def _liquidate_spot_after_expiry(self, spot_id: str, now: datetime) -> None:
         try:
-            spot_book = self.market.get_book(spot_id)
+            spot_book = self._get_book(spot_id)
         except Exception as error:
             self.ledger.record_wait(
                 reason_code="EXPIRY_SPOT_BOOK_UNAVAILABLE",
@@ -748,6 +947,14 @@ class CarryDatedRunner:
                 now=now,
             )
             return
+        self.ledger.persist_market_evidence(
+            spot_book,
+            purpose="EXPIRY_SPOT_LIQUIDATION",
+            requested_depth=BOOK_DEPTH_LEVELS,
+            protocol_version=BOOK_EVIDENCE_PROTOCOL_VERSION,
+            now=now,
+            required=False,
+        )
         reasons = self._book_quality_reasons(spot_book, now)
         if reasons:
             self.ledger.record_wait(
@@ -791,6 +998,71 @@ class CarryDatedRunner:
             now=now,
             max_age_seconds=self.max_book_age_seconds,
         )
+
+    @staticmethod
+    def _effective_taker_rate(schedule_rate: Decimal, instrument: DatedInstrument) -> Decimal:
+        configured = decimal(schedule_rate, field="fee_schedule_rate")
+        metadata = (
+            decimal(instrument.taker_commission, field="instrument.taker_commission")
+            if instrument.taker_commission is not None
+            else Decimal("0")
+        )
+        return max(configured, metadata)
+
+    def _get_book(self, instrument_id: str) -> DatedBook:
+        """Request the frozen 20-level evidence depth and reject wider responses."""
+
+        book = self.market.get_book(instrument_id, depth=BOOK_DEPTH_LEVELS)
+        if len(book.bids) > BOOK_DEPTH_LEVELS or len(book.asks) > BOOK_DEPTH_LEVELS:
+            raise DatedLedgerError(
+                f"{instrument_id} returned more than the frozen {BOOK_DEPTH_LEVELS}-level book"
+            )
+        return book
+
+    def _position_fee_rate(
+        self,
+        state_key: str,
+        schedule_rate: Decimal,
+        instrument_record: dict[str, Any],
+    ) -> Decimal:
+        persisted = self.ledger.state.get(state_key)
+        if persisted is not None:
+            return decimal(persisted, field=state_key)
+        # Compatibility for a checkpoint created before effective rates were
+        # persisted: use the conservative maximum from stored instrument metadata.
+        metadata_raw = instrument_record.get("taker_commission")
+        metadata = decimal(metadata_raw, field="instrument.taker_commission") if metadata_raw is not None else Decimal("0")
+        return max(decimal(schedule_rate, field="fee_schedule_rate"), metadata)
+
+    def _sweep_residual_spot_dust(
+        self,
+        spot: DatedInstrument,
+        spot_book: DatedBook,
+        fee_rate: Decimal,
+        *,
+        now: datetime,
+        market_evidence_id: str = "",
+    ) -> None:
+        dust_qty = state_decimal(self.ledger.state, "spot_dust_qty")
+        if dust_qty <= 0:
+            return
+        amount = floor_to_step(
+            dust_qty / (Decimal("1") + fee_rate), spot.amount_step
+        )
+        if amount < spot.min_amount:
+            return
+        fill = fill_from_book(
+            book=spot_book,
+            leg="spot",
+            side="SELL",
+            quantity=amount,
+            fee_rate=fee_rate,
+            fee_currency="BASE",
+            fill_id=self.ledger.dust_fill_id(),
+            market_evidence_id=market_evidence_id,
+        )
+        if fill.filled_qty > 0:
+            self.ledger.apply_spot_dust_fill(fill, timestamp=now)
 
     def _instrument_quality_reasons(
         self, instrument: DatedInstrument, now: datetime

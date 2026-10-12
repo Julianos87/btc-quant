@@ -9,9 +9,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from typing import Any
+
+from btcquant.domain.carry_dated import (
+    canonical_market_book_snapshot,
+    canonical_payload_sha256,
+)
 
 from .errors import AccountingIdentityCollision
 from .state_store import StateStore
@@ -19,6 +24,9 @@ from .state_store import StateStore
 ENGINE_NAME = "carry_dated"
 STRATEGY_NAME = "carry_btc_dated"
 CHECKPOINT_SCHEMA_VERSION = 1
+BOOK_EVIDENCE_PROTOCOL_VERSION = "carry-dated-market-evidence-v2"
+BOOK_DEPTH_LEVELS = 20
+DEFAULT_MARKET_EVIDENCE_QUOTA_BYTES = 5 * 1024 * 1024 * 1024
 
 
 class DatedLedgerError(ValueError):
@@ -51,6 +59,24 @@ def utc_string(value: datetime | None = None) -> str:
     return current.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
+def next_daily_settlement_after(opened_at: datetime) -> datetime:
+    """Return the first 08:00 UTC settlement boundary strictly after entry."""
+
+    stamp = opened_at.astimezone(UTC)
+    boundary = stamp.replace(hour=8, minute=0, second=0, microsecond=0)
+    if stamp >= boundary:
+        boundary += timedelta(days=1)
+    return boundary
+
+
+def _book_snapshot(book: Any) -> dict[str, Any]:
+    return canonical_market_book_snapshot(book)
+
+
+def _canonical_hash(payload: Mapping[str, Any]) -> str:
+    return canonical_payload_sha256(payload)
+
+
 def state_decimal(state: Mapping[str, Any], key: str) -> Decimal:
     raw = state.get(key)
     if raw is None:
@@ -62,15 +88,30 @@ def reserved_total(state: Mapping[str, Any]) -> Decimal:
     return state_decimal(state, "reserved_margin") + state_decimal(state, "stress_cash_buffer")
 
 
-def initial_checkpoint(capital: Decimal, *, now: datetime | None = None) -> dict[str, Any]:
+def initial_checkpoint(
+    capital: Decimal,
+    *,
+    now: datetime | None = None,
+    market_evidence_quota_bytes: int = DEFAULT_MARKET_EVIDENCE_QUOTA_BYTES,
+) -> dict[str, Any]:
     amount = decimal(capital, field="capital")
     if amount <= 0:
         raise DatedLedgerError("capital must be positive")
+    if (
+        not isinstance(market_evidence_quota_bytes, int)
+        or isinstance(market_evidence_quota_bytes, bool)
+        or market_evidence_quota_bytes < 1
+    ):
+        raise DatedLedgerError("market evidence quota must be a positive integer")
     stamp = utc_string(now)
     return {
         "strategy": STRATEGY_NAME,
         "schema_version": CHECKPOINT_SCHEMA_VERSION,
+        "market_evidence_protocol_version": BOOK_EVIDENCE_PROTOCOL_VERSION,
+        "book_depth_levels": BOOK_DEPTH_LEVELS,
+        "market_evidence_quota_bytes": market_evidence_quota_bytes,
         "paper_only": True,
+        "market_evidence_gap": None,
         "status": "FLAT",
         "instrument": None,
         "expiry_utc": None,
@@ -86,6 +127,11 @@ def initial_checkpoint(capital: Decimal, *, now: datetime | None = None) -> dict
         "derivative_cash_after_unrealized_short_loss": decimal_string(amount),
         "cash_after_margin_stress": decimal_string(amount),
         "spot_qty": "0",
+        "spot_dust_qty": "0",
+        "spot_dust_avg_entry": None,
+        "spot_dust_mark": None,
+        "spot_dust_mark_timestamp": None,
+        "spot_dust_instrument_id": None,
         "future_qty": "0",
         "hedge_residual": "0",
         "hedge_tolerance": "0",
@@ -116,10 +162,15 @@ def initial_checkpoint(capital: Decimal, *, now: datetime | None = None) -> dict
         "pending_saga_ids": [],
         "active_saga_id": None,
         "fill_sequences": {"spot": 0, "future": 0},
+        "dust_sweep_sequence": 0,
         "delivery_fee_estimate": None,
         "delivery_fee_rate": None,
         "delivery_fee_applied": None,
         "delivery_fee_model_version": None,
+        "spot_entry_fee_rate": None,
+        "future_taker_fee_rate": None,
+        "spot_exit_fee_rate": None,
+        "settlement_audit_start_key": None,
         "expiry_spot_liquidation_late": None,
         "expiry_spot_liquidation_delay_seconds": None,
         "expiry_spot_liquidation_book_timestamp": None,
@@ -144,7 +195,14 @@ class BookFill:
     fee_amount: Decimal
     fee_quote_equivalent: Decimal
     market_timestamp: str
+    book_received_timestamp: str
+    book_source: str
+    book_sequence: int | None
     book_hash: str | None
+    consumed_levels: tuple[tuple[Decimal, Decimal], ...]
+    book_snapshot: dict[str, Any]
+    book_snapshot_sha256: str
+    market_evidence_id: str | None
     fee_rate: Decimal
 
     @property
@@ -175,8 +233,9 @@ class BookFill:
     def complete(self) -> bool:
         return self.filled_qty == self.requested_qty
 
-    def to_dict(self) -> dict[str, str | None]:
-        return {
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "execution_kind": "PAPER_DEPTH_SIMULATION",
             "fill_id": self.fill_id,
             "instrument_id": self.instrument_id,
             "leg": self.leg,
@@ -190,9 +249,24 @@ class BookFill:
             "fee_amount": decimal_string(self.fee_amount),
             "fee_quote_equivalent": decimal_string(self.fee_quote_equivalent),
             "market_timestamp": self.market_timestamp,
+            "book_received_timestamp": self.book_received_timestamp,
+            "book_source": self.book_source,
+            "book_sequence": self.book_sequence,
             "book_hash": self.book_hash,
             "fee_rate": decimal_string(self.fee_rate),
+            "consumed_levels": [
+                {"price": decimal_string(price), "quantity": decimal_string(quantity)}
+                for price, quantity in self.consumed_levels
+            ],
+            "book_snapshot_sha256": self.book_snapshot_sha256,
+            "market_evidence_id": self.market_evidence_id,
         }
+        # Durable runner snapshots live once in the market evidence archive.
+        # Keep an inline copy only for protective exits whose evidence sink is
+        # unavailable; those fills must remain auditable while risk is managed.
+        if not self.market_evidence_id:
+            payload["book_snapshot"] = self.book_snapshot
+        return payload
 
 
 def fill_from_book(
@@ -204,6 +278,7 @@ def fill_from_book(
     fee_rate: Decimal,
     fee_currency: str,
     fill_id: str,
+    market_evidence_id: str | None = None,
 ) -> BookFill:
     """Consume asks for BUY or bids for SELL, never using the mark or mid."""
 
@@ -221,6 +296,7 @@ def fill_from_book(
     remaining = requested
     filled = Decimal("0")
     notional = Decimal("0")
+    consumed_levels: list[tuple[Decimal, Decimal]] = []
     for level in levels:
         level_price = decimal(level.price, field="level.price")
         level_qty = decimal(level.quantity, field="level.quantity")
@@ -229,12 +305,14 @@ def fill_from_book(
             continue
         filled += take
         notional += take * level_price
+        consumed_levels.append((level_price, take))
         remaining -= take
         if remaining == 0:
             break
     average = notional / filled if filled else None
     fee_quote = notional * rate
     fee_amount = fee_quote / average if currency == "BASE" and average is not None else fee_quote
+    snapshot = _book_snapshot(book)
     return BookFill(
         fill_id=fill_id,
         instrument_id=book.instrument_id,
@@ -247,7 +325,14 @@ def fill_from_book(
         fee_amount=fee_amount,
         fee_quote_equivalent=fee_quote,
         market_timestamp=utc_string(book.market_timestamp),
+        book_received_timestamp=utc_string(book.received_timestamp),
+        book_source=book.source,
+        book_sequence=book.sequence,
         book_hash=getattr(book, "content_hash", None),
+        consumed_levels=tuple(consumed_levels),
+        book_snapshot=snapshot,
+        book_snapshot_sha256=_canonical_hash(snapshot),
+        market_evidence_id=market_evidence_id or None,
         fee_rate=rate,
     )
 
@@ -282,12 +367,30 @@ def floor_to_step(quantity: Decimal, step: Decimal) -> Decimal:
 class CarryDatedLedger:
     """Persistence and accounting transitions for an isolated dated-carry DB."""
 
-    def __init__(self, store: StateStore, capital: Decimal) -> None:
+    def __init__(
+        self,
+        store: StateStore,
+        capital: Decimal,
+        *,
+        market_evidence_quota_bytes: int = DEFAULT_MARKET_EVIDENCE_QUOTA_BYTES,
+        market_evidence_recorder: Any | None = None,
+    ) -> None:
         self.store = store
+        self.market_evidence_recorder = market_evidence_recorder
+        if (
+            not isinstance(market_evidence_quota_bytes, int)
+            or isinstance(market_evidence_quota_bytes, bool)
+            or market_evidence_quota_bytes < 1
+        ):
+            raise DatedLedgerError("market evidence quota must be a positive integer")
+        self.market_evidence_quota_bytes = market_evidence_quota_bytes
         expected_capital = decimal(capital, field="capital")
         persisted = store.load_engine_state(ENGINE_NAME)
         if persisted is None:
-            self.state = initial_checkpoint(expected_capital)
+            self.state = initial_checkpoint(
+                expected_capital,
+                market_evidence_quota_bytes=market_evidence_quota_bytes,
+            )
             self.store.save_engine_state(
                 ENGINE_NAME,
                 self.state,
@@ -303,6 +406,22 @@ class CarryDatedLedger:
                     "configured capital differs from the dedicated PAPER checkpoint"
                 )
             self.state = persisted
+        config_payload = {
+            "protocol_version": BOOK_EVIDENCE_PROTOCOL_VERSION,
+            "book_depth_levels": BOOK_DEPTH_LEVELS,
+            "market_evidence_quota_bytes": market_evidence_quota_bytes,
+        }
+        configured_state = dict(self.state)
+        configured_state.update(config_payload)
+        self._commit(
+            event_type="dated_market_evidence_config",
+            aggregate_id=(
+                f"{BOOK_EVIDENCE_PROTOCOL_VERSION}:{BOOK_DEPTH_LEVELS}:"
+                f"{market_evidence_quota_bytes}"
+            ),
+            business_payload=config_payload,
+            state=configured_state,
+        )
 
     @staticmethod
     def _validate_checkpoint(state: Mapping[str, Any]) -> None:
@@ -368,8 +487,14 @@ class CarryDatedLedger:
         ):
             raise DatedLedgerError("position writes are blocked by ACCOUNTING_UNCERTAIN")
 
-    def persist_decision(self, decision: Any) -> str:
+    def persist_decision(
+        self,
+        decision: Any,
+        *,
+        market_evidence_ids: tuple[str, ...] = (),
+    ) -> str:
         payload = decision.to_dict()
+        payload["market_evidence_ids"] = list(market_evidence_ids)
         candidate = dict(self.state)
         previous = candidate.get("decision") or {}
         stable_fields = (
@@ -398,6 +523,68 @@ class CarryDatedLedger:
             business_payload=payload,
             state=candidate,
         )
+
+    def persist_market_evidence(
+        self,
+        book: Any,
+        *,
+        purpose: str,
+        requested_depth: int,
+        protocol_version: str,
+        now: datetime,
+        required: bool = True,
+    ) -> str:
+        """Persist the exact observed snapshot used by a decision or risk action."""
+
+        if requested_depth != BOOK_DEPTH_LEVELS:
+            raise DatedLedgerError(
+                f"market evidence protocol requires depth={BOOK_DEPTH_LEVELS}"
+            )
+        if protocol_version != BOOK_EVIDENCE_PROTOCOL_VERSION:
+            raise DatedLedgerError("unsupported market evidence protocol version")
+        if len(book.bids) > requested_depth or len(book.asks) > requested_depth:
+            raise DatedLedgerError("market snapshot exceeds the requested evidence depth")
+        if self.market_evidence_recorder is None:
+            error: Exception = DatedLedgerError("MARKET_EVIDENCE_RECORDER_UNAVAILABLE")
+        else:
+            try:
+                evidence_id = self.market_evidence_recorder.persist(
+                    book,
+                    purpose=purpose,
+                    requested_depth=requested_depth,
+                    protocol_version=protocol_version,
+                    now=now,
+                )
+            except (OSError, RuntimeError, ValueError) as caught:
+                error = caught
+            else:
+                prior_gap = self.state.get("market_evidence_gap")
+                if prior_gap is not None:
+                    candidate = dict(self.state)
+                    candidate["market_evidence_gap"] = None
+                    self.store.save_carry_dated_checkpoint(candidate)
+                    self.state = candidate
+                return evidence_id
+
+        quota_failure = "MARKET_EVIDENCE_QUOTA_EXCEEDED" in str(error)
+        if required:
+            raise DatedLedgerError(str(error)) from error
+        candidate = dict(self.state)
+        gap = {
+            "reason_code": (
+                "MARKET_EVIDENCE_QUOTA_EXCEEDED"
+                if quota_failure
+                else "MARKET_EVIDENCE_UNAVAILABLE"
+            ),
+            "reason": f"{type(error).__name__}: {str(error)[:200]}",
+            "detected_at": utc_string(now),
+        }
+        existing_gap = candidate.get("market_evidence_gap") or {}
+        if existing_gap.get("reason_code") != gap["reason_code"]:
+            candidate["market_evidence_gap"] = gap
+            self.store.save_carry_dated_checkpoint(candidate)
+            self.state = candidate
+        return ""
 
     def record_wait(self, *, reason_code: str, reason_message: str, now: datetime) -> None:
         """Expose a bounded technical WAIT without creating a synthetic fill."""
@@ -442,8 +629,12 @@ class CarryDatedLedger:
         delivery_fee_estimate: Decimal | None,
         delivery_fee_rate: Decimal | None,
         delivery_fee_model_version: str,
+        spot_entry_fee_rate: Decimal,
+        future_taker_fee_rate: Decimal,
+        spot_exit_fee_rate: Decimal,
         spot_fee_currency_scenario: str,
         hedge_tolerance: Decimal,
+        market_evidence_ids: tuple[str, ...] = (),
     ) -> str:
         self._assert_position_writable()
         if self.state.get("status") != "FLAT":
@@ -455,8 +646,17 @@ class CarryDatedLedger:
         quantity = decimal(decision.quantity, field="decision.quantity")
         reserve = decimal(reserved_margin, field="reserved_margin")
         stress = decimal(stress_cash_buffer, field="stress_cash_buffer")
+        spot_entry_fee = decimal(spot_entry_fee_rate, field="spot_entry_fee_rate")
+        future_taker_fee = decimal(future_taker_fee_rate, field="future_taker_fee_rate")
+        spot_exit_fee = decimal(spot_exit_fee_rate, field="spot_exit_fee_rate")
         tolerance = decimal(hedge_tolerance, field="hedge_tolerance")
-        if quantity <= 0 or reserve < 0 or stress < 0 or tolerance < 0:
+        if (
+            quantity <= 0
+            or reserve < 0
+            or stress < 0
+            or tolerance < 0
+            or min(spot_entry_fee, future_taker_fee, spot_exit_fee) < 0
+        ):
             raise DatedLedgerError("entry quantity must be positive and reserve non-negative")
         required_cash = decimal(decision.total_cash_required, field="decision.total_cash_required")
         if required_cash > state_decimal(self.state, "free_cash"):
@@ -486,6 +686,9 @@ class CarryDatedLedger:
                 ),
                 "delivery_fee_applied": None,
                 "delivery_fee_model_version": delivery_fee_model_version,
+                "spot_entry_fee_rate": decimal_string(spot_entry_fee),
+                "future_taker_fee_rate": decimal_string(future_taker_fee),
+                "spot_exit_fee_rate": decimal_string(spot_exit_fee),
                 "spot_fee_currency_assumption": getattr(
                     decision, "spot_fee_currency_assumption", "UNKNOWN_WORST_CASE"
                 ),
@@ -503,6 +706,7 @@ class CarryDatedLedger:
                 "pending_saga_ids": [saga_id],
                 "active_saga_id": saga_id,
                 "last_settlement_key": None,
+                "settlement_audit_start_key": None,
                 "last_settlement_index": None,
                 "last_settlement_period_end": None,
                 "settlements_applied": 0,
@@ -523,6 +727,10 @@ class CarryDatedLedger:
             "reserved_margin": decimal_string(reserve),
             "stress_cash_buffer": decimal_string(stress),
             "spot_fee_currency_scenario": spot_fee_currency_scenario,
+            "spot_entry_fee_rate": decimal_string(spot_entry_fee),
+            "future_taker_fee_rate": decimal_string(future_taker_fee),
+            "spot_exit_fee_rate": decimal_string(spot_exit_fee),
+            "market_evidence_ids": list(market_evidence_ids),
         }
         return self._commit(
             event_type="dated_entry_intent",
@@ -691,10 +899,27 @@ class CarryDatedLedger:
             candidate["future_reference_price"] = None
             candidate["spot_fee_currency_assumption"] = None
             candidate["spot_fee_currency_applied_scenario"] = None
+            candidate["spot_entry_fee_rate"] = None
+            candidate["future_taker_fee_rate"] = None
+            candidate["spot_exit_fee_rate"] = None
             candidate["expected_hedge_residual"] = "0"
             candidate["hedge_tolerance"] = "0"
             candidate["hedge_residual"] = "0"
             candidate["incident"] = None
+            dust_qty = state_decimal(candidate, "spot_dust_qty")
+            dust_basis_raw = candidate.get("spot_dust_avg_entry")
+            dust_mark_raw = candidate.get("spot_dust_mark")
+            if dust_qty and (dust_basis_raw is None or dust_mark_raw is None):
+                raise DatedLedgerError("residual BTC inventory lacks its basis or mark")
+            if dust_qty:
+                assert dust_basis_raw is not None and dust_mark_raw is not None
+                dust_basis = decimal(dust_basis_raw, field="spot_dust_avg_entry")
+                dust_mark = decimal(dust_mark_raw, field="spot_dust_mark")
+            else:
+                dust_basis = Decimal("0")
+                dust_mark = Decimal("0")
+            candidate["pnl_unrealized"] = decimal_string(dust_qty * (dust_mark - dust_basis))
+            candidate["equity"] = decimal_string(cash + dust_qty * dust_mark)
         elif cash < 0:
             candidate["status"] = "UNBALANCED"
             candidate["incident"] = {
@@ -854,6 +1079,228 @@ class CarryDatedLedger:
         sequences = self.state.get("fill_sequences") or {}
         return int(sequences.get(leg, 0))
 
+    def dust_fill_id(self) -> str:
+        return f"dated-spot-dust-sweep:{int(self.state.get('dust_sweep_sequence', 0)) + 1}"
+
+    def classify_spot_dust(
+        self,
+        *,
+        minimum_amount: Decimal,
+        orderable_quantity: Decimal,
+        market_book: Any,
+        now: datetime,
+    ) -> str:
+        """Close the carry cycle while retaining sub-minimum BTC as visible inventory."""
+
+        self._assert_position_writable()
+        if self.state.get("status") not in {"CLOSING", "SETTLEMENT_PENDING", "UNBALANCED"}:
+            raise DatedLedgerError("spot dust can only be classified during a close saga")
+        if state_decimal(self.state, "future_qty") != 0:
+            raise DatedLedgerError("spot dust cannot be detached while a future short remains")
+        quantity = state_decimal(self.state, "spot_qty")
+        if quantity <= 0:
+            raise DatedLedgerError("spot dust classification requires a positive carry spot balance")
+        minimum = decimal(minimum_amount, field="minimum_amount")
+        orderable = decimal(orderable_quantity, field="orderable_quantity")
+        if minimum <= 0 or orderable >= minimum:
+            raise DatedLedgerError("spot quantity is still executable and cannot be classified as dust")
+        if not market_book.bids:
+            raise DatedLedgerError("spot dust classification requires an observed bid for valuation")
+        instrument = self.state.get("instrument") or {}
+        spot_record = instrument.get("spot") or {}
+        if market_book.instrument_id != spot_record.get("instrument_id"):
+            raise DatedLedgerError("spot dust valuation book does not match the held spot instrument")
+        mark = decimal(market_book.bids[0].price, field="spot_dust_mark")
+        active_basis_raw = self.state.get("spot_avg_entry")
+        if active_basis_raw is None:
+            raise DatedLedgerError("spot dust classification has no active spot cost basis")
+        active_basis = decimal(active_basis_raw, field="spot_avg_entry")
+        old_dust = state_decimal(self.state, "spot_dust_qty")
+        old_dust_instrument = self.state.get("spot_dust_instrument_id")
+        if old_dust and old_dust_instrument != market_book.instrument_id:
+            raise DatedLedgerError("residual BTC inventory belongs to another spot instrument")
+        old_dust_basis_raw = self.state.get("spot_dust_avg_entry")
+        old_dust_basis = (
+            decimal(old_dust_basis_raw, field="spot_dust_avg_entry")
+            if old_dust and old_dust_basis_raw is not None
+            else Decimal("0")
+        )
+        total_dust = old_dust + quantity
+        total_basis = (old_dust * old_dust_basis + quantity * active_basis) / total_dust
+        candidate = dict(self.state)
+        candidate.update(
+            {
+                "status": "FLAT",
+                "spot_qty": "0",
+                "spot_avg_entry": None,
+                "spot_dust_qty": decimal_string(total_dust),
+                "spot_dust_avg_entry": decimal_string(total_basis),
+                "spot_dust_mark": decimal_string(mark),
+                "spot_dust_mark_timestamp": utc_string(market_book.market_timestamp),
+                "spot_dust_instrument_id": market_book.instrument_id,
+                "future_qty": "0",
+                "future_avg_entry": None,
+                "future_reference_price": None,
+                "reserved_margin": "0",
+                "stress_cash_buffer": "0",
+                "maintenance_margin": "0",
+                "unrealized_short_loss_to_mark": "0",
+                "derivative_cash_after_unrealized_short_loss": candidate["cash_total"],
+                "cash_after_margin_stress": candidate["cash_total"],
+                "free_cash": candidate["cash_total"],
+                "instrument": None,
+                "expiry_utc": None,
+                "pending_saga_ids": [],
+                "active_saga_id": None,
+                "spot_fee_currency_assumption": None,
+                "spot_fee_currency_applied_scenario": None,
+                "spot_entry_fee_rate": None,
+                "future_taker_fee_rate": None,
+                "spot_exit_fee_rate": None,
+                "expected_hedge_residual": "0",
+                "hedge_tolerance": "0",
+                "hedge_residual": "0",
+                "pnl_unrealized": decimal_string(total_dust * (mark - total_basis)),
+                "equity": decimal_string(
+                    state_decimal(candidate, "cash_total") + total_dust * mark
+                ),
+                "reason_code": "CLOSED_WITH_SPOT_DUST",
+                "reason_message": (
+                    "Carry cycle closed; untradeable BTC remains in a separately tracked dust "
+                    "inventory and will be sold from a fresh bid book when it reaches minimum size"
+                ),
+                "incident": None,
+                "last_updated_at": utc_string(now),
+            }
+        )
+        active_saga_id = str(self.state.get("active_saga_id") or "unknown")
+        return self._commit(
+            event_type="dated_spot_dust_classified",
+            aggregate_id=f"spot-dust-classification:{active_saga_id}",
+            business_payload={
+                "quantity": decimal_string(quantity),
+                "cost_basis": decimal_string(active_basis),
+                "minimum_amount": decimal_string(minimum),
+                "orderable_quantity": decimal_string(orderable),
+                "residual_inventory_quantity": decimal_string(total_dust),
+                "valuation_price": decimal_string(mark),
+                "valuation_is_fill": False,
+                "market_timestamp": utc_string(market_book.market_timestamp),
+                "received_timestamp": utc_string(market_book.received_timestamp),
+                "book_source": market_book.source,
+                "book_sequence": market_book.sequence,
+                "book_hash": market_book.content_hash,
+            },
+            state=candidate,
+        )
+
+    def apply_spot_dust_fill(self, fill: BookFill, *, timestamp: datetime | None = None) -> str:
+        """Apply a public-book PAPER sale against the segregated dust inventory."""
+
+        self._assert_position_writable()
+        if self.state.get("status") != "FLAT" or fill.leg != "spot" or fill.side != "SELL":
+            raise DatedLedgerError("dust sweep requires a flat PAPER spot SELL")
+        if fill.filled_qty <= 0 or fill.average_price is None:
+            raise DatedLedgerError("zero-quantity dust fill cannot change the ledger")
+        quantity = state_decimal(self.state, "spot_dust_qty")
+        if fill.instrument_id != self.state.get("spot_dust_instrument_id"):
+            raise DatedLedgerError("dust fill instrument does not match tracked residual inventory")
+        if fill.base_consumed > quantity:
+            raise DatedLedgerError("dust sale exceeds the tracked residual BTC inventory")
+        basis_raw = self.state.get("spot_dust_avg_entry")
+        if basis_raw is None:
+            raise DatedLedgerError("residual BTC inventory has no cost basis")
+        basis = decimal(basis_raw, field="spot_dust_avg_entry")
+        cash = state_decimal(self.state, "cash_total")
+        realized = state_decimal(self.state, "pnl_realized")
+        fees_paid = state_decimal(self.state, "fees_paid")
+        cash_fee = fill.fee if fill.fee_currency == "QUOTE" else Decimal("0")
+        cash += fill.notional - cash_fee
+        if fill.fee_currency == "BASE":
+            realized += fill.notional - fill.base_consumed * basis
+        else:
+            realized += fill.notional - fill.fee - fill.filled_qty * basis
+        remaining = quantity - fill.base_consumed
+        candidate = dict(self.state)
+        snapshot = fill.book_snapshot
+        observed_mark = (
+            decimal(snapshot["bids"][0]["price"], field="book_snapshot.bid.price")
+            if snapshot.get("bids")
+            else fill.average_price
+        )
+        candidate.update(
+            {
+                "spot_dust_qty": decimal_string(remaining),
+                "spot_dust_avg_entry": decimal_string(basis) if remaining else None,
+                "spot_dust_mark": decimal_string(observed_mark) if remaining else None,
+                "spot_dust_instrument_id": (
+                    candidate.get("spot_dust_instrument_id") if remaining else None
+                ),
+                "spot_dust_mark_timestamp": (
+                    fill.market_timestamp if remaining else None
+                ),
+                "cash_total": decimal_string(cash),
+                "free_cash": decimal_string(cash),
+                "pnl_realized": decimal_string(realized),
+                "pnl_unrealized": (
+                    decimal_string(remaining * (observed_mark - basis)) if remaining else "0"
+                ),
+                "fees_paid": decimal_string(fees_paid + fill.fee),
+                "equity": decimal_string(cash + remaining * observed_mark),
+                "reason_code": "SPOT_DUST_SWEEP_PARTIAL" if remaining else "SPOT_DUST_SWEPT",
+                "reason_message": (
+                    "Residual BTC inventory was partially sold from observed bid depth"
+                    if remaining
+                    else "Residual BTC inventory was fully sold from observed bid depth"
+                ),
+                "last_updated_at": utc_string(timestamp),
+                "dust_sweep_sequence": int(candidate.get("dust_sweep_sequence", 0)) + 1,
+            }
+        )
+        return self._commit(
+            event_type="dated_spot_dust_sweep_fill",
+            aggregate_id=fill.fill_id,
+            business_payload=fill.to_dict(),
+            state=candidate,
+        )
+
+    def mark_spot_dust(
+        self,
+        *,
+        spot_mark: Decimal | None,
+        now: datetime,
+        market_timestamp: datetime | None = None,
+    ) -> None:
+        """Update residual-inventory valuation without creating a PAPER fill."""
+
+        if state_decimal(self.state, "spot_dust_qty") <= 0:
+            return
+        if self.state.get("status") != "FLAT":
+            raise DatedLedgerError("flat dust valuation cannot overlap an active carry position")
+        if spot_mark is None:
+            return
+        mark = decimal(spot_mark, field="spot_dust_mark")
+        quantity = state_decimal(self.state, "spot_dust_qty")
+        basis_raw = self.state.get("spot_dust_avg_entry")
+        if basis_raw is None:
+            raise DatedLedgerError("residual BTC inventory has no cost basis")
+        basis = decimal(basis_raw, field="spot_dust_avg_entry")
+        cash = state_decimal(self.state, "cash_total")
+        candidate = dict(self.state)
+        candidate.update(
+            {
+                "spot_dust_mark": decimal_string(mark),
+                "spot_dust_mark_timestamp": (
+                    utc_string(market_timestamp) if market_timestamp is not None else None
+                ),
+                "pnl_unrealized": decimal_string(quantity * (mark - basis)),
+                "equity": decimal_string(cash + quantity * mark),
+                "last_updated_at": utc_string(now),
+            }
+        )
+        self.store.save_carry_dated_checkpoint(candidate)
+        self.state = candidate
+
     def apply_settlement(self, settlement: Any, *, now: datetime | None = None) -> str:
         self._assert_position_writable()
         if self.state.get("status") not in {"OPEN", "SETTLEMENT_PENDING"}:
@@ -893,22 +1340,56 @@ class CarryDatedLedger:
                 now=now or settlement.received_at,
             )
             raise DatedLedgerError("settlement cursor exists without its immutable event")
-        elif settlement.kind == "daily" and previous_key is not None:
-            previous_end = datetime.fromisoformat(
-                str(self.state["last_settlement_period_end"]).replace("Z", "+00:00")
-            )
-            delta = settlement.period_end - previous_end
+        elif settlement.kind == "daily":
+            if previous_key is None:
+                if opened_at_raw is None:
+                    self.mark_uncertain(
+                        kind="POSITION_OPEN_TIME_MISSING",
+                        message="Cannot identify the first daily settlement boundary for this position",
+                        now=now or settlement.received_at,
+                    )
+                    raise DatedLedgerError("position open time is required for first settlement")
+                expected_end = next_daily_settlement_after(opened_at)
+                if settlement.period_end != expected_end:
+                    self.mark_settlement_pending(
+                        reason_code="DAILY_SETTLEMENT_GAP",
+                        reason_message=(
+                            f"First daily settlement expected at {utc_string(expected_end)}, "
+                            f"received {utc_string(settlement.period_end)}"
+                        ),
+                        now=now or settlement.received_at,
+                    )
+                    raise DatedLedgerError("first daily settlement is missing; cash PnL was not applied")
+            else:
+                previous_end = datetime.fromisoformat(
+                    str(self.state["last_settlement_period_end"]).replace("Z", "+00:00")
+                )
+                expected_end = previous_end + timedelta(days=1)
+                if settlement.period_end != expected_end or settlement.period_start != previous_end:
+                    self.mark_settlement_pending(
+                        reason_code="DAILY_SETTLEMENT_GAP",
+                        reason_message=(
+                            f"Settlement interval should end at {utc_string(expected_end)}, "
+                            f"received {utc_string(settlement.period_end)}"
+                        ),
+                        now=now or settlement.received_at,
+                    )
+                    raise DatedLedgerError("daily settlement gap; cash PnL was not applied")
             if (
-                delta.total_seconds() != 86_400
-                or settlement.period_start != previous_end
+                settlement.event_timestamp != settlement.period_end
                 or (settlement.period_end - settlement.period_start).total_seconds() != 86_400
             ):
                 self.mark_settlement_pending(
-                    reason_code="DAILY_SETTLEMENT_GAP",
-                    reason_message=f"Settlement interval gap: {delta}",
+                    reason_code="DAILY_SETTLEMENT_PERIOD_INVALID",
+                    reason_message="Daily settlement event/period does not match the official 24-hour boundary",
                     now=now or settlement.received_at,
                 )
-                raise DatedLedgerError("daily settlement gap; cash PnL was not applied")
+                raise DatedLedgerError("daily settlement period is invalid; cash PnL was not applied")
+            expiry_raw = future_instrument.get("expiration_utc")
+            if expiry_raw:
+                expiry = datetime.fromisoformat(str(expiry_raw).replace("Z", "+00:00"))
+                if settlement.event_timestamp >= expiry:
+                    raise DatedLedgerError("daily settlement cannot be applied at/after contract expiry")
         elif settlement.kind == "expiry":
             previous_end_raw = self.state.get("last_settlement_period_end")
             if previous_end_raw is not None:
@@ -930,14 +1411,6 @@ class CarryDatedLedger:
                 )
                 raise DatedLedgerError(
                     "expiry settlement timestamp does not match contract metadata"
-                )
-        elif settlement.kind == "daily" and future_instrument.get("expiration_utc"):
-            expiry = datetime.fromisoformat(
-                str(future_instrument["expiration_utc"]).replace("Z", "+00:00")
-            )
-            if settlement.event_timestamp >= expiry:
-                raise DatedLedgerError(
-                    "daily settlement cannot be applied at/after contract expiry"
                 )
 
         future_qty = state_decimal(self.state, "future_qty")
@@ -996,6 +1469,8 @@ class CarryDatedLedger:
                 "pnl_realized": decimal_string(realized),
                 "fees_paid": decimal_string(fees_paid),
                 "last_settlement_key": settlement.settlement_key,
+                "settlement_audit_start_key": candidate.get("settlement_audit_start_key")
+                or settlement.settlement_key,
                 "last_settlement_index": decimal_string(index_price),
                 "last_settlement_period_end": utc_string(settlement.period_end),
                 "settlements_applied": int(candidate.get("settlements_applied", 0)) + 1,
@@ -1197,9 +1672,17 @@ class CarryDatedLedger:
             state=candidate,
         )
 
-    def mark_to_market(self, *, spot_mark: Decimal, future_mark: Decimal, now: datetime) -> None:
+    def mark_to_market(
+        self,
+        *,
+        spot_mark: Decimal,
+        future_mark: Decimal,
+        now: datetime,
+        spot_market_timestamp: datetime | None = None,
+    ) -> None:
         candidate = dict(self.state)
         spot_qty = state_decimal(candidate, "spot_qty")
+        dust_qty = state_decimal(candidate, "spot_dust_qty")
         future_qty = state_decimal(candidate, "future_qty")
         spot_avg = (
             decimal(candidate["spot_avg_entry"], field="spot_avg_entry")
@@ -1213,23 +1696,35 @@ class CarryDatedLedger:
             future_reference = decimal(reference_raw, field="future_reference_price")
         else:
             future_reference = Decimal("0")
-        unrealized = spot_qty * (decimal(spot_mark) - spot_avg)
+        dust_basis_raw = candidate.get("spot_dust_avg_entry")
+        if dust_qty and dust_basis_raw is None:
+            raise DatedLedgerError("residual BTC inventory has no cost basis")
+        if dust_qty:
+            assert dust_basis_raw is not None
+            dust_basis = decimal(dust_basis_raw, field="spot_dust_avg_entry")
+        else:
+            dust_basis = Decimal("0")
+        spot_price = decimal(spot_mark)
+        unrealized = spot_qty * (spot_price - spot_avg)
+        unrealized += dust_qty * (spot_price - dust_basis)
         unrealized += future_qty * (future_reference - decimal(future_mark))
         cash = state_decimal(candidate, "cash_total")
         candidate.update(
             {
                 "pnl_unrealized": decimal_string(unrealized),
-                "equity": decimal_string(cash + unrealized + spot_qty * spot_avg),
+                "equity": decimal_string(
+                    cash
+                    + (spot_qty + dust_qty) * spot_price
+                    + future_qty * (future_reference - decimal(future_mark))
+                ),
                 "last_updated_at": utc_string(now),
             }
         )
-        # Spot cost has already left cash; add current spot market value here,
-        # while `pnl_unrealized` is only the gain/loss above entry basis.
-        candidate["equity"] = decimal_string(
-            cash
-            + spot_qty * decimal(spot_mark)
-            + future_qty * (future_reference - decimal(future_mark))
-        )
+        if dust_qty:
+            candidate["spot_dust_mark"] = decimal_string(spot_price)
+            candidate["spot_dust_mark_timestamp"] = utc_string(
+                spot_market_timestamp or now
+            )
         self.store.save_carry_dated_checkpoint(candidate)
         self.state = candidate
 

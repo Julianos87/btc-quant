@@ -313,28 +313,68 @@ collecteur et du runner, l'intégrité de leur DB et leur espace disque soient
 prouvés indépendamment. Une décision économique `WAIT` est normale et ne vaut
 pas incident. Ce statut ne prouve pas la rentabilité.
 
-Le lot C a déclaré le nom du runner PAPER
-`btcquant-carry-dated-experimental.service`; le service et son chemin DB doivent
-être vérifiés dans la release intégrée avec `systemctl cat` et
-`systemd-analyze verify` avant toute activation. Le lot B n'a pas encore livré
-le nom d'unité ni le contrat de santé du collecteur : ils restent INCONNUS et
-doivent être remplis à partir de son implémentation, jamais déduits de
-`btcquant-carry-data.service` qui collecte l'ancien perp. Tant que runner et
-collecteur ne sont pas reliés à des preuves de santé distinctes, la readiness
-reste UNKNOWN. Les unités datées doivent écrire uniquement sous
-`state/carry-dated-experiment/` et dans le répertoire de données expérimental
-dédié; elles ne doivent ni partager la DB Trend/Carry canonique, ni faire
-partie des moteurs requis par la campagne Tandem. Ne pas les activer
-automatiquement dans `install.sh`/`update.sh` avant validation PAPER explicite.
+Les unités exactes sont `btcquant-carry-dated-experimental.service` et
+`btcquant-carry-dated-collector.service`. `deploy/update.sh` les installe et
+crée les seuls répertoires isolés autorisés; il ne les active pas et ne redémarre
+pas Trend/Carry si `--engines` n'est pas demandé. Après validation technique et
+avant leur activation, vérifier les fichiers de l'artefact immuable :
 
-Après intégration, vérifier le JSON de `/api/carry-dated`, l'âge de
-`last_updated_at`, l'identité du profil PAPER, le motif de décision, le dernier
-settlement et le nombre de règlements appliqués. Interroger le runner nommé
-ci-dessus et le vrai service collecteur livré par B séparément pour vérifier
-heartbeat, trous/échecs, backlog de règlement, déséquilibre, incertitude
-comptable, intégrité DB, quota disque et sauvegarde/restauration. Ne pas conclure
-« service sain » à partir du seul fichier de statut ni de ce runbook avant que
-ces identités soient présentes dans la release.
+```bash
+sudo systemd-analyze verify \
+  /opt/btcquant/current/deploy/btcquant-carry-dated-experimental.service \
+  /opt/btcquant/current/deploy/btcquant-carry-dated-collector.service
+sudo systemctl cat btcquant-carry-dated-experimental.service
+sudo systemctl cat btcquant-carry-dated-collector.service
+```
+
+Le runner est l'unique source des carnets réellement utilisés : BTC_USDC spot
+et l'échéance sélectionnée, toutes les 30 secondes, à 20 niveaux. Il écrit
+chaque snapshot exact une fois dans `market.sqlite3`; décisions et fills le
+référencent par identifiant et hash. Le collecteur est lancé avec
+`--books-from-runner` : il ne repolle pas les carnets, mais conserve les
+métadonnées et règlements publics, puis archive et vérifie les snapshots du
+runner. S'il ne trouve pas les deux carnets récents attendus, son état est
+`PARTIAL`; les données manquantes ne sont pas remplacées.
+
+La cible de conservation est 700 jours pour couvrir le plancher causal de 560
+jours (30 cycles de développement + 10 cycles holdout, 14 jours minimum
+chacun). Le plafond global est 5 GiB et le collecteur garde au moins 2 GiB
+libres; il suspend explicitement l'écriture au seuil sans purge automatique.
+Un test de 300 polls à carnets variables de 20 niveaux a projeté 1,52 GiB sur
+700 jours pour les snapshots runner et les cycles; une estimation indépendante
+plus conservatrice donne 1,88 GiB pour les snapshots seuls. Ces fixtures
+excluent les métadonnées/règlements et ne sont pas une mesure de réponses
+réelles de Deribit. Mesurer la croissance réelle après 24–72 h sur le VPS avant
+de valider la capacité 700 jours. La sauvegarde chiffrée du même volume exige
+de la place distincte : prévoir jusqu'à 5 GiB d'archive, 5 GiB de miroir
+chiffré et 2,5 GiB de réserve libre, en plus de l'état Trend.
+
+Quand la baseline Trend/Carry et la sauvegarde vérifiée sont enregistrées,
+activer uniquement les deux unités expérimentales :
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now btcquant-carry-dated-collector.service
+sudo systemctl enable --now btcquant-carry-dated-experimental.service
+```
+
+Après deux cycles normaux, confirmer les deux unités actives, deux timestamps
+collecteur espacés de 30 s, les statuts `/api/carry-dated`, une décision WAIT/OPEN
+explicable, la fraîcheur des carnets, zéro dette, zéro déséquilibre et la DB
+isolée. Redémarrer une fois le collecteur seul, puis confirmer reprise des
+cursors sans doublons. Réaliser une sauvegarde chiffrée et un test de
+restauration clean-room des deux DB et d'au moins un segment immuable. Le
+dashboard expose les heartbeats, qualité des carnets, quota, couverture et
+scrub d'archives; `readiness_status` reste `UNKNOWN` jusqu'aux contrôles
+systemd/SQLite indépendants. Un état vert du fichier seul ne prouve pas la
+liveness du processus ni la rentabilité.
+
+Toute bascule code-only conserve les processus Trend et Carry canoniques déjà
+chargés; un changement de symlink ne prouve pas leur SHA mémoire. Vérifier le
+SHA/la release des deux seuls processus PAPER au moyen de `/proc/<pid>/cwd`, de
+`systemctl show` et du journal. Ne pas appeler `update.sh --engines` pour cette
+première livraison, car il redémarrerait les moteurs canoniques et pourrait
+modifier la position/son stop Trend.
 
 À l'échéance, contrôler la réception du règlement officiel, son identifiant et
 sa correction/version, puis la liquidation spot issue des bids observés. En cas

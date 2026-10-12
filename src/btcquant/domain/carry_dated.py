@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+import hashlib
+import json
 from typing import Any, Literal
 
 
@@ -27,7 +29,9 @@ def _decimal(value: Decimal | int | str, name: str, *, allow_zero: bool = False)
     except (InvalidOperation, ValueError) as exc:
         raise ValueError(f"{name} must be a finite Decimal") from exc
     if not result.is_finite() or (result < 0 if allow_zero else result <= 0):
-        raise ValueError(f"{name} must be {'non-negative' if allow_zero else 'positive'} and finite")
+        raise ValueError(
+            f"{name} must be {'non-negative' if allow_zero else 'positive'} and finite"
+        )
     return result
 
 
@@ -105,7 +109,9 @@ class DatedInstrument:
             value = getattr(self, name)
             if value is not None:
                 object.__setattr__(self, name, _signed_decimal(value, name))
-        object.__setattr__(self, "metadata_timestamp", _utc(self.metadata_timestamp, "metadata_timestamp"))
+        object.__setattr__(
+            self, "metadata_timestamp", _utc(self.metadata_timestamp, "metadata_timestamp")
+        )
         if self.expiration_utc is not None:
             object.__setattr__(self, "expiration_utc", _utc(self.expiration_utc, "expiration_utc"))
         if not self.fee_provenance or not self.metadata_hash or not self.instrument_state:
@@ -135,8 +141,12 @@ class DatedBook:
             raise ValueError("book instrument_id and source are required")
         if not all(isinstance(level, BookLevel) for level in (*self.bids, *self.asks)):
             raise TypeError("book levels must be BookLevel instances")
-        object.__setattr__(self, "market_timestamp", _utc(self.market_timestamp, "market_timestamp"))
-        object.__setattr__(self, "received_timestamp", _utc(self.received_timestamp, "received_timestamp"))
+        object.__setattr__(
+            self, "market_timestamp", _utc(self.market_timestamp, "market_timestamp")
+        )
+        object.__setattr__(
+            self, "received_timestamp", _utc(self.received_timestamp, "received_timestamp")
+        )
         for name in ("mark_price", "index_price"):
             value = getattr(self, name)
             if value is not None:
@@ -176,6 +186,59 @@ class DatedBook:
         return not self.quality_reasons(now=now, max_age_seconds=max_age_seconds)
 
 
+def _canonical_decimal_string(value: Decimal) -> str:
+    """Serialize numerically equal Decimal values identically for market evidence."""
+
+    if value == 0:
+        return "0"
+    return format(value.normalize(), "f")
+
+
+def canonical_market_book_snapshot(book: DatedBook) -> dict[str, Any]:
+    """Canonical, shared representation used by both fills and durable evidence."""
+
+    return {
+        "instrument_id": book.instrument_id,
+        "bids": [
+            {
+                "price": _canonical_decimal_string(level.price),
+                "quantity": _canonical_decimal_string(level.quantity),
+            }
+            for level in book.bids
+        ],
+        "asks": [
+            {
+                "price": _canonical_decimal_string(level.price),
+                "quantity": _canonical_decimal_string(level.quantity),
+            }
+            for level in book.asks
+        ],
+        "market_timestamp": _iso_string(book.market_timestamp),
+        "received_timestamp": _iso_string(book.received_timestamp),
+        "source": book.source,
+        "instrument_state": book.instrument_state,
+        "mark_price": (
+            _canonical_decimal_string(book.mark_price) if book.mark_price is not None else None
+        ),
+        "index_price": (
+            _canonical_decimal_string(book.index_price) if book.index_price is not None else None
+        ),
+        "sequence": book.sequence,
+        "content_hash": book.content_hash,
+    }
+
+
+def canonical_payload_sha256(payload: Any) -> str:
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 @dataclass(frozen=True, slots=True)
 class DatedSettlement:
     venue: str
@@ -194,7 +257,9 @@ class DatedSettlement:
     def __post_init__(self) -> None:
         if self.kind not in ("daily", "expiry"):
             raise ValueError("unsupported settlement kind")
-        if not all((self.venue, self.instrument_id, self.settlement_key, self.source, self.content_hash)):
+        if not all(
+            (self.venue, self.instrument_id, self.settlement_key, self.source, self.content_hash)
+        ):
             raise ValueError("settlement identity, provenance and hash are required")
         for name in ("period_start", "period_end", "received_at", "event_timestamp"):
             object.__setattr__(self, name, _utc(getattr(self, name), name))
@@ -202,7 +267,11 @@ class DatedSettlement:
             raise ValueError("settlement period must be positive")
         if not self.period_start <= self.event_timestamp <= self.period_end:
             raise ValueError("settlement event timestamp must lie in its period")
-        object.__setattr__(self, "official_index_price", _decimal(self.official_index_price, "official_index_price"))
+        object.__setattr__(
+            self,
+            "official_index_price",
+            _decimal(self.official_index_price, "official_index_price"),
+        )
         if not self.correction_version:
             raise ValueError("settlement correction/version identity is required")
 
@@ -261,7 +330,13 @@ class DatedCarryDecision:
             raise ValueError("decision action must be OPEN or WAIT")
         if self.spot_fee_currency_assumption not in ("UNKNOWN_WORST_CASE", "BASE", "QUOTE"):
             raise ValueError("unsupported spot fee currency assumption")
-        for name in ("decision_at", "as_of", "expiry_utc", "spot_market_timestamp", "future_market_timestamp"):
+        for name in (
+            "decision_at",
+            "as_of",
+            "expiry_utc",
+            "spot_market_timestamp",
+            "future_market_timestamp",
+        ):
             value = getattr(self, name)
             if value is not None:
                 object.__setattr__(self, name, _utc(value, name))
@@ -378,6 +453,8 @@ __all__ = [
     "BOOK_FRESHNESS_SECONDS",
     "BookLevel",
     "DatedBook",
+    "canonical_market_book_snapshot",
+    "canonical_payload_sha256",
     "DatedCarryDecision",
     "DatedInstrument",
     "DatedSettlement",

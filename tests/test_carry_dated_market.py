@@ -124,9 +124,15 @@ def test_active_settlement_cursor_is_inclusive_and_expiry_is_verified() -> None:
     def fake_get(method: str, params: dict):
         calls.append((method, params))
         if method == "get_last_settlements_by_instrument" and params["type"] == "settlement":
-            return {"settlements": [settlement("settlement", CURSOR_MS)], "continuation": "none"}, NOW
+            return {
+                "settlements": [settlement("settlement", CURSOR_MS)],
+                "continuation": "none",
+            }, NOW
         if method == "get_last_settlements_by_instrument" and params["type"] == "delivery":
-            return {"settlements": [settlement("delivery", DELIVERY_MS)], "continuation": "none"}, NOW
+            return {
+                "settlements": [settlement("delivery", DELIVERY_MS)],
+                "continuation": "none",
+            }, NOW
         if method == "get_delivery_prices":
             return {
                 "data": [{"date": "2026-10-11", "delivery_price": Decimal("82952.11")}],
@@ -199,7 +205,8 @@ def test_expired_contract_without_cursor_fails_closed() -> None:
 def test_bad_cursor_never_skips_history() -> None:
     client = DeribitPublicClient(clock=lambda: NOW, sleeper=lambda _: None)
     client._get = lambda method, params: (
-        {"settlements": [settlement("settlement", CURSOR_MS + 1000)], "continuation": "none"}, NOW
+        {"settlements": [settlement("settlement", CURSOR_MS + 1000)], "continuation": "none"},
+        NOW,
     )  # type: ignore[method-assign]
     cursor = f"deribit:{INSTRUMENT}:daily:{CURSOR_MS}"
     with pytest.raises(SettlementCursorMissing, match="cursor is absent"):
@@ -220,7 +227,10 @@ def test_delivery_price_disagreement_is_not_replaced_by_a_proxy() -> None:
         NOW,
     )
     client._get = lambda method, params: (
-        {"data": [{"date": "2026-10-11", "delivery_price": Decimal("82952.12")}], "records_total": 1},
+        {
+            "data": [{"date": "2026-10-11", "delivery_price": Decimal("82952.12")}],
+            "records_total": 1,
+        },
         NOW,
     )  # type: ignore[method-assign]
     from btcquant.execution.carry_dated_market import SettlementDataMismatch
@@ -313,4 +323,3 @@ def test_json_rpc_rate_limit_retry_exhaustion_is_bounded(
     assert error.value.rpc_code == 10028
     assert attempts == 2
     assert delays == [0.25]
-

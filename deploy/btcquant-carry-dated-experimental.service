@@ -1,0 +1,33 @@
+[Unit]
+Description=btcquant - Carry BTC à échéance PAPER expérimental isolé
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=btcquant
+Group=btcquant
+WorkingDirectory=/opt/btcquant/current
+Environment=PYTHONIOENCODING=utf-8
+Environment=BTCQUANT_ROOT=/opt/btcquant
+ExecStart=/opt/btcquant/current/venv/bin/python -m btcquant.entrypoints.carry_dated_experimental --config /opt/btcquant/current/environments/paper/carry_dated_experimental.yaml
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=30
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/btcquant/state/carry-dated-experiment
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryMax=768M
+CPUQuota=50%
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target

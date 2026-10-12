@@ -15,7 +15,8 @@ les checkpoints, les événements et les contrôles de reprise existants. Aucun
 ordre d'exchange n'est implémenté ou autorisé.
 
 Phase initiale : nouveau runner expérimental et DB dédiée sous le runtime
-`carry-experiment`. Toute éventuelle migration vers le Carry canonique reste
+`state/carry-dated-experiment/`, avec les preuves publiques conservées sous
+`data/carry-dated-experiment/archive/`. Toute éventuelle migration vers le Carry canonique reste
 ultérieure, après validation technique, et une décision distincte après preuves
 économiques. Le protocole existant pour perp demeure inchangé et historisé.
 

@@ -676,10 +676,15 @@ function renderDatedCarry(report) {
     const runner = components.runner || {}, collector = components.collector || {};
     const database = components.database || {}, disk = components.disk || {};
     const settlements = components.settlement_backlog || {};
+    const archive = collector.archive_integrity || {};
+    const market = collector.market_data || {};
+    const diskUsage = disk.used_bytes == null || disk.quota_bytes == null
+      ? "N/A" : `${disk.used_bytes}/${disk.quota_bytes} B`;
+    const collectorAge = collector.age_seconds == null ? "N/A" : `${Math.round(collector.age_seconds)} s`;
     const unknownUnit = t("dated_unknown_unit"), unsetUnit = t("dated_unset_unit");
     return PREFS.lang === "en"
-      ? `runner ${runner.status || "UNKNOWN"} (${runner.unit || unknownUnit}) · collector ${collector.status || "UNKNOWN"} (${collector.unit || unsetUnit}) · DB integrity ${database.integrity || "UNKNOWN"} · disk/quota ${disk.status || "UNKNOWN"} · settlement backlog ${settlements.status || "UNKNOWN"}`
-      : `runner ${runner.status || "UNKNOWN"} (${runner.unit || unknownUnit}) · collecteur ${collector.status || "UNKNOWN"} (${collector.unit || unsetUnit}) · intégrité DB ${database.integrity || "UNKNOWN"} · disque/quota ${disk.status || "UNKNOWN"} · backlog règlements ${settlements.status || "UNKNOWN"}`;
+      ? `runner ${runner.status || "UNKNOWN"} (${runner.unit || unknownUnit}) · collector ${collector.status || "UNKNOWN"} (${collector.unit || unsetUnit}, ${collectorAge}) · market ${market.status || "UNKNOWN"} · archives ${archive.status || "UNKNOWN"} · DB integrity ${database.integrity || "UNKNOWN"} · disk ${disk.status || "UNKNOWN"} ${diskUsage} · settlement backlog ${settlements.status || "UNKNOWN"}`
+      : `runner ${runner.status || "UNKNOWN"} (${runner.unit || unknownUnit}) · collecteur ${collector.status || "UNKNOWN"} (${collector.unit || unsetUnit}, ${collectorAge}) · marché ${market.status || "UNKNOWN"} · archives ${archive.status || "UNKNOWN"} · intégrité DB ${database.integrity || "UNKNOWN"} · disque ${disk.status || "UNKNOWN"} ${diskUsage} · backlog règlements ${settlements.status || "UNKNOWN"}`;
   };
   const key = {
     NOT_DEPLOYED:"dated_not_deployed", AVAILABLE:"dated_available", STALE:"dated_stale",
