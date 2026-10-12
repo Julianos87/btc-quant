@@ -270,7 +270,7 @@
     </div>
 
     <div class="card" data-card="carry">
-      <h2>Moteur Carry <span style="color:var(--muted);font-weight:600">cash · sans dette</span> <span class="estate" id="carry-state"><span class="dot"></span>—</span></h2>
+      <h2>Carry perp canonique <span style="color:var(--muted);font-weight:600">produit perpétuel</span> <span class="estate" id="carry-state"><span class="dot"></span>—</span></h2>
       <div class="eequity num" id="carry-eq">—</div>
       <div class="esub">cash-and-carry · encaisse le funding toutes les heures
         <span class="beat num" id="carry-beat"></span></div>
@@ -312,6 +312,33 @@
         <div class="technical-note">Prix funding : close H1 précédent · jambes spot/perp modélisées en paper, aucune position venue déduite.</div>
       </details>
       <div class="card-note">Sortie : funding lissé 14 j &lt; 0. Jambes spot/perp modélisées en paper, aucune position venue déduite.</div>
+
+      <section class="dated-carry-panel" aria-labelledby="dated-carry-title" aria-live="polite">
+        <div class="dated-carry-heading">
+          <div>
+          <h3 id="dated-carry-title" data-i18n="dated_title">Carry BTC à échéance · PAPER expérimental</h3>
+            <p data-i18n="dated_product_note">Spot BTC acheté + future BTC_USDC linéaire vendu · portefeuille isolé, exclu des totaux Tandem</p>
+          </div>
+          <span class="dated-carry-badge" id="dated-carry-status">NON DÉPLOYÉ</span>
+        </div>
+        <p class="dated-carry-reason" id="dated-carry-reason">Aucun état expérimental disponible.</p>
+        <div class="dated-carry-grid">
+          <div><span data-i18n="dated_instrument">Contrat / échéance UTC</span><strong id="dated-carry-instrument">N/A</strong></div>
+          <div><span data-i18n="dated_capital">Capital / cash total</span><strong id="dated-carry-capital">N/A</strong></div>
+          <div><span data-i18n="dated_cash_margin">Cash libre / marge réservée</span><strong id="dated-carry-cash-margin">N/A</strong></div>
+          <div><span data-i18n="dated_stress">Réserve de stress</span><strong id="dated-carry-stress">N/A</strong></div>
+          <div><span data-i18n="dated_spot">Spot BTC / prix moyen</span><strong id="dated-carry-spot">N/A</strong></div>
+          <div><span data-i18n="dated_future">Future short BTC / prix moyen</span><strong id="dated-carry-future">N/A</strong></div>
+          <div><span data-i18n="dated_residual">Déséquilibre constaté</span><strong id="dated-carry-residual">N/A</strong></div>
+          <div><span data-i18n="dated_settlement">Dernier règlement officiel / compteur</span><strong id="dated-carry-settlement">N/A</strong></div>
+          <div><span data-i18n="dated_pnl">PnL réalisé / latent</span><strong id="dated-carry-pnl">N/A</strong></div>
+          <div><span data-i18n="dated_fees">Frais comptabilisés</span><strong id="dated-carry-fees">N/A</strong></div>
+          <div><span data-i18n="dated_premium">Prime brute estimée à l’entrée</span><strong id="dated-carry-premium">N/A</strong></div>
+          <div><span data-i18n="dated_net_reserve">Net avant réserve / réserve / après</span><strong id="dated-carry-net-reserve">N/A</strong></div>
+        </div>
+        <div class="dated-carry-foot" id="dated-carry-health">Readiness globale UNKNOWN · liveness du collecteur, runner et intégrité DB non prouvées par ce snapshot.</div>
+        <small data-i18n="dated_economics_note">Prix/quantités et PnL proviennent du checkpoint PAPER, pas de fills réels. La marge immobilisée est un besoin de liquidité, pas une perte. La réserve est un seuil de décision, pas une charge. Rentabilité : INSUFFICIENT_EVIDENCE.</small>
+      </section>
     </div>
 
     <div class="card" data-card="breakdown">

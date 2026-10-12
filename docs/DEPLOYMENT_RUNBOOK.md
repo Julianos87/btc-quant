@@ -291,6 +291,105 @@ corruption, une erreur I/O ou une base indisponible échoue immédiatement. En
 cas d'épuisement, le JSON conserve seulement le nom/code SQLite et le nombre
 d'essais, jamais des requêtes, lignes ou secrets.
 
+## Carry BTC à échéance expérimental (PAPER isolé)
+
+Le premier déploiement du Carry à échéance utilise une allocation et un état
+séparés. Le snapshot lu par l'interface est
+`/opt/btcquant/state/carry-dated-experiment/carry_dated_status.json` par défaut.
+Le chemin peut être remplacé par la variable non secrète
+`BTCQUANT_CARRY_DATED_STATUS_PATH`; le writer doit publier ce fichier par
+remplacement atomique. Il doit contenir le contrat `strategy=carry_btc_dated`,
+`schema_version=1`, `paper_only=true` et un des états documentés dans
+`docs/ADR_CARRY_DATED_PAPER.md`. Ne pas publier de clé, de compte ou de secret
+dans le snapshot.
+
+Le dashboard lit cette source séparément via `/api/carry-dated`. Elle n'entre
+pas dans les courbes, l'equity agrégée ni l'allocation Tandem. `NOT_DEPLOYED`,
+`STALE`, `UNKNOWN`, `ACCOUNTING_UNCERTAIN`, `INCIDENT_OPEN` et `UNBALANCED`
+doivent rester visibles; aucune de ces valeurs n'est convertie en FLAT. Un
+snapshot `AVAILABLE` prouve seulement que son fichier est lisible et récent.
+La readiness globale reste `UNKNOWN` jusqu'à ce que la liveness systemd du
+collecteur et du runner, l'intégrité de leur DB et leur espace disque soient
+prouvés indépendamment. Une décision économique `WAIT` est normale et ne vaut
+pas incident. Ce statut ne prouve pas la rentabilité.
+
+Les unités exactes sont `btcquant-carry-dated-experimental.service` et
+`btcquant-carry-dated-collector.service`. `deploy/update.sh` les installe et
+crée les seuls répertoires isolés autorisés; il ne les active pas et ne redémarre
+pas Trend/Carry si `--engines` n'est pas demandé. Après validation technique et
+avant leur activation, vérifier les fichiers de l'artefact immuable :
+
+```bash
+sudo systemd-analyze verify \
+  /opt/btcquant/current/deploy/btcquant-carry-dated-experimental.service \
+  /opt/btcquant/current/deploy/btcquant-carry-dated-collector.service
+sudo systemctl cat btcquant-carry-dated-experimental.service
+sudo systemctl cat btcquant-carry-dated-collector.service
+```
+
+Le runner est l'unique source des carnets réellement utilisés : BTC_USDC spot
+et l'échéance sélectionnée, toutes les 30 secondes, à 20 niveaux. Il écrit
+chaque snapshot exact une fois dans `market.sqlite3`; décisions et fills le
+référencent par identifiant et hash. Le collecteur est lancé avec
+`--books-from-runner` : il ne repolle pas les carnets, mais conserve les
+métadonnées et règlements publics, puis archive et vérifie les snapshots du
+runner. S'il ne trouve pas les deux carnets récents attendus, son état est
+`PARTIAL`; les données manquantes ne sont pas remplacées.
+
+La cible de conservation est 700 jours pour couvrir le plancher causal de 560
+jours (30 cycles de développement + 10 cycles holdout, 14 jours minimum
+chacun). Le plafond global est 5 GiB et runner/collecteur gardent au moins
+10 GiB libres. Ce plancher protège la sauvegarde d'état : à la baseline VPS du
+12 octobre, son budget conservateur est d'environ 8,8 GiB (4× l'état courant,
+128 MiB de staging et 2,5 GiB de réserve après sauvegarde). La collecte se
+suspend au seuil sans purge automatique.
+Un test de 300 polls à carnets variables de 20 niveaux a projeté 1,52 GiB sur
+700 jours pour les snapshots runner et les cycles; une estimation indépendante
+plus conservatrice donne 1,88 GiB pour les snapshots seuls. Ces fixtures
+excluent les métadonnées/règlements et ne sont pas une mesure de réponses
+réelles de Deribit. Sur le VPS contrôlé, 14,56 GiB sont libres. La projection
+conservatrice de 1,88 GiB d'archive plus un miroir chiffré comparable donne
+3,76 GiB supplémentaires et laisse environ 10,8 GiB libres, au-dessus du
+plancher de 10 GiB. Le plafond de 5 GiB reste une limite de panne sûre, pas une
+promesse de capacité : si les réponses réelles dépassent cette projection, le
+collecteur suspendra la collecte avant de consommer l'espace requis par la
+sauvegarde. Mesurer la croissance réelle après 24–72 h et ne valider la cible
+700 jours qu'après comparaison avec ce budget; ne réduire ni cadence, ni
+profondeur, ni rétention pour contourner une suspension.
+
+Quand la baseline Trend/Carry et la sauvegarde vérifiée sont enregistrées,
+activer uniquement les deux unités expérimentales :
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now btcquant-carry-dated-collector.service
+sudo systemctl enable --now btcquant-carry-dated-experimental.service
+```
+
+Après deux cycles normaux, confirmer les deux unités actives, deux timestamps
+collecteur espacés de 30 s, les statuts `/api/carry-dated`, une décision WAIT/OPEN
+explicable, la fraîcheur des carnets, zéro dette, zéro déséquilibre et la DB
+isolée. Redémarrer une fois le collecteur seul, puis confirmer reprise des
+cursors sans doublons. Réaliser une sauvegarde chiffrée et un test de
+restauration clean-room des deux DB et d'au moins un segment immuable. Le
+dashboard expose les heartbeats, qualité des carnets, quota, couverture et
+scrub d'archives; `readiness_status` reste `UNKNOWN` jusqu'aux contrôles
+systemd/SQLite indépendants. Un état vert du fichier seul ne prouve pas la
+liveness du processus ni la rentabilité.
+
+Toute bascule code-only conserve les processus Trend et Carry canoniques déjà
+chargés; un changement de symlink ne prouve pas leur SHA mémoire. Vérifier le
+SHA/la release des deux seuls processus PAPER au moyen de `/proc/<pid>/cwd`, de
+`systemctl show` et du journal. Ne pas appeler `update.sh --engines` pour cette
+première livraison, car il redémarrerait les moteurs canoniques et pourrait
+modifier la position/son stop Trend.
+
+À l'échéance, contrôler la réception du règlement officiel, son identifiant et
+sa correction/version, puis la liquidation spot issue des bids observés. En cas
+de règlement manquant, jambe résiduelle ou état incertain, arrêter toute nouvelle
+entrée et suivre la procédure de reprise comptable de l'ADR; ne pas remplir un
+prix absent avec l'indice ou un mark. Aucun rollover implicite n'est permis.
+
 ### Démarrage de la maturité PAPER v3
 
 Après la qualification technique, la maturité PAPER est démarrée uniquement par

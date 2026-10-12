@@ -10,6 +10,8 @@ PREVIOUS="${ROOT}/previous"
 DASHBOARD_CURRENT="${ROOT}/dashboard-current"
 DASHBOARD_PREVIOUS="${ROOT}/dashboard-previous"
 RESTART_ENGINES=false
+START_DATED_CARRY=false
+DATED_CARRY_WAS_ACTIVE=false
 MIGRATION_MODE=false
 TARGET_SHA=""
 LOCK_FILE="${BTCQUANT_DEPLOY_LOCK:-/run/lock/btcquant-deploy.lock}"
@@ -33,6 +35,7 @@ WRITER_UNITS=(
   btcquant-rebalance.service btcquant-rebalance-pending.service btcquant-shadow.service
   btcquant-hyperliquid-testnet.service btcquant-hyperliquid-watchdog.service
   btcquant-carry-experimental.service btcquant-carry-data.service
+  btcquant-carry-dated-experimental.service btcquant-carry-dated-collector.service
 )
 WRITER_TIMERS=(
   btcquant-watchdog.timer btcquant-hyperliquid-watchdog.timer btcquant-compact.timer
@@ -68,6 +71,24 @@ restart_selected_engines() {
     systemctl restart btcquant-trend btcquant-carry
   fi
   configure_carry_experiment_services
+}
+
+sync_dated_carry_services() {
+  local target="$1"
+  local should_run="$2"
+  local control_release="${TARGET:-}"
+  if [ ! -x "${control_release}/deploy/sync-dated-carry-paper.sh" ]; then
+    control_release="${OLD_TARGET:-}"
+  fi
+  if [ ! -x "${control_release}/deploy/sync-dated-carry-paper.sh" ]; then
+    echo "Refus: helper de cycle de vie Carry daté absent." >&2
+    return 1
+  fi
+  if [ "${should_run}" = true ]; then
+    TARGET_WRITES_STARTED=true
+  fi
+  BTCQUANT_ROOT="${ROOT}" bash \
+    "${control_release}/deploy/sync-dated-carry-paper.sh" "${target}" "${should_run}"
 }
 
 configure_carry_experiment_services() {
@@ -231,6 +252,11 @@ atomic_switch_release(sys.argv[1], sys.argv[2])
   fi
   systemctl restart btcquant-dashboard
   wait_for_dashboard
+  if ${DATED_CARRY_WAS_ACTIVE} || ${START_DATED_CARRY}; then
+    sync_dated_carry_services "${old_target}" true
+  else
+    sync_dated_carry_services "${old_target}" false
+  fi
 }
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -253,6 +279,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --engines)
       RESTART_ENGINES=true
+      shift
+      ;;
+    --dated-carry-paper)
+      START_DATED_CARRY=true
       shift
       ;;
     --migration)
@@ -282,6 +312,16 @@ if [ "${TARGET_SHA}" = rollback ] && ${MIGRATION_MODE}; then
   echo "Refus: rollback et migration sont incompatibles." >&2
   exit 2
 fi
+if ${START_DATED_CARRY} && ${RESTART_ENGINES}; then
+  echo "Refus: --dated-carry-paper est séparé du redémarrage des moteurs canoniques (--engines)." >&2
+  exit 2
+fi
+
+for dated_unit in btcquant-carry-dated-collector.service btcquant-carry-dated-experimental.service; do
+  if systemctl is-active --quiet "${dated_unit}"; then
+    DATED_CARRY_WAS_ACTIVE=true
+  fi
+done
 
 if [ "${TARGET_SHA}" = rollback ]; then
   [ -L "${CURRENT}" ] && [ -L "${PREVIOUS}" ] || { echo "Rollback refusé: liens absents." >&2; exit 1; }
@@ -324,6 +364,11 @@ atomic_switch_release(sys.argv[1], sys.argv[2])
   if ! systemctl restart btcquant-dashboard || ! wait_for_dashboard; then
     echo "Rollback invalide; restauration manuelle requise." >&2
     exit 1
+  fi
+  if ${DATED_CARRY_WAS_ACTIVE} || ${START_DATED_CARRY}; then
+    sync_dated_carry_services "${TARGET}" true
+  else
+    sync_dated_carry_services "${TARGET}" false
   fi
   echo "Rollback activé: ${RELEASE_ID}"
   exit 0
@@ -439,6 +484,7 @@ migration_abort_on_error() {
   if [ -f "${MIGRATION_BACKUP}" ]; then
     echo "FAIL CLOSED: migration interrompue après création du backup; MANUAL RECOVERY REQUIRED." >&2
   else
+    install_units "${OLD_TARGET}" || true
     echo "MIGRATION_REFUSED: migration arrêtée avant backup; DB/current/previous inchangés." >&2
   fi
   exit "${code}"
@@ -451,6 +497,10 @@ if ${MIGRATION_MODE}; then
   MIGRATION_ATTEMPTED=true
   MIGRATION_BACKUP="${ROOT}/backups/pre-migration-${TARGET_SHA}.db"
   trap migration_abort_on_error ERR
+  # Load the target's complete writer set while everything is stopped. This
+  # lets migrate.sh prove the new isolated units are known and inactive on a
+  # first installation instead of refusing because systemd has never seen them.
+  install_units "${TARGET}"
   # migrate.sh resolves its Python from its own release directory (TARGET),
   # not from /opt/btcquant/current. Do not pass BTCQUANT_CURRENT here.
   BTCQUANT_DEPLOY_LOCK_HELD=true BTCQUANT_ROOT="${ROOT}" \
@@ -500,6 +550,11 @@ atomic_switch_release(sys.argv[1], sys.argv[2])
     restart_selected_engines || true
   fi
   systemctl restart btcquant-dashboard || true
+  if ${DATED_CARRY_WAS_ACTIVE} || ${START_DATED_CARRY}; then
+    sync_dated_carry_services "${OLD_TARGET}" true || true
+  else
+    sync_dated_carry_services "${OLD_TARGET}" false || true
+  fi
   exit "${code}"
 }
 trap rollback_on_error ERR
@@ -512,6 +567,22 @@ atomic_switch_release(sys.argv[1], sys.argv[2])
 ' "${ROOT}" "${TARGET}"
 switch_dashboard_release "${TARGET}"
 install_units "${TARGET}"
+configure_dated_carry_experiment_paths() {
+  local path
+  for path in \
+    "${ROOT}/state/carry-dated-experiment" \
+    "${ROOT}/data/carry-dated-experiment" \
+    "${ROOT}/data/carry-dated-experiment/archive"; do
+    if [ -L "${path}" ] || { [ -e "${path}" ] && [ ! -d "${path}" ]; }; then
+      echo "Refus: chemin de Carry daté non-répertoire ou lien symbolique (${path})." >&2
+      return 1
+    fi
+  done
+  install -d -o btcquant -g btcquant -m 0750 \
+    "${ROOT}/state/carry-dated-experiment" \
+    "${ROOT}/data/carry-dated-experiment/archive"
+}
+configure_dated_carry_experiment_paths
 
 if ${MIGRATION_MODE}; then
   # Le dashboard appartient au writer set: son démarrage franchit la frontière
@@ -533,6 +604,15 @@ else
     restart_selected_engines
   fi
   wait_for_dashboard
+fi
+
+# A code switch does not replace code already loaded by a long-running Python
+# process. Restart only dated PAPER services that were already active, or
+# explicitly requested for this validated first delivery. Trend remains up.
+if ${DATED_CARRY_WAS_ACTIVE} || ${START_DATED_CARRY}; then
+  sync_dated_carry_services "${TARGET}" true
+else
+  sync_dated_carry_services "${TARGET}" false
 fi
 
 if ${RESTART_ENGINES}; then

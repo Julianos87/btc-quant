@@ -73,6 +73,22 @@ const I18N = {
     carry_modeled_qty:"Perp qty modélisé", carry_modeled_spot:"Spot notionnel modélisé",
     carry_modeled_perp:"Perp notionnel modélisé",
     carry_uncertain:"Comptabilité Carry incertaine — pas d'exposition venue",
+    dated_title:"Carry BTC à échéance · PAPER expérimental", dated_instrument:"Contrat / échéance UTC",
+    dated_capital:"Capital / cash total", dated_cash_margin:"Cash libre / marge réservée",
+    dated_stress:"Réserve de stress", dated_spot:"Spot BTC / prix moyen",
+    dated_future:"Future vendu BTC / prix moyen", dated_residual:"Déséquilibre constaté",
+    dated_settlement:"Dernier règlement officiel / compteur", dated_pnl:"PnL réalisé / latent",
+    dated_fees:"Frais comptabilisés", dated_premium:"Prime brute estimée à l’entrée",
+    dated_net_reserve:"Net avant réserve / réserve / après",
+    dated_not_deployed:"NON DÉPLOYÉ", dated_available:"SNAPSHOT LISIBLE",
+    dated_stale:"SNAPSHOT PÉRIMÉ", dated_unknown:"ÉTAT INCONNU",
+    dated_accounting_uncertain:"COMPTABILITÉ INCERTAINE", dated_incident:"INCIDENT OUVERT",
+    dated_unbalanced:"JAMBES DÉSÉQUILIBRÉES",
+    dated_no_snapshot:"Aucun état Carry à échéance disponible.",
+    dated_readiness_unknown:"Readiness globale UNKNOWN · liveness du collecteur, runner et intégrité DB non prouvées par ce snapshot.",
+    dated_product_note:"Spot BTC acheté + future BTC_USDC linéaire vendu · portefeuille expérimental isolé, exclu des totaux Tandem.",
+    dated_economics_note:"Valeurs issues du checkpoint PAPER, sans fills réels. La marge immobilisée est un besoin de liquidité, pas une perte; la réserve est un seuil de décision, pas une charge. Rentabilité : INSUFFICIENT_EVIDENCE.",
+    dated_unknown_unit:"unité inconnue", dated_unset_unit:"unité non fixée",
     paper_vs_bt:"Hyperliquid 1 m · backtest Binance 4 h",
     readiness_title:"Qualification", testnet_guard:"Testnet non autorisé · cette carte décrit uniquement la qualification PAPER.", readiness_note:"Critères fixés à froid — le passage ne se décide pas au feeling.",
     decision_current:"Décision actuelle", decision_unknown:"UNKNOWN", decision_unavailable:"Régime 4 h indisponible — aucune direction confirmée.",
@@ -136,6 +152,22 @@ const I18N = {
     carry_modeled_qty:"Modeled perp qty", carry_modeled_spot:"Modeled spot notional",
     carry_modeled_perp:"Modeled perp notional",
     carry_uncertain:"Carry accounting uncertain — no venue exposure",
+    dated_title:"Dated BTC carry · experimental PAPER", dated_instrument:"Contract / expiry UTC",
+    dated_capital:"Capital / total cash", dated_cash_margin:"Free cash / reserved margin",
+    dated_stress:"Stress cash buffer", dated_spot:"Spot BTC / average entry",
+    dated_future:"Sold future BTC / average entry", dated_residual:"Recorded hedge residual",
+    dated_settlement:"Latest official settlement / count", dated_pnl:"Realized / unrealized PnL",
+    dated_fees:"Booked fees", dated_premium:"Estimated gross entry premium",
+    dated_net_reserve:"Net before reserve / reserve / after",
+    dated_not_deployed:"NOT DEPLOYED", dated_available:"SNAPSHOT READABLE",
+    dated_stale:"STALE SNAPSHOT", dated_unknown:"UNKNOWN STATE",
+    dated_accounting_uncertain:"ACCOUNTING UNCERTAIN", dated_incident:"OPEN INCIDENT",
+    dated_unbalanced:"UNBALANCED LEGS",
+    dated_no_snapshot:"No dated Carry state is available.",
+    dated_readiness_unknown:"Overall readiness UNKNOWN · this snapshot does not prove collector/runner liveness or database integrity.",
+    dated_product_note:"Buy BTC spot + sell a linear BTC_USDC future · isolated experimental allocation, excluded from Tandem totals.",
+    dated_economics_note:"Values come from the PAPER checkpoint, not real fills. Reserved margin is a liquidity requirement, not a loss; the reserve is a decision hurdle, not an expense. Profitability: INSUFFICIENT_EVIDENCE.",
+    dated_unknown_unit:"unknown unit", dated_unset_unit:"unit not defined",
     paper_vs_bt:"Hyperliquid 1m · Binance 4h backtest",
     readiness_title:"Qualification", testnet_guard:"Testnet is not authorized · this card describes PAPER qualification only.", readiness_note:"Criteria set in advance — the transition is not a gut call.",
     decision_current:"Current decision", decision_unknown:"UNKNOWN", decision_unavailable:"4h regime unavailable — no direction confirmed.",
@@ -622,6 +654,88 @@ async function refreshSummary() {
     if (summaryRequestState.isCurrent(requestSequence)) markSummaryUnavailable();
     throw error;
   }
+}
+
+async function refreshDatedCarry() {
+  try {
+    const response = await fetchDashboard("/api/carry-dated");
+    if (!response.ok) throw new Error("carry_dated_http_" + response.status);
+    renderDatedCarry(await response.json());
+  } catch (_error) {
+    renderDatedCarry({status:"UNKNOWN", reason_code:"STATUS_ENDPOINT_UNAVAILABLE", snapshot:null,
+      readiness_status:"UNKNOWN", economic_evidence:"INSUFFICIENT_EVIDENCE"});
+  }
+  return true;
+}
+
+function renderDatedCarry(report) {
+  const snapshot = report && report.snapshot && typeof report.snapshot === "object"
+    ? report.snapshot : null;
+  const components = report && report.components || {};
+  const componentNote = () => {
+    const runner = components.runner || {}, collector = components.collector || {};
+    const database = components.database || {}, disk = components.disk || {};
+    const settlements = components.settlement_backlog || {};
+    const archive = collector.archive_integrity || {};
+    const market = collector.market_data || {};
+    const diskUsage = disk.used_bytes == null || disk.quota_bytes == null
+      ? "N/A" : `${disk.used_bytes}/${disk.quota_bytes} B`;
+    const collectorAge = collector.age_seconds == null ? "N/A" : `${Math.round(collector.age_seconds)} s`;
+    const unknownUnit = t("dated_unknown_unit"), unsetUnit = t("dated_unset_unit");
+    return PREFS.lang === "en"
+      ? `runner ${runner.status || "UNKNOWN"} (${runner.unit || unknownUnit}) · collector ${collector.status || "UNKNOWN"} (${collector.unit || unsetUnit}, ${collectorAge}) · market ${market.status || "UNKNOWN"} · archives ${archive.status || "UNKNOWN"} · DB integrity ${database.integrity || "UNKNOWN"} · disk ${disk.status || "UNKNOWN"} ${diskUsage} · settlement backlog ${settlements.status || "UNKNOWN"}`
+      : `runner ${runner.status || "UNKNOWN"} (${runner.unit || unknownUnit}) · collecteur ${collector.status || "UNKNOWN"} (${collector.unit || unsetUnit}, ${collectorAge}) · marché ${market.status || "UNKNOWN"} · archives ${archive.status || "UNKNOWN"} · intégrité DB ${database.integrity || "UNKNOWN"} · disque ${disk.status || "UNKNOWN"} ${diskUsage} · backlog règlements ${settlements.status || "UNKNOWN"}`;
+  };
+  const key = {
+    NOT_DEPLOYED:"dated_not_deployed", AVAILABLE:"dated_available", STALE:"dated_stale",
+    UNKNOWN:"dated_unknown", ACCOUNTING_UNCERTAIN:"dated_accounting_uncertain",
+    INCIDENT_OPEN:"dated_incident", UNBALANCED:"dated_unbalanced",
+  }[report && report.status] || "dated_unknown";
+  const badge = $("dated-carry-status");
+  badge.textContent = t(key);
+  badge.dataset.status = report && report.status || "UNKNOWN";
+  const field = (id, value) => { $(id).textContent = value == null || value === "" ? "N/A" : String(value); };
+  if (!snapshot) {
+    field("dated-carry-reason", report && report.reason_code || t("dated_no_snapshot"));
+    ["dated-carry-instrument", "dated-carry-capital", "dated-carry-cash-margin",
+      "dated-carry-stress", "dated-carry-spot", "dated-carry-future", "dated-carry-residual",
+      "dated-carry-settlement", "dated-carry-pnl", "dated-carry-fees", "dated-carry-premium",
+      "dated-carry-net-reserve"].forEach(id => field(id, null));
+    field("dated-carry-health", `${t("dated_readiness_unknown")} ${componentNote()}`);
+    return;
+  }
+  const instrument = snapshot.instrument && snapshot.instrument.future || {};
+  const decision = snapshot.decision && typeof snapshot.decision === "object" ? snapshot.decision : {};
+  const market = snapshot.market || {};
+  const show = value => value == null ? "N/A" : String(value);
+  const usd = value => value == null ? "N/A" : `${value} USDC`;
+  const btc = value => value == null ? "N/A" : `${value} BTC`;
+  const timestamp = value => value == null ? "N/A" : String(value).endsWith("Z") ? String(value) : `${value} UTC`;
+  const action = decision.action ? `${decision.action} · ` : "";
+  const reasonCode = snapshot.reason_code || decision.reason_code || "N/A";
+  const reasonMessage = snapshot.reason_message || decision.reason_message || "";
+  field("dated-carry-reason", `${snapshot.status} · ${action}${reasonCode}${reasonMessage ? " · " + reasonMessage : ""}`);
+  field("dated-carry-instrument", `${instrument.instrument_id || "N/A"} · ${timestamp(snapshot.expiry_utc)}`);
+  field("dated-carry-capital", `${usd(snapshot.capital)} / ${usd(snapshot.cash_total)}`);
+  field("dated-carry-cash-margin", `${usd(snapshot.free_cash)} / ${usd(snapshot.reserved_margin)}`);
+  field("dated-carry-stress", usd(snapshot.stress_cash_buffer));
+  field("dated-carry-spot", `${btc(snapshot.spot_qty)} / ${usd(snapshot.spot_avg_entry)}`);
+  field("dated-carry-future", `${btc(snapshot.future_qty)} / ${usd(snapshot.future_avg_entry)}`);
+  field("dated-carry-residual", btc(snapshot.hedge_residual));
+  field("dated-carry-settlement", `${usd(snapshot.last_settlement_index)} / ${show(snapshot.settlements_applied)} · ${show(snapshot.last_settlement_key)}`);
+  field("dated-carry-pnl", `${usd(snapshot.pnl_realized)} / ${usd(snapshot.pnl_unrealized)}`);
+  field("dated-carry-fees", usd(snapshot.fees_paid));
+  field("dated-carry-premium", usd(decision.gross_premium));
+  field("dated-carry-net-reserve", `${usd(decision.net_before_reserve)} / ${usd(decision.risk_reserve)} / ${usd(decision.net_after_reserve)}`);
+  const age = report.snapshot_age_seconds == null ? "N/A" : `${Math.round(report.snapshot_age_seconds)} s`;
+  const incident = snapshot.incident == null ? "aucun incident snapshot" : `incident ${JSON.stringify(snapshot.incident)}`;
+  const sagas = Array.isArray(snapshot.pending_saga_ids) ? snapshot.pending_saga_ids.length : "N/A";
+  const readiness = report.readiness_status || "UNKNOWN";
+  const marketTimes = `spot ${timestamp(market.spot_timestamp)} · future ${timestamp(market.future_timestamp)}`;
+  const snapshotDetails = PREFS.lang === "en"
+    ? `snapshot ${age} · settlements applied ${show(snapshot.settlements_applied)} · pending sagas ${sagas} · ${incident} · ${marketTimes} · readiness ${readiness}`
+    : `snapshot ${age} · règlements appliqués ${show(snapshot.settlements_applied)} · sagas en attente ${sagas} · ${incident} · ${marketTimes} · readiness ${readiness}`;
+  field("dated-carry-health", `${t("dated_readiness_unknown")} ${componentNote()} · ${snapshotDetails}`);
 }
 
 // ── exposition + santé + countdowns ────────────────────────
@@ -2246,7 +2360,7 @@ $("tr-more").onclick = () => refreshTrades({append: true});
 let timer = null;
 let tickPromise = null;
 let refreshResetTimer = null;
-const PANEL_PERIODS = {summary: 0, events: 0, journal: 30_000, readiness: 0, equity: 0, price: 0, trades: 0, metrics: 60_000, analytics: 120_000, conformity: 120_000};
+const PANEL_PERIODS = {summary: 0, carry_dated: 0, events: 0, journal: 30_000, readiness: 0, equity: 0, price: 0, trades: 0, metrics: 60_000, analytics: 120_000, conformity: 120_000};
 const panelSuccessAt = new Map();
 const panelStates = new Map();
 function restartTimer() { if (timer) clearInterval(timer); if (PREFS.refresh) timer = setInterval(tick, PREFS.refresh); }
@@ -2291,7 +2405,8 @@ function refreshPlan({background = document.hidden} = {}) {
   // Summary, readiness, and metrics feed the cockpit status and notifications;
   // they remain live even when the tab or their cards are not visible.
   const plan = [
-    ["summary", refreshSummary], ["readiness", refreshReadiness], ["metrics", refreshMetrics],
+    ["summary", refreshSummary], ["carry_dated", refreshDatedCarry],
+    ["readiness", refreshReadiness], ["metrics", refreshMetrics],
   ];
   // A hidden tab keeps only operational dependencies alive. Returning to the
   // foreground forces the visible secondary panels through visibilitychange.

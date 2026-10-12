@@ -22,6 +22,7 @@ import ccxt
 import pandas as pd
 from flask import Flask, Response, jsonify, make_response, redirect, request
 from dashboard.auth import DashboardAuthenticator
+from dashboard.carry_dated_status import project_status as project_carry_dated_status
 from dashboard.web import web
 from btcquant.config import load_config, portfolio_from_config
 from btcquant.reporting.analytics import (
@@ -160,6 +161,13 @@ def operational_health():
     # Detailed service readiness; liveness remains intentionally separate.
     payload, status = _readiness_snapshot()
     return jsonify(payload), status
+
+
+@app.get("/api/carry-dated")
+def carry_dated_status():
+    """Read the isolated dated-carry PAPER snapshot, never the perp ledger."""
+
+    return jsonify(project_carry_dated_status(STATE))
 
 
 @app.get("/metrics/prometheus")

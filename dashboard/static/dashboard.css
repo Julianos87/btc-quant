@@ -1864,3 +1864,29 @@ canvas, svg, img { max-width:100%; }
   body[data-view="monitor"] .decision-board.monitor-masonry > [data-card="journal"] { order:8; }
   body[data-view="monitor"] .decision-board.monitor-masonry > [data-card="readiness"] { order:9; }
 }
+
+.dated-carry-panel {
+  margin-top:16px;
+  padding:14px;
+  border:1px solid color-mix(in srgb,var(--s1) 38%,var(--ring));
+  border-radius:12px;
+  background:color-mix(in srgb,var(--s1) 4%,var(--surface-2));
+}
+.dated-carry-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.dated-carry-heading h3 { margin:0; color:var(--ink); font-size:14px; line-height:1.3; }
+.dated-carry-heading p { margin:4px 0 0; color:var(--muted); font-size:10px; line-height:1.4; }
+.dated-carry-badge { flex:none; padding:5px 8px; border:1px solid var(--ring); border-radius:999px; color:var(--muted); font-size:9px; font-weight:800; letter-spacing:.04em; }
+.dated-carry-badge[data-status="AVAILABLE"] { color:var(--good-text); border-color:color-mix(in srgb,var(--good) 48%,var(--ring)); }
+.dated-carry-badge[data-status="STALE"],
+.dated-carry-badge[data-status="INCIDENT_OPEN"],
+.dated-carry-badge[data-status="UNBALANCED"],
+.dated-carry-badge[data-status="ACCOUNTING_UNCERTAIN"] { color:var(--crit); border-color:color-mix(in srgb,var(--crit) 48%,var(--ring)); }
+.dated-carry-reason { margin:10px 0; padding:8px 10px; border-left:3px solid var(--s1); border-radius:4px; color:var(--ink-2); background:color-mix(in srgb,var(--surface) 78%,transparent); font-size:11px; line-height:1.4; overflow-wrap:anywhere; }
+.dated-carry-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1px; border:1px solid var(--grid); background:var(--grid); }
+.dated-carry-grid > div { min-width:0; padding:8px 9px; background:var(--surface); }
+.dated-carry-grid span { display:block; color:var(--muted); font-size:9px; letter-spacing:.04em; text-transform:uppercase; }
+.dated-carry-grid strong { display:block; margin-top:4px; color:var(--ink); font:650 11px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace; overflow-wrap:anywhere; }
+.dated-carry-foot { margin-top:9px; color:var(--warn); font-size:10px; line-height:1.45; overflow-wrap:anywhere; }
+.dated-carry-panel > small { display:block; margin-top:8px; color:var(--muted); font-size:9px; line-height:1.45; }
+@media (max-width:780px) { .dated-carry-panel { padding:11px; } .dated-carry-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media (max-width:380px) { .dated-carry-heading { display:block; } .dated-carry-badge { display:inline-block; margin-top:8px; } .dated-carry-grid { grid-template-columns:1fr; } }

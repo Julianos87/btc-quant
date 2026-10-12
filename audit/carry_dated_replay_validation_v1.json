@@ -1,0 +1,44 @@
+{
+  "report_version": "carry_dated_replay_validation_v1",
+  "validated_at_utc": "2026-10-12T08:14:24Z",
+  "source_commit": "b09a57a2f7800ba3993bc7750fb2a5654308a1e4",
+  "protocol_version": "carry_btc_dated_v1",
+  "checks": {
+    "full_mypy": {
+      "command": "uv run --locked --python 3.11 mypy src",
+      "result": "PASS",
+      "detail": "134 source files; no issues"
+    },
+    "full_pytest": {
+      "command": "uv run --locked --python 3.11 pytest -q",
+      "result": "PASS",
+      "passed": 2226,
+      "skipped": 3
+    },
+    "targeted_carry_pytest": {
+      "command": "uv run --locked --python 3.11 pytest -q tests/test_carry_dated_replay.py tests/test_carry_dated_policy.py tests/test_carry_dated_governance.py tests/test_carry_dated_domain.py",
+      "result": "PASS",
+      "passed": 24
+    },
+    "ruff": {
+      "command": "uv run --locked --python 3.11 ruff check src/btcquant/domain/carry_dated_policy.py src/btcquant/research/carry_dated_replay.py tests/test_carry_dated_replay.py tests/test_carry_dated_policy.py tests/test_carry_dated_governance.py",
+      "result": "PASS"
+    }
+  },
+  "mechanics_covered": [
+    "dated expiry selection and stable decision identity across repeated inputs; source book hash changes decision identity",
+    "observed depth-walked entry and expiry spot exit; official daily/expiry settlements telescope to entry-to-expiry cash PnL",
+    "missing, duplicate, corrected, and pre-event settlement evidence; stale, late, and not-yet-received books",
+    "protective trigger debits short losses since last official settlement, never credits short gains, and supports negative derivative cash",
+    "protective close covers future first, then sells spot; partial depth and amount-step residual are explicit",
+    "spot entry and exit fee currency sensitivity BASE versus QUOTE, including BTC consumed, quote cash fees, and realized PnL",
+    "terminal 5% spot/index basis sensitivity is reported separately and is never treated as covered by the 2% admission reserve"
+  ],
+  "limitations": {
+    "execution_label_in_tests": "FIXTURE",
+    "fixture_scope": "mechanical proof only; no portfolio fills, no observed completed carry cycle, no profitability evidence",
+    "live_paper_fee_scenario": "The current runner assumes BASE for routed spot fees at entry and exit; this is explicitly a PAPER assumption because public source data do not establish the debit asset.",
+    "economic_status": "INSUFFICIENT_EVIDENCE",
+    "canonical_status": "CANONICAL_UNCHANGED"
+  }
+}

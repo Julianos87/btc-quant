@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 import os
+import json
 import sqlite3
 import stat
 import subprocess
+import sys
 import tarfile
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from btcquant.backup import assert_writer_recovery_clear
 from btcquant.execution.state_store import SCHEMA_VERSION, StateStore
+from btcquant.research.carry_dated_collector import (
+    DatedMarketCollector,
+    _record,
+    open_database,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -36,7 +44,11 @@ def _runtime_layout(tmp_path: Path) -> tuple[Path, Path]:
     (release / "backups").symlink_to(Path("../../backups"))
     (release / "backups-repo").symlink_to(Path("../../backups-repo"))
     (runtime / "current").symlink_to(release)
-    for name in ("backup_state.sh", "backup_database.py"):
+    for name in (
+        "backup_state.sh",
+        "backup_database.py",
+        "backup_carry_dated_evidence.py",
+    ):
         (release / "scripts" / name).write_text(
             (ROOT / "scripts" / name).read_text(encoding="utf-8"),
             encoding="utf-8",
@@ -188,6 +200,132 @@ def test_backup_encrypted_roundtrip_from_runtime_root(tmp_path: Path) -> None:
     with sqlite3.connect(restored) as connection:
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert connection.execute("SELECT value FROM sample").fetchone()[0] == "runtime-real"
+
+
+def test_backup_separates_dated_databases_from_incremental_encrypted_evidence(
+    tmp_path: Path,
+) -> None:
+    runtime, release = _runtime_layout(tmp_path)
+    backup_source = (ROOT / "scripts" / "backup_state.sh").read_text(encoding="utf-8")
+    assert 'DATED_SNAPSHOT_LOCK="${DATED_STATE_DIR}/market.sqlite3.snapshot.lock"' in backup_source
+    _seed_db(runtime / "state" / "btcquant.db")
+    dated_state = runtime / "state" / "carry-dated-experiment"
+    archive = runtime / "data" / "carry-dated-experiment" / "archive"
+    dated_state.mkdir(parents=True)
+    archive.mkdir(parents=True)
+    _seed_db(dated_state / "carry_dated.db")
+    _seed_db(dated_state / "market.sqlite3")
+    _write_executable(
+        release / "venv" / "bin" / "python",
+        f'#!/usr/bin/env bash\nexec "{sys.executable}" "$@"\n',
+    )
+    collector = DatedMarketCollector(
+        database=dated_state / "market.sqlite3",
+        archive_dir=archive,
+        status_path=dated_state / "collector_status.json",
+        market=object(),
+        clock=lambda: datetime.now(UTC),
+    )
+    connection = open_database(dated_state / "market.sqlite3")
+    observed_at = datetime(2026, 10, 1, tzinfo=UTC)
+    with connection:
+        _record(
+            connection,
+            kind="book",
+            key="observed-book",
+            payload={"instrument_id": "BTC_USDC", "bids": [["100000", "0.1"]]},
+            received_at=observed_at,
+            market_at=observed_at,
+        )
+        collector._archive_old(
+            connection,
+            now=datetime(2026, 10, 3, tzinfo=UTC),
+        )
+    connection.close()
+    manifest = next(archive.glob("*.manifest.json"))
+    assert manifest.is_file()
+
+    # The fixture helper is invoked by the runtime release's selected Python.
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ROOT / "src") + os.pathsep + env.get("PYTHONPATH", "")
+    env["BACKUP_ENCRYPTION_KEY"] = "dated-backup-fixture"
+    env["BTCQUANT_ROOT"] = str(runtime)
+    env["BTCQUANT_BACKUP_POST_FREE_BYTES"] = "0"
+    env["TMPDIR"] = str(tmp_path)
+    result = subprocess.run(
+        ["bash", str(release / "scripts" / "backup_state.sh")],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+    encrypted = next((runtime / "backups").glob("*.tar.gz.enc"))
+    plain = tmp_path / "dated-backup.tar.gz"
+    subprocess.run(
+        [
+            "openssl",
+            "enc",
+            "-d",
+            "-aes-256-cbc",
+            "-pbkdf2",
+            "-iter",
+            "200000",
+            "-in",
+            str(encrypted),
+            "-out",
+            str(plain),
+            "-pass",
+            "env:BACKUP_ENCRYPTION_KEY",
+        ],
+        env=env,
+        check=True,
+        capture_output=True,
+    )
+    extracted = tmp_path / "dated-backup-extract"
+    extracted.mkdir()
+    with tarfile.open(plain, "r:gz") as bundle:
+        bundle.extractall(extracted)
+
+    restored_state = extracted / "state" / "carry-dated-experiment"
+    for name in ("carry_dated.db", "market.sqlite3"):
+        with sqlite3.connect(restored_state / name) as connection:
+            assert connection.execute("SELECT value FROM sample").fetchone()[0] == "runtime-real"
+            assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    assert not (extracted / "data").exists()
+    evidence_backup = runtime / "backups" / "carry-dated-evidence"
+    encrypted_evidence = list(evidence_backup.glob("*.enc"))
+    assert len(encrypted_evidence) == 2
+
+    clean_room = tmp_path / "restore-test" / "archive"
+    restored_market = tmp_path / "restore-test" / "market.sqlite3"
+    restored = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "backup_carry_dated_evidence.py"),
+            "--source",
+            str(evidence_backup),
+            "--destination",
+            str(clean_room),
+            "--restore",
+            "--restore-database",
+            str(restored_market),
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    restored_payload = json.loads(restored.stdout)
+    assert restored_payload["segments_restored"] == 1
+    assert restored_payload["records_restored"] == 1
+    assert len(list(clean_room.glob("*.manifest.json"))) == 1
+    with sqlite3.connect(restored_market) as connection:
+        assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert connection.execute("SELECT record_key FROM observations").fetchone()[0] == (
+            "observed-book"
+        )
 
 
 def test_rebalance_wrapper_pending_and_monthly_pass_runtime_root(tmp_path: Path) -> None:

@@ -1,0 +1,183 @@
+{
+  "protocol_version": "carry_btc_dated_v2",
+  "experiment_id": "deribit_btc_usdc_dated_cash_carry_20261012_v2",
+  "status": "PREREGISTERED_SELECTION_DISABLED",
+  "created_at_utc": "2026-10-12T08:41:39Z",
+  "base_git_sha": "3430ad423b66de3875c5485f27aa50d18d0cc5ff",
+  "strategy": {
+    "family": "cash_funded_btc_spot_long_linear_dated_future_short",
+    "venue": "Deribit public market data",
+    "network": "mainnet_public_data_only",
+    "spot_instrument": "BTC_USDC",
+    "future_universe": "active BTC linear future, quote=USDC, settlement=USDC",
+    "capital_usdc": "4000",
+    "borrowing": false,
+    "perpetual_funding": false,
+    "one_open_cycle_at_a_time": true,
+    "policy_candidate_count": 1,
+    "adaptive_search": false
+  },
+  "known_development_data": {
+    "2026-10-12_public_order_books": "SEEN_DEVELOPMENT_ONLY",
+    "diagnostic_capture": "DIAGNOSTIC_DATED_CARRY_20261012T071632Z.json",
+    "selection_use": "forbidden",
+    "economic_evidence_use": "forbidden",
+    "reason": "Les contrats et primes figurant dans le diagnostic ont été vus pendant le développement; ils ne constituent ni holdout ni expérience non biaisée."
+  },
+  "selection_policy": {
+    "spot_identity": "exactly one active BTC_USDC spot instrument with base BTC and quote USDC; ambiguity => WAIT",
+    "eligible_future": "active BTC linear dated future with base BTC, quote USDC, settlement USDC and 14 <= (expiration_utc-now) days <= 90",
+    "order": "earliest expiration_utc first; instrument_id ascending as deterministic tie-break; never maximize premium, PnL, mark or volume",
+    "candidate_trials": 1,
+    "minimum_age_days": 14,
+    "maximum_age_days": 90,
+    "quantity": "largest common BTC quantity on both books, floored to the common amount step, satisfying all cash and margin constraints; fail if below both minimums",
+    "entry": "walk spot asks and future bids at the same BTC quantity; use depth-weighted executable prices and reject inadequate depth",
+    "freshness": "both books must be valid, uncrossed, positive-depth, received no more than 15 seconds before decision, market timestamps no more than 5 seconds apart, neither market timestamp may be in the future",
+    "entry_basis": "future executable sell VWAP minus spot executable buy VWAP; non-positive => WAIT"
+  },
+  "exit_policy": {
+    "normal": "hold the linear future through its official expiry TWAP settlement; after the final settlement is received, liquidate the spot long by selling into the first valid observed spot bid book within 5 minutes of settlement period_end",
+    "spot_price": "depth-walked bid VWAP from that spot book; never use future TWAP, index, mark, mid, or last trade as a spot fill",
+    "early_exit": "no discretionary/economic early exit and no rollover. Protective exit only when derivative cash after applying short unrealized loss since the last official settlement (never credit unrealized short gains or spot gains) is below current initial margin plus the additional cash required for the frozen +25% adverse BTC stress at shocked-mark IM. Close future first through observed asks; then sell spot through observed bids. Preserve any partial/unbalanced state. Stale market data blocks new entry but does not trigger an automatic liquidation.",
+    "rollover": "none; a new expiry requires a new independent entry decision and both legs/costs",
+    "missing_final_settlement": "remain pending/uncertain; no inferred price or outcome"
+  },
+  "settlement_accounting": {
+    "currency": "USDC",
+    "daily_settlement_time": "08:00 UTC; use the official period_end and official TWAP/index received from venue",
+    "short_daily_cash_pnl": "q_btc * (previous_settlement_reference - current_official_index); first previous reference is the actual future entry fill price",
+    "exactly_once": true,
+    "no_funding": true,
+    "no_second_mark_pnl_for_realized_settlements": true,
+    "expiry_spot_liquidation_is_separate": true,
+    "cycle_identity": "q*(future_entry_fill - expiry_index) + q*(observed_spot_exit_bid_vwap - spot_entry_fill) - all_fees"
+  },
+  "cost_model": {
+    "version": "deribit_standard_taker_fee_and_delivery_2026-09-25_v1",
+    "spot_routed_taker_rate": "0.0005",
+    "linear_future_taker_rate": "0.00035",
+    "linear_future_delivery_rate": "0.00025",
+    "spot_exit_taker_rate": "0.0005",
+    "fee_currency_assumption": "UNKNOWN_WORST_CASE: routed BTC_USDC spot fee debit asset is not established by public docs. Compare BASE and QUOTE for both spot entry and spot exit. BASE entry reduces BTC received; BASE exit consumes sold BTC plus BTC fee. QUOTE fees reduce cash. The decision budgets conservatively, publishes entry/exit residuals, and never labels PAPER fees as observed Deribit fees. The ledger's explicit BASE assumption remains a scenario only.",
+    "sources": [
+      {
+        "url": "https://support.deribit.com/hc/en-us/articles/25944746248989-Fees",
+        "observed_at_utc": "2026-10-12",
+        "used_claims": "standard futures/perpetual taker 3.5 bps; routed spot taker 5 bps; USDC settled BTC/ETH futures delivery 2.5 bps"
+      },
+      {
+        "url": "https://support.deribit.com/hc/en-us/articles/31424969480093-Spot-Instruments",
+        "observed_at_utc": "2026-10-12",
+        "used_claims": "BTC_USDC spot routing and pair-level specifications must be verified; public pre-login visibility does not prove personal account eligibility"
+      }
+    ],
+    "execution_costs": "entry price walks captured order-book depth and therefore already includes entry spread/depth; do not add a second entry slippage charge",
+    "unknown_future_spot_exit": "use entry-price notional only as a labeled fee estimate; no future spot fill or basis convergence is predicted",
+    "delivery_fee_amount": "proxy at entry future price until official expiry price is known; never treat as zero when amount is unknown",
+    "stress": "multiply configured commissions by 1.5 and observed executable spread/depth cost by 2; retain component attribution"
+  },
+  "margin_and_cash_model": {
+    "version": "deribit_standard_margin_linear_futures_tier4_2026-09-28_v1",
+    "mode_scenario": "segregated_standard_margin_S_SM; venue default for new accounts, not user account qualification",
+    "tier": 4,
+    "leverage_parameters": {
+      "C1": "25",
+      "C2": "4",
+      "C3": "0.03",
+      "C4": "0.35",
+      "N_max_btc": "885"
+    },
+    "initial_margin_rule": "IM_rate=1/L(N); L(N)=C1*(C1/C2)^(-max(0,(N/N_max-C3)/(1-C3))^C4)",
+    "maintenance_margin_rule": "MM_rate=(2/3)*IM_rate",
+    "source": "https://support.deribit.com/hc/en-us/articles/25944811528477-Standard-Margin; BTC_USDC dated futures tier and Max Amount cross-checked against https://support.deribit.com/hc/en-us/articles/31424954805405-Linear-Futures on 2026-10-12",
+    "max_amount_policy": "885 BTC is the currently documented Standard Margin limit, not a guarantee; missing/stale metadata or a changed public limit blocks a trade until policy is reviewed/versioned",
+    "cash_separation": "spot principal, derivative initial margin, adverse cash-loss buffer, commissions and operating cash are separately funded; spot unrealized gains cannot collateralize short-future losses",
+    "stress_cash": "before admission, reserve sufficient cash for a +25% BTC index move plus required Tier-4 IM at the stressed mark, net only against already reserved entry IM; no credit for spot appreciation",
+    "margin_is_not_cost": true,
+    "borrow": false
+  },
+  "decision_threshold": {
+    "risk_reserve_floor": "0.02 * total allocated Carry capital",
+    "reserve_semantics": "admission hurdle only; not a ledger debit and not margin cash",
+    "net_before_reserve": "entry premium less explicit entry/estimated exit fee and delivery fee proxies; known future spot exit basis is unobserved and not assumed to converge",
+    "net_after_reserve": "net_before_reserve minus the frozen 2% of allocated capital admission reserve; future empirical joint adverse residual requires a separately versioned policy and cannot be tuned into v1",
+    "admission": "WAIT until economic estimate after reserve is strictly positive and all market, quantity, cash, margin, and safety conditions pass",
+    "evidence_note": "The 2% floor is a conservative control witness, not a calibrated Deribit loss quantile. Until enough completed cycles support the joint residual estimate, status remains INSUFFICIENT_EVIDENCE even if a PAPER entry is mechanically admitted."
+  },
+  "sample_and_evaluation": {
+    "development_completed_non_overlapping_cycles_minimum": 30,
+    "untouched_forward_holdout_completed_cycles_minimum": 10,
+    "market_regimes_minimum": 3,
+    "regime_definition": "causal 30-calendar-day annualized realized volatility of Deribit BTC-USDC index at entry: low <30%, medium 30%-60% inclusive, high >60%; missing history => regime unknown and does not count",
+    "cycle_independence": "one open cycle at a time; cycles cannot overlap; each entry-to-final-settlement-and-spot-liquidation outcome counts once",
+    "holdout": "after code/policy freeze, first 10 fully matured non-overlapping eligible cycles, sealed before outcomes are accessed; development/diagnostic observations cannot be promoted",
+    "selection": "no parameter search and no adaptive candidate expansion; this single frozen policy either passes all gates or remains unadopted",
+    "primary_metric": "net realized USDC PnL after all observed/modelled fees divided by total allocated capital, with risk reserve shown as a separate hurdle",
+    "acceptance": "lower 95% confidence bound of net return after the frozen reserve and all preregistered stresses > 0 in development and untouched forward holdout; max drawdown <=10% allocated capital; zero unhedged/accounting/margin/data violations",
+    "statistics": "one-sided 95% bootstrap confidence bound over completed non-overlapping cycles; 10,000 resamples, seed 20261012; no bar-level pseudoreplication",
+    "insufficient_data": "INSUFFICIENT_EVIDENCE; do not annualize a single cycle or declare a pass from fixtures",
+    "minimum_completed_cycle_duration_days": 14,
+    "early_protective_exit_rule": "Early protective exits remain fully reported for safety/risk statistics but cannot substitute for a matured completed >=14-day expiry cycle in the 30 development / 10 forward holdout counts."
+  },
+  "stress_tests": [
+    "BTC index +25% before settlement; cash shortfall must be covered without spot gains",
+    "terminal spot/index basis residual adverse by 5% of allocated notional",
+    "USDC mark at 0.99 USD for USD-equivalent reporting; USDC-denominated ledger remains explicit",
+    "standard commissions multiplied by 1.5",
+    "observed entry/exit book-walk execution cost multiplied by 2",
+    "zero/insufficient depth on either entry leg => reject; at exit use only observed depth and report residual inventory",
+    "daily/expiry settlement missing, delayed, duplicated, or corrected => pending/uncertain and no fabricated PnL",
+    "one leg rejected/partial and process restart before compensation => count unhedged exposure and risk response; do not count as a successful cycle"
+  ],
+  "governance": {
+    "experiment_spec": "carry_dated_governance_v2.build_experiment_spec from this frozen policy and the real immutable development manifest; do not invent dataset hashes.",
+    "dataset_role_for_known_data": "SEEN_RESEARCH_DATA",
+    "blind_forward_data": "separate BLIND_FORWARD_OOS role only after protocol/code/candidate freeze",
+    "search_gate": "use ExperimentSpec, validate_search_ready, and GovernanceStore before any selection/economic evaluation",
+    "trial_budget": 1,
+    "candidate_selection_enabled": false,
+    "replay_parity": "fixtures qualify expiry-only settlement and protective-close mechanics; claim parity with the runner only after its implementation and triggers are independently reproduced",
+    "technical_fixtures": "may prove only deterministic mechanics, never market profitability",
+    "collection_launch_gate": "Forward collection remains blocked until exact-runner-book archival, 30s cadence, 20-level depth, compact single-writer evidence, immutable archive restore, and the measured effective-retention storage gate (<=4 GiB retained dataset, <5 GiB peak including compaction/restore) are independently verified.",
+    "protocol_registration": "Use a distinct v2 ExperimentSpec and experiment_id in an isolated GovernanceStore; do not mutate v1 registration or promote seen data to holdout."
+  },
+  "economic_status": "INSUFFICIENT_EVIDENCE",
+  "canonical_status": "CANONICAL_UNCHANGED",
+  "collection_policy": {
+    "version": "carry_dated_collection_v2",
+    "poll_interval_seconds": 30,
+    "book_depth_levels_per_side": 20,
+    "runner_capture": "Append the exact DatedBook objects returned to the runner at every poll before the corresponding decision/action; persist instrument_id, market_timestamp, received_timestamp, source, mark/index, sequence, content_hash, and all returned bid/ask levels.",
+    "book_universe": "Persist compact metadata/hash for all active instruments on change. Persist books only for the BTC_USDC spot and the single earliest eligible BTC linear USDC-settled dated future selected before inspecting its book; while a position is open, persist the held spot/future books consumed by each 30-second risk poll. No fallback expiry.",
+    "missing_or_failed_poll": "Record a gap/failure event; never synthesize, interpolate, or backfill a book as if observed. A gap invalidates replay of affected decision/risk intervals.",
+    "finite_depth_rule": "Any entry, cover, or spot sale must be fully supported by captured levels on the relevant side. If requested quantity exceeds cumulative captured depth, refuse/leave residual explicit; never extrapolate prices or treat unseen levels as fills.",
+    "retention_target_days_from_collector_start": 700,
+    "minimum_retention_days_after_first_entry": 560,
+    "retention_floor": "Retain until the latest of collector_start + 700 days, first_entry + 560 days, and completion of all in-scope settlement/liquidation/replay manifests; the 560-day minimum is not shortened if first entry is delayed.",
+    "preserve_policy": "Append-only immutable segments with hashes/manifests and verified restore; no silent purge and no automatic reduction in depth or cadence to meet quota. On quota risk, alert and pause collection safely; affected evidence remains insufficient.",
+    "disk_quota_gib": 5.0,
+    "estimated_storage": {
+      "quota_gib": 5.0,
+      "audit_fixture": "11 instruments/minute, depth=100 levels per side, 560 days, ~11.3 GiB uncompressed; synthetic fixture, not VPS measurement.",
+      "naive_linear_700_day_books_only_gib": 1.03,
+      "independent_validation_gzip_bytes_per_20_level_book": 501,
+      "runner_recorder_probe_gzip_bytes_per_poll_for_two_use_rows": 191.5,
+      "measured_fixture_projection_560d_books_only_gib": 1.506,
+      "measured_fixture_projection_560d_books_plus_use_proxy_gib": 1.793,
+      "measured_fixture_projection_700d_books_only_gib": 1.882,
+      "measured_fixture_projection_700d_books_plus_use_proxy_gib": 2.241,
+      "single_writer_books_plus_use_proxy_700d_gib": 2.241,
+      "current_duplicate_collector_lower_bound_700d_gib": 4.12,
+      "retained_dataset_projection_limit_gib": 4.0,
+      "peak_compaction_restore_limit_gib": 5.0,
+      "calculation": "Polls: 560d=1,612,800; 700d=2,016,000. 501 B/book * 2 books/poll gives 1.506 GiB/560d and 1.882 GiB/700d for the two exact runner books. The regular-fixture 191.5 B/poll for two use rows is a conservative index proxy, giving 1.793 and 2.241 GiB. The single-writer compact design stores each snapshot once and uses one compact pair-poll index; the 2.241 GiB estimate intentionally retains the larger two-row proxy. A duplicate collector adds another ~1.882 GiB of books (about 4.12 GiB including the proxy) before cycle/metadata overhead. The earlier 1.03 GiB estimate is only a linear level-count lower bound and is not quota proof.",
+      "limits": "The 501-byte estimate comes from an independent synthetic variable-book gzip fixture; the 191.5-byte use-row probe used a more regular synthetic book and is only a proxy. Actual DERIBIT payloads, effective retention horizon, SQLite/WAL, segment encoding, compaction/restore peak, metadata, and settlement correction rows must be measured before collection. This estimate is not a VPS measurement."
+    },
+    "forward_collection_gate": "Do not start forward evidence until an integration check proves: (1) persisted snapshot hashes/levels exactly match the books consumed by runner; (2) runner poll interval is 30 seconds and both-side depth requested is 20; (3) no second periodic book writer or full snapshot/checkpoint duplication exists; (4) immutable segment archive and clean-room restore verify coverage; and (5) the full effective-retention projection is <=4 GiB and peak use including compaction/restore is <5 GiB.",
+    "persist_exact_runner_books": true,
+    "one_authoritative_book_writer": "The runner-supplied recorder is the only writer of periodic book observations. The separate public collector may retain metadata and official settlements but must not independently poll/store the same spot/future books or a duplicate per-poll cycle record.",
+    "compact_evidence_layout": "Store each exact runner DatedBook once in immutable compressed segments. Use a compact pair-poll index (one record per poll) referencing the two evidence IDs and poll sequence/time. Decision, fill, protective-exit, and liquidation records reference evidence IDs/hashes; no full book is copied into per-poll checkpoints or duplicate usage events.",
+    "storage_acceptance_gate": "Before forward collection, project the measured compressed archive for the actual retention floor (latest of collector_start+700d, first_entry+560d, and completion of in-scope settlement/liquidation/replay) plus live SQLite/WAL, metadata, settlement corrections, and manifests. The retained dataset must project to <=4 GiB, preserving 1 GiB for compaction/restore and operational growth under the 5 GiB evidence quota; measured peak use including compaction/restore must remain <5 GiB. Validate the forecast with representative full-depth snapshots, an interrupted write, archive and clean-room restore. If either limit fails, collection remains blocked pending a measured compact representation; do not reduce 30s cadence, 20-level depth, retention, or economic/cycle requirements."
+  }
+}

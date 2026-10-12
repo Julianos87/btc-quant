@@ -1,0 +1,23 @@
+{
+  "candidate_selection_enabled": false,
+  "dataset": {
+    "already_seen": true,
+    "cutoff_utc": "2026-10-12T07:16:32.888638Z",
+    "dataset_id": "deribit-diagnostic-capture-20261012T071632Z",
+    "manifest": "DIAGNOSTIC_DATED_CARRY_20261012T071632Z.json",
+    "role": "SEEN_RESEARCH_DATA",
+    "rows_or_events": 6,
+    "sha256": "abaf0506cb370d5132431c7f3ca3f096328df8f27c9d33842b9798a75d766e22",
+    "usage_id": "6b11da163ea3b31bdd36fdd370d264deaa3ec30dcc05e2bee6652dd3b3d53680"
+  },
+  "economic_status": "INSUFFICIENT_EVIDENCE",
+  "experiment_id": "deribit_btc_usdc_dated_cash_carry_20261012_v1",
+  "governance_status": "REGISTERED",
+  "governance_store": "isolated PAPER experiment store; not runtime ledger",
+  "protocol_file_sha256": "fc6ba0dd8f445fbe6e6437a61ab976aa432c89b9622063029cd078f6ed05c261",
+  "protocol_version": "carry_btc_dated_v1",
+  "qualification_note": "This seen diagnostic capture registered development provenance only; it is not a trial, holdout, fill record, or evidence of profitability.",
+  "registered_at_utc": "2026-10-12T08:13:56.590080Z",
+  "registered_code_sha": "b09a57a2f7800ba3993bc7750fb2a5654308a1e4",
+  "registered_spec_fingerprint": "376b3f45243adb52d34e0b1634951d30e46e320c59799631fd9dd14a5b65397e"
+}
