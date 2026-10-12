@@ -154,4 +154,3 @@ def test_carry_decision_serializes_decimal_strings_and_nullable_costs() -> None:
     assert payload["capital"] == "4000.00"
     assert payload["delivery_fee_estimate"] is None
     assert payload["action"] == "WAIT"
-

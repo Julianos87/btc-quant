@@ -242,4 +242,3 @@ def test_retry_count_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(DeribitPublicAPIError, match="HTTP 503"):
         client._get("get_instruments", {"kind": "spot"})
     assert attempts == 2
-
