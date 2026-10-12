@@ -126,6 +126,15 @@ price move: spot equity is not derivative collateral in the simulator. The
 stress amount, reserved margin, free cash and entry admission buffer stay as
 distinct values and are tested in cash units.
 
+The official routed-spot specification confirms BTC_USDC routing and fee rate,
+but does not clearly state the fee debit currency for that path. Keep the venue
+field unknown unless authoritative evidence resolves it. For PAPER decisions,
+calculate both quote-currency and base-currency spot fee treatments and admit
+only against the more adverse cash/hedge/result case. Persist the assumption and
+show resulting hedge residual; never label the assumed fee asset as an observed
+venue fill or claim account-specific fees. If the conservative case cannot be
+funded or passes no decision threshold, WAIT with `FEE_CURRENCY_UNCERTAIN`.
+
 V1 has no early economic exit and no roll: hold the short through official expiry
 and sell the spot using an observed PAPER book. A protective early close is
 allowed only when modeled collateral/margin plus the funded adverse-move buffer
