@@ -36,8 +36,17 @@ def _sha256_file(path: Path) -> str:
 def _decrypted_sha256(encrypted: Path, *, key_env: str) -> str:
     process = subprocess.Popen(
         [
-            "openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-iter", "200000",
-            "-in", str(encrypted), "-pass", f"env:{key_env}",
+            "openssl",
+            "enc",
+            "-d",
+            "-aes-256-cbc",
+            "-pbkdf2",
+            "-iter",
+            "200000",
+            "-in",
+            str(encrypted),
+            "-pass",
+            f"env:{key_env}",
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
@@ -74,9 +83,7 @@ def _encrypt_verified(
         return False
     needed = source.stat().st_size + 1024 * 1024 + min_free_bytes
     if shutil.disk_usage(destination.parent).free < needed:
-        raise OSError(
-            f"evidence backup would breach free-space reserve before {source.name}"
-        )
+        raise OSError(f"evidence backup would breach free-space reserve before {source.name}")
     temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
     if source.is_symlink() or destination.is_symlink() or temporary.exists():
         raise RuntimeError("evidence paths must be regular files")
@@ -84,8 +91,15 @@ def _encrypt_verified(
         with source.open("rb") as source_handle, temporary.open("xb") as output:
             subprocess.run(
                 [
-                    "openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-iter", "200000",
-                    "-salt", "-pass", f"env:{key_env}",
+                    "openssl",
+                    "enc",
+                    "-aes-256-cbc",
+                    "-pbkdf2",
+                    "-iter",
+                    "200000",
+                    "-salt",
+                    "-pass",
+                    f"env:{key_env}",
                 ],
                 stdin=source_handle,
                 stdout=output,
@@ -213,8 +227,19 @@ def restore_evidence(
             temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
             process = subprocess.run(
                 [
-                    "openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-iter", "200000",
-                    "-in", str(encrypted), "-out", str(temporary), "-pass", f"env:{key_env}",
+                    "openssl",
+                    "enc",
+                    "-d",
+                    "-aes-256-cbc",
+                    "-pbkdf2",
+                    "-iter",
+                    "200000",
+                    "-in",
+                    str(encrypted),
+                    "-out",
+                    str(temporary),
+                    "-pass",
+                    f"env:{key_env}",
                 ],
                 stderr=subprocess.PIPE,
                 check=True,

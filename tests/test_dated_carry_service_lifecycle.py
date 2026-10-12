@@ -55,9 +55,9 @@ def test_sync_starts_only_isolated_paper_units_and_restarts_active_code(
         '  disable) shift; [ "${1:-}" = --now ] && shift; for unit in "$@"; do rm -f "'
         + str(state)
         + '/$unit"; done ;;\n'
-        '  daemon-reload) ;;\n'
-        '  *) exit 9 ;;\n'
-        'esac\n',
+        "  daemon-reload) ;;\n"
+        "  *) exit 9 ;;\n"
+        "esac\n",
     )
     env = os.environ.copy()
     env.update(
@@ -101,12 +101,31 @@ def test_sync_starts_only_isolated_paper_units_and_restarts_active_code(
         f"restart {UNITS[1]}",
     ]
 
+    collector = release / "deploy" / UNITS[0]
+    collector.write_text(
+        collector.read_text(encoding="utf-8").replace(
+            "--min-free-bytes 10737418240", "--min-free-bytes 9663676416"
+        ),
+        encoding="utf-8",
+    )
+    log.write_text("", encoding="utf-8")
+    refused = subprocess.run(
+        ["bash", str(helper), str(release), "true"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert refused.returncode != 0
+    assert "mismatched collector/profile minimum free-space limits" in refused.stderr
+    assert not log.read_text(encoding="utf-8")
+
 
 def test_update_syncs_target_services_without_restarting_canonical_engines() -> None:
     update = (ROOT / "deploy" / "update.sh").read_text(encoding="utf-8")
     assert "--dated-carry-paper" in update
     assert 'sync_dated_carry_services "${TARGET}" true' in update
-    assert 'systemctl restart btcquant-trend btcquant-carry' in update
+    assert "systemctl restart btcquant-trend btcquant-carry" in update
     assert "if ${RESTART_ENGINES}; then" in update
     migration = update.index('bash "${TARGET}/deploy/migrate.sh"')
     install_target = update.rfind('install_units "${TARGET}"', 0, migration)
@@ -115,9 +134,7 @@ def test_update_syncs_target_services_without_restarting_canonical_engines() -> 
 
 
 def test_collector_unit_uses_runner_books_and_consistent_storage_quota() -> None:
-    unit = (ROOT / "deploy" / "btcquant-carry-dated-collector.service").read_text(
-        encoding="utf-8"
-    )
+    unit = (ROOT / "deploy" / "btcquant-carry-dated-collector.service").read_text(encoding="utf-8")
     profile = (ROOT / "environments" / "paper" / "carry_dated_experimental.yaml").read_text(
         encoding="utf-8"
     )

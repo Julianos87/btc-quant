@@ -202,7 +202,9 @@ def test_backup_encrypted_roundtrip_from_runtime_root(tmp_path: Path) -> None:
         assert connection.execute("SELECT value FROM sample").fetchone()[0] == "runtime-real"
 
 
-def test_backup_separates_dated_databases_from_incremental_encrypted_evidence(tmp_path: Path) -> None:
+def test_backup_separates_dated_databases_from_incremental_encrypted_evidence(
+    tmp_path: Path,
+) -> None:
     runtime, release = _runtime_layout(tmp_path)
     backup_source = (ROOT / "scripts" / "backup_state.sh").read_text(encoding="utf-8")
     assert 'DATED_SNAPSHOT_LOCK="${DATED_STATE_DIR}/market.sqlite3.snapshot.lock"' in backup_source
@@ -263,8 +265,19 @@ def test_backup_separates_dated_databases_from_incremental_encrypted_evidence(tm
     plain = tmp_path / "dated-backup.tar.gz"
     subprocess.run(
         [
-            "openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-iter", "200000",
-            "-in", str(encrypted), "-out", str(plain), "-pass", "env:BACKUP_ENCRYPTION_KEY",
+            "openssl",
+            "enc",
+            "-d",
+            "-aes-256-cbc",
+            "-pbkdf2",
+            "-iter",
+            "200000",
+            "-in",
+            str(encrypted),
+            "-out",
+            str(plain),
+            "-pass",
+            "env:BACKUP_ENCRYPTION_KEY",
         ],
         env=env,
         check=True,

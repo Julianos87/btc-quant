@@ -343,9 +343,7 @@ class DatedMarketEvidenceRecorder:
                 path.stat().st_size
                 for path in self.database.parent.glob(self.database.name + "*")
                 if path.is_file()
-            ) + sum(
-                path.stat().st_size for path in self.archive_dir.rglob("*") if path.is_file()
-            )
+            ) + sum(path.stat().st_size for path in self.archive_dir.rglob("*") if path.is_file())
             free_bytes = shutil.disk_usage(self.database.parent).free
             if (
                 total_bytes + reserve_bytes > self.max_total_bytes
@@ -784,7 +782,9 @@ class DatedMarketCollector:
                     ),
                     "collector_version": "carry_dated_collector_v2",
                     "book_source": (
-                        "runner_market_evidence" if self.books_from_runner else "collector_public_api"
+                        "runner_market_evidence"
+                        if self.books_from_runner
+                        else "collector_public_api"
                     ),
                     "source": "Deribit public market-data API; unauthenticated GET only",
                     "active_spot": spots[0].instrument_id,
@@ -815,9 +815,7 @@ class DatedMarketCollector:
                 connection.close()
             total_bytes, free_bytes = self._storage()
             quality_errors = {
-                instrument_id: reasons
-                for instrument_id, reasons in book_quality.items()
-                if reasons
+                instrument_id: reasons for instrument_id, reasons in book_quality.items() if reasons
             }
             result = self._status(
                 state=(
@@ -1199,7 +1197,9 @@ def verify_archive(manifest_path: Path, *, restore_database: Path | None = None)
         raise ValueError("ARCHIVE_HASH_MISMATCH")
     raw = gzip.decompress(compressed)
     records = [json.loads(line) for line in raw.splitlines() if line]
-    if not isinstance(manifest.get("record_count"), int) or len(records) != manifest.get("record_count"):
+    if not isinstance(manifest.get("record_count"), int) or len(records) != manifest.get(
+        "record_count"
+    ):
         raise ValueError("ARCHIVE_RECORD_COUNT_MISMATCH")
     if len({record.get("id") for record in records if isinstance(record, dict)}) != len(records):
         raise ValueError("ARCHIVE_DUPLICATE_RECORD_ID")

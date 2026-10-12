@@ -273,9 +273,7 @@ class CarryDatedRunner:
                 now=now,
                 market_timestamp=spot_book.market_timestamp,
             )
-            exit_rate = self._effective_taker_rate(
-                self.fee_schedule.spot_exit_taker_rate, spot
-            )
+            exit_rate = self._effective_taker_rate(self.fee_schedule.spot_exit_taker_rate, spot)
             self._sweep_residual_spot_dust(
                 spot,
                 spot_book,
@@ -444,9 +442,7 @@ class CarryDatedRunner:
         )
         decision_evidence_ids = tuple(
             str(item)
-            for item in (self.ledger.state.get("decision") or {}).get(
-                "market_evidence_ids", ()
-            )
+            for item in (self.ledger.state.get("decision") or {}).get("market_evidence_ids", ())
         )
         market_evidence_ids = tuple(dict.fromkeys((*decision_evidence_ids, *evidence_ids)))
         if self.ledger.state.get("decision") is not None:
@@ -463,9 +459,7 @@ class CarryDatedRunner:
         )
         spot_rate = self._effective_taker_rate(self.fee_schedule.spot_taker_rate, spot)
         future_rate = self._effective_taker_rate(self.fee_schedule.future_taker_rate, future)
-        spot_exit_rate = self._effective_taker_rate(
-            self.fee_schedule.spot_exit_taker_rate, spot
-        )
+        spot_exit_rate = self._effective_taker_rate(self.fee_schedule.spot_exit_taker_rate, spot)
         gross_spot_qty = decimal(decision.spot_gross_quantity, field="spot_gross_quantity")
         target_future_qty = decimal(decision.quantity, field="quantity")
         spot_check = fill_from_book(
@@ -497,11 +491,10 @@ class CarryDatedRunner:
                 now=now,
             )
             return
-        if (
-            spot_check.fee_quote_equivalent
-            != decimal(decision.spot_fee, field="decision.spot_fee")
-            or future_check.fee_quote_equivalent
-            != decimal(decision.future_entry_fee, field="decision.future_entry_fee")
+        if spot_check.fee_quote_equivalent != decimal(
+            decision.spot_fee, field="decision.spot_fee"
+        ) or future_check.fee_quote_equivalent != decimal(
+            decision.future_entry_fee, field="decision.future_entry_fee"
         ):
             self.ledger.record_wait(
                 reason_code="ENTRY_FEE_DECISION_MISMATCH",
@@ -1032,7 +1025,11 @@ class CarryDatedRunner:
         # Compatibility for a checkpoint created before effective rates were
         # persisted: use the conservative maximum from stored instrument metadata.
         metadata_raw = instrument_record.get("taker_commission")
-        metadata = decimal(metadata_raw, field="instrument.taker_commission") if metadata_raw is not None else Decimal("0")
+        metadata = (
+            decimal(metadata_raw, field="instrument.taker_commission")
+            if metadata_raw is not None
+            else Decimal("0")
+        )
         return max(decimal(schedule_rate, field="fee_schedule_rate"), metadata)
 
     def _sweep_residual_spot_dust(
@@ -1047,9 +1044,7 @@ class CarryDatedRunner:
         dust_qty = state_decimal(self.ledger.state, "spot_dust_qty")
         if dust_qty <= 0:
             return
-        amount = floor_to_step(
-            dust_qty / (Decimal("1") + fee_rate), spot.amount_step
-        )
+        amount = floor_to_step(dust_qty / (Decimal("1") + fee_rate), spot.amount_step)
         if amount < spot.min_amount:
             return
         fill = fill_from_book(

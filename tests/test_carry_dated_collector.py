@@ -226,12 +226,16 @@ def test_runner_book_source_avoids_duplicate_public_book_polls(tmp_path: Path) -
     assert result["details"]["book_source"] == "runner_market_evidence"
     assert market.books_requested == []
     with sqlite3.connect(collector.database) as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) FROM observations WHERE kind='runner_book'"
-        ).fetchone()[0] == 2
-        assert connection.execute(
-            "SELECT COUNT(*) FROM observations WHERE kind='book'"
-        ).fetchone()[0] == 0
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM observations WHERE kind='runner_book'"
+            ).fetchone()[0]
+            == 2
+        )
+        assert (
+            connection.execute("SELECT COUNT(*) FROM observations WHERE kind='book'").fetchone()[0]
+            == 0
+        )
 
 
 def test_runner_book_archive_restores_exact_evidence_identity(tmp_path: Path) -> None:
@@ -249,12 +253,8 @@ def test_runner_book_archive_restores_exact_evidence_identity(tmp_path: Path) ->
                 _book(instrument_id),
                 bids=(BookLevel(Decimal("99999.00"), Decimal("0.0250")),),
                 asks=(BookLevel(Decimal("100001.00"), Decimal("0.0300")),),
-                mark_price=(
-                    Decimal("100000.00") if instrument_id != SPOT_ID else None
-                ),
-                index_price=(
-                    Decimal("100000.00") if instrument_id != SPOT_ID else None
-                ),
+                mark_price=(Decimal("100000.00") if instrument_id != SPOT_ID else None),
+                index_price=(Decimal("100000.00") if instrument_id != SPOT_ID else None),
             ),
             purpose="ENTRY_DECISION",
             requested_depth=20,

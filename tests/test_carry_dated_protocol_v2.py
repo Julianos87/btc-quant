@@ -104,9 +104,11 @@ def test_v2_freezes_collection_depth_cadence_retention_and_fail_closed_rules() -
     assert policy["poll_interval_seconds"] == POLL_INTERVAL_SECONDS == 30
     assert policy["book_depth_levels_per_side"] == BOOK_DEPTH_LEVELS_PER_SIDE == 20
     assert policy["retention_target_days_from_collector_start"] == RETENTION_TARGET_DAYS == 700
-    assert policy["minimum_retention_days_after_first_entry"] == (
-        MINIMUM_RETENTION_AFTER_FIRST_ENTRY_DAYS
-    ) == 560
+    assert (
+        policy["minimum_retention_days_after_first_entry"]
+        == (MINIMUM_RETENTION_AFTER_FIRST_ENTRY_DAYS)
+        == 560
+    )
     assert policy["persist_exact_runner_books"] is True
     assert policy["one_authoritative_book_writer"].startswith("The runner-supplied recorder")
     assert policy["compact_evidence_layout"].startswith("Store each exact runner DatedBook once")
@@ -147,7 +149,9 @@ def test_v2_spec_is_separate_search_ready_and_registers_alongside_v1(tmp_path) -
     assert v2.parameter_space["book_depth_levels_per_side"] == [20]
     assert v2.parameter_space["minimum_completed_cycle_duration_days"] == [14]
     assert v2.feature_policy["collection_policy"]["max_projected_retained_dataset_gib"] == 4.0
-    assert v2.feature_policy["collection_policy"]["max_peak_storage_including_compaction_gib"] == 5.0
+    assert (
+        v2.feature_policy["collection_policy"]["max_peak_storage_including_compaction_gib"] == 5.0
+    )
 
     with GovernanceStore(db_path) as store:
         register_v1(store, v1)

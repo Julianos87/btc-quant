@@ -94,7 +94,11 @@ def test_class_a_units_set_explicit_btcquant_root() -> None:
         }:
             continue
         text = _service_text(name)
-        runtime_root = "/opt/btcquant/carry-experiment" if kind == CLASS_D_ISOLATED_RUNTIME else "/opt/btcquant"
+        runtime_root = (
+            "/opt/btcquant/carry-experiment"
+            if kind == CLASS_D_ISOLATED_RUNTIME
+            else "/opt/btcquant"
+        )
         assert f"Environment=BTCQUANT_ROOT={runtime_root}" in text, name
         assert text.count("Environment=BTCQUANT_ROOT=") == 1, name
         assert ".service.d" not in text, name
@@ -145,7 +149,10 @@ def test_systemd_hardening_is_preserved() -> None:
                 assert "ReadWritePaths=/opt/btcquant/state" in text
             continue
         for needle in A_PYTHON_HARDENING:
-            if kind in {CLASS_D_ISOLATED_RUNTIME, CLASS_E_DATED_EXPERIMENT} and needle == "ReadWritePaths=/opt/btcquant/state":
+            if (
+                kind in {CLASS_D_ISOLATED_RUNTIME, CLASS_E_DATED_EXPERIMENT}
+                and needle == "ReadWritePaths=/opt/btcquant/state"
+            ):
                 continue
             assert needle in text, f"{name} missing {needle}"
         if kind == CLASS_D_ISOLATED_RUNTIME:

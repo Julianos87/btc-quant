@@ -538,9 +538,7 @@ class CarryDatedLedger:
         """Persist the exact observed snapshot used by a decision or risk action."""
 
         if requested_depth != BOOK_DEPTH_LEVELS:
-            raise DatedLedgerError(
-                f"market evidence protocol requires depth={BOOK_DEPTH_LEVELS}"
-            )
+            raise DatedLedgerError(f"market evidence protocol requires depth={BOOK_DEPTH_LEVELS}")
         if protocol_version != BOOK_EVIDENCE_PROTOCOL_VERSION:
             raise DatedLedgerError("unsupported market evidence protocol version")
         if len(book.bids) > requested_depth or len(book.asks) > requested_depth:
@@ -573,9 +571,7 @@ class CarryDatedLedger:
         candidate = dict(self.state)
         gap = {
             "reason_code": (
-                "MARKET_EVIDENCE_QUOTA_EXCEEDED"
-                if quota_failure
-                else "MARKET_EVIDENCE_UNAVAILABLE"
+                "MARKET_EVIDENCE_QUOTA_EXCEEDED" if quota_failure else "MARKET_EVIDENCE_UNAVAILABLE"
             ),
             "reason": f"{type(error).__name__}: {str(error)[:200]}",
             "detected_at": utc_string(now),
@@ -1100,17 +1096,25 @@ class CarryDatedLedger:
             raise DatedLedgerError("spot dust cannot be detached while a future short remains")
         quantity = state_decimal(self.state, "spot_qty")
         if quantity <= 0:
-            raise DatedLedgerError("spot dust classification requires a positive carry spot balance")
+            raise DatedLedgerError(
+                "spot dust classification requires a positive carry spot balance"
+            )
         minimum = decimal(minimum_amount, field="minimum_amount")
         orderable = decimal(orderable_quantity, field="orderable_quantity")
         if minimum <= 0 or orderable >= minimum:
-            raise DatedLedgerError("spot quantity is still executable and cannot be classified as dust")
+            raise DatedLedgerError(
+                "spot quantity is still executable and cannot be classified as dust"
+            )
         if not market_book.bids:
-            raise DatedLedgerError("spot dust classification requires an observed bid for valuation")
+            raise DatedLedgerError(
+                "spot dust classification requires an observed bid for valuation"
+            )
         instrument = self.state.get("instrument") or {}
         spot_record = instrument.get("spot") or {}
         if market_book.instrument_id != spot_record.get("instrument_id"):
-            raise DatedLedgerError("spot dust valuation book does not match the held spot instrument")
+            raise DatedLedgerError(
+                "spot dust valuation book does not match the held spot instrument"
+            )
         mark = decimal(market_book.bids[0].price, field="spot_dust_mark")
         active_basis_raw = self.state.get("spot_avg_entry")
         if active_basis_raw is None:
@@ -1237,9 +1241,7 @@ class CarryDatedLedger:
                 "spot_dust_instrument_id": (
                     candidate.get("spot_dust_instrument_id") if remaining else None
                 ),
-                "spot_dust_mark_timestamp": (
-                    fill.market_timestamp if remaining else None
-                ),
+                "spot_dust_mark_timestamp": (fill.market_timestamp if remaining else None),
                 "cash_total": decimal_string(cash),
                 "free_cash": decimal_string(cash),
                 "pnl_realized": decimal_string(realized),
@@ -1360,7 +1362,9 @@ class CarryDatedLedger:
                         ),
                         now=now or settlement.received_at,
                     )
-                    raise DatedLedgerError("first daily settlement is missing; cash PnL was not applied")
+                    raise DatedLedgerError(
+                        "first daily settlement is missing; cash PnL was not applied"
+                    )
             else:
                 previous_end = datetime.fromisoformat(
                     str(self.state["last_settlement_period_end"]).replace("Z", "+00:00")
@@ -1385,12 +1389,16 @@ class CarryDatedLedger:
                     reason_message="Daily settlement event/period does not match the official 24-hour boundary",
                     now=now or settlement.received_at,
                 )
-                raise DatedLedgerError("daily settlement period is invalid; cash PnL was not applied")
+                raise DatedLedgerError(
+                    "daily settlement period is invalid; cash PnL was not applied"
+                )
             expiry_raw = future_instrument.get("expiration_utc")
             if expiry_raw:
                 expiry = datetime.fromisoformat(str(expiry_raw).replace("Z", "+00:00"))
                 if settlement.event_timestamp >= expiry:
-                    raise DatedLedgerError("daily settlement cannot be applied at/after contract expiry")
+                    raise DatedLedgerError(
+                        "daily settlement cannot be applied at/after contract expiry"
+                    )
         elif settlement.kind == "expiry":
             previous_end_raw = self.state.get("last_settlement_period_end")
             if previous_end_raw is not None:
@@ -1723,9 +1731,7 @@ class CarryDatedLedger:
         )
         if dust_qty:
             candidate["spot_dust_mark"] = decimal_string(spot_price)
-            candidate["spot_dust_mark_timestamp"] = utc_string(
-                spot_market_timestamp or now
-            )
+            candidate["spot_dust_mark_timestamp"] = utc_string(spot_market_timestamp or now)
         self.store.save_carry_dated_checkpoint(candidate)
         self.state = candidate
 

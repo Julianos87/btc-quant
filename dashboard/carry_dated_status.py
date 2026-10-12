@@ -426,9 +426,7 @@ def project_status(
     }
 
 
-def _unavailable(
-    status: str, reason: str, *, state_dir: Path, now: datetime
-) -> dict[str, Any]:
+def _unavailable(status: str, reason: str, *, state_dir: Path, now: datetime) -> dict[str, Any]:
     collector = _collector_projection(state_dir, now=now)
     return {
         "api_schema_version": 1,

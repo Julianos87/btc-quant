@@ -25,7 +25,9 @@ if [ ! -f "${RELEASE}/deploy/${UNITS[0]}" ] ||
   exit 0
 fi
 
-"${RELEASE}/venv/bin/python" - "${RELEASE}/environments/paper/carry_dated_experimental.yaml" <<'PY'
+"${RELEASE}/venv/bin/python" - \
+  "${RELEASE}/environments/paper/carry_dated_experimental.yaml" \
+  "${RELEASE}/deploy/${UNITS[0]}" <<'PY'
 import re
 import sys
 
@@ -57,6 +59,30 @@ if (
     or config.get("database") != "state/carry-dated-experiment/carry_dated.db"
 ):
     raise SystemExit("Refusing to start a non-isolated or non-PAPER dated Carry profile")
+
+def configured_bytes(name: str) -> int:
+    value = config.get(name)
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]+", value):
+        raise SystemExit(f"Refusing an invalid {name} storage limit")
+    return int(value)
+
+with open(sys.argv[2], encoding="utf-8") as handle:
+    collector_unit = handle.read()
+
+def unit_bytes(name: str) -> int:
+    matches = re.findall(
+        rf"(?:^|\s)--{re.escape(name)} ([0-9]+)(?=\s|$)",
+        collector_unit,
+        re.MULTILINE,
+    )
+    if len(matches) != 1:
+        raise SystemExit(f"Refusing a collector unit with missing or duplicate --{name}")
+    return int(matches[0])
+
+if unit_bytes("min-free-bytes") != configured_bytes("market_evidence_min_free_bytes"):
+    raise SystemExit("Refusing mismatched collector/profile minimum free-space limits")
+if unit_bytes("max-total-bytes") != configured_bytes("market_evidence_quota_bytes"):
+    raise SystemExit("Refusing mismatched collector/profile evidence quotas")
 PY
 
 for unit in "${UNITS[@]}"; do

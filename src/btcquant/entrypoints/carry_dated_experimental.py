@@ -50,9 +50,7 @@ def _reject_symlink_components(path: Path) -> None:
         current = current.parent
 
 
-def _validate_status_path(
-    path: Path, *, state_root: Path, database: Path
-) -> Path:
+def _validate_status_path(path: Path, *, state_root: Path, database: Path) -> Path:
     _reject_symlink_components(path)
     resolved_root = state_root.resolve()
     resolved_path = path.resolve()
@@ -62,7 +60,9 @@ def _validate_status_path(
         or resolved_path == resolved_database
         or resolved_path.suffix != ".json"
     ):
-        raise ValueError("dated carry status file must be a distinct JSON file under isolated state")
+        raise ValueError(
+            "dated carry status file must be a distinct JSON file under isolated state"
+        )
     return resolved_path
 
 
@@ -170,9 +170,7 @@ def main() -> None:
         raise ValueError("dated carry database resolves outside its isolated state directory")
     status_override = os.environ.get("BTCQUANT_CARRY_DATED_STATUS_PATH")
     configured_status = (
-        Path(status_override)
-        if status_override
-        else ROOT / str(config["status_file"])
+        Path(status_override) if status_override else ROOT / str(config["status_file"])
     )
     status_path = _validate_status_path(
         configured_status,

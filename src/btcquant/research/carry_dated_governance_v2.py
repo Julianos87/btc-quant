@@ -64,13 +64,9 @@ def build_experiment_spec(
             "collection_profile_version": [COLLECTION_PROFILE_VERSION],
             "poll_interval_seconds": [POLL_INTERVAL_SECONDS],
             "book_depth_levels_per_side": [BOOK_DEPTH_LEVELS_PER_SIDE],
-            "minimum_completed_cycle_duration_days": [
-                MINIMUM_COMPLETED_CYCLE_DURATION_DAYS
-            ],
+            "minimum_completed_cycle_duration_days": [MINIMUM_COMPLETED_CYCLE_DURATION_DAYS],
             "retention_target_days": [RETENTION_TARGET_DAYS],
-            "minimum_retention_days_after_first_entry": [
-                MINIMUM_RETENTION_AFTER_FIRST_ENTRY_DAYS
-            ],
+            "minimum_retention_days_after_first_entry": [MINIMUM_RETENTION_AFTER_FIRST_ENTRY_DAYS],
         },
         sample_sufficiency_policy={
             **(prior.sample_sufficiency_policy or {}),

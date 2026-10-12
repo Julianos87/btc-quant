@@ -277,9 +277,12 @@ def test_paper_entry_status_parses_and_preserves_trend(tmp_path: Path) -> None:
         assert fill["book_snapshot_sha256"] == evidence["snapshot_sha256"]
         assert evidence["book_snapshot"]["instrument_id"] == fill["instrument_id"]
     market_connection = sqlite3.connect(store.path.parent / "market.sqlite3")
-    assert market_connection.execute(
-        "SELECT COUNT(*) FROM observations WHERE kind='runner_book_use'"
-    ).fetchone()[0] == 0
+    assert (
+        market_connection.execute(
+            "SELECT COUNT(*) FROM observations WHERE kind='runner_book_use'"
+        ).fetchone()[0]
+        == 0
+    )
     market_connection.close()
 
 
@@ -379,11 +382,16 @@ def test_market_evidence_quota_blocks_entry_and_leaves_observable_wait(tmp_path:
     assert snapshot["reason_code"] == "MARKET_EVIDENCE_QUOTA_EXCEEDED"
     assert state_decimal(snapshot, "spot_qty") == 0
     assert state_decimal(snapshot, "future_qty") == 0
-    assert not any(event["event_type"] == "dated_entry_intent" for event in store.read_events("carry_dated"))
+    assert not any(
+        event["event_type"] == "dated_entry_intent" for event in store.read_events("carry_dated")
+    )
     with sqlite3.connect(store.path.parent / "market.sqlite3") as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) FROM observations WHERE kind='runner_book'"
-        ).fetchone()[0] == 0
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM observations WHERE kind='runner_book'"
+            ).fetchone()[0]
+            == 0
+        )
 
 
 def test_market_evidence_quota_on_open_position_blocks_writes_without_losing_fills(
@@ -438,7 +446,9 @@ def test_close_keeps_full_book_evidence_when_archive_quota_is_exhausted(
     ][-2:]
     assert len(close_fills) == 2
     assert all(fill["market_evidence_id"] is None for fill in close_fills)
-    assert all(fill["book_snapshot"]["instrument_id"] in {SPOT_ID, FUTURE_ID} for fill in close_fills)
+    assert all(
+        fill["book_snapshot"]["instrument_id"] in {SPOT_ID, FUTURE_ID} for fill in close_fills
+    )
     assert all(fill["book_snapshot_sha256"] for fill in close_fills)
 
 
