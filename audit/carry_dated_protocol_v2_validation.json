@@ -1,0 +1,79 @@
+{
+  "report_version": "carry_dated_protocol_v2_validation_v1",
+  "observed_at_utc": "2026-10-12T16:15:58Z",
+  "research_branch": "codex/carry-dated-research-20261012",
+  "research_commit": "b0509023b8ea0f101022404be6f8da65b4d7d3ce",
+  "protocol_version": "carry_btc_dated_v2",
+  "experiment_id": "deribit_btc_usdc_dated_cash_carry_20261012_v2",
+  "protocol_sha256": "be257207d13bf5f7cf97e374a677d75301b69eb098565f0c97ef311b8c2ffb23",
+  "v1_unchanged": {
+    "protocol_sha256": "fc6ba0dd8f445fbe6e6437a61ab976aa432c89b9622063029cd078f6ed05c261",
+    "registered_sha256_matches": true
+  },
+  "validation": {
+    "full_test_suite": {
+      "command": "uv run --locked --python 3.11 pytest -q",
+      "result": "PASS",
+      "passed": 2232,
+      "skipped": 3
+    },
+    "targeted_tests": {
+      "command": "uv run --locked --python 3.11 pytest -q tests/test_carry_dated_protocol_v2.py tests/test_carry_dated_governance.py",
+      "result": "PASS",
+      "passed": 8
+    },
+    "lint": {
+      "command": "uv run --locked --python 3.11 ruff check src/btcquant/research/carry_dated_governance_v2.py tests/test_carry_dated_protocol_v2.py",
+      "result": "PASS"
+    },
+    "types": {
+      "command": "uv run --locked --python 3.11 mypy src",
+      "result": "PASS",
+      "source_files": 135
+    },
+    "diff_check": "PASS",
+    "governance_test": "v1 and v2 register independently in a temporary isolated GovernanceStore; this validates the path only and is not a durable/runtime registration"
+  },
+  "protocol_checks": {
+    "v2_identity_distinct": true,
+    "v1_economic_selection_cost_margin_stress_and_cycle_requirements_preserved": true,
+    "cycles": "30 non-overlapping development cycles plus 10 untouched forward holdout cycles; minimum completed cycle duration remains 14 days",
+    "collection": "30-second polls, 20 levels per side, exact runner-consumed books, finite-depth actions only, 700-day collector target and at least 560 days after first entry",
+    "economic_status": "INSUFFICIENT_EVIDENCE",
+    "canonical_status": "CANONICAL_UNCHANGED"
+  },
+  "storage_model": {
+    "basis": "synthetic variable-book compressed-size estimate, not measured Deribit/VPS storage",
+    "polls_700d_at_30s": 2016000,
+    "bytes_per_book_estimate": 501,
+    "exact_books_per_poll": 2,
+    "two_book_snapshot_projection_gib_700d": 1.882,
+    "two_book_plus_conservative_index_proxy_gib_700d": 2.241,
+    "retained_dataset_gate_gib": 4.0,
+    "quota_gib": 5.0,
+    "peak_compaction_restore_gate_gib": 5.0,
+    "assessment": "5 GiB is a plausible planning quota for the compact single-writer design: it leaves about 2.76 GiB above the 2.241 GiB snapshot-plus-index proxy. It is not a proof of capacity. The measured effective retention horizon, live SQLite/WAL, metadata, settlements/corrections, manifests, compaction and clean-room restore must remain <=4 GiB retained and <5 GiB peak."
+  },
+  "integration_snapshot": {
+    "worktree": "/home/ubuntu/btcquant-carry-dated-v1",
+    "repository_head_at_read": "b5a5576eb72e71f48c762068f376079ee0013f68",
+    "config_sha256": "b9a2ac20f888d99fe26f29dc8b6c452ef24ed81e61e05a19d8a26e711a4c699d",
+    "collector_unit_sha256": "2e25b9315edf64f28fd8acf574e5b229c9136c5a74e9fc2c3f2d0cdc7ebe2d54",
+    "config_observed": {
+      "poll_seconds": 30,
+      "book_depth_levels": 20,
+      "market_evidence_protocol_version": "carry-dated-market-evidence-v2",
+      "market_evidence_quota_bytes": 2147483648
+    },
+    "collector_unit_observed": {
+      "interval_seconds": 30,
+      "book_depth_levels": 20,
+      "retention_days": 700,
+      "max_total_bytes": 2147483648
+    },
+    "exact_runner_book_writer": "Runner evidence recorder writes exact snapshots to market.sqlite3; separate DatedMarketCollector also polls and persists spot/future rows as kind=book at 30 seconds in the same database in the observed worktree.",
+    "forward_collection_gate": "BLOCKED: 2 GiB config/unit quota does not match the v2 5 GiB quota; the collector still has a second periodic book writer in the observed worktree; representative storage forecast and clean-room restore are not evidenced.",
+    "runtime_registration_or_collection": "NOT VERIFIED; no VPS action or forward collection was performed by this research lot"
+  },
+  "proof_boundary": "Fixtures and governance tests prove deterministic protocol construction and mechanics only. They do not establish durable fill archival, runner/collector parity in deployment, market profitability, account-specific fees, or production capacity."
+}
