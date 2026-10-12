@@ -242,3 +242,75 @@ def test_retry_count_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(DeribitPublicAPIError, match="HTTP 503"):
         client._get("get_instruments", {"kind": "spot"})
     assert attempts == 2
+
+
+def test_json_rpc_10028_rate_limit_retries_with_bounded_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = DeribitPublicClient(max_attempts=3)
+    attempts = 0
+    delays: list[float] = []
+    client._sleep = delays.append
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit: int) -> bytes:
+            return self.body
+
+    def rate_limited_then_ok(_request, timeout):
+        nonlocal attempts
+        assert timeout == client.timeout_seconds
+        attempts += 1
+        if attempts < 3:
+            return FakeResponse(
+                b'{"jsonrpc":"2.0","id":1,"error":{"code":10028,"message":"too_many_requests"}}'
+            )
+        return FakeResponse(b'{"jsonrpc":"2.0","id":1,"result":[]}')
+
+    monkeypatch.setattr("btcquant.execution.carry_dated_market.urlopen", rate_limited_then_ok)
+    result, received_at = client._get("get_instruments", {"kind": "spot"})
+    assert result == []
+    assert received_at.tzinfo is not None
+    assert attempts == 3
+    assert delays == [0.25, 0.5]
+
+
+def test_json_rpc_rate_limit_retry_exhaustion_is_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = DeribitPublicClient(max_attempts=2)
+    attempts = 0
+    delays: list[float] = []
+    client._sleep = delays.append
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit: int) -> bytes:
+            return b'{"jsonrpc":"2.0","id":1,"error":{"code":10028,"message":"too_many_requests"}}'
+
+    def rate_limited(_request, timeout):
+        nonlocal attempts
+        assert timeout == client.timeout_seconds
+        attempts += 1
+        return FakeResponse()
+
+    monkeypatch.setattr("btcquant.execution.carry_dated_market.urlopen", rate_limited)
+    with pytest.raises(DeribitPublicAPIError) as error:
+        client._get("get_instruments", {"kind": "spot"})
+    assert error.value.rpc_code == 10028
+    assert attempts == 2
+    assert delays == [0.25]
+

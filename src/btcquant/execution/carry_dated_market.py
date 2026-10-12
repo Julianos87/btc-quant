@@ -53,10 +53,12 @@ class DeribitPublicAPIError(RuntimeError):
         *,
         reason: str | None = None,
         http_status: int | None = None,
+        rpc_code: int | None = None,
     ) -> None:
         self.method = method
         self.reason = reason
         self.http_status = http_status
+        self.rpc_code = rpc_code
         super().__init__(f"Deribit public {method} failed: {message[:240]}")
 
 
@@ -183,7 +185,31 @@ class DeribitPublicClient:
                         data = error.get("data") if isinstance(error, dict) else None
                         rpc_reason = data.get("reason") if isinstance(data, dict) else None
                         message = error.get("message", "JSON-RPC error") if isinstance(error, dict) else "JSON-RPC error"
-                        raise DeribitPublicAPIError(method, str(message), reason=rpc_reason)
+                        code = error.get("code") if isinstance(error, dict) else None
+                        try:
+                            rpc_code = int(code) if code is not None else None
+                        except (TypeError, ValueError, OverflowError):
+                            rpc_code = None
+                        error_message = str(message)
+                        # Deribit documents JSON-RPC 10028 / `too_many_requests`
+                        # as rate-limit exhaustion, distinct from HTTP 429.
+                        # Retry only these transient forms, with the same strict cap
+                        # and backoff used for HTTP 429/5xx and transport failures.
+                        retryable = (
+                            rpc_code == 10028
+                            or str(rpc_reason or "").casefold() in {"too_many_requests", "rate_limit"}
+                            or "too_many_requests" in error_message.casefold()
+                            or "too many requests" in error_message.casefold()
+                        )
+                        if retryable and attempt + 1 < self.max_attempts:
+                            self._sleep(min(0.25 * (2**attempt), 1.0))
+                            continue
+                        raise DeribitPublicAPIError(
+                            method,
+                            error_message,
+                            reason=str(rpc_reason) if rpc_reason is not None else None,
+                            rpc_code=rpc_code,
+                        )
                     if "result" not in payload:
                         raise DeribitPublicAPIError(method, "result is missing")
                     return payload["result"], received
@@ -352,6 +378,14 @@ class DeribitPublicClient:
 
     @staticmethod
     def _levels(raw: Any, side: str) -> tuple[BookLevel, ...]:
+        """Parse Deribit order-book amounts as base-asset quantity.
+
+        Deribit's public instrument metadata/docs define linear future amount
+        in underlying currency (BTC for BTC_USDC); `contract_size` describes
+        a contract's BTC value and must not be multiplied into this quantity.
+        See https://docs.deribit.com/api-reference/market-data/public-get_order_book
+        and https://support.deribit.com/hc/en-us/articles/31424954805405-Linear-Futures.
+        """
         if not isinstance(raw, list):
             raise DeribitPublicAPIError("get_order_book", f"{side} is not a level list")
         levels: list[BookLevel] = []
