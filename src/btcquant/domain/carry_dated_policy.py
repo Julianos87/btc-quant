@@ -364,6 +364,7 @@ def _size(
     spot_book = quote.spot_book
     future_book = quote.future_book
     spot_rate = max(fees.spot_taker_rate, spot.taker_commission or ZERO)
+    spot_exit_rate = max(fees.spot_exit_taker_rate, spot.taker_commission or ZERO)
     future_rate = max(fees.future_taker_rate, future.taker_commission or ZERO)
 
     # The route's fee asset is not public/account-qualified. Size the short
@@ -387,7 +388,7 @@ def _size(
     spot_fee = spot_notional * spot_rate
     future_fee = quantity * future_vwap * future_rate
     delivery_fee = quantity * future_vwap * fees.delivery_rate
-    exit_fee = spot_gross * spot_exit_vwap * fees.spot_exit_taker_rate
+    exit_fee = spot_gross * spot_exit_vwap * spot_exit_rate
     all_fees = spot_fee + future_fee + delivery_fee + exit_fee
     margin = margin_policy.assess(quantity, future_book.mark_price)
     spot_cash = spot_notional

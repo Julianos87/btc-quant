@@ -186,9 +186,7 @@ def test_book_identity_must_match_instrument_and_content_hash_is_required() -> N
 
 
 def test_unknown_spot_fee_currency_blocks_only_if_its_quote_cash_case_blocks() -> None:
-    item = candidate(
-        spot_quantity="0.02", future_quantity="0.02", min_amount="0.0199"
-    )
+    item = candidate(spot_quantity="0.02", future_quantity="0.02", min_amount="0.0199")
     fees = FeeSchedule.standard_deribit()
     margin = MarginPolicy()
     baseline = evaluate_entry(
@@ -208,6 +206,48 @@ def test_unknown_spot_fee_currency_blocks_only_if_its_quote_cash_case_blocks() -
 
     assert decision.action == "WAIT"
     assert decision.reason_code == "WAIT_FEE_CURRENCY_UNCERTAIN"
+
+
+def test_metadata_spot_taker_rate_applies_to_entry_and_exit_fee_budgets() -> None:
+    item = candidate()
+    spot = replace(item[0], taker_commission=Decimal("0.01"))
+    decision = evaluate_entry(
+        ((spot, item[1], item[2], item[3]),),
+        capital=Decimal("4000"),
+        fee_schedule=FeeSchedule.standard_deribit(),
+        margin_policy=MarginPolicy.deribit_ssm_linear_btc(),
+        now=NOW,
+    )
+
+    assert decision.action == "OPEN"
+    assert decision.spot_estimated_price is not None
+    assert decision.future_estimated_price is not None
+    assert decision.spot_depth_quantity > 0
+    spot_gross = decision.spot_gross_quantity
+    expected_entry_fee = spot_gross * decision.spot_estimated_price * Decimal("0.01")
+    expected_exit_fee = spot_gross * Decimal("99900") * Decimal("0.01")
+    expected_future_fee = decision.quantity * decision.future_estimated_price * Decimal("0.00035")
+    expected_delivery_fee = decision.quantity * decision.future_estimated_price * Decimal("0.00025")
+    expected_gross_premium = decision.quantity * (
+        decision.future_estimated_price - decision.spot_estimated_price
+    )
+    expected_exit_execution_reserve = spot_gross * (
+        decision.spot_estimated_price - Decimal("99900")
+    )
+
+    assert decision.spot_fee == expected_entry_fee
+    assert decision.exit_fee_estimate == expected_exit_fee
+    assert decision.exit_execution_reserve == expected_exit_execution_reserve
+    assert decision.fees == (
+        expected_entry_fee + expected_future_fee + expected_delivery_fee + expected_exit_fee
+    )
+    assert decision.total_cash_required == (
+        decision.spot_cash_required + decision.fees + decision.margin_cash + decision.stress_cash
+    )
+    assert decision.net_before_reserve == (
+        expected_gross_premium - decision.fees - expected_exit_execution_reserve
+    )
+    assert decision.net_after_reserve == decision.net_before_reserve - decision.risk_reserve
 
 
 def test_deribit_model_assumptions_are_versioned_and_fees_are_not_funding() -> None:
