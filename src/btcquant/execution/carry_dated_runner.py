@@ -1113,24 +1113,46 @@ class CarryDatedRunner:
     def _write_status(self, now: datetime) -> None:
         try:
             state = self.ledger.checkpoint
-            market = state.get("market") or {}
+            market = dict(state.get("market") or {})
+            decision = state.get("decision") or {}
+            if state.get("status") == "FLAT":
+                # A rejected entry still has valid market timestamps in its
+                # decision. Preserve them in the snapshot consumed by the UI.
+                spot_timestamp = (
+                    decision.get("spot_market_timestamp")
+                    or state.get("spot_market_timestamp")
+                    or market.get("spot_timestamp")
+                )
+                future_timestamp = (
+                    decision.get("future_market_timestamp")
+                    or state.get("future_market_timestamp")
+                    or market.get("future_timestamp")
+                )
+            else:
+                spot_timestamp = (
+                    state.get("spot_market_timestamp")
+                    or market.get("spot_timestamp")
+                    or decision.get("spot_market_timestamp")
+                )
+                future_timestamp = (
+                    state.get("future_market_timestamp")
+                    or market.get("future_timestamp")
+                    or decision.get("future_market_timestamp")
+                )
+            market["spot_timestamp"] = spot_timestamp
+            market["future_timestamp"] = future_timestamp
             state.update(
                 {
                     "schema_version": 1,
                     "strategy": "carry_btc_dated",
                     "paper_only": True,
                     "status_updated_at": utc_string(now),
-                    "spot_market_timestamp": state.get(
-                        "spot_market_timestamp", market.get("spot_timestamp")
-                    ),
-                    "future_market_timestamp": state.get(
-                        "future_market_timestamp", market.get("future_timestamp")
-                    ),
+                    "market": market,
+                    "spot_market_timestamp": spot_timestamp,
+                    "future_market_timestamp": future_timestamp,
                     "market_timestamps": {
-                        "spot": state.get("spot_market_timestamp", market.get("spot_timestamp")),
-                        "future": state.get(
-                            "future_market_timestamp", market.get("future_timestamp")
-                        ),
+                        "spot": spot_timestamp,
+                        "future": future_timestamp,
                     },
                 }
             )

@@ -332,6 +332,32 @@ def test_paper_entry_status_parses_and_preserves_trend(tmp_path: Path) -> None:
     market_connection.close()
 
 
+def test_wait_status_exposes_market_timestamps_from_decision(tmp_path: Path) -> None:
+    market = make_market()
+    future_book = market.books[FUTURE_ID]
+    market.books[FUTURE_ID] = replace(
+        future_book,
+        bids=(BookLevel(Decimal("100000"), Decimal("0.05")),),
+        asks=(BookLevel(Decimal("100100"), Decimal("0.05")),),
+        mark_price=Decimal("100000"),
+        index_price=Decimal("100000"),
+    )
+    status_path = tmp_path / "carry_dated_status.json"
+    _, runner, _ = make_runner(tmp_path, market, status_path=status_path)
+
+    snapshot = runner.run_once()
+    status = json.loads(status_path.read_text())
+
+    assert snapshot["status"] == "FLAT"
+    assert status["decision"]["action"] == "WAIT"
+    assert status["market"]["spot_timestamp"] == status["decision"]["spot_market_timestamp"]
+    assert status["market"]["future_timestamp"] == status["decision"]["future_market_timestamp"]
+    assert status["market_timestamps"] == {
+        "spot": status["decision"]["spot_market_timestamp"],
+        "future": status["decision"]["future_market_timestamp"],
+    }
+
+
 @pytest.mark.parametrize("timestamp_metadata_on_response", [False, True])
 def test_entry_uses_clock_after_public_market_responses(
     tmp_path: Path, timestamp_metadata_on_response: bool
