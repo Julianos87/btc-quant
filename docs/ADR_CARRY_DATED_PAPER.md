@@ -25,6 +25,10 @@ Les noms précis des classes sont libres si leur sens/validation est conservé.
 Les champs financiers utilisent Decimal en domaine/calcul ; sérialisation JSON
 précise et rétrocompatible dans le checkpoint. Les timestamps sont UTC.
 
+Domain types live in `src/btcquant/domain/carry_dated.py`; the read-only venue
+client lives in `src/btcquant/execution/carry_dated_market.py`. Research and
+runner code import the shared domain types; do not define lookalike DTOs.
+
 `DatedInstrument` : venue, instrument_id, kind (`spot`/`dated_future`), base,
 quote, settlement_currency, contract_size, amount_step, min_amount, tick_size,
 expiration_utc, active, fee schedule/provenance, metadata timestamp/hash.
@@ -42,12 +46,15 @@ quantity, spot/future fill estimate/depth, capital, cash for spot, margin cash,
 fees and exit-cost assumptions, entry premium, risk reserve, net before/after
 reserve, freshness, policy/version, decision and reason codes.
 
-Checkpoint key `carry_dated` (or one explicitly agreed canonical ID inside a
-dedicated DB): schema-versioned strategy state, status FLAT/OPENING/OPEN/
-SETTLEMENT_PENDING/CLOSING/UNBALANCED/ACCOUNTING_UNCERTAIN, filled spot and
-future quantities, lots/average entry, cash/equity, margin reservation, accrued
-settlement cash, realized/unrealized components, selected contract/expiry,
-last settlement key and high-water marks, pending saga/order IDs, risk state.
+Engine key `carry_dated` in the dedicated experimental DB. Status JSON uses
+`strategy=carry_btc_dated`, `schema_version=1`, `paper_only=true`, and
+FLAT/OPENING/OPEN/SETTLEMENT_PENDING/CLOSING/UNBALANCED/ACCOUNTING_UNCERTAIN.
+It includes instrument/expiry, capital/free_cash/cash_total/reserved_margin,
+spot_qty/future_qty and average entries, last settlement key/index/count,
+realized/unrealized PnL, fees, decision/action/reason/as_of, spot/future market
+timestamps, uncertainty/incident and pending saga IDs. Serialize money and
+quantities as canonical decimal strings. A dashboard reader must reject unknown
+versions or missing required keys; it must not infer a position from equity.
 
 ## Event and ledger semantics
 
@@ -68,7 +75,7 @@ it is never assumed sold at the TWAP.
 
 ## Ports and ownership
 
-- Market/data agent owns new Deribit public client, domain market models,
+- Market/data agent owns `domain/carry_dated.py`, new Deribit public client,
   historical data/settlement adapter, dated collector, tests, and its service unit.
 - Engine/accounting agent owns dated runner/ledger/decision application, minimal
   config/entrypoint integration, settlement atomicity method in StateStore,
