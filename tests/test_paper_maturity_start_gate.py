@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from btcquant.execution import paper_technical_qualification as technical
 from btcquant.execution.readiness import (
     ReadinessPolicy,
+    _current_paper_binding,
     canonical_service_component_profile,
     paper_maturity_status,
     start_paper_maturity_campaign,
@@ -260,6 +262,34 @@ def test_runtime_required_engine_change_invalidates_existing_binding(
     assert status["qualified"] is False
     assert status["reason_code"] == "PAPER_MATURITY_BINDING_MISMATCH"
     assert status["binding"]["comparisons"]["required_engines"] is False
+
+
+def test_binding_unknown_preserves_sqlite_code_without_error_message(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root, store = _prepare_bound_fixture(monkeypatch, tmp_path)
+    start_paper_maturity_campaign(root, now_factory=lambda: "2026-09-13T10:00:00+00:00")
+    campaign = store.active_qualification_campaign()
+    assert campaign is not None
+    connection = sqlite3.connect(":memory:")
+    try:
+        connection.execute("SELECT confidential_value FROM private_fixture_table")
+    except sqlite3.Error as error:
+        sqlite_error = error
+    else:
+        raise AssertionError("fixture query unexpectedly succeeded")
+
+    def fail(_qualification_id: int) -> None:
+        raise sqlite_error
+
+    monkeypatch.setattr(store, "paper_technical_qualification_record", fail)
+    result = _current_paper_binding(store, campaign, root=root)
+
+    assert result["status"] == "UNKNOWN"
+    assert result["error_type"] == "OperationalError"
+    assert result["sqlite_errorcode"] == sqlite3.SQLITE_ERROR
+    assert result["sqlite_errorname"] == "SQLITE_ERROR"
+    assert "private_fixture_table" not in repr(result)
 
 
 @pytest.mark.parametrize(

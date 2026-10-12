@@ -17,6 +17,7 @@ from typing import Any
 from .historical_state_reader import HistoricalStateReader
 from .operational_state_reader import OperationalStateReader
 from .quality_metrics import percentile, slippages_bps
+from .readonly_state_db import sqlite_error_metadata
 from .state_store import StateStore
 
 PROTOCOL_VERSION = 3
@@ -444,6 +445,7 @@ def _current_paper_binding(
             "detail": "current PAPER binding could not be demonstrated",
             "error_code": error_code,
             "error_type": type(error).__name__,
+            **sqlite_error_metadata(error),
         }
 
 
