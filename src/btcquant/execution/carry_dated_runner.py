@@ -379,6 +379,7 @@ class CarryDatedRunner:
                 now=now,
             )
             return
+        self._set_market_timestamps(spot_book, future_book)
         evidence_ids = (spot_evidence_id, future_evidence_id)
         candidates = [(spot, future, spot_book, future_book)]
 
@@ -1115,30 +1116,19 @@ class CarryDatedRunner:
             state = self.ledger.checkpoint
             market = dict(state.get("market") or {})
             decision = state.get("decision") or {}
-            if state.get("status") == "FLAT":
-                # A rejected entry still has valid market timestamps in its
-                # decision. Preserve them in the snapshot consumed by the UI.
-                spot_timestamp = (
-                    decision.get("spot_market_timestamp")
-                    or state.get("spot_market_timestamp")
-                    or market.get("spot_timestamp")
-                )
-                future_timestamp = (
-                    decision.get("future_market_timestamp")
-                    or state.get("future_market_timestamp")
-                    or market.get("future_timestamp")
-                )
-            else:
-                spot_timestamp = (
-                    state.get("spot_market_timestamp")
-                    or market.get("spot_timestamp")
-                    or decision.get("spot_market_timestamp")
-                )
-                future_timestamp = (
-                    state.get("future_market_timestamp")
-                    or market.get("future_timestamp")
-                    or decision.get("future_market_timestamp")
-                )
+            # Checkpoint market timestamps are updated from every accepted
+            # entry/management/close book. The decision is a fallback for
+            # older or still-flat checkpoints that predate that publication.
+            spot_timestamp = (
+                state.get("spot_market_timestamp")
+                or market.get("spot_timestamp")
+                or decision.get("spot_market_timestamp")
+            )
+            future_timestamp = (
+                state.get("future_market_timestamp")
+                or market.get("future_timestamp")
+                or decision.get("future_market_timestamp")
+            )
             market["spot_timestamp"] = spot_timestamp
             market["future_timestamp"] = future_timestamp
             state.update(
