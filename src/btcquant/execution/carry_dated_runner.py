@@ -166,6 +166,7 @@ class CarryDatedRunner:
                     or self.ledger.state.get("status") == "ACCOUNTING_UNCERTAIN"
                 ):
                     return self.ledger.checkpoint
+                failure_now = self._now()
                 if state_decimal(self.ledger.state, "spot_qty") or state_decimal(
                     self.ledger.state, "future_qty"
                 ):
@@ -177,7 +178,7 @@ class CarryDatedRunner:
                             else "RUNNER_CYCLE_ERROR"
                         ),
                         reason_message=f"{type(error).__name__}: {str(error)[:240]}",
-                        now=now,
+                        now=failure_now,
                     )
                 else:
                     self.ledger.record_wait(
@@ -187,12 +188,12 @@ class CarryDatedRunner:
                             else "PUBLIC_DATA_OR_POLICY_ERROR"
                         ),
                         reason_message=f"{type(error).__name__}: {str(error)[:240]}",
-                        now=now,
+                        now=failure_now,
                     )
             except Exception:
                 LOG.exception("could not persist the dated carry failure status")
         finally:
-            self._write_status(now)
+            self._write_status(self._now())
         return self.ledger.checkpoint
 
     def run_forever(self) -> None:
@@ -221,6 +222,9 @@ class CarryDatedRunner:
 
     def _evaluate_entry(self, now: datetime) -> None:
         instruments = tuple(self.market.list_active_instruments())
+        # Production metadata carries the response receipt time. Evaluate it
+        # against a clock sample taken after the HTTP requests, not at cycle start.
+        now = self._now()
         spots = tuple(
             item
             for item in instruments
@@ -243,6 +247,7 @@ class CarryDatedRunner:
             )
             return
         spot_book = self._get_book(spot.instrument_id)
+        now = self._now()
         spot_evidence_id = self.ledger.persist_market_evidence(
             spot_book,
             purpose="ENTRY_DECISION",
@@ -340,7 +345,9 @@ class CarryDatedRunner:
             return
         try:
             future_book = self._get_book(future.instrument_id)
+            now = self._now()
         except Exception as error:
+            now = self._now()
             self.ledger.record_wait(
                 reason_code="SELECTED_FUTURE_BOOK_UNAVAILABLE",
                 reason_message=f"Selected maturity book unavailable: {type(error).__name__}",
@@ -414,6 +421,7 @@ class CarryDatedRunner:
     ) -> None:
         if decision.action != "OPEN":
             raise DatedLedgerError("runner cannot start an entry without an OPEN decision")
+        now = self._now()
         current_spot_reasons = self._book_quality_reasons(spot_book, now)
         current_future_reasons = self._book_quality_reasons(future_book, now)
         if current_spot_reasons or current_future_reasons:
@@ -674,7 +682,9 @@ class CarryDatedRunner:
             settlements = self.market.get_settlements(
                 str(future_id), after_key=settlement_audit_key
             )
+            now = self._now()
         except Exception as error:
+            now = self._now()
             self.ledger.mark_settlement_pending(
                 reason_code="SETTLEMENT_HISTORY_UNAVAILABLE",
                 reason_message=f"Public settlement history unavailable: {type(error).__name__}",
@@ -726,7 +736,9 @@ class CarryDatedRunner:
         try:
             spot_book = self._get_book(str(spot_id))
             future_book = self._get_book(str(future_id))
+            now = self._now()
         except Exception as error:
+            now = self._now()
             self.ledger.mark_settlement_pending(
                 reason_code="POSITION_MARKET_DATA_UNAVAILABLE",
                 reason_message=f"Position market data unavailable: {type(error).__name__}",
@@ -831,7 +843,9 @@ class CarryDatedRunner:
             spot_book = spot_book or self._get_book(spot_id)
             if state_decimal(self.ledger.state, "future_qty") > 0:
                 future_book = future_book or self._get_book(future_id)
+            now = self._now()
         except Exception as error:
+            now = self._now()
             self.ledger.mark_settlement_pending(
                 reason_code="CLOSE_BOOK_UNAVAILABLE",
                 reason_message=f"No fresh close book is available: {type(error).__name__}",
@@ -934,7 +948,9 @@ class CarryDatedRunner:
     def _liquidate_spot_after_expiry(self, spot_id: str, now: datetime) -> None:
         try:
             spot_book = self._get_book(spot_id)
+            now = self._now()
         except Exception as error:
+            now = self._now()
             self.ledger.record_wait(
                 reason_code="EXPIRY_SPOT_BOOK_UNAVAILABLE",
                 reason_message=f"Official future settlement is booked; spot sale awaits a book ({type(error).__name__})",

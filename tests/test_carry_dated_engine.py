@@ -161,6 +161,51 @@ class FakeMarket:
         return tuple(ordered[cursor:])
 
 
+class AdvancingFakeMarket(FakeMarket):
+    """Model public responses whose receipt timestamps follow the cycle start."""
+
+    def __init__(
+        self,
+        instruments: tuple[DatedInstrument, ...],
+        books: dict[str, DatedBook],
+        *,
+        timestamp_metadata_on_response: bool,
+    ) -> None:
+        super().__init__(instruments, books)
+        self.clock: list[datetime] | None = None
+        self.timestamp_metadata_on_response = timestamp_metadata_on_response
+
+    def list_active_instruments(self) -> tuple[DatedInstrument, ...]:
+        if self.timestamp_metadata_on_response:
+            self._advance()
+            self.instruments = tuple(
+                replace(item, metadata_timestamp=self._current_time()) for item in self.instruments
+            )
+        return self.instruments
+
+    def get_book(self, instrument_id: str, *, depth: int = 100) -> DatedBook:
+        super().get_book(instrument_id, depth=depth)
+        self._advance()
+        received = self._current_time()
+        original = self.books[instrument_id]
+        return replace(
+            original,
+            market_timestamp=received - timedelta(milliseconds=500),
+            received_timestamp=received,
+            content_hash=hashlib.sha256(
+                f"{instrument_id}:{received.isoformat()}".encode()
+            ).hexdigest(),
+        )
+
+    def _advance(self) -> None:
+        assert self.clock is not None
+        self.clock[0] += timedelta(seconds=2)
+
+    def _current_time(self) -> datetime:
+        assert self.clock is not None
+        return self.clock[0]
+
+
 def make_market(*, now: datetime = NOW, expiry: datetime = EXPIRY) -> FakeMarket:
     spot = instrument(SPOT_ID, kind="spot", now=now)
     future = instrument(FUTURE_ID, kind="dated_future", now=now, expiry=expiry)
@@ -231,6 +276,7 @@ def test_paper_entry_status_parses_and_preserves_trend(tmp_path: Path) -> None:
     assert Decimal(snapshot["free_cash"]) >= 0
     assert Decimal(snapshot["spot_qty"]) > 0
     assert Decimal(snapshot["future_qty"]) > 0
+
     assert abs(Decimal(snapshot["hedge_residual"])) <= Decimal(snapshot["hedge_tolerance"])
     assert store.load_engine_state("trend") == trend
     assert validate_snapshot(json.loads(status_path.read_text()))["status"] == "OPEN"
@@ -284,6 +330,32 @@ def test_paper_entry_status_parses_and_preserves_trend(tmp_path: Path) -> None:
         == 0
     )
     market_connection.close()
+
+
+@pytest.mark.parametrize("timestamp_metadata_on_response", [False, True])
+def test_entry_uses_clock_after_public_market_responses(
+    tmp_path: Path, timestamp_metadata_on_response: bool
+) -> None:
+    base = make_market()
+    market = AdvancingFakeMarket(
+        base.instruments,
+        base.books,
+        timestamp_metadata_on_response=timestamp_metadata_on_response,
+    )
+    status_path = tmp_path / "carry_dated_status.json"
+    _, runner, clock = make_runner(tmp_path, market, status_path=status_path)
+    market.clock = clock
+
+    snapshot = runner.run_once()
+
+    assert snapshot["status"] == "OPEN"
+    assert snapshot["reason_code"] == "ECONOMIC_AND_CASH_GATES_PASSED_UNDER_PAPER_ASSUMPTIONS"
+    status_snapshot = json.loads(status_path.read_text())
+    status_time = datetime.fromisoformat(
+        status_snapshot["status_updated_at"].replace("Z", "+00:00")
+    )
+    assert status_time == clock[0]
+    assert clock[0] > NOW
 
 
 def test_trailing_zero_book_decimals_keep_fill_and_evidence_hashes_identical(
