@@ -125,6 +125,22 @@ def test_sync_starts_only_isolated_paper_units_and_restarts_active_code(
         encoding="utf-8"
     )
     collector_source = (ROOT / "deploy" / UNITS[0]).read_text(encoding="utf-8")
+    profile_path.write_text(profile_source, encoding="utf-8")
+    collector.write_text(
+        collector_source.replace("--max-total-bytes 5368709120", "--max-total-bytes 4294967296"),
+        encoding="utf-8",
+    )
+    log.write_text("", encoding="utf-8")
+    refused = subprocess.run(
+        ["bash", str(helper), str(release), "true"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert refused.returncode != 0
+    assert "mismatched collector/profile evidence quotas" in refused.stderr
+    assert not log.read_text(encoding="utf-8")
 
     for profile_key, unit_flag, valid_value, invalid_value, error in (
         (
