@@ -291,6 +291,57 @@ corruption, une erreur I/O ou une base indisponible échoue immédiatement. En
 cas d'épuisement, le JSON conserve seulement le nom/code SQLite et le nombre
 d'essais, jamais des requêtes, lignes ou secrets.
 
+## Carry BTC à échéance expérimental (PAPER isolé)
+
+Le premier déploiement du Carry à échéance utilise une allocation et un état
+séparés. Le snapshot lu par l'interface est
+`/opt/btcquant/state/carry-dated-experiment/carry_dated_status.json` par défaut.
+Le chemin peut être remplacé par la variable non secrète
+`BTCQUANT_CARRY_DATED_STATUS_PATH`; le writer doit publier ce fichier par
+remplacement atomique. Il doit contenir le contrat `strategy=carry_btc_dated`,
+`schema_version=1`, `paper_only=true` et un des états documentés dans
+`docs/ADR_CARRY_DATED_PAPER.md`. Ne pas publier de clé, de compte ou de secret
+dans le snapshot.
+
+Le dashboard lit cette source séparément via `/api/carry-dated`. Elle n'entre
+pas dans les courbes, l'equity agrégée ni l'allocation Tandem. `NOT_DEPLOYED`,
+`STALE`, `UNKNOWN`, `ACCOUNTING_UNCERTAIN`, `INCIDENT_OPEN` et `UNBALANCED`
+doivent rester visibles; aucune de ces valeurs n'est convertie en FLAT. Un
+snapshot `AVAILABLE` prouve seulement que son fichier est lisible et récent.
+La readiness globale reste `UNKNOWN` jusqu'à ce que la liveness systemd du
+collecteur et du runner, l'intégrité de leur DB et leur espace disque soient
+prouvés indépendamment. Une décision économique `WAIT` est normale et ne vaut
+pas incident. Ce statut ne prouve pas la rentabilité.
+
+Le lot C a déclaré le nom du runner PAPER
+`btcquant-carry-dated-experimental.service`; le service et son chemin DB doivent
+être vérifiés dans la release intégrée avec `systemctl cat` et
+`systemd-analyze verify` avant toute activation. Le lot B n'a pas encore livré
+le nom d'unité ni le contrat de santé du collecteur : ils restent INCONNUS et
+doivent être remplis à partir de son implémentation, jamais déduits de
+`btcquant-carry-data.service` qui collecte l'ancien perp. Tant que runner et
+collecteur ne sont pas reliés à des preuves de santé distinctes, la readiness
+reste UNKNOWN. Les unités datées doivent écrire uniquement sous
+`state/carry-dated-experiment/` et dans le répertoire de données expérimental
+dédié; elles ne doivent ni partager la DB Trend/Carry canonique, ni faire
+partie des moteurs requis par la campagne Tandem. Ne pas les activer
+automatiquement dans `install.sh`/`update.sh` avant validation PAPER explicite.
+
+Après intégration, vérifier le JSON de `/api/carry-dated`, l'âge de
+`last_updated_at`, l'identité du profil PAPER, le motif de décision, le dernier
+settlement et le nombre de règlements appliqués. Interroger le runner nommé
+ci-dessus et le vrai service collecteur livré par B séparément pour vérifier
+heartbeat, trous/échecs, backlog de règlement, déséquilibre, incertitude
+comptable, intégrité DB, quota disque et sauvegarde/restauration. Ne pas conclure
+« service sain » à partir du seul fichier de statut ni de ce runbook avant que
+ces identités soient présentes dans la release.
+
+À l'échéance, contrôler la réception du règlement officiel, son identifiant et
+sa correction/version, puis la liquidation spot issue des bids observés. En cas
+de règlement manquant, jambe résiduelle ou état incertain, arrêter toute nouvelle
+entrée et suivre la procédure de reprise comptable de l'ADR; ne pas remplir un
+prix absent avec l'indice ou un mark. Aucun rollover implicite n'est permis.
+
 ### Démarrage de la maturité PAPER v3
 
 Après la qualification technique, la maturité PAPER est démarrée uniquement par

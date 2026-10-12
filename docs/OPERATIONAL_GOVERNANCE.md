@@ -64,6 +64,37 @@ cleanup tool must first produce a deterministic plan, require explicit review,
 preserve the latest verified backup and rollback release, and remain separate
 from this status command.
 
+## Isolated dated-carry PAPER status
+
+The dated-future experiment is a separate allocation, database and reporting
+surface. Its read-only dashboard endpoint is `/api/carry-dated`; the snapshot
+path is `BTCQUANT_CARRY_DATED_STATUS_PATH`, defaulting to
+`/opt/btcquant/state/carry-dated-experiment/carry_dated_status.json`. The endpoint
+accepts only schema version 1 for `strategy=carry_btc_dated` and
+`paper_only=true`; unsupported versions or missing contract keys return
+`UNKNOWN`. A missing file is `NOT_DEPLOYED`, and a timestamp beyond the existing
+20-minute Carry heartbeat bound is `STALE`. No absent value is inferred from
+equity, and this experimental capital is excluded from Tandem totals.
+
+`AVAILABLE` means only that the checkpoint file is recent and well-formed. The
+endpoint deliberately reports overall readiness as `UNKNOWN` until independent
+evidence covers the collector and runner process, market-data gaps/failures,
+settlement backlog, leg imbalance/accounting uncertainty, database integrity,
+disk quota and backup/restore state. C declared
+`btcquant-carry-dated-experimental.service` as the runner unit; the dashboard
+still leaves its unit health `UNKNOWN` until that unit is integrated and
+probed. B has not yet delivered a collector unit or health contract, so the
+collector identity remains null/`UNKNOWN`; do not map the legacy perp collector
+to it. An operator must inspect the integrated unit journals; the checkpoint
+alone is not a service-health probe.
+
+The panel distinguishes reserved margin, stress cash and the economic reserve.
+Reserved margin is not a booked loss; the reserve is a decision hurdle, not a
+ledger debit. It reports official settlement values separately from entry
+estimates and does not display perp funding for the dated instrument. Economic
+qualification remains `INSUFFICIENT_EVIDENCE` until the registered forward
+protocol passes; service availability does not alter that verdict.
+
 ## Scheduled read-only observation
 
 The release contains btcquant-ops-status.service and
