@@ -268,9 +268,32 @@ def test_backup_offhost_allowlist_rejects_nested_verification_sidecar(tmp_path: 
     assert commits.stdout.strip() == "1"
 
     secret.unlink()
-    allowed = subprocess.run(
+    outside_target = tmp_path / "outside-target"
+    outside_target.write_text("PRESERVE", encoding="utf-8")
+    malicious_link = offhost / "state-20261013-0301.tar.gz.enc.verification.json"
+    malicious_link.symlink_to(outside_target)
+    symlink_attempt = subprocess.run(
         ["bash", str(scripts / "backup_state.sh")],
         env={**backup_env, "MOCK_DATE_STAMP": "20261013-0301"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert symlink_attempt.returncode == 0, symlink_attempt.stderr
+    assert "contains a symlink" in symlink_attempt.stderr
+    assert outside_target.read_text(encoding="utf-8") == "PRESERVE"
+    commits_after_symlink = subprocess.run(
+        ["git", "-C", str(offhost), "rev-list", "--count", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert commits_after_symlink.stdout.strip() == "1"
+    malicious_link.unlink()
+
+    allowed = subprocess.run(
+        ["bash", str(scripts / "backup_state.sh")],
+        env={**backup_env, "MOCK_DATE_STAMP": "20261013-0302"},
         capture_output=True,
         text=True,
         check=False,
@@ -284,8 +307,8 @@ def test_backup_offhost_allowlist_rejects_nested_verification_sidecar(tmp_path: 
         text=True,
     )
     paths = set(pushed_paths.stdout.splitlines())
-    assert "state-20261013-0301.tar.gz.enc" in paths
-    assert "state-20261013-0301.tar.gz.enc.verification.json" in paths
+    assert "state-20261013-0302.tar.gz.enc" in paths
+    assert "state-20261013-0302.tar.gz.enc.verification.json" in paths
     assert not any("subdir" in path or "SECRET" in path for path in paths)
 
 

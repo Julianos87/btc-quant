@@ -237,6 +237,10 @@ if [ -d "${REPO}/.git" ] && [[ "${ARCHIVE}" == *.enc ]]; then
       exit 5
     fi
     while IFS= read -r -d '' candidate; do
+      if [ -L "${candidate}" ]; then
+        echo "Refusing: off-host repository contains a symlink: ${candidate}" >&2
+        exit 6
+      fi
       if [[ "${candidate}" =~ ^\./state-[0-9]{8}-[0-9]{4}\.tar\.gz\.enc(\.verification\.json)?$ ]] ||
         [[ "${candidate}" =~ ^\./carry-dated-evidence/observations-[0-9]{8}-[0-9]+-[0-9]+\.jsonl\.gz(\.manifest\.json)?\.enc$ ]]; then
         continue
@@ -245,6 +249,11 @@ if [ -d "${REPO}/.git" ] && [[ "${ARCHIVE}" == *.enc ]]; then
       exit 6
     done < <(find . -path './.git' -prune -o \( -type f -o -type l \) -print0)
     mkdir -p carry-dated-evidence
+    if [ -e "${ARCHIVE##*/}" ] || [ -L "${ARCHIVE##*/}" ] ||
+      [ -e "${VERIFICATION##*/}" ] || [ -L "${VERIFICATION##*/}" ]; then
+      echo "Refusing: off-host backup destination already exists" >&2
+      exit 8
+    fi
     cp -- "${ARCHIVE}" .
     cp -- "${VERIFICATION}" .
     evidence_git_paths=()
