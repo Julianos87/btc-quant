@@ -1212,6 +1212,8 @@ def test_validate_release_isolates_and_cleans_validation_artifacts(tmp_path):
         "deploy/start-hyperliquid-testnet.sh",
         "deploy/stop-hyperliquid-testnet.sh",
         "scripts/backup_state.sh",
+        "scripts/backup-health.sh",
+        "scripts/verify_backup.py",
         "scripts/check_sbom.py",
         "scripts/check_baseline_provenance.py",
     ):

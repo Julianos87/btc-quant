@@ -36,10 +36,12 @@ WRITER_UNITS=(
   btcquant-hyperliquid-testnet.service btcquant-hyperliquid-watchdog.service
   btcquant-carry-experimental.service btcquant-carry-data.service
   btcquant-carry-dated-experimental.service btcquant-carry-dated-collector.service
+  btcquant-backup-health.service
 )
 WRITER_TIMERS=(
   btcquant-watchdog.timer btcquant-hyperliquid-watchdog.timer btcquant-compact.timer
   btcquant-backup.timer btcquant-rebalance.timer btcquant-rebalance-pending.timer
+  btcquant-backup-health.timer
 )
 
 stop_all_writer_processes() {
@@ -142,6 +144,11 @@ configure_writer_timers() {
   TARGET_WRITES_STARTED=true
   systemctl enable --now btcquant-compact.timer btcquant-backup.timer \
     btcquant-rebalance.timer
+  if [ -x "${CURRENT}/scripts/backup-health.sh" ]; then
+    systemctl enable --now btcquant-backup-health.timer
+  else
+    systemctl disable --now btcquant-backup-health.timer 2>/dev/null || true
+  fi
   configure_pending_rebalance_timer
   if [ -f "${TESTNET_APPROVAL}" ]; then
     systemctl disable --now btcquant-watchdog.timer 2>/dev/null || true

@@ -75,7 +75,7 @@ bash -n deploy/install.sh deploy/update.sh deploy/create-release.sh \
   deploy/preflight.sh deploy/migrate.sh deploy/rebalance-root.sh \
   deploy/resolve-uv.sh \
   deploy/start-hyperliquid-testnet.sh deploy/stop-hyperliquid-testnet.sh \
-  scripts/backup_state.sh
+  scripts/backup_state.sh scripts/backup-health.sh
 run_isolated "${UV_BIN}" export --locked --no-default-groups --group exchange --group dashboard \
   --no-header --no-emit-project --output-file "${TEMP_EXPORT}"
 diff -u requirements.txt "${TEMP_EXPORT}"

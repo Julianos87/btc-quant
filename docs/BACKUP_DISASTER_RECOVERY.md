@@ -164,6 +164,15 @@ never resets a previous successful verification timestamp. Capture skew is
 recorded and a set exceeding its configured bound is DEGRADED, not trusted for
 restore.
 
+The production daily encrypted archive also carries an adjacent
+`<archive>.verification.json` sidecar. It binds the archive name, byte length,
+SHA-256 and verification time to the successful SQLite snapshot checks,
+encrypted round trip and tar read. The operational status reader re-hashes the
+current archive before accepting that sidecar. This prevents a new daily archive
+from appearing unverified merely because the most recent release qualification
+points to the previous day's filename. The sidecar proves archive bytes and
+SQLite snapshot integrity; it does not replace an isolated restore drill.
+
 trusted means current-byte and integrity verification only. It does not mean
 that a restore drill has run. A fresh or degraded BackupSet therefore reports
 restore_verified = false until an external, append-only drill record binds the

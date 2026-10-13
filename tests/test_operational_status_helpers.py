@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -7,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from btcquant.backup_verification import verification_path
 from btcquant.operations import status
 
 
@@ -293,3 +297,68 @@ def test_backup_reader_requires_matching_verified_archive(
     monkeypatch.setattr(status, "StateStore", FakeStore)
     result = status._read_backup(tmp_path, datetime.now(UTC))
     assert result["status"] == status.PASS
+
+
+def _write_backup_verification_fixture(archive: Path) -> None:
+    payload = {
+        "archive_name": archive.name,
+        "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+        "archive_size_bytes": archive.stat().st_size,
+        "format_version": 1,
+        "kind": "BTCQUANT_BACKUP_VERIFICATION",
+        "status": "PASS",
+        "verified_at_utc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "verification_checks": {
+            "encrypted_round_trip": "PASS",
+            "archive_read": "PASS",
+            "sqlite_snapshots": "PASS",
+        },
+        "verification_scope": "encrypted_archive_and_sqlite_snapshot_integrity",
+    }
+    verification_path(archive).write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_backup_reader_accepts_verified_archive_sidecar_without_requalification(
+    tmp_path: Path,
+) -> None:
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    archive = backups / "state-20261013-0300.tar.gz.enc"
+    archive.write_bytes(b"verified fixture bytes")
+    _write_backup_verification_fixture(archive)
+
+    result = status._read_backup(tmp_path, datetime.now(UTC))
+
+    assert verification_path(archive).is_file()
+    assert result["status"] == status.PASS
+    assert result["verification"]["source"] == "archive_verification_sidecar"
+    assert result["verification"]["archive_name"] == archive.name
+
+
+def test_backup_reader_fails_if_archive_bytes_change_after_verification(tmp_path: Path) -> None:
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    archive = backups / "state-20261013-0300.tar.gz.enc"
+    archive.write_bytes(b"verified fixture bytes")
+    _write_backup_verification_fixture(archive)
+    archive.write_bytes(b"changed after verification")
+
+    result = status._read_backup(tmp_path, datetime.now(UTC))
+
+    assert result["status"] == status.FAIL
+    assert result["verification"]["reason"] == "verification_record_does_not_match_archive"
+
+
+def test_backup_reader_keeps_future_dated_archive_unknown(tmp_path: Path) -> None:
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    archive = backups / "state-20261013-0300.tar.gz.enc"
+    archive.write_bytes(b"verified fixture bytes")
+    _write_backup_verification_fixture(archive)
+    future = datetime.now(UTC).timestamp() + 600
+    os.utime(archive, (future, future))
+
+    result = status._read_backup(tmp_path, datetime.now(UTC))
+
+    assert result["status"] == status.UNKNOWN
+    assert result["verification"]["reason"] == "backup_timestamp_in_future"

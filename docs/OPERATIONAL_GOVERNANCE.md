@@ -39,6 +39,15 @@ The maturity section shows duration, terminal orders, required-engine orders,
 and closed trades as bounded percentages. Historical counters are not
 backfilled by this command.
 
+Each encrypted daily archive has an adjacent
+`<archive>.verification.json` record. The backup job writes it only after all
+SQLite snapshots pass integrity checks, the encrypted bytes decrypt back to the
+created archive, and the tar stream can be read. The status command checks the
+record against the current archive size and SHA-256, so a new daily backup does
+not depend on rewriting the release qualification record. This byte/integrity
+evidence is not a clean-room restore drill; the latter remains a separate
+qualification and disaster-recovery check.
+
 ## Incident response
 
 1. Capture `--json` output and the timestamp.

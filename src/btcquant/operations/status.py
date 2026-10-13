@@ -12,11 +12,12 @@ import shutil
 import subprocess
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from collections.abc import Callable
 
+from btcquant.backup_verification import read_backup_verification_record
 from btcquant.execution.paper_technical_qualification import active_paper_release
 from btcquant.execution.readiness import paper_maturity_status
 from btcquant.execution.readonly_state_db import open_state_db_readonly
@@ -378,21 +379,34 @@ def _read_backup(root: Path, now: datetime) -> dict[str, Any]:
     if not backups:
         return {"status": UNKNOWN, "reason": "encrypted_backup_missing"}
     latest = backups[-1]
-    age_seconds = max(0.0, now.timestamp() - latest.stat().st_mtime)
-    verification: dict[str, Any] | None = None
-    try:
-        store = StateStore(root / "state" / "btcquant.db", initialize=False, read_only=True)
-        record = store.latest_paper_technical_qualification_record()
-        if record:
-            candidate = record["payload"].get("backup_verification")
-            if isinstance(candidate, dict) and candidate.get("archive_name") == latest.name:
-                verification = candidate
-    except Exception:
-        verification = None
-    if verification is None:
-        state = UNKNOWN
-    elif verification.get("status") != PASS:
+    archive_delta = now.timestamp() - latest.stat().st_mtime
+    future_archive_timestamp = archive_delta < -300
+    age_seconds = max(0.0, archive_delta)
+    verification = read_backup_verification_record(latest, now=now)
+    if verification.get("status") == UNKNOWN:
+        # Keep compatibility with archives verified by the previous release.
+        # New daily archives carry their own proof, so qualification does not
+        # need to be rewritten after every successful backup.
+        try:
+            store = StateStore(root / "state" / "btcquant.db", initialize=False, read_only=True)
+            record = store.latest_paper_technical_qualification_record()
+            if record:
+                candidate = record["payload"].get("backup_verification")
+                if (
+                    isinstance(candidate, dict)
+                    and candidate.get("status") == PASS
+                    and candidate.get("archive_name") == latest.name
+                ):
+                    verification = candidate
+        except Exception:
+            pass
+    if verification.get("status") == FAIL:
         state = FAIL
+    elif future_archive_timestamp:
+        state = UNKNOWN
+        verification = {"status": UNKNOWN, "reason": "backup_timestamp_in_future"}
+    elif verification.get("status") != PASS:
+        state = UNKNOWN
     elif age_seconds <= BACKUP_FRESH_SECONDS:
         state = PASS
     elif age_seconds <= BACKUP_STALE_SECONDS:
