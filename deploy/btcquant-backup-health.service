@@ -1,0 +1,19 @@
+[Unit]
+Description=btcquant - contrôle horaire de fraîcheur et intégrité des sauvegardes
+After=btcquant-backup.timer
+
+[Service]
+Type=oneshot
+User=btcquant
+WorkingDirectory=/opt/btcquant/current
+Environment=BTCQUANT_ROOT=/opt/btcquant
+EnvironmentFile=-/opt/btcquant/.env
+ExecStart=/opt/btcquant/current/scripts/backup-health.sh
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/btcquant/state
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+LockPersonality=true

@@ -148,6 +148,8 @@ if ${DATED_SNAPSHOT_LOCK_ACQUIRED}; then
 fi
 ARCHIVE="${BACKUP_DIR}/state-${STAMP}.tar.gz.enc"
 ENCRYPTED_TMP="${TMP_DIR}/state-${STAMP}.tar.gz.enc"
+VERIFICATION="${ARCHIVE}.verification.json"
+VERIFICATION_TMP="${TMP_DIR}/state-${STAMP}.tar.gz.enc.verification.json"
 if [ -e "${ARCHIVE}" ]; then
   echo "Archive finale deja presente : ${ARCHIVE}" >&2
   exit 3
@@ -161,8 +163,16 @@ openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
   -in "${ENCRYPTED_TMP}" -out "${ROUNDTRIP_ARCHIVE}" \
   -pass env:BACKUP_ENCRYPTION_KEY
 cmp --silent "${PLAIN_ARCHIVE}" "${ROUNDTRIP_ARCHIVE}"
+# Confirm the gzip/tar stream and every member can be read from the encrypted
+# bytes that will be published. Individual SQLite snapshots were integrity
+# checked by backup_database.py before this archive was built.
+tar -tzf "${ROUNDTRIP_ARCHIVE}" >/dev/null
+"${PYBIN}" "${APP_ROOT}/scripts/verify_backup.py" \
+  "${ENCRYPTED_TMP}" \
+  --write-archive-verification-record "${VERIFICATION_TMP}" \
+  >"${TMP_DIR}/verification-result.json"
 # Do not report a completed archive until its bytes and containing directory
-# have been durably flushed.
+# and its exact-byte verification record have been durably flushed.
 fsync_file() {
   "${PYBIN}" -c 'import os, sys; fd=os.open(sys.argv[1], os.O_RDONLY); os.fsync(fd); os.close(fd)' "$1"
 }
@@ -170,13 +180,19 @@ fsync_directory() {
   "${PYBIN}" -c 'import os, sys; flags=os.O_RDONLY | getattr(os, "O_DIRECTORY", 0); fd=os.open(sys.argv[1], flags); os.fsync(fd); os.close(fd)' "$1"
 }
 fsync_file "${ENCRYPTED_TMP}"
+fsync_file "${VERIFICATION_TMP}"
 mv --no-clobber "${ENCRYPTED_TMP}" "${ARCHIVE}"
+mv --no-clobber "${VERIFICATION_TMP}" "${VERIFICATION}"
 fsync_file "${ARCHIVE}"
+fsync_file "${VERIFICATION}"
 fsync_directory "${BACKUP_DIR}"
 # purge des archives de plus de 30 jours
 find "${BACKUP_DIR}" \( -name 'state-*.tar.gz' -o -name 'state-*.tar.gz.enc' \) \
   -mtime +30 -delete
+find "${BACKUP_DIR}" -name 'state-*.tar.gz.enc.verification.json' \
+  -mtime +30 -delete
 echo "Sauvegarde : ${ARCHIVE}"
+echo "Preuve de vérification : ${VERIFICATION}"
 
 # Archive immutable public market evidence incrementally, once per segment.
 # This keeps daily ledger backups small while retaining every replay input.
@@ -208,25 +224,28 @@ if [ -d "${REPO}/.git" ] && [[ "${ARCHIVE}" == *.enc ]]; then
       echo "Refusing: off-host repository contains an unauthorized plaintext artifact" >&2
       exit 4
     fi
-    if git ls-files | grep -Ev '^(state-[0-9]{8}-[0-9]{4}\.tar\.gz\.enc|carry-dated-evidence/[^/]+\.enc)$' | grep -q .; then
+    if git ls-files | grep -Ev '^(state-[0-9]{8}-[0-9]{4}\.tar\.gz\.enc|state-[0-9]{8}-[0-9]{4}\.tar\.gz\.enc\.verification\.json|carry-dated-evidence/[^/]+\.enc)$' | grep -q .; then
       echo "Refusing: off-host repository contains a non-whitelisted tracked file" >&2
       exit 5
     fi
     if find . -path './.git' -prune -o -type f \
       ! -name 'state-*.tar.gz.enc' ! -path './carry-dated-evidence/*.enc' \
+      ! -name 'state-*.tar.gz.enc.verification.json' \
       -print -quit | grep -q .; then
       echo "Refusing: off-host repository contains an unapproved file" >&2
       exit 6
     fi
     mkdir -p carry-dated-evidence
     cp -- "${ARCHIVE}" .
+    cp -- "${VERIFICATION}" .
     if [ -d "${BACKUP_DIR}/carry-dated-evidence" ]; then
       while IFS= read -r -d '' evidence_file; do
         cp -- "${evidence_file}" carry-dated-evidence/
       done < <(find "${BACKUP_DIR}/carry-dated-evidence" -maxdepth 1 -type f -name '*.enc' -print0)
     fi
     find . -maxdepth 1 -name 'state-*.tar.gz.enc' -mtime +30 -delete
-    git add -A -- state-*.tar.gz.enc carry-dated-evidence
+    find . -maxdepth 1 -name 'state-*.tar.gz.enc.verification.json' -mtime +30 -delete
+    git add -A -- state-*.tar.gz.enc state-*.tar.gz.enc.verification.json carry-dated-evidence
     git -c commit.gpgsign=false commit -q -m "backup ${STAMP}" || exit 0
     git push -q "${OFFHOST_REMOTE}" "HEAD:refs/heads/${OFFHOST_BRANCH}"
     echo "Off-host backup pushed."

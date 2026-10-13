@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import os
+import hashlib
 import json
+import os
 import sqlite3
 import stat
 import subprocess
@@ -47,6 +48,7 @@ def _runtime_layout(tmp_path: Path) -> tuple[Path, Path]:
     for name in (
         "backup_state.sh",
         "backup_database.py",
+        "verify_backup.py",
         "backup_carry_dated_evidence.py",
     ):
         (release / "scripts" / name).write_text(
@@ -111,6 +113,12 @@ def test_backup_uses_real_runtime_state_and_release_venv(tmp_path: Path) -> None
     assert str(release / "state" / "btcquant.db") not in argv.split()
     archives = list((runtime / "backups").glob("state-*.tar.gz.enc"))
     assert len(archives) == 1
+    proofs = list((runtime / "backups").glob("state-*.tar.gz.enc.verification.json"))
+    assert len(proofs) == 1
+    proof = json.loads(proofs[0].read_text(encoding="utf-8"))
+    assert proof["archive_name"] == archives[0].name
+    assert proof["status"] == "PASS"
+    assert proof["archive_sha256"] == hashlib.sha256(archives[0].read_bytes()).hexdigest()
     assert not list((runtime / "backups").glob("state-*.tar.gz"))
     assert (runtime / "state" / "btcquant.db").is_file()
     assert not (runtime / "state" / "btcquant.db").is_symlink()

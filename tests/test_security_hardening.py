@@ -43,6 +43,10 @@ def test_backup_offsite_requires_encryption_and_checks_roundtrip():
     assert "openssl enc -aes-256-cbc -pbkdf2" in script
     assert "openssl enc -d -aes-256-cbc -pbkdf2" in script
     assert 'cmp --silent "${PLAIN_ARCHIVE}" "${ROUNDTRIP_ARCHIVE}"' in script
+    assert "--write-archive-verification-record" in script
+    assert '"${VERIFICATION}"' in script
+    assert "state-*.tar.gz.enc.verification.json" in script
+    assert "git add -A -- state-*.tar.gz.enc state-*.tar.gz.enc.verification.json" in script
     for pattern in (
         "--exclude '*.db'",
         "--exclude '*.db-*'",
@@ -76,6 +80,13 @@ def test_backup_unit_exports_runtime_root_and_keeps_ssh_home_readable():
     assert "Environment=BTCQUANT_ROOT=/opt/btcquant" in service
     assert "ProtectHome=read-only" in service
     assert "ProtectHome=true" not in service
+
+
+def test_backup_health_unit_uses_versioned_verified_backup_checker():
+    service = (ROOT / "deploy" / "btcquant-backup-health.service").read_text(encoding="utf-8")
+    timer = (ROOT / "deploy" / "btcquant-backup-health.timer").read_text(encoding="utf-8")
+    assert "ExecStart=/opt/btcquant/current/scripts/backup-health.sh" in service
+    assert "OnUnitActiveSec=1h" in timer
 
 
 def test_unprivileged_services_drop_linux_capabilities():
@@ -451,6 +462,10 @@ def test_backup_script_fails_closed_without_encryption_key(tmp_path: Path, key: 
         (ROOT / "scripts" / "backup_database.py").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
+    (app / "scripts" / "verify_backup.py").write_text(
+        (ROOT / "scripts" / "verify_backup.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     with sqlite3.connect(app / "state" / "btcquant.db") as connection:
         connection.execute("CREATE TABLE sample (value TEXT)")
         connection.execute("INSERT INTO sample VALUES ('fixture')")
@@ -526,6 +541,10 @@ def test_legacy_backup_snapshots_all_allowlisted_sqlite_wal_databases(tmp_path: 
     )
     (app / "scripts" / "backup_database.py").write_text(
         (ROOT / "scripts" / "backup_database.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (app / "scripts" / "verify_backup.py").write_text(
+        (ROOT / "scripts" / "verify_backup.py").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
 
@@ -629,6 +648,10 @@ def test_backup_script_does_not_invoke_compaction_and_publishes_only_encrypted(
     (app / "scripts" / "backup_state.sh").write_text(script, encoding="utf-8")
     (app / "scripts" / "backup_database.py").write_text(
         (ROOT / "scripts" / "backup_database.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (app / "scripts" / "verify_backup.py").write_text(
+        (ROOT / "scripts" / "verify_backup.py").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
     with sqlite3.connect(app / "state" / "btcquant.db") as connection:

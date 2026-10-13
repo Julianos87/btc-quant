@@ -220,7 +220,8 @@ fi
 # s'exécutent sous btcquant et doivent pouvoir traverser/lire la release.
 chown -R root:btcquant "${STAGING}"
 chmod -R o-rwx "${STAGING}"
-chmod +x "${STAGING}/scripts/backup_state.sh" "${STAGING}/deploy/"*.sh
+chmod +x "${STAGING}/scripts/backup_state.sh" "${STAGING}/scripts/backup-health.sh" \
+  "${STAGING}/deploy/"*.sh
 mv "${STAGING}" "${TARGET}"
 NEW_RELEASE_CREATED=1
 # Static shebang rewrite is not enough: the OS must be able to exec the
