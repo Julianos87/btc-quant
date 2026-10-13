@@ -46,7 +46,10 @@ def test_backup_offsite_requires_encryption_and_checks_roundtrip():
     assert "--write-archive-verification-record" in script
     assert '"${VERIFICATION}"' in script
     assert "state-*.tar.gz.enc.verification.json" in script
-    assert "git add -A -- state-*.tar.gz.enc state-*.tar.gz.enc.verification.json" in script
+    assert "git add -A --" in script
+    assert ":(glob)state-*.tar.gz.enc.verification.json" in script
+    assert "observations-[0-9]{8}-[0-9]+-[0-9]+" in script
+    assert "git add -A -- state-*.tar.gz.enc state-*.tar.gz.enc.verification.json carry-dated-evidence" not in script
     for pattern in (
         "--exclude '*.db'",
         "--exclude '*.db-*'",
@@ -87,6 +90,202 @@ def test_backup_health_unit_uses_versioned_verified_backup_checker():
     timer = (ROOT / "deploy" / "btcquant-backup-health.timer").read_text(encoding="utf-8")
     assert "ExecStart=/opt/btcquant/current/scripts/backup-health.sh" in service
     assert "OnUnitActiveSec=1h" in timer
+
+
+def test_backup_health_retries_failed_alerts_and_clears_only_after_recovery_alert(tmp_path: Path):
+    root = tmp_path / "runtime"
+    python = root / "current" / "venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    (root / "state").mkdir(parents=True)
+    python.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$1\" == '-m' ]]; then\n"
+        "  if [[ \"${BACKUP_HEALTH_STATUS:-bad}\" == 'good' ]]; then echo healthy; exit 0; fi\n"
+        "  echo stale; exit 1\n"
+        "fi\n"
+        "if [[ \"$1\" == '-' ]]; then cat >/dev/null; [[ \"${NOTIFY_RESULT:-false}\" == 'true' ]]; exit; fi\n"
+        "exit 9\n",
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
+    env = os.environ.copy()
+    env["BTCQUANT_ROOT"] = str(root)
+    script = ROOT / "scripts" / "backup-health.sh"
+
+    failed_alert = subprocess.run(
+        ["bash", str(script)],
+        env={**env, "BACKUP_HEALTH_STATUS": "bad", "NOTIFY_RESULT": "false"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    marker = root / "state" / ".backup-health-alert"
+    assert failed_alert.returncode == 1
+    assert not marker.exists()
+
+    sent_alert = subprocess.run(
+        ["bash", str(script)],
+        env={**env, "BACKUP_HEALTH_STATUS": "bad", "NOTIFY_RESULT": "true"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert sent_alert.returncode == 1
+    assert marker.read_text(encoding="utf-8").strip() == "stale"
+
+    failed_recovery_alert = subprocess.run(
+        ["bash", str(script)],
+        env={**env, "BACKUP_HEALTH_STATUS": "good", "NOTIFY_RESULT": "false"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert failed_recovery_alert.returncode == 0
+    assert marker.exists()
+
+    sent_recovery_alert = subprocess.run(
+        ["bash", str(script)],
+        env={**env, "BACKUP_HEALTH_STATUS": "good", "NOTIFY_RESULT": "true"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert sent_recovery_alert.returncode == 0
+    assert not marker.exists()
+
+
+def test_backup_script_refuses_overlapping_backup_runs(tmp_path: Path) -> None:
+    app = tmp_path / "app"
+    runtime = tmp_path / "runtime"
+    (app / "scripts").mkdir(parents=True)
+    (runtime / "state").mkdir(parents=True)
+    backup_dir = runtime / "backups"
+    backup_dir.mkdir()
+    lock = backup_dir / ".backup.lock"
+    with lock.open("w", encoding="utf-8") as stream:
+        import fcntl
+
+        fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        script_copy = app / "scripts" / "backup_state.sh"
+        script_copy.write_text(
+            (ROOT / "scripts" / "backup_state.sh").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            ["bash", str(script_copy)],
+            env={
+                **os.environ,
+                "BTCQUANT_ROOT": str(runtime),
+                "BACKUP_ENCRYPTION_KEY": "fixture-key",
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    assert result.returncode == 75
+    assert "Backup already running" in result.stderr
+
+
+def test_backup_offhost_allowlist_rejects_nested_verification_sidecar(tmp_path: Path) -> None:
+    app = tmp_path / "app"
+    runtime = tmp_path / "runtime"
+    scripts = app / "scripts"
+    scripts.mkdir(parents=True)
+    for name in ("backup_state.sh", "backup_database.py", "verify_backup.py"):
+        shutil.copy2(ROOT / "scripts" / name, scripts / name)
+    state = runtime / "state"
+    state.mkdir(parents=True)
+    with sqlite3.connect(state / "btcquant.db") as connection:
+        connection.execute("CREATE TABLE sample (value TEXT)")
+        connection.execute("INSERT INTO sample VALUES ('fixture')")
+
+    offhost = runtime / "backups-repo"
+    nested = offhost / "carry-dated-evidence" / "subdir"
+    nested.mkdir(parents=True)
+    secret = nested / "state-20261013-0300.tar.gz.enc.verification.json"
+    secret.write_text("SECRET", encoding="utf-8")
+    subprocess.run(
+        ["git", "-c", "init.defaultBranch=main", "init", str(offhost)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(offhost), "config", "user.name", "Backup test"], check=True
+    )
+    subprocess.run(
+        ["git", "-C", str(offhost), "config", "user.email", "backup-test@example.invalid"],
+        check=True,
+    )
+    remote = tmp_path / "offhost.git"
+    subprocess.run(
+        ["git", "init", "--bare", "--initial-branch=backups", str(remote)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(offhost), "remote", "add", "origin", str(remote)], check=True
+    )
+    subprocess.run(
+        ["git", "-C", str(offhost), "commit", "--allow-empty", "-m", "initial"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    mock_date = fake_bin / "date"
+    mock_date.write_text("#!/usr/bin/env bash\nprintf '%s\\n' \"$MOCK_DATE_STAMP\"\n", encoding="utf-8")
+    mock_date.chmod(0o755)
+    backup_env = {
+        **os.environ,
+        "BTCQUANT_ROOT": str(runtime),
+        "BACKUP_ENCRYPTION_KEY": "fixture-key",
+        "BTCQUANT_BACKUP_POST_FREE_BYTES": "0",
+        "TMPDIR": str(tmp_path),
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+    }
+    result = subprocess.run(
+        ["bash", str(scripts / "backup_state.sh")],
+        env={**backup_env, "MOCK_DATE_STAMP": "20261013-0300"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "unapproved path" in result.stderr
+    assert secret.read_text(encoding="utf-8") == "SECRET"
+    commits = subprocess.run(
+        ["git", "-C", str(offhost), "rev-list", "--count", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert commits.stdout.strip() == "1"
+
+    secret.unlink()
+    allowed = subprocess.run(
+        ["bash", str(scripts / "backup_state.sh")],
+        env={**backup_env, "MOCK_DATE_STAMP": "20261013-0301"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert allowed.returncode == 0, allowed.stderr
+    assert "Off-host backup pushed." in allowed.stdout
+    pushed_paths = subprocess.run(
+        ["git", "--git-dir", str(remote), "ls-tree", "-r", "--name-only", "backups"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    paths = set(pushed_paths.stdout.splitlines())
+    assert "state-20261013-0301.tar.gz.enc" in paths
+    assert "state-20261013-0301.tar.gz.enc.verification.json" in paths
+    assert not any("subdir" in path or "SECRET" in path for path in paths)
 
 
 def test_unprivileged_services_drop_linux_capabilities():
@@ -253,6 +452,9 @@ def test_update_has_atomic_activation_backup_healthcheck_and_rollback():
     assert "migration_abort_on_error" in script
     assert "MANUAL RECOVERY REQUIRED" in script
     assert "systemctl enable --now btcquant-compact.timer" in script
+    assert "systemctl enable --now btcquant-backup-health.timer" in script
+    assert "btcquant-backup-health.service" in script
+    assert "btcquant-backup-health.timer" in script
     assert "configure_writer_timers" in script
     assert script.count("configure_writer_timers") >= 5
     assert "configure_writer_timers || true" in script

@@ -36,6 +36,14 @@ fi
 OFFHOST_REMOTE="${BACKUP_OFFHOST_REMOTE:-origin}"
 OFFHOST_BRANCH="${BACKUP_OFFHOST_BRANCH:-backups}"
 mkdir -p "${BACKUP_DIR}"
+# A single lock covers archive generation and publication. systemd normally
+# serializes this oneshot, but manual/recovery starts must not pair another
+# invocation's archive with its verification sidecar.
+exec 8>"${BACKUP_DIR}/.backup.lock"
+if ! flock -n 8; then
+  echo "Backup already running; refusing overlapping archive publication" >&2
+  exit 75
+fi
 # This job is a backup reader. Compaction is a separate scheduled writer and
 # must never mutate the authoritative database as a side effect of backup.
 PYBIN="${APP_ROOT}/venv/bin/python"; [ -x "${PYBIN}" ] || PYBIN="python3"
@@ -224,28 +232,39 @@ if [ -d "${REPO}/.git" ] && [[ "${ARCHIVE}" == *.enc ]]; then
       echo "Refusing: off-host repository contains an unauthorized plaintext artifact" >&2
       exit 4
     fi
-    if git ls-files | grep -Ev '^(state-[0-9]{8}-[0-9]{4}\.tar\.gz\.enc|state-[0-9]{8}-[0-9]{4}\.tar\.gz\.enc\.verification\.json|carry-dated-evidence/[^/]+\.enc)$' | grep -q .; then
+    if git ls-files | grep -Ev '^(state-[0-9]{8}-[0-9]{4}\.tar\.gz\.enc(\.verification\.json)?|carry-dated-evidence/observations-[0-9]{8}-[0-9]+-[0-9]+\.jsonl\.gz(\.manifest\.json)?\.enc)$' | grep -q .; then
       echo "Refusing: off-host repository contains a non-whitelisted tracked file" >&2
       exit 5
     fi
-    if find . -path './.git' -prune -o -type f \
-      ! -name 'state-*.tar.gz.enc' ! -path './carry-dated-evidence/*.enc' \
-      ! -name 'state-*.tar.gz.enc.verification.json' \
-      -print -quit | grep -q .; then
-      echo "Refusing: off-host repository contains an unapproved file" >&2
+    while IFS= read -r -d '' candidate; do
+      if [[ "${candidate}" =~ ^\./state-[0-9]{8}-[0-9]{4}\.tar\.gz\.enc(\.verification\.json)?$ ]] ||
+        [[ "${candidate}" =~ ^\./carry-dated-evidence/observations-[0-9]{8}-[0-9]+-[0-9]+\.jsonl\.gz(\.manifest\.json)?\.enc$ ]]; then
+        continue
+      fi
+      echo "Refusing: off-host repository contains an unapproved path: ${candidate}" >&2
       exit 6
-    fi
+    done < <(find . -path './.git' -prune -o \( -type f -o -type l \) -print0)
     mkdir -p carry-dated-evidence
     cp -- "${ARCHIVE}" .
     cp -- "${VERIFICATION}" .
+    evidence_git_paths=()
     if [ -d "${BACKUP_DIR}/carry-dated-evidence" ]; then
       while IFS= read -r -d '' evidence_file; do
+        evidence_name="$(basename -- "${evidence_file}")"
+        if [[ ! "${evidence_name}" =~ ^observations-[0-9]{8}-[0-9]+-[0-9]+\.jsonl\.gz(\.manifest\.json)?\.enc$ ]]; then
+          echo "Refusing: unexpected encrypted evidence filename: ${evidence_name}" >&2
+          exit 7
+        fi
         cp -- "${evidence_file}" carry-dated-evidence/
+        evidence_git_paths+=("carry-dated-evidence/${evidence_name}")
       done < <(find "${BACKUP_DIR}/carry-dated-evidence" -maxdepth 1 -type f -name '*.enc' -print0)
     fi
     find . -maxdepth 1 -name 'state-*.tar.gz.enc' -mtime +30 -delete
     find . -maxdepth 1 -name 'state-*.tar.gz.enc.verification.json' -mtime +30 -delete
-    git add -A -- state-*.tar.gz.enc state-*.tar.gz.enc.verification.json carry-dated-evidence
+    git add -A -- \
+      ':(glob)state-*.tar.gz.enc' \
+      ':(glob)state-*.tar.gz.enc.verification.json' \
+      "${evidence_git_paths[@]}"
     git -c commit.gpgsign=false commit -q -m "backup ${STAMP}" || exit 0
     git push -q "${OFFHOST_REMOTE}" "HEAD:refs/heads/${OFFHOST_BRANCH}"
     echo "Off-host backup pushed."

@@ -11,7 +11,8 @@ notify() {
 import sys
 from btcquant.notify import notify
 
-notify(sys.argv[1])
+if not notify(sys.argv[1]):
+    sys.exit(1)
 PY
 }
 
@@ -22,8 +23,9 @@ set -e
 
 if [ "${status}" -ne 0 ]; then
   if [ ! -e "${MARKER}" ]; then
-    notify "⛔ BTCQuant sauvegarde : ${problem}. Intervention requise."
-    printf '%s\n' "${problem}" >"${MARKER}"
+    if notify "⛔ BTCQuant sauvegarde : ${problem}. Intervention requise."; then
+      printf '%s\n' "${problem}" >"${MARKER}"
+    fi
   fi
   echo "Backup health failed: ${problem}" >&2
   exit 1
@@ -31,8 +33,9 @@ fi
 
 if [ -e "${MARKER}" ]; then
   previous="$(head -1 "${MARKER}" 2>/dev/null || true)"
-  rm -f -- "${MARKER}"
-  notify "✅ BTCQuant sauvegarde rétablie (${previous})."
+  if notify "✅ BTCQuant sauvegarde rétablie (${previous})."; then
+    rm -f -- "${MARKER}"
+  fi
 fi
 
 printf '%s\n' "${problem}"
