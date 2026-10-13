@@ -49,7 +49,10 @@ def test_backup_offsite_requires_encryption_and_checks_roundtrip():
     assert "git add -A --" in script
     assert ":(glob)state-*.tar.gz.enc.verification.json" in script
     assert "observations-[0-9]{8}-[0-9]+-[0-9]+" in script
-    assert "git add -A -- state-*.tar.gz.enc state-*.tar.gz.enc.verification.json carry-dated-evidence" not in script
+    assert (
+        "git add -A -- state-*.tar.gz.enc state-*.tar.gz.enc.verification.json carry-dated-evidence"
+        not in script
+    )
     for pattern in (
         "--exclude '*.db'",
         "--exclude '*.db-*'",
@@ -210,9 +213,7 @@ def test_backup_offhost_allowlist_rejects_nested_verification_sidecar(tmp_path: 
         capture_output=True,
         text=True,
     )
-    subprocess.run(
-        ["git", "-C", str(offhost), "config", "user.name", "Backup test"], check=True
-    )
+    subprocess.run(["git", "-C", str(offhost), "config", "user.name", "Backup test"], check=True)
     subprocess.run(
         ["git", "-C", str(offhost), "config", "user.email", "backup-test@example.invalid"],
         check=True,
@@ -224,9 +225,7 @@ def test_backup_offhost_allowlist_rejects_nested_verification_sidecar(tmp_path: 
         capture_output=True,
         text=True,
     )
-    subprocess.run(
-        ["git", "-C", str(offhost), "remote", "add", "origin", str(remote)], check=True
-    )
+    subprocess.run(["git", "-C", str(offhost), "remote", "add", "origin", str(remote)], check=True)
     subprocess.run(
         ["git", "-C", str(offhost), "commit", "--allow-empty", "-m", "initial"],
         check=True,
@@ -237,7 +236,9 @@ def test_backup_offhost_allowlist_rejects_nested_verification_sidecar(tmp_path: 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     mock_date = fake_bin / "date"
-    mock_date.write_text("#!/usr/bin/env bash\nprintf '%s\\n' \"$MOCK_DATE_STAMP\"\n", encoding="utf-8")
+    mock_date.write_text(
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"$MOCK_DATE_STAMP\"\n", encoding="utf-8"
+    )
     mock_date.chmod(0o755)
     backup_env = {
         **os.environ,
