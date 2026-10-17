@@ -21,7 +21,6 @@ liquidation : sa courbe ne qualifie pas ces risques d'exécution réelle.
 from __future__ import annotations
 
 import logging
-import json
 import math
 import threading
 from collections.abc import Mapping
@@ -306,41 +305,6 @@ class CarryRunner:
         self.two_leg_journal = (
             list(journal[-TWO_LEG_JOURNAL_LIMIT:]) if isinstance(journal, list) else []
         )
-        # The compact checkpoint is only a dashboard/restart summary. Rebuild
-        # the familiar in-memory 128-entry view from the append-only event log,
-        # which remains the authoritative history across restarts.
-        journal_events = self.store.read_events(
-            "carry", limit=TWO_LEG_JOURNAL_LIMIT, event_type_prefix="carry_"
-        )
-        restored_journal: list[dict[str, object]] = []
-        for event in journal_events:
-            event_type = event.get("event_type")
-            raw_event_payload = event.get("payload")
-            if not isinstance(event_type, str):
-                continue
-            if isinstance(raw_event_payload, str):
-                try:
-                    event_payload = json.loads(raw_event_payload)
-                except (TypeError, ValueError):
-                    continue
-            elif isinstance(raw_event_payload, dict):
-                event_payload = raw_event_payload
-            else:
-                continue
-            if not isinstance(event_payload, dict):
-                continue
-            restored_journal.append(
-                {
-                    "event_type": event_type,
-                    **{
-                        key: value
-                        for key, value in event_payload.items()
-                        if key not in {"state", "state_sha256"}
-                    },
-                }
-            )
-        if restored_journal:
-            self.two_leg_journal = restored_journal[-TWO_LEG_JOURNAL_LIMIT:]
         if self.two_leg_state in {
             CarryExecutionState.ENTRY_PENDING,
             CarryExecutionState.ONE_LEG_FILLED,
