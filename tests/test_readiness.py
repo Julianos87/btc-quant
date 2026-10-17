@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from btcquant.execution.operational_state_reader import OperationalStateReader
 from btcquant.execution.readiness import (
     ReadinessPolicy,
     evaluate_readiness,
@@ -15,7 +16,7 @@ from btcquant.execution.readiness import (
     _start_campaign_for_test,
     testnet_p1_policy as p1_policy,
 )
-from btcquant.execution.state_store import StateStore
+from btcquant.execution.state_store import SCHEMA_VERSION, StateStore
 from btcquant.execution.safety import require_live_execution_enabled
 
 
@@ -71,6 +72,70 @@ def test_readiness_fails_closed_without_campaign(tmp_path):
     assert report["status"] == "FAIL"
     assert report["campaign_status"] == "NOT_STARTED"
     assert report["checks"][0]["key"] == "campaign"
+
+
+def test_dashboard_readiness_reuses_bound_full_integrity_evidence(tmp_path, monkeypatch):
+    store = StateStore(tmp_path / "state.db")
+    now = datetime.now(UTC)
+    store.save_engine_state("trend", {"slots": {}, "halted": False})
+    release_sha = "a" * 40
+    release_tree = "b" * 40
+    qualification_id = store.record_paper_technical_qualification(
+        release_sha=release_sha,
+        release_tree=release_tree,
+        schema_version=SCHEMA_VERSION,
+        full_test_results={"status": "PASS"},
+        staging_run={"status": "PASS"},
+        migration={"status": "PASS", "integrity": "ok"},
+        rollback_rehearsal={"status": "PASS"},
+        production_health={"status": "PASS"},
+        backup_verification={"status": "PASS"},
+        qualified_at=now.isoformat(),
+    )
+    binding = {
+        "environment": "paper",
+        "technical_qualification_id": qualification_id,
+        "release_sha": release_sha,
+        "release_tree": release_tree,
+        "schema_version": SCHEMA_VERSION,
+        "config_identity": "c" * 64,
+        "config_identity_version": 1,
+        "required_engines": ["trend"],
+    }
+    store.start_bound_paper_maturity_campaign(
+        policy=ReadinessPolicy().to_dict(),
+        binding=binding,
+        required_engines=("trend",),
+        qualification_id=qualification_id,
+        now_factory=lambda: now.isoformat(),
+    )
+
+    def unexpected_deep_scan(_reader):
+        pytest.fail("dashboard readiness must not run PRAGMA integrity_check")
+
+    monkeypatch.setattr(OperationalStateReader, "integrity_check", unexpected_deep_scan)
+    report = evaluate_readiness(store, now=now, verify_integrity=False)
+    integrity = next(item for item in report["checks"] if item["key"] == "integrity")
+
+    assert integrity["passed"] is True
+    assert now.isoformat() in integrity["note"]
+    assert "pas relancé" in integrity["note"]
+
+
+def test_dashboard_readiness_without_bound_proof_does_not_claim_integrity(tmp_path, monkeypatch):
+    store = StateStore(tmp_path / "state.db")
+    now = datetime.now(UTC)
+    _start_campaign_for_test(store, started_at=now.isoformat())
+
+    def unexpected_deep_scan(_reader):
+        pytest.fail("dashboard readiness must not run PRAGMA integrity_check")
+
+    monkeypatch.setattr(OperationalStateReader, "integrity_check", unexpected_deep_scan)
+    report = evaluate_readiness(store, now=now, verify_integrity=False)
+    integrity = next(item for item in report["checks"] if item["key"] == "integrity")
+
+    assert integrity["passed"] is False
+    assert "ne porte pas de preuve technique" in integrity["note"]
 
 
 def test_healthy_campaign_can_be_finalized_and_unlocks_qualification(tmp_path):
