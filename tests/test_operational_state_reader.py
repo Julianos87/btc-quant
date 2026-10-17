@@ -112,7 +112,7 @@ def test_operational_reader_integrity_contract_and_non_ok_result(tmp_path, monke
             return ("database disk image is malformed",)
 
     @contextmanager
-    def non_ok_connection(_path):
+    def non_ok_connection(_path, **_kwargs):
         yield NonOkConnection()
 
     monkeypatch.setattr(

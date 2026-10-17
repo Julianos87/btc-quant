@@ -261,6 +261,27 @@ def test_smoothing_supports_legacy_eight_hour_events_without_row_assumption() ->
     assert result.coverage.iloc[-1]["expected_events"] == 42
 
 
+def test_hourly_and_eight_hour_negative_funding_have_same_annualized_units() -> None:
+    hourly_index = pd.date_range("2030-01-01T00:00:00Z", periods=14 * 24 + 1, freq="1h")
+    eight_hour_index = pd.date_range("2030-01-01T00:00:00Z", periods=43, freq="8h")
+    hourly = smooth_funding_events(
+        pd.Series(-0.000125, index=hourly_index),
+        smooth_days=14,
+        funding_interval="1h",
+    )
+    eight_hour = smooth_funding_events(
+        pd.Series(-0.001, index=eight_hour_index),
+        smooth_days=14,
+        funding_interval="8h",
+    )
+
+    assert hourly.coverage.iloc[-1]["status"] == "OK"
+    assert eight_hour.coverage.iloc[-1]["status"] == "OK"
+    assert hourly.annualized.iloc[-1] < 0
+    assert eight_hour.annualized.iloc[-1] < 0
+    assert hourly.annualized.iloc[-1] == pytest.approx(eight_hour.annualized.iloc[-1])
+
+
 def test_smoothing_is_not_lookahead_biased() -> None:
     full = _hourly(14 * 24 + 25)
     cutoff = full.index[14 * 24]

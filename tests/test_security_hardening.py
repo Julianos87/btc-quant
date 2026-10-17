@@ -41,8 +41,14 @@ def test_backup_offsite_requires_encryption_and_checks_roundtrip():
 
     assert '[[ "${ARCHIVE}" == *.enc ]]' in script
     assert "openssl enc -aes-256-cbc -pbkdf2" in script
-    assert "openssl enc -d -aes-256-cbc -pbkdf2" in script
-    assert 'cmp --silent "${PLAIN_ARCHIVE}" "${ROUNDTRIP_ARCHIVE}"' in script
+    verifier = (ROOT / "scripts" / "verify_backup.py").read_text(encoding="utf-8")
+    assert '"-d"' in verifier and "subprocess.PIPE" in verifier
+    assert 'cmp --silent "${PLAIN_ARCHIVE}" "${ROUNDTRIP_ARCHIVE}"' not in script
+    assert "ROUNDTRIP_ARCHIVE" not in script
+    assert 'STAGING_REQUIRED_BYTES="$((SOURCE_BYTES * 3 + 134217728))"' in script
+    assert "-mtime +30 -delete" not in script
+    assert 'find "${BACKUP_DIR}" -maxdepth 1 -type f' not in script
+    assert '--plaintext-archive "${PLAIN_ARCHIVE}"' in script
     assert "--write-archive-verification-record" in script
     assert '"${VERIFICATION}"' in script
     assert "state-*.tar.gz.enc.verification.json" in script

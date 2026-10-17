@@ -1101,8 +1101,20 @@ def test_flat_carry_dashboard_keeps_latest_rejected_economics_visible(tmp_path, 
                         "net_expected_before_reserve": -6.0,
                         "net_expected_after_reserve": -86.0,
                         "net_expected": -86.0,
+                        "borrow_expected": 2.0,
+                        "notional": 2609.0,
+                        "signal_rate_annualized": 0.0784,
+                        "signal_rate_unit": "simple_fraction_per_365.25_day_year",
+                        "signal_smoothing_days": 14.0,
+                        "signal_observation_interval_seconds": 3600.0,
+                        "funding_projection_horizon_days": 30.0,
+                        "funding_rate_basis": "simple_constant_projection",
                     },
                     "plan": {
+                        "spot_notional": 2610.0,
+                        "perp_notional": 2609.0,
+                        "capital_available": 4000.0,
+                        "total_cash_required": 3980.0,
                         "market_timestamp": "2026-10-11T14:30:00Z",
                         "received_timestamp": "2026-10-11T14:30:01Z",
                         "market_freshness_seconds": 1.0,
@@ -1126,6 +1138,19 @@ def test_flat_carry_dashboard_keeps_latest_rejected_economics_visible(tmp_path, 
     assert two_leg["last_decision_event"] == "carry_entry_blocked"
     assert two_leg["last_decision_reason"] == "net_expected_non_positive"
     assert two_leg["spot_price_step"] == pytest.approx(1.0)
+    assert two_leg["signal_rate_annualized"] == pytest.approx(0.0784)
+    assert two_leg["signal_rate_unit"] == "simple_fraction_per_365.25_day_year"
+    assert two_leg["signal_smoothing_days"] == pytest.approx(14.0)
+    assert two_leg["signal_observation_interval_seconds"] == pytest.approx(3600.0)
+    assert two_leg["funding_projection_horizon_days"] == pytest.approx(30.0)
+    assert two_leg["funding_rate_basis"] == "simple_constant_projection"
+    assert two_leg["expected_spot_notional"] == pytest.approx(2610.0)
+    assert two_leg["expected_perp_notional"] == pytest.approx(2609.0)
+    assert two_leg["capital_available_at_decision"] == pytest.approx(4000.0)
+    assert two_leg["total_cash_required"] == pytest.approx(3980.0)
+    assert two_leg["required_funding_rate_annualized"] == pytest.approx(
+        (12.0 + 12.0 + 2.0 + 80.0) / (2609.0 * 30.0 / 365.25)
+    )
 
 
 def test_operational_journal_exposes_correlated_events_without_checkpoint_state(

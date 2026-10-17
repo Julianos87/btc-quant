@@ -989,7 +989,9 @@ def expected_net_carry(
     exit_cost: float,
     uncertainty_reserve: float,
     basis_expected: float = 0.0,
-) -> dict[str, float | bool]:
+    signal_smoothing_days: int | None = None,
+    signal_observation_interval_seconds: float | None = None,
+) -> dict[str, float | bool | str | None]:
     """Décide sur le rendement net attendu, jamais sur le funding brut seul."""
 
     if holding_days <= 0:
@@ -1010,6 +1012,15 @@ def expected_net_carry(
         "net_expected_after_reserve": net,
         "net_expected": net,
         "qualified": net > 0,
+        "signal_rate_annualized": funding_ann,
+        "signal_rate_unit": "simple_fraction_per_365.25_day_year",
+        "signal_smoothing_days": signal_smoothing_days,
+        "signal_observation_interval_seconds": signal_observation_interval_seconds,
+        "funding_projection_horizon_days": holding_days,
+        "funding_rate_basis": (
+            "constant simple annualized rate projected over holding_days; "
+            "signal sums native payment rates over a complete smoothing window"
+        ),
     }
 
 

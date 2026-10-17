@@ -52,7 +52,7 @@ from btcquant.execution.readiness import (
     service_component_profile,
 )
 from btcquant.execution.shadow import ShadowStore
-from btcquant.execution.state_store import StateStore
+from btcquant.execution.state_store import SCHEMA_VERSION, StateStore
 from btcquant.execution.operational_state_reader import OperationalStateReader
 from btcquant.observability import (
     BoundedReadCache,
@@ -204,9 +204,14 @@ def prometheus_metrics():
     metrics["btcquant_trading_db_available"] = int(database.exists())
     if database.exists():
         try:
-            store = StateStore(database, initialize=False, read_only=True)
-            operational_reader = OperationalStateReader(database)
-            database_available = bool(operational_reader.integrity_check())
+            store = StateStore(database, initialize=False, read_only=True, read_timeout_seconds=1.0)
+            operational_reader = OperationalStateReader(database, timeout_seconds=1.0)
+            database_probe = operational_reader.database_probe(
+                expected_schema_version=SCHEMA_VERSION
+            )
+            database_available = bool(
+                database_probe["schema_matches"] and database_probe["required_tables_present"]
+            )
             metrics["btcquant_trading_db_available"] = int(database_available)
             incidents = operational_reader.read_incidents(open_only=True)
             metrics["btcquant_open_incidents"] = len(incidents)
@@ -841,6 +846,36 @@ def _sum_trade_pnl(strategy: str, trades: pd.DataFrame) -> tuple[float | None, s
     return float(values.sum()), "AVAILABLE"
 
 
+def _required_funding_rate_annualized(economics: dict, plan: dict) -> float | None:
+    """Simple annualized admission hurdle, with the reserve treated as a hurdle."""
+
+    notional = _dashboard_number(economics.get("notional", plan.get("perp_notional")))
+    holding_days = _dashboard_number(
+        economics.get("holding_days", economics.get("funding_projection_horizon_days"))
+    )
+    entry = _dashboard_number(economics.get("entry_cost"))
+    exit_ = _dashboard_number(economics.get("exit_cost"))
+    borrow = _dashboard_number(economics.get("borrow_expected"))
+    reserve = _dashboard_number(economics.get("uncertainty_reserve"))
+    basis = _dashboard_number(economics.get("basis_expected"))
+    if (
+        notional is None
+        or holding_days is None
+        or entry is None
+        or exit_ is None
+        or borrow is None
+        or reserve is None
+        or basis is None
+        or notional <= 0
+        or holding_days <= 0
+    ):
+        return None
+    denominator = notional * holding_days / 365.25
+    if denominator <= 0:
+        return None
+    return (entry + exit_ + borrow + reserve - basis) / denominator
+
+
 def _carry_two_leg_projection(carry_state: dict, carry_two_leg: dict) -> dict:
     balance = carry_two_leg.get("balance") if isinstance(carry_two_leg, dict) else None
     balance = balance if isinstance(balance, dict) else {}
@@ -902,6 +937,12 @@ def _carry_two_leg_projection(carry_state: dict, carry_two_leg: dict) -> dict:
     booked = _dashboard_number(balance.get("equity"))
     initial_cash = _dashboard_number(balance.get("initial_cash"))
     booked_net = booked - initial_cash if booked is not None and initial_cash is not None else None
+    total_cash_raw = plan.get("total_cash_required")
+    total_cash_required = _dashboard_number(total_cash_raw)
+    if total_cash_required is None and isinstance(total_cash_raw, str):
+        total_cash_required = (
+            total_cash_raw if total_cash_raw.strip().upper() == "UNKNOWN" else None
+        )
     return {
         "state": state,
         "qualification": carry_two_leg.get("qualification"),
@@ -964,6 +1005,27 @@ def _carry_two_leg_projection(carry_state: dict, carry_two_leg: dict) -> dict:
         "expected_entry_cost": _dashboard_number(economics.get("entry_cost")),
         "expected_exit_cost": _dashboard_number(economics.get("exit_cost")),
         "uncertainty_reserve": _dashboard_number(economics.get("uncertainty_reserve")),
+        "signal_rate_annualized": _dashboard_number(economics.get("signal_rate_annualized")),
+        "signal_rate_unit": economics.get("signal_rate_unit"),
+        "signal_smoothing_days": _dashboard_number(economics.get("signal_smoothing_days")),
+        "signal_observation_interval_seconds": _dashboard_number(
+            economics.get("signal_observation_interval_seconds")
+        ),
+        "funding_projection_horizon_days": _dashboard_number(
+            economics.get("funding_projection_horizon_days")
+        ),
+        "funding_rate_basis": economics.get("funding_rate_basis"),
+        "expected_spot_notional": _dashboard_number(
+            economics.get("spot_notional", plan.get("spot_notional"))
+        ),
+        "expected_perp_notional": _dashboard_number(
+            economics.get("notional", plan.get("perp_notional"))
+        ),
+        "capital_available_at_decision": _dashboard_number(
+            plan.get("capital_available", balance.get("cash_available"))
+        ),
+        "total_cash_required": total_cash_required,
+        "required_funding_rate_annualized": _required_funding_rate_annualized(economics, plan),
         "last_decision_reason": latest_decision_event.get("reason")
         or latest_economic_event.get("reason"),
         "last_decision_event": latest_decision_event.get("event_type")

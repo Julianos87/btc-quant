@@ -147,10 +147,12 @@ class StateStore:
         initialize: bool = True,
         allow_migration: bool = False,
         read_only: bool = False,
+        read_timeout_seconds: float = 15.0,
     ) -> None:
         self.path = Path(path)
         self.allow_migration = allow_migration
         self.read_only = read_only
+        self.read_timeout_seconds = read_timeout_seconds
         self._qualification_repository = QualificationRepository(
             connect=self._connect,
             transaction=self._transaction,
@@ -210,13 +212,16 @@ class StateStore:
     def _connect(self) -> sqlite3.Connection:
         if self.read_only:
             uri = f"{self.path.resolve().as_uri()}?mode=ro"
-            connection = sqlite3.connect(uri, uri=True, timeout=15.0)
+            connection = sqlite3.connect(uri, uri=True, timeout=self.read_timeout_seconds)
             connection.execute("PRAGMA query_only = ON")
         else:
             connection = sqlite3.connect(self.path, timeout=15.0)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA busy_timeout = 15000")
+        if self.read_only:
+            connection.execute(f"PRAGMA busy_timeout = {int(self.read_timeout_seconds * 1000)}")
+        else:
+            connection.execute("PRAGMA busy_timeout = 15000")
         if not self.read_only:
             connection.execute("PRAGMA synchronous = FULL")
         return connection

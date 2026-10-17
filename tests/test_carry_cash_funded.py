@@ -92,6 +92,11 @@ def test_cash_refuses_net_loss_without_erasing_reserve(tmp_path):
     assert economics["borrow_expected"] == 0
     assert economics["uncertainty_reserve"] > 0
     assert economics["net_expected"] < 0
+    assert economics["signal_rate_annualized"] == pytest.approx(0.0784)
+    assert economics["signal_rate_unit"] == "simple_fraction_per_365.25_day_year"
+    assert economics["signal_smoothing_days"] == 14
+    assert economics["signal_observation_interval_seconds"] == pytest.approx(3600)
+    assert economics["funding_projection_horizon_days"] == pytest.approx(30)
 
 
 def test_cash_short_margin_survives_twenty_percent_price_rise(tmp_path):

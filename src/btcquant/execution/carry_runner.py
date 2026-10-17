@@ -434,6 +434,11 @@ class CarryRunner:
         log.info("État carry rechargé : équity %.2f, position %s", self.equity, self.in_position)
 
     def _state_payload(self) -> CarryStatePayload:
+        # The append-only events table holds the full audit trail. Retain only
+        # the latest economics and decision in engine_state to avoid copying
+        # up to 128 old records into each state snapshot. The legacy list shape
+        # remains readable by the current rollback release.
+        checkpoint_journal = self._checkpoint_journal()
         return {
             "equity": self.equity,
             "in_position": self.in_position,
@@ -480,7 +485,7 @@ class CarryRunner:
                     spec=self.two_leg_spec,
                     balance=self.two_leg_balance,
                     active_intent=self.two_leg_intent,
-                    journal=self.two_leg_journal,
+                    journal=checkpoint_journal,
                     cost_provenance={
                         "spot_fee_rate": self.policy.spot_execution_fee_rate,
                         "perp_fee_rate": self.policy.perp_execution_fee_rate,
@@ -499,6 +504,77 @@ class CarryRunner:
                 else None
             ),
         }
+
+    def _checkpoint_journal(self) -> list[dict[str, object]]:
+        """Keep compact dashboard context; SQLite events remain the full audit log."""
+
+        if not self.two_leg_journal:
+            return []
+        keep = {len(self.two_leg_journal) - 1}
+        economic = next(
+            (
+                index
+                for index in range(len(self.two_leg_journal) - 1, -1, -1)
+                if isinstance(self.two_leg_journal[index].get("economics"), dict)
+            ),
+            None,
+        )
+        decision_types = {
+            "carry_entry_blocked",
+            "carry_entry_intent",
+            "carry_entry_checkpoint",
+            "carry_exit_intent",
+            "carry_reconciliation_required",
+        }
+        decision = next(
+            (
+                index
+                for index in range(len(self.two_leg_journal) - 1, -1, -1)
+                if self.two_leg_journal[index].get("event_type") in decision_types
+            ),
+            None,
+        )
+        if economic is not None:
+            keep.add(economic)
+        if decision is not None:
+            keep.add(decision)
+        return [self.two_leg_journal[index] for index in sorted(keep)]
+
+    def _trim_two_leg_journal(self) -> None:
+        """Bound RAM while retaining the latest economics and decision context."""
+
+        if len(self.two_leg_journal) <= TWO_LEG_JOURNAL_LIMIT:
+            return
+        decision_types = {
+            "carry_entry_blocked",
+            "carry_entry_intent",
+            "carry_entry_checkpoint",
+            "carry_exit_intent",
+            "carry_reconciliation_required",
+        }
+        retained_context: set[int] = set()
+        for predicate in (
+            lambda item: isinstance(item.get("economics"), dict),
+            lambda item: item.get("event_type") in decision_types,
+        ):
+            index = next(
+                (
+                    position
+                    for position in range(len(self.two_leg_journal) - 1, -1, -1)
+                    if predicate(self.two_leg_journal[position])
+                ),
+                None,
+            )
+            if index is not None:
+                retained_context.add(index)
+
+        tail_start = len(self.two_leg_journal) - TWO_LEG_JOURNAL_LIMIT
+        old_context = {index for index in retained_context if index < tail_start}
+        tail_count = TWO_LEG_JOURNAL_LIMIT - len(old_context)
+        keep = old_context | set(
+            range(len(self.two_leg_journal) - tail_count, len(self.two_leg_journal))
+        )
+        self.two_leg_journal = [self.two_leg_journal[index] for index in sorted(keep)]
 
     def _save_state(
         self,
@@ -1351,7 +1427,7 @@ class CarryRunner:
 
     def _two_leg_persist(self, event_type: str, payload: dict[str, object]) -> None:
         self.two_leg_journal.append({"event_type": event_type, **payload})
-        del self.two_leg_journal[:-TWO_LEG_JOURNAL_LIMIT]
+        self._trim_two_leg_journal()
         self._sync_two_leg_legacy_fields()
         try:
             self._save_state(event_type=event_type, event_payload=payload)
@@ -1483,6 +1559,7 @@ class CarryRunner:
         self.store.resolve_incident("accounting:carry:financing_not_qualified")
         holding_days = float(getattr(configured, "holding_days", 30.0))
         reserve = plan.perp_notional * float(getattr(configured, "uncertainty_reserve_rate", 0.0))
+        native_interval = self._native_funding_interval()
         economics = expected_net_carry(
             funding_ann=smooth_ann,
             notional=plan.perp_notional,
@@ -1492,6 +1569,10 @@ class CarryRunner:
             entry_cost=plan.estimated_entry_cost,
             exit_cost=plan.estimated_entry_cost,
             uncertainty_reserve=reserve,
+            signal_smoothing_days=self.smooth_days,
+            signal_observation_interval_seconds=(
+                native_interval.total_seconds() if native_interval is not None else None
+            ),
         )
         if not bool(economics["qualified"]):
             self.store.record_incident(

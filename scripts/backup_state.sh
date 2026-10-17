@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Archive quotidienne de state/ (track record paper), conservée 30 jours.
+# Archive quotidienne de state/ (track record paper), conservée sans purge automatique.
 # Appelé par un timer systemd.
 #
 # APP_ROOT     : arbre physique de la release (venv + scripts).
@@ -80,7 +80,11 @@ fi
 SOURCE_BYTES="$(du -sb -- "${STATE_DIR}" | awk '{ print $1 }')"
 TMP_FREE_BYTES="$(df -B1 --output=avail "${TMP_DIR}" | tail -n 1 | tr -d '[:space:]')"
 BACKUP_FREE_BYTES="$(df -B1 --output=avail "${BACKUP_DIR}" | tail -n 1 | tr -d '[:space:]')"
-STAGING_REQUIRED_BYTES="$((SOURCE_BYTES * 4 + 134217728))"
+# Peak before this check: online DB snapshots + plaintext tar + encrypted tar.
+# The decrypt round-trip is hashed as a stream below, so it no longer requires
+# a fourth full-size temporary archive. Keep 128 MiB for metadata and workspace
+# overhead, plus the independent post-backup free-space reserve.
+STAGING_REQUIRED_BYTES="$((SOURCE_BYTES * 3 + 134217728))"
 TARGET_REQUIRED_BYTES="$((SOURCE_BYTES + 134217728 + POST_BACKUP_FREE_BYTES))"
 if [ "$(stat -c %d "${TMP_DIR}")" = "$(stat -c %d "${BACKUP_DIR}")" ]; then
   COMBINED_REQUIRED_BYTES="$((STAGING_REQUIRED_BYTES + POST_BACKUP_FREE_BYTES))"
@@ -165,18 +169,11 @@ fi
 openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt \
   -in "${PLAIN_ARCHIVE}" -out "${ENCRYPTED_TMP}" \
   -pass env:BACKUP_ENCRYPTION_KEY
-# Verify that decryption reproduces the plaintext before publishing the final name.
-ROUNDTRIP_ARCHIVE="${TMP_DIR}/roundtrip.tar.gz"
-openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
-  -in "${ENCRYPTED_TMP}" -out "${ROUNDTRIP_ARCHIVE}" \
-  -pass env:BACKUP_ENCRYPTION_KEY
-cmp --silent "${PLAIN_ARCHIVE}" "${ROUNDTRIP_ARCHIVE}"
-# Confirm the gzip/tar stream and every member can be read from the encrypted
-# bytes that will be published. Individual SQLite snapshots were integrity
-# checked by backup_database.py before this archive was built.
-tar -tzf "${ROUNDTRIP_ARCHIVE}" >/dev/null
+# Stream-decrypt and compare against the already-staged plaintext, then scan that
+# same tar stream and publish exact-byte verification evidence without another copy.
 "${PYBIN}" "${APP_ROOT}/scripts/verify_backup.py" \
   "${ENCRYPTED_TMP}" \
+  --plaintext-archive "${PLAIN_ARCHIVE}" \
   --write-archive-verification-record "${VERIFICATION_TMP}" \
   >"${TMP_DIR}/verification-result.json"
 # Do not report a completed archive until its bytes and containing directory
@@ -194,11 +191,6 @@ mv --no-clobber "${VERIFICATION_TMP}" "${VERIFICATION}"
 fsync_file "${ARCHIVE}"
 fsync_file "${VERIFICATION}"
 fsync_directory "${BACKUP_DIR}"
-# purge des archives de plus de 30 jours
-find "${BACKUP_DIR}" \( -name 'state-*.tar.gz' -o -name 'state-*.tar.gz.enc' \) \
-  -mtime +30 -delete
-find "${BACKUP_DIR}" -name 'state-*.tar.gz.enc.verification.json' \
-  -mtime +30 -delete
 echo "Sauvegarde : ${ARCHIVE}"
 echo "Preuve de vérification : ${VERIFICATION}"
 
@@ -268,8 +260,6 @@ if [ -d "${REPO}/.git" ] && [[ "${ARCHIVE}" == *.enc ]]; then
         evidence_git_paths+=("carry-dated-evidence/${evidence_name}")
       done < <(find "${BACKUP_DIR}/carry-dated-evidence" -maxdepth 1 -type f -name '*.enc' -print0)
     fi
-    find . -maxdepth 1 -name 'state-*.tar.gz.enc' -mtime +30 -delete
-    find . -maxdepth 1 -name 'state-*.tar.gz.enc.verification.json' -mtime +30 -delete
     git add -A -- \
       ':(glob)state-*.tar.gz.enc' \
       ':(glob)state-*.tar.gz.enc.verification.json' \

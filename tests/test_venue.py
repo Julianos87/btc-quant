@@ -59,11 +59,15 @@ def _stub_venue(v: Venue, **kw) -> Venue:
     return v
 
 
-def test_hyperliquid_funding_converted_to_8h():
+@pytest.mark.parametrize(
+    ("native_hourly_rate", "expected_8h_rate"),
+    [(1e-5, 8e-5), (-1e-5, -8e-5), (0.0, 0.0)],
+)
+def test_hyperliquid_funding_converted_to_8h(native_hourly_rate, expected_8h_rate):
     """Le taux horaire Hyperliquid est ramené à l'équivalent 8 h — la
     convention des filtres funding_long_max/short_min et du backtest."""
-    v = _stub_venue(Venue("hyperliquid", "BTC/USDC:USDC"), funding_rate=1e-5)
-    assert v.funding_rate_8h() == pytest.approx(8e-5)
+    v = _stub_venue(Venue("hyperliquid", "BTC/USDC:USDC"), funding_rate=native_hourly_rate)
+    assert v.funding_rate_8h() == pytest.approx(expected_8h_rate)
     assert v.payments_per_day == 24
     assert v.payments_per_year == 24 * 365
 

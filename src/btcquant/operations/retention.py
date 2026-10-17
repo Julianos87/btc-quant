@@ -39,23 +39,24 @@ def _bounded_size(path: Path) -> tuple[int | None, str]:
     while pending:
         current = pending.pop()
         try:
-            entries = list(os.scandir(current))
+            entries = os.scandir(current)
         except OSError:
             return total, "UNKNOWN_UNREADABLE"
-        scanned += len(entries)
-        if scanned > MAX_SCAN_ENTRIES:
-            return total, "UNKNOWN_SCAN_LIMIT"
-        for entry in entries:
-            entry_path = Path(entry.path)
-            if entry.is_symlink():
-                return total, "UNKNOWN_SYMLINK"
-            try:
-                if entry.is_dir(follow_symlinks=False):
-                    pending.append(entry_path)
-                else:
-                    total += entry.stat(follow_symlinks=False).st_size
-            except OSError:
-                return total, "UNKNOWN_UNREADABLE"
+        with entries:
+            for entry in entries:
+                scanned += 1
+                if scanned > MAX_SCAN_ENTRIES:
+                    return total, "UNKNOWN_SCAN_LIMIT"
+                entry_path = Path(entry.path)
+                if entry.is_symlink():
+                    return total, "UNKNOWN_SYMLINK"
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        pending.append(entry_path)
+                    else:
+                        total += entry.stat(follow_symlinks=False).st_size
+                except OSError:
+                    return total, "UNKNOWN_UNREADABLE"
     return total, "COMPLETE"
 
 

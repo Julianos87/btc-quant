@@ -242,7 +242,9 @@ def execution_safety_health(
         health_by_engine = {engine: execution_health(store, engine, now=now) for engine in engines}
         open_critical = tuple(
             str(item["fingerprint"])
-            for item in OperationalStateReader(store.path).read_incidents(open_only=True)
+            for item in OperationalStateReader(
+                store.path, timeout_seconds=store.read_timeout_seconds
+            ).read_incidents(open_only=True)
             if item.get("severity") == "CRITICAL"
             and str(item.get("fingerprint", "")).startswith("execution:")
         )

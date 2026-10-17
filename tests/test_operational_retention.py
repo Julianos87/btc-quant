@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
+from btcquant.operations import retention
 from btcquant.operations.retention import measure_footprints, plan_retention
 
 
@@ -82,3 +84,45 @@ def test_footprints_are_bounded_and_non_mutating(tmp_path: Path) -> None:
     assert result["sqlite_wal_shm"]["bytes"] == 3
     assert result["application_logs"]["bytes"] == 3
     assert (state / "runner.log").stat().st_mtime_ns == before
+
+
+def test_size_scan_stops_at_limit_without_materializing_all_entries(
+    tmp_path: Path, monkeypatch
+) -> None:
+    yielded = 0
+
+    class Entry:
+        path = str(tmp_path / "item")
+
+        def is_symlink(self) -> bool:
+            return False
+
+        def is_dir(self, *, follow_symlinks: bool) -> bool:
+            assert follow_symlinks is False
+            return False
+
+        def stat(self, *, follow_symlinks: bool):
+            assert follow_symlinks is False
+            return SimpleNamespace(st_size=1)
+
+    class Scanner:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def __iter__(self):
+            nonlocal yielded
+            for _ in range(10_000):
+                yielded += 1
+                yield Entry()
+
+    monkeypatch.setattr(retention, "MAX_SCAN_ENTRIES", 3)
+    monkeypatch.setattr(retention.os, "scandir", lambda _path: Scanner())
+
+    size, status = retention._bounded_size(tmp_path)
+
+    assert status == "UNKNOWN_SCAN_LIMIT"
+    assert size == 3
+    assert yielded == 4
