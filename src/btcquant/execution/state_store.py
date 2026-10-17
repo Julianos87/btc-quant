@@ -5296,6 +5296,7 @@ class StateStore:
         *,
         limit: int | None = None,
         since_id: int | None = None,
+        event_type_prefix: str | None = None,
     ) -> list[dict[str, Any]]:
         """Journal, du plus ancien au plus récent.
 
@@ -5313,6 +5314,9 @@ class StateStore:
         if since_id is not None:
             conditions.append("id > ?")
             params.append(since_id)
+        if event_type_prefix is not None:
+            conditions.append("substr(event_type, 1, ?) = ?")
+            params.extend((len(event_type_prefix), event_type_prefix))
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         if limit is None:
             query = f"SELECT * FROM events{where} ORDER BY id"
