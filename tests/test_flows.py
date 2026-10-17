@@ -461,6 +461,28 @@ def test_analytics_funding_excludes_deposits(dash_state):
     assert a["records"]["best_day"] == pytest.approx(0.0, abs=1e-9)
 
 
+def test_dashboard_readiness_does_not_request_a_deep_integrity_scan(dash_state, monkeypatch):
+    store = StateStore(dash_state / "btcquant.db")
+    store.migrate_legacy_journals(dash_state)
+    _start_campaign_for_test(store)
+    original = dash.evaluate_readiness
+    calls = {}
+
+    def bounded_evaluation(store, *, persist=False, verify_integrity=True):
+        calls["verify_integrity"] = verify_integrity
+        return original(
+            store,
+            persist=persist,
+            verify_integrity=verify_integrity,
+        )
+
+    monkeypatch.setattr(dash, "evaluate_readiness", bounded_evaluation)
+    response = dash.app.test_client().get("/api/readiness")
+
+    assert response.status_code == 200
+    assert calls["verify_integrity"] is False
+
+
 def test_readiness_drawdown_unaffected(dash_state):
     store = StateStore(dash_state / "btcquant.db")
     store.migrate_legacy_journals(dash_state)

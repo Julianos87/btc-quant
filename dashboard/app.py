@@ -2464,7 +2464,10 @@ def readiness():
         return jsonify({"status": "SOURCE_UNAVAILABLE", "campaign_qualification": "UNKNOWN"}), 503
     try:
         store = StateStore(database, initialize=False, read_only=True)
-        payload = evaluate_readiness(store, persist=False)
+        # This endpoint is polled by the UI. Reuse the full integrity proof
+        # bound to the active PAPER campaign instead of rescanning the entire
+        # SQLite database on every refresh.
+        payload = evaluate_readiness(store, persist=False, verify_integrity=False)
     except Exception:
         app.logger.exception("Campaign readiness source unavailable")
         return jsonify({"status": "SOURCE_UNAVAILABLE", "campaign_qualification": "UNKNOWN"}), 503

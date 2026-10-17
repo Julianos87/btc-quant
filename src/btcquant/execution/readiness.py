@@ -736,6 +736,44 @@ def _inactive_campaign_report(
     return report
 
 
+def _bound_integrity_evidence(
+    store: StateStore,
+    binding: dict[str, Any],
+) -> tuple[bool, str]:
+    """Reuse the full integrity proof bound to this PAPER campaign.
+
+    Dashboard polls must not rerun a table-wide SQLite scan. The technical
+    qualification performed before campaign start already records that full
+    check and its timestamp; this helper reports that evidence as historical.
+    Finalization and explicit CLI qualification still run a fresh full check.
+    """
+
+    qualification_id = binding.get("technical_qualification_id")
+    if not isinstance(qualification_id, int) or isinstance(qualification_id, bool):
+        return False, "Aucune qualification technique PAPER liée à cette campagne."
+    record = store.paper_technical_qualification_record(qualification_id)
+    if record is None:
+        return False, "La preuve complète d’intégrité liée à cette campagne est absente."
+    payload = record.get("payload")
+    if not isinstance(payload, dict) or payload.get("status") != "PAPER_TECHNICAL_QUALIFIED":
+        return False, "La preuve technique PAPER liée à cette campagne n’est pas PASS."
+    if any(
+        payload.get(key) != binding.get(key)
+        for key in ("release_sha", "release_tree", "schema_version")
+    ):
+        return False, "La preuve complète ne correspond pas au binding PAPER."
+    migration = payload.get("migration")
+    if not isinstance(migration, dict) or migration.get("status") != "PASS":
+        return False, "La vérification complète de la base n’a pas obtenu PASS."
+    if migration.get("integrity") != "ok":
+        return False, "La vérification complète SQLite liée à la campagne n’a pas obtenu PASS."
+    verified_at = str(record.get("generated_at", "horodatage absent"))
+    return True, (
+        f"Contrôle complet PASS enregistré le {verified_at}; "
+        "il n’est pas relancé à chaque rafraîchissement dashboard."
+    )
+
+
 def _build_active_checks(
     store: StateStore,
     current: datetime,
@@ -744,6 +782,7 @@ def _build_active_checks(
     required_engines: tuple[str, ...],
     *,
     integrity_ok: bool,
+    integrity_note: str,
     elapsed_days: float,
     coverage: float,
     coverage_by_engine: dict[str, float],
@@ -776,6 +815,7 @@ def _build_active_checks(
             integrity_ok,
             "ok" if integrity_ok else "échec",
             "ok",
+            integrity_note,
         ),
         ReadinessCheck(
             "days",
@@ -890,6 +930,7 @@ def evaluate_readiness(
     *,
     now: datetime | None = None,
     persist: bool = False,
+    verify_integrity: bool = True,
 ) -> dict[str, Any]:
     current = now or datetime.now(UTC)
     if current.tzinfo is None:
@@ -898,7 +939,7 @@ def evaluate_readiness(
     if campaign is None:
         return _inactive_campaign_report(store, current, persist=persist)
 
-    policy, _binding = _decode_campaign_contract(campaign)
+    policy, binding = _decode_campaign_contract(campaign)
     started = _parse_datetime(campaign["started_at"])
     required_engines = tuple(policy.required_engines)
     history = HistoricalStateReader(store.path)
@@ -973,7 +1014,17 @@ def evaluate_readiness(
         bool((store.load_engine_state(engine) or {}).get("halted")) for engine in required_engines
     )
 
-    integrity_ok = OperationalStateReader(store.path).integrity_check()
+    if verify_integrity:
+        integrity_ok = OperationalStateReader(store.path).integrity_check()
+        integrity_note = "Contrôle complet SQLite exécuté pour ce rapport."
+    elif int(campaign["protocol_version"]) == PROTOCOL_VERSION and isinstance(binding, dict):
+        integrity_ok, integrity_note = _bound_integrity_evidence(store, binding)
+    else:
+        integrity_ok = False
+        integrity_note = (
+            "Contrôle complet non relancé; cette campagne ne porte pas de preuve "
+            "technique PAPER liée."
+        )
     checks = _build_active_checks(
         store,
         current,
@@ -981,6 +1032,7 @@ def evaluate_readiness(
         policy,
         required_engines,
         integrity_ok=integrity_ok,
+        integrity_note=integrity_note,
         elapsed_days=elapsed_days,
         coverage=coverage,
         coverage_by_engine=coverage_by_engine,
