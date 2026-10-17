@@ -233,6 +233,7 @@ def make_runner(
     capital: Decimal = Decimal("4000"),
     status_path: Path | None = None,
     market_evidence_quota_bytes: int = 5 * 1024 * 1024 * 1024,
+    market_evidence_min_free_bytes: int = 0,
 ) -> tuple[StateStore, CarryDatedRunner, list[datetime]]:
     store = StateStore(tmp_path / "carry_dated.db")
     clock = [now]
@@ -245,6 +246,7 @@ def make_runner(
         clock=lambda: clock[0],
         status_path=status_path or tmp_path / "carry_dated_status.json",
         market_evidence_quota_bytes=market_evidence_quota_bytes,
+        market_evidence_min_free_bytes=market_evidence_min_free_bytes,
     )
     return store, runner, clock
 
@@ -538,6 +540,25 @@ def test_market_evidence_quota_blocks_entry_and_leaves_observable_wait(tmp_path:
             ).fetchone()[0]
             == 0
         )
+
+
+def test_market_evidence_min_free_bytes_blocks_entry(tmp_path: Path) -> None:
+    market = make_market()
+    store, runner, _ = make_runner(
+        tmp_path,
+        market,
+        market_evidence_min_free_bytes=2**62,
+    )
+
+    snapshot = runner.run_once()
+
+    assert snapshot["status"] == "FLAT"
+    assert snapshot["reason_code"] == "MARKET_EVIDENCE_QUOTA_EXCEEDED"
+    assert state_decimal(snapshot, "spot_qty") == 0
+    assert state_decimal(snapshot, "future_qty") == 0
+    assert not any(
+        event["event_type"] == "dated_entry_intent" for event in store.read_events("carry_dated")
+    )
 
 
 def test_market_evidence_quota_on_open_position_blocks_writes_without_losing_fills(
@@ -861,6 +882,7 @@ def test_restart_ignores_pre_entry_settlement_and_uses_entry_reference(tmp_path:
         capital=Decimal("4000"),
         clock=lambda: clock[0],
         status_path=tmp_path / "restarted.json",
+        market_evidence_min_free_bytes=0,
     )
     entry_future_price = state_decimal(restarted.ledger.state, "future_reference_price")
     quantity = state_decimal(restarted.ledger.state, "future_qty")
@@ -1317,6 +1339,7 @@ def test_restart_resumes_partial_close_saga_without_duplicate_future_cover(tmp_p
         capital=Decimal("4000"),
         clock=lambda: clock[0],
         status_path=tmp_path / "restarted-close.json",
+        market_evidence_min_free_bytes=0,
     )
     restarted.run_once()
     future_cover_events = [
@@ -1399,6 +1422,7 @@ def test_partial_opening_leg_is_compensated_after_process_restart(tmp_path: Path
         capital=Decimal("4000"),
         clock=lambda: clock[0],
         status_path=tmp_path / "partial-restart.json",
+        market_evidence_min_free_bytes=0,
     )
     restarted.run_once()
 
@@ -1453,6 +1477,7 @@ def test_base_and_quote_spot_fee_sale_pnl_reconciles_cash_at_different_exit_pric
             capital=Decimal("4000"),
             clock=lambda: NOW,
             status_path=local / "status.json",
+            market_evidence_min_free_bytes=0,
         )
         runner.run_once()
         ledger = runner.ledger
