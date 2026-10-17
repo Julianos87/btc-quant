@@ -90,10 +90,26 @@ def test_database_reader_is_read_only_and_checks_all_safety_facts(tmp_path: Path
     before = database.stat().st_mtime_ns
     result = status._read_database(tmp_path)
     assert result["status"] == status.PASS
-    assert result["integrity"] == status.PASS
-    assert result["foreign_key_errors"] == 0
+    assert result["integrity"] == "NOT_RUN"
+    assert result["foreign_key_check"] == "NOT_RUN"
+    assert result["deep_integrity_check"] == "deferred_to_verified_backup_and_qualification"
     assert result["unresolved_orders"] == 0
     assert database.stat().st_mtime_ns == before
+
+
+def test_database_probe_reports_sqlite_error_details(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    state.mkdir()
+    database = state / "btcquant.db"
+    sqlite3.connect(database).close()
+
+    result = status._read_database(tmp_path)
+
+    assert result["status"] == status.UNKNOWN
+    assert result["error"]["type"] == "OperationalError"
+    assert "no such table" in result["error"]["message"]
+    assert result["error"]["sqlite_errorcode"] is not None
+    assert result["error"]["sqlite_errorname"]
 
 
 def test_database_reader_fails_closed_on_unresolved_orders(tmp_path: Path) -> None:

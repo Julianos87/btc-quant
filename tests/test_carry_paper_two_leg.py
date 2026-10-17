@@ -236,6 +236,48 @@ def test_two_leg_accounting_replays_without_double_application_and_sees_basis():
     assert balance.balance_sheet()["identity_residual"] == pytest.approx(0.0)
 
 
+def test_short_perp_funding_keeps_native_sign_across_positive_negative_and_zero():
+    balance = CarryAccountingState(initial_cash=10_000)
+    balance.apply_perp_fill(side="SELL", qty=0.1, price=10_000, fee=0, event_id="short")
+    cash_before = balance.cash_available
+
+    for event_id, hour, rate in (
+        ("positive", 12, 0.001),
+        ("negative", 13, -0.002),
+        ("zero", 14, 0.0),
+    ):
+        balance.apply_funding(
+            CarryFundingEvent(
+                event_id=f"funding:{event_id}",
+                venue="fixture",
+                instrument="BTC/USDC:USDC",
+                timestamp=f"2026-09-21T{hour:02d}:00:00Z",
+                native_rate=rate,
+                reference_price=10_000,
+                reference_source="fixture_oracle",
+            )
+        )
+
+    # A short perp earns a positive native payment and pays a negative one.
+    assert balance.funding_received == pytest.approx(1.0)
+    assert balance.funding_paid == pytest.approx(2.0)
+    assert balance.cash_available == pytest.approx(cash_before - 1.0)
+
+    equity_after_all_payments = balance.equity
+    balance.apply_funding(
+        CarryFundingEvent(
+            event_id="funding:negative",
+            venue="fixture",
+            instrument="BTC/USDC:USDC",
+            timestamp="2026-09-21T13:00:00Z",
+            native_rate=-0.002,
+            reference_price=10_000,
+            reference_source="fixture_oracle",
+        )
+    )
+    assert balance.equity == pytest.approx(equity_after_all_payments)
+
+
 def test_margin_is_not_hidden_by_economic_hedge():
     balance = CarryAccountingState(initial_cash=10_000)
     balance.reserve_margin(1_000)

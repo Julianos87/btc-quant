@@ -347,7 +347,8 @@ def test_repeated_refusals_keep_bounded_checkpoint_but_all_durable_events(tmp_pa
     events = runner.store.read_events("carry", limit=200)
     assert sum(row["event_type"] == "carry_entry_blocked" for row in events) == 150
     revived = _qualified_runner(tmp_path, _QualifiedVenue(market))
-    assert revived.two_leg_journal == runner.two_leg_journal
+    assert len(revived.two_leg_journal) <= 3
+    assert revived.two_leg_journal[-1]["number"] == 149
     assert revived.equity == runner.equity
 
 

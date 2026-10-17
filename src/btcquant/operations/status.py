@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sqlite3
 import subprocess
 import urllib.error
 import urllib.request
@@ -95,7 +96,9 @@ def _parse_key_values(text: str) -> dict[str, str]:
 
 
 def _http_json(url: str) -> dict[str, Any]:
-    with urllib.request.urlopen(url, timeout=5) as response:
+    # Keep the local watchdog's network budget separate from SQLite query
+    # budgets. This is not a claim that /readyz itself is fast.
+    with urllib.request.urlopen(url, timeout=15) as response:
         payload = json.loads(response.read().decode("utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("health payload is not an object")
@@ -216,7 +219,7 @@ def _read_release(root: Path, source_repository: Path | None) -> dict[str, Any]:
 def _read_qualification(root: Path, release: dict[str, Any]) -> dict[str, Any]:
     database = root / "state" / "btcquant.db"
     try:
-        store = StateStore(database, initialize=False, read_only=True)
+        store = StateStore(database, initialize=False, read_only=True, read_timeout_seconds=1.0)
         record = store.latest_paper_technical_qualification_record()
         if record is None:
             return {"status": UNKNOWN, "reason": "technical_qualification_missing"}
@@ -237,17 +240,25 @@ def _read_qualification(root: Path, release: dict[str, Any]) -> dict[str, Any]:
             "matches_active_release": matches,
         }
     except Exception as error:
-        return {"status": UNKNOWN, "reason": type(error).__name__}
+        return {
+            "status": UNKNOWN,
+            "reason": _error_reason(error),
+            "error": _error_details(error),
+        }
 
 
 def _read_maturity(root: Path, now: datetime) -> dict[str, Any]:
     database = root / "state" / "btcquant.db"
     try:
-        store = StateStore(database, initialize=False, read_only=True)
+        store = StateStore(database, initialize=False, read_only=True, read_timeout_seconds=1.0)
         campaign = store.active_qualification_campaign() or store.latest_passed_qualification()
         maturity = paper_maturity_status(store, root=root, now=now)
     except Exception as error:
-        return {"status": UNKNOWN, "reason": type(error).__name__}
+        return {
+            "status": UNKNOWN,
+            "reason": _error_reason(error),
+            "error": _error_details(error),
+        }
     status = maturity.get("status")
     binding = maturity.get("binding_status")
     if binding in {"FAIL", "MISMATCH"}:
@@ -316,21 +327,31 @@ def _read_database(root: Path) -> dict[str, Any]:
                 "path": str(database),
             }
     except OSError as error:
-        return {"status": UNKNOWN, "reason": type(error).__name__, "path": str(database)}
+        return {
+            "status": UNKNOWN,
+            "reason": _error_reason(error),
+            "error": _error_details(error),
+            "path": str(database),
+        }
     try:
-        with open_state_db_readonly(database) as connection:
+        with open_state_db_readonly(database, timeout_seconds=1.0) as connection:
             schema_row = connection.execute(
                 "SELECT value FROM metadata WHERE key='schema_version'"
             ).fetchone()
             schema = int(schema_row[0]) if schema_row else None
-            integrity_row = connection.execute("PRAGMA integrity_check").fetchone()
-            integrity = integrity_row is not None and integrity_row[0] == "ok"
-            foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
+            required_tables = {
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name IN ('metadata','engine_state','orders','incidents')"
+                )
+            }
             unresolved = int(
                 connection.execute(
-                    "SELECT COUNT(*) FROM orders WHERE local_state != 'TERMINAL' "
-                    "AND NOT (order_type='STOP' AND status='OPEN')"
-                ).fetchone()[0]
+                    "SELECT 1 FROM orders WHERE local_state != 'TERMINAL' "
+                    "AND NOT (order_type='STOP' AND status='OPEN') LIMIT 1"
+                ).fetchone()
+                is not None
             )
             reconciliation = 0
             for row in connection.execute("SELECT payload FROM engine_state"):
@@ -342,12 +363,13 @@ def _read_database(root: Path) -> dict[str, Any]:
                     reconciliation += 1
             critical = int(
                 connection.execute(
-                    "SELECT COUNT(*) FROM incidents WHERE status='OPEN' AND severity='CRITICAL'"
-                ).fetchone()[0]
+                    "SELECT 1 FROM incidents WHERE status='OPEN' AND severity='CRITICAL' LIMIT 1"
+                ).fetchone()
+                is not None
             )
         safety = (
-            integrity
-            and not foreign_keys
+            schema == 14
+            and required_tables == {"metadata", "engine_state", "orders", "incidents"}
             and unresolved == 0
             and reconciliation == 0
             and critical == 0
@@ -357,14 +379,37 @@ def _read_database(root: Path) -> dict[str, Any]:
             "path": str(database),
             "schema_version": schema,
             "expected_schema_version": 14,
-            "integrity": PASS if integrity else FAIL,
-            "foreign_key_errors": len(foreign_keys),
+            "database_probe": PASS,
+            "integrity": "NOT_RUN",
+            "foreign_key_check": "NOT_RUN",
             "unresolved_orders": unresolved,
             "reconciliation_required": reconciliation,
             "open_critical_incidents": critical,
+            "deep_integrity_check": "deferred_to_verified_backup_and_qualification",
         }
     except Exception as error:
-        return {"status": UNKNOWN, "path": str(database), "reason": type(error).__name__}
+        return {
+            "status": UNKNOWN,
+            "path": str(database),
+            "reason": _error_reason(error),
+            "error": _error_details(error),
+        }
+
+
+def _error_details(error: Exception) -> dict[str, Any]:
+    detail: dict[str, Any] = {
+        "type": type(error).__name__,
+        "message": str(error)[:240],
+    }
+    if isinstance(error, sqlite3.Error):
+        detail["sqlite_errorcode"] = getattr(error, "sqlite_errorcode", None)
+        detail["sqlite_errorname"] = getattr(error, "sqlite_errorname", None)
+    return detail
+
+
+def _error_reason(error: Exception) -> str:
+    message = str(error).strip()
+    return f"{type(error).__name__}: {message[:240]}" if message else type(error).__name__
 
 
 def _read_backup(root: Path, now: datetime) -> dict[str, Any]:

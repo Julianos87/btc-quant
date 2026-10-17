@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import sqlite3
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
@@ -17,7 +18,7 @@ from typing import Any
 from .historical_state_reader import HistoricalStateReader
 from .operational_state_reader import OperationalStateReader
 from .quality_metrics import percentile, slippages_bps
-from .state_store import StateStore
+from .state_store import SCHEMA_VERSION, StateStore
 
 PROTOCOL_VERSION = 3
 LEGACY_PROTOCOL_VERSIONS = frozenset({1, 2})
@@ -185,11 +186,21 @@ def evaluate_service_readiness(
         }
 
     try:
-        store = StateStore(database_path, initialize=False, read_only=True)
-        operational = OperationalStateReader(store.path)
-        checks["database"] = bool(operational.integrity_check())
+        store = StateStore(
+            database_path, initialize=False, read_only=True, read_timeout_seconds=1.0
+        )
+        operational = OperationalStateReader(store.path, timeout_seconds=1.0)
+        database_probe = operational.database_probe(expected_schema_version=SCHEMA_VERSION)
+        details["database_probe"] = database_probe
+        details["database_integrity"] = {
+            "status": "NOT_RUN",
+            "reason": "deep_check_is_reserved_for_backup_and_qualification",
+        }
+        checks["database"] = bool(
+            database_probe["schema_matches"] and database_probe["required_tables_present"]
+        )
         if not checks["database"]:
-            reasons.append("DATABASE_CORRUPT")
+            reasons.append("DATABASE_SCHEMA_MISMATCH")
         incidents = operational.read_incidents(open_only=True)
         applicable_incidents = [
             item for item in incidents if _incident_applies_to_service_profile(item, cfg)
@@ -232,8 +243,16 @@ def evaluate_service_readiness(
                 checks[f"{engine}_fresh"] = status == Freshness.FRESH.value
                 if status != Freshness.FRESH.value:
                     reasons.append(f"REQUIRED_{engine.upper()}_{status}")
-    except Exception:
+    except Exception as error:
         checks["database"] = False
+        error_details: dict[str, Any] = {
+            "type": type(error).__name__,
+            "message": str(error)[:240],
+        }
+        if isinstance(error, sqlite3.Error):
+            error_details["sqlite_errorcode"] = getattr(error, "sqlite_errorcode", None)
+            error_details["sqlite_errorname"] = getattr(error, "sqlite_errorname", None)
+        details["database_error"] = error_details
         reasons.append("DATABASE_UNAVAILABLE")
         return {
             "api_schema_version": 2,
@@ -513,7 +532,9 @@ def _paper_status_safety(store: StateStore) -> dict[str, int]:
         if item.get("local_state") != "TERMINAL"
         and not (item.get("order_type") == "STOP" and item.get("status") == "OPEN")
     )
-    incidents = OperationalStateReader(store.path).read_incidents(open_only=True)
+    incidents = OperationalStateReader(
+        store.path, timeout_seconds=store.read_timeout_seconds
+    ).read_incidents(open_only=True)
     critical = sum(item.get("severity") == "CRITICAL" for item in incidents)
     reconciliation = 0
     for engine in ("trend", "carry"):

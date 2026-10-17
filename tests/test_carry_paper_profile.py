@@ -50,6 +50,56 @@ def test_paper_profile_balances_credit_and_refuses_unprofitable_entry(tmp_path):
     assert runner.equity == 4000
 
 
+def test_carry_checkpoint_keeps_recent_explanation_without_trimming_event_history(tmp_path):
+    cfg = load_config(CONFIG)
+    market = _market()
+    database = tmp_path / "carry.db"
+
+    def make_runner():
+        return CarryRunner(
+            policy=carry_policy_from_config(cfg),
+            carry_execution=carry_execution_from_config(cfg),
+            state_file=database,
+            venue=_QualifiedVenue(market),
+            notifier=lambda _: True,
+        )
+
+    runner = make_runner()
+    for sequence in range(20):
+        runner._two_leg_persist("carry_observation", {"sequence": sequence})
+    runner._two_leg_persist(
+        "carry_entry_blocked",
+        {
+            "reason": "net_expected_non_positive",
+            "economics": {"funding_expected": 4.0},
+        },
+    )
+    runner._two_leg_persist("checkpoint", {"reason": "routine"})
+
+    payload = runner.store.load_engine_state("carry")
+    journal = payload["two_leg"]["journal"]
+    assert len(journal) == 2
+    assert any(item.get("economics", {}).get("funding_expected") == 4.0 for item in journal)
+    assert journal[-1]["event_type"] == "checkpoint"
+    assert len(runner.store.read_events("carry")) >= 22
+
+    restored = make_runner()
+    assert len(restored.two_leg_journal) == 2
+    assert restored.two_leg_journal[-1]["event_type"] == "checkpoint"
+    for sequence in range(150):
+        restored._two_leg_persist("carry_observation", {"sequence": sequence})
+
+    resumed = make_runner()
+    resumed_journal = resumed.store.load_engine_state("carry")["two_leg"]["journal"]
+    assert len(resumed_journal) <= 3
+    assert any(
+        item.get("reason") == "net_expected_non_positive"
+        and item.get("economics", {}).get("funding_expected") == 4.0
+        for item in resumed_journal
+    )
+    assert len(resumed.store.read_events("carry")) >= 172
+
+
 def test_simulated_financing_requires_explicit_provenance():
     config = carry_execution_from_config(load_config(CONFIG))
     with pytest.raises(ValueError, match="provenance"):

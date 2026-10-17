@@ -166,6 +166,8 @@ def test_service_readiness_defaults_to_required_trend_only(tmp_path: Path) -> No
     assert payload["ready"] is True
     assert "carry" in payload["optional_components"]
     assert "shadow" in payload["optional_components"]
+    assert payload["details"]["database_probe"]["integrity_check"] == "NOT_RUN"
+    assert payload["details"]["database_integrity"]["status"] == "NOT_RUN"
 
 
 def test_service_readiness_optional_and_required_stale_components(tmp_path: Path) -> None:

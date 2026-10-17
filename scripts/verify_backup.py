@@ -158,13 +158,66 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def write_archive_verification_record(archive: Path, destination: Path) -> Path:
+def _sha256_decrypted(archive: Path) -> str:
+    """Hash decrypted bytes as a stream without creating another archive copy."""
+
+    if not os.environ.get("BACKUP_ENCRYPTION_KEY"):
+        raise RuntimeError("BACKUP_ENCRYPTION_KEY est requise pour cette archive")
+    command = [
+        "openssl",
+        "enc",
+        "-d",
+        "-aes-256-cbc",
+        "-pbkdf2",
+        "-iter",
+        "200000",
+        "-in",
+        str(archive),
+        "-pass",
+        "env:BACKUP_ENCRYPTION_KEY",
+    ]
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if process.stdout is None:
+        raise RuntimeError("OpenSSL output stream unavailable")
+    digest = hashlib.sha256()
+    for chunk in iter(lambda: process.stdout.read(1024 * 1024), b""):
+        digest.update(chunk)
+    _, stderr = process.communicate()
+    if process.returncode != 0:
+        raise subprocess.CalledProcessError(process.returncode, command, stderr=stderr)
+    return digest.hexdigest()
+
+
+def _validate_backup_tar(plaintext: Path) -> None:
+    """Read every tar member and reject unsafe links and missing DB snapshots."""
+
+    safe_root = Path("/safe-root")
+    found_database = False
+    with tarfile.open(plaintext, "r|gz") as bundle:
+        for member in bundle:
+            target = (safe_root / member.name).resolve()
+            if not target.is_relative_to(safe_root):
+                raise ValueError(f"unsafe archive member: {member.name}")
+            if member.issym() or member.islnk():
+                raise ValueError(f"archive link is not allowed: {member.name}")
+            if member.name == "state/btcquant.db" and member.isfile():
+                found_database = True
+    if not found_database:
+        raise ValueError("state/btcquant.db is missing from the backup")
+
+
+def write_archive_verification_record(
+    archive: Path,
+    destination: Path,
+    *,
+    plaintext_archive: Path | None = None,
+) -> Path:
     """Verify the published encrypted container and atomically write its proof.
 
-    The backup pipeline invokes this only after all SQLite Online Backup calls
-    and the byte-for-byte encryption round trip have passed. This check then
-    decrypts the exact archive again and fully reads the tar stream before a
-    durable sidecar is published.
+    The backup pipeline invokes this after SQLite Online Backup calls pass. If
+    it supplies the staged plaintext archive, this check hashes decrypted bytes
+    in a pipe and scans that existing tar stream before publishing the sidecar.
+    Direct callers retain the isolated temporary-decrypt path.
     """
 
     if archive.is_symlink():
@@ -179,22 +232,20 @@ def write_archive_verification_record(archive: Path, destination: Path) -> Path:
     if destination.exists() or destination.is_symlink():
         raise FileExistsError("verification record destination already exists")
 
-    with tempfile.TemporaryDirectory(prefix="btcquant-archive-verify-") as temp_name:
-        plaintext = Path(temp_name) / "state.tar.gz"
-        _decrypt(archive, plaintext)
-        with tarfile.open(plaintext, "r:gz") as bundle:
-            members = bundle.getmembers()
-            found_database = False
-            for member in members:
-                target = (Path("/safe-root") / member.name).resolve()
-                if not target.is_relative_to(Path("/safe-root")):
-                    raise ValueError(f"unsafe archive member: {member.name}")
-                if member.issym() or member.islnk():
-                    raise ValueError(f"archive link is not allowed: {member.name}")
-                if member.name == "state/btcquant.db" and member.isfile():
-                    found_database = True
-            if not found_database:
-                raise ValueError("state/btcquant.db is missing from the backup")
+    if plaintext_archive is None:
+        with tempfile.TemporaryDirectory(prefix="btcquant-archive-verify-") as temp_name:
+            plaintext = Path(temp_name) / "state.tar.gz"
+            _decrypt(archive, plaintext)
+            _validate_backup_tar(plaintext)
+    else:
+        if plaintext_archive.is_symlink():
+            raise ValueError("plaintext archive must be a regular file")
+        plaintext = plaintext_archive.resolve(strict=True)
+        if not plaintext.is_file():
+            raise ValueError("plaintext archive must be a regular file")
+        if _sha256_decrypted(archive) != _sha256_file(plaintext):
+            raise RuntimeError("decrypted bytes do not match supplied plaintext archive")
+        _validate_backup_tar(plaintext)
 
     stat = archive.stat()
     if stat.st_size <= 0:
@@ -333,6 +384,11 @@ def main() -> None:
         help="Répertoire neuf où conserver la restauration de test",
     )
     parser.add_argument(
+        "--plaintext-archive",
+        type=Path,
+        help="Already-staged plaintext archive whose bytes are matched by streaming decryption",
+    )
+    parser.add_argument(
         "--write-archive-verification-record",
         type=Path,
         help="Write an atomic sidecar after verifying encrypted archive bytes and tar contents",
@@ -340,7 +396,9 @@ def main() -> None:
     args = parser.parse_args()
     if args.write_archive_verification_record is not None:
         record = write_archive_verification_record(
-            args.archive, args.write_archive_verification_record
+            args.archive,
+            args.write_archive_verification_record,
+            plaintext_archive=args.plaintext_archive,
         )
         print(json.dumps({"status": "PASS", "verification_record": str(record)}, sort_keys=True))
         return
