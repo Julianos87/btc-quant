@@ -794,6 +794,21 @@ def test_read_events_limit_returns_the_most_recent_in_order(tmp_path):
     assert [event["id"] for event in recent] == [event["id"] for event in everything[-3:]]
 
 
+def test_read_events_can_filter_checkpoints_before_applying_limit(tmp_path):
+    store = StateStore(tmp_path / "btcquant.db")
+    _seed_journal(store, checkpoints=10)
+
+    recent = store.read_events(
+        "trend",
+        limit=1,
+        exclude_event_types=("checkpoint", "engine_state_saved"),
+    )
+
+    assert len(recent) == 1
+    assert recent[0]["event_type"] != "checkpoint"
+    assert recent[0]["event_type"] != "engine_state_saved"
+
+
 def test_read_events_since_id_paginates(tmp_path):
     store = StateStore(tmp_path / "btcquant.db")
     _seed_journal(store, checkpoints=6)

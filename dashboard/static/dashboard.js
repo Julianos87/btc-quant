@@ -797,6 +797,7 @@ function renderCarryCard(carry) {
     ? carry.position_status
     : "UNKNOWN";
   const open = positionStatus === "OPEN";
+  const knownFlat = positionStatus === "FLAT" && carry.position_known === true;
   const accounting = carry.position_known !== true
     ? "N/A"
     : carry.accounting_uncertain === true
@@ -815,11 +816,11 @@ function renderCarryCard(carry) {
   $("carry-pos").innerHTML = positionBadge + '<span class="carry-synth">' + modelNote + '</span>';
 
   const qty = $("carry-perp-qty");
-  if (qty) qty.textContent = !open || carry.perp_qty == null ? "N/A" : fmtQty(carry.perp_qty);
+  if (qty) qty.textContent = open && carry.perp_qty != null ? fmtQty(carry.perp_qty) : knownFlat ? fmtQty(0) : "N/A";
   const spot = $("carry-spot-notional");
-  if (spot) spot.textContent = !open || carry.spot_notional_derived == null ? "N/A" : fmt$(carry.spot_notional_derived, 0);
+  if (spot) spot.textContent = open && carry.spot_notional_derived != null ? fmt$(carry.spot_notional_derived, 0) : knownFlat ? fmt$(0, 0) : "N/A";
   const perp = $("carry-perp-notional");
-  if (perp) perp.textContent = !open || carry.perp_notional_derived == null ? "N/A" : fmt$(carry.perp_notional_derived, 0);
+  if (perp) perp.textContent = open && carry.perp_notional_derived != null ? fmt$(carry.perp_notional_derived, 0) : knownFlat ? fmt$(0, 0) : "N/A";
   const grossNet = carry.gross_notional == null || carry.net_notional == null
     ? null
     : fmt$(carry.gross_notional, 0) + " / " + fmt$(carry.net_notional, 0);
@@ -1139,9 +1140,25 @@ function renderAccountingPanel(s) {
   const decisions = $("decision-explanation");
   if (decisions) {
     const decisionGrid = decisions.querySelector(".decision-explanation-grid");
+    const carryTwo = (s.carry && s.carry.two_leg) || {};
+    const carryVenue = carryTwo.venue_spec || {};
+    const carryQty = value => dashboardValue(value, v => fmtQty(v));
+    const carryMoney = value => dashboardValue(value);
+    const carrySignal = carryTwo.signal_rate_unit === "simple_fraction_per_365.25_day_year"
+      ? fmtPct(carryTwo.signal_rate_annualized, 2)
+      : "N/A (unité non qualifiée)";
+    const carryHorizon = carryTwo.funding_projection_horizon_days == null
+      ? "N/A"
+      : `${fmtNum(carryTwo.funding_projection_horizon_days, 1)} j de projection`;
+    const carryMarket = carryTwo.market_freshness_seconds == null
+      ? "fraîcheur N/A"
+      : `marché âgé de ${fmtNum(carryTwo.market_freshness_seconds, 1)} s`;
+    const carryDetail = carryTwo.last_decision_event
+      ? `<small>Jambes prévues : acheter ${esc(carryVenue.spot_base_name || "UBTC")} spot (${esc(carryVenue.spot_symbol || "BTC/USDC")}, ${carryQty(carryTwo.expected_spot_qty)}) et vendre à découvert ${esc(carryVenue.perp_symbol || "BTC/USDC:USDC")} (${carryQty(carryTwo.expected_perp_qty)}). Notionnels spot/perp : ${carryMoney(carryTwo.expected_spot_notional)} / ${carryMoney(carryTwo.expected_perp_notional)}.</small><small>Signal ${esc(carrySignal)} · ${esc(carryHorizon)} · funding projeté ${carryMoney(carryTwo.expected_funding)} · basis prévu ${carryMoney(carryTwo.expected_basis)} · coûts entrée/sortie ${carryMoney(carryTwo.expected_entry_cost)} / ${carryMoney(carryTwo.expected_exit_cost)}.</small><small>Net avant/après réserve ${carryMoney(carryTwo.expected_net_before_reserve)} / ${carryMoney(carryTwo.expected_net_after_reserve)} · réserve ${carryMoney(carryTwo.uncertainty_reserve)} (filtre d’admission, pas une dépense) · seuil annualisé ${carryTwo.required_funding_rate_annualized == null ? "N/A" : fmtPct(carryTwo.required_funding_rate_annualized, 2)} · ${esc(carryMarket)}.</small>`
+      : "";
     const entries = [["Trend", s.decisions && s.decisions.trend], ["Carry", s.decisions && s.decisions.carry]];
     decisionGrid.innerHTML = entries.map(([engine, decision]) => decision
-      ? `<div class="decision-explanation-item"><span>${engine} · ${esc(decision.event_type || "événement")}</span><strong>${esc(decision.reason || "motif non renseigné")}</strong><small>${fmtTimeUTC(decision.ts)} · ${esc(decision.correlation_id || "sans corrélation")}</small></div>`
+      ? `<div class="decision-explanation-item"><span>${engine} · ${esc(engine === "Carry" ? carryTwo.last_decision_event || decision.event_type || "événement" : decision.event_type || "événement")}</span><strong>${esc(engine === "Carry" ? carryTwo.last_decision_reason || decision.reason || "motif non renseigné" : decision.reason || "motif non renseigné")}</strong><small>${fmtTimeUTC(decision.ts)} · ${esc(decision.correlation_id || "sans corrélation")}</small>${engine === "Carry" ? carryDetail : ""}</div>`
       : `<div class="decision-explanation-item unknown"><span>${engine}</span><strong>Décision non persistée</strong><small>aucun motif durable exposé</small></div>`
     ).join("");
   }

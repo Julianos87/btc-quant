@@ -93,12 +93,19 @@ class ReportingRepository:
         """Lit une courbe par identifiant moteur, jamais par convention de nom."""
 
         if self.database.exists():
+            cache_key = f"sqlite-equity:{engine}"
+            source_key = self.database_key()
+            cached = self._cache.get(cache_key)
+            if cached is not None and cached[0] == source_key:
+                return cached[1]
             try:
                 rows = HistoricalStateReader(self.database).read_equity(engine)
                 if rows:
                     frame = pd.DataFrame(rows)
                     index = pd.to_datetime(frame["ts"], utc=True, format="ISO8601")
-                    return pd.Series(frame["equity"].values, index=index).sort_index()
+                    series = pd.Series(frame["equity"].values, index=index).sort_index()
+                    self._cache[cache_key] = (source_key, series)
+                    return series
             except Exception as exc:
                 raise ReportingReadError(f"equity SQLite illisible pour {engine}") from exc
         if legacy_path is None:

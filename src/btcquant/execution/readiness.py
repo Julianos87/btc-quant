@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+from bisect import bisect_left, bisect_right
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
@@ -1141,7 +1142,11 @@ def _equity_timestamps(
     earliest = start - timedelta(seconds=freshness_seconds)
     return sorted(
         timestamp
-        for row in history.read_equity(engine)
+        for row in history.read_equity(
+            engine,
+            start=earliest.isoformat(),
+            end=end.isoformat(),
+        )
         if earliest <= (timestamp := _parse_datetime(row["ts"])) <= end
     )
 
@@ -1157,7 +1162,13 @@ def _availability_from_timestamps(
         return 0.0
     intervals: list[tuple[datetime, datetime]] = []
     freshness = timedelta(seconds=freshness_seconds)
-    for timestamp in timestamps:
+    # A timestamp older than start-freshness cannot cover this interval, and
+    # one at/after end starts no interval inside it. Slice the sorted history
+    # so daily qualification checks do not rescan the full 90-day timeline for
+    # every calendar day.
+    first = bisect_right(timestamps, start - freshness)
+    last = bisect_left(timestamps, end)
+    for timestamp in timestamps[first:last]:
         left = max(start, timestamp)
         right = min(end, timestamp + freshness)
         if right > left:
@@ -1213,7 +1224,7 @@ def _max_portfolio_drawdown(
     samples: dict[str, list[tuple[datetime, float]]] = {}
     for engine in engines:
         values: list[tuple[datetime, float]] = []
-        for row in history.read_equity(engine):
+        for row in history.read_equity(engine, start=start.isoformat(), end=end.isoformat()):
             timestamp = _parse_datetime(row["ts"])
             if start <= timestamp <= end:
                 values.append((timestamp, float(row["equity"])))

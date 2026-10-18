@@ -48,9 +48,23 @@ fi
 # must never mutate the authoritative database as a side effect of backup.
 PYBIN="${APP_ROOT}/venv/bin/python"; [ -x "${PYBIN}" ] || PYBIN="python3"
 STAMP="$(date -u +%Y%m%d-%H%M)"
+REPO="${RUNTIME_ROOT}/backups-repo"
+ARCHIVE="${BACKUP_DIR}/state-${STAMP}.tar.gz.enc"
+ENCRYPTED_TMP="${BACKUP_DIR}/.state-${STAMP}.tar.gz.enc.tmp"
+VERIFICATION="${ARCHIVE}.verification.json"
 TMP_BASE="${TMPDIR:-/tmp}"
 TMP_DIR="$(mktemp -d "${TMP_BASE%/}/btcquant-backup.XXXXXX")"
+PLAINTEXT_SHA256_TMP="${TMP_DIR}/state-${STAMP}.tar.sha256"
+VERIFICATION_TMP="${BACKUP_DIR}/.state-${STAMP}.tar.gz.enc.verification.json.tmp"
+ENCRYPTED_TMP_CREATED=false
+VERIFICATION_TMP_CREATED=false
 cleanup() {
+  if ${ENCRYPTED_TMP_CREATED}; then
+    rm -f -- "${ENCRYPTED_TMP}"
+  fi
+  if ${VERIFICATION_TMP_CREATED}; then
+    rm -f -- "${VERIFICATION_TMP}"
+  fi
   case "${TMP_DIR}" in
     "${TMP_BASE%/}"/btcquant-backup.*) rm -rf -- "${TMP_DIR}" ;;
     *) echo "Refus de supprimer un chemin temporaire inattendu : ${TMP_DIR}" >&2 ;;
@@ -80,14 +94,16 @@ fi
 SOURCE_BYTES="$(du -sb -- "${STATE_DIR}" | awk '{ print $1 }')"
 TMP_FREE_BYTES="$(df -B1 --output=avail "${TMP_DIR}" | tail -n 1 | tr -d '[:space:]')"
 BACKUP_FREE_BYTES="$(df -B1 --output=avail "${BACKUP_DIR}" | tail -n 1 | tr -d '[:space:]')"
-# Peak before this check: online DB snapshots + plaintext tar + encrypted tar.
-# The decrypt round-trip is hashed as a stream below, so it no longer requires
-# a fourth full-size temporary archive. Keep 128 MiB for metadata and workspace
-# overhead, plus the independent post-backup free-space reserve.
-STAGING_REQUIRED_BYTES="$((SOURCE_BYTES * 3 + 134217728))"
-TARGET_REQUIRED_BYTES="$((SOURCE_BYTES + 134217728 + POST_BACKUP_FREE_BYTES))"
+# The temporary filesystem contains only the copied non-SQLite state and
+# SQLite Online Backup snapshots, bounded by source state size plus workspace
+# overhead. The encrypted archive is written directly to BACKUP_DIR. Its local
+# file plus a possible Git object are bounded by 2x source size plus overhead.
+# Add the independent reserve on the destination; if TMPDIR shares that device,
+# sum both budgets instead of counting the same free pool twice.
+STAGING_REQUIRED_BYTES="$((SOURCE_BYTES + 134217728))"
+TARGET_REQUIRED_BYTES="$((SOURCE_BYTES * 2 + 134217728 + POST_BACKUP_FREE_BYTES))"
 if [ "$(stat -c %d "${TMP_DIR}")" = "$(stat -c %d "${BACKUP_DIR}")" ]; then
-  COMBINED_REQUIRED_BYTES="$((STAGING_REQUIRED_BYTES + POST_BACKUP_FREE_BYTES))"
+  COMBINED_REQUIRED_BYTES="$((STAGING_REQUIRED_BYTES + SOURCE_BYTES * 2 + 134217728 + POST_BACKUP_FREE_BYTES))"
   if [ "${TMP_FREE_BYTES}" -lt "${COMBINED_REQUIRED_BYTES}" ]; then
     echo "Refusing backup: shared temporary/destination filesystem has ${TMP_FREE_BYTES} B, requires ${COMBINED_REQUIRED_BYTES} B including reserve." >&2
     exit 75
@@ -152,30 +168,28 @@ for optional_db in \
       "${STATE_DIR}/${optional_db}" "${TMP_DIR}/state/${optional_db}"
   fi
 done
-PLAIN_ARCHIVE="${TMP_DIR}/state-${STAMP}.tar.gz"
-tar -czf "${PLAIN_ARCHIVE}" -C "${TMP_DIR}" state
 if ${DATED_SNAPSHOT_LOCK_ACQUIRED}; then
   flock -u 9
   exec 9>&-
 fi
-ARCHIVE="${BACKUP_DIR}/state-${STAMP}.tar.gz.enc"
-ENCRYPTED_TMP="${TMP_DIR}/state-${STAMP}.tar.gz.enc"
-VERIFICATION="${ARCHIVE}.verification.json"
-VERIFICATION_TMP="${TMP_DIR}/state-${STAMP}.tar.gz.enc.verification.json"
-if [ -e "${ARCHIVE}" ]; then
+if [ -e "${ARCHIVE}" ] || [ -L "${ARCHIVE}" ] ||
+  [ -e "${VERIFICATION}" ] || [ -L "${VERIFICATION}" ]; then
   echo "Archive finale deja presente : ${ARCHIVE}" >&2
   exit 3
 fi
-openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt \
-  -in "${PLAIN_ARCHIVE}" -out "${ENCRYPTED_TMP}" \
-  -pass env:BACKUP_ENCRYPTION_KEY
-# Stream-decrypt and compare against the already-staged plaintext, then scan that
-# same tar stream and publish exact-byte verification evidence without another copy.
+"${PYBIN}" "${APP_ROOT}/scripts/stream_encrypt_archive.py" \
+  "${TMP_DIR}" "${ENCRYPTED_TMP}" "${PLAINTEXT_SHA256_TMP}"
+ENCRYPTED_TMP_CREATED=true
+# Decrypt and hash the exact stream while scanning tar paths and members. No
+# plaintext archive is staged on disk at any point.
 "${PYBIN}" "${APP_ROOT}/scripts/verify_backup.py" \
   "${ENCRYPTED_TMP}" \
-  --plaintext-archive "${PLAIN_ARCHIVE}" \
+  --expected-plaintext-sha256 "${PLAINTEXT_SHA256_TMP}" \
+  --archive-name "${ARCHIVE##*/}" \
+  --verification-name "${VERIFICATION##*/}" \
   --write-archive-verification-record "${VERIFICATION_TMP}" \
   >"${TMP_DIR}/verification-result.json"
+VERIFICATION_TMP_CREATED=true
 # Do not report a completed archive until its bytes and containing directory
 # and its exact-byte verification record have been durably flushed.
 fsync_file() {
@@ -187,7 +201,9 @@ fsync_directory() {
 fsync_file "${ENCRYPTED_TMP}"
 fsync_file "${VERIFICATION_TMP}"
 mv --no-clobber "${ENCRYPTED_TMP}" "${ARCHIVE}"
+ENCRYPTED_TMP_CREATED=false
 mv --no-clobber "${VERIFICATION_TMP}" "${VERIFICATION}"
+VERIFICATION_TMP_CREATED=false
 fsync_file "${ARCHIVE}"
 fsync_file "${VERIFICATION}"
 fsync_directory "${BACKUP_DIR}"
@@ -212,7 +228,6 @@ fi
 # ── copie hors-site : branche `backups` du dépôt GitHub (clé de déploiement,
 # ~btcquant/.ssh/backup_deploy). Best-effort : un échec réseau ne doit jamais
 # faire échouer la sauvegarde locale. ────────────────────────────────────────
-REPO="${RUNTIME_ROOT}/backups-repo"
 if [ -d "${REPO}/.git" ] && [[ "${ARCHIVE}" == *.enc ]]; then
   (
     cd "${REPO}"
@@ -246,9 +261,16 @@ if [ -d "${REPO}/.git" ] && [[ "${ARCHIVE}" == *.enc ]]; then
       echo "Refusing: off-host backup destination already exists" >&2
       exit 8
     fi
-    cp -- "${ARCHIVE}" .
-    cp -- "${VERIFICATION}" .
-    evidence_git_paths=()
+
+    if ! git diff --cached --quiet; then
+      echo "Refusing: off-host repository has pre-staged changes" >&2
+      exit 9
+    fi
+
+    # Retain the post-backup reserve while accounting for all new Git blobs.
+    # Evidence files are incremental and can be larger than the main state DB.
+    OFFHOST_BYTES="$(stat -c %s -- "${ARCHIVE}")"
+    OFFHOST_BYTES="$((OFFHOST_BYTES + $(stat -c %s -- "${VERIFICATION}") + 134217728))"
     if [ -d "${BACKUP_DIR}/carry-dated-evidence" ]; then
       while IFS= read -r -d '' evidence_file; do
         evidence_name="$(basename -- "${evidence_file}")"
@@ -256,15 +278,60 @@ if [ -d "${REPO}/.git" ] && [[ "${ARCHIVE}" == *.enc ]]; then
           echo "Refusing: unexpected encrypted evidence filename: ${evidence_name}" >&2
           exit 7
         fi
-        cp -- "${evidence_file}" carry-dated-evidence/
-        evidence_git_paths+=("carry-dated-evidence/${evidence_name}")
+        if [ -L "${evidence_file}" ] || [ ! -f "${evidence_file}" ]; then
+          echo "Refusing non-regular encrypted evidence source: ${evidence_file}" >&2
+          exit 7
+        fi
+        OFFHOST_BYTES="$((OFFHOST_BYTES + $(stat -c %s -- "${evidence_file}")))"
       done < <(find "${BACKUP_DIR}/carry-dated-evidence" -maxdepth 1 -type f -name '*.enc' -print0)
     fi
-    git add -A -- \
-      ':(glob)state-*.tar.gz.enc' \
-      ':(glob)state-*.tar.gz.enc.verification.json' \
-      "${evidence_git_paths[@]}"
-    git -c commit.gpgsign=false commit -q -m "backup ${STAMP}" || exit 0
+    OFFHOST_FREE_BYTES="$(df -B1 --output=avail "${REPO}" | tail -n 1 | tr -d '[:space:]')"
+    if [ "${OFFHOST_FREE_BYTES}" -lt "$((OFFHOST_BYTES + POST_BACKUP_FREE_BYTES))" ]; then
+      echo "Off-host push skipped: Git object budget would breach free-space reserve; local backup remains available." >&2
+      exit 0
+    fi
+
+    index_encrypted_file() {
+      local source_path="$1"
+      local repo_path="$2"
+      local repo_parent
+      local blob
+      repo_parent="$(dirname -- "${repo_path}")"
+      if [ -L "${source_path}" ] || [ ! -f "${source_path}" ]; then
+        echo "Refusing non-regular off-host source: ${source_path}" >&2
+        return 1
+      fi
+      if git ls-files --error-unmatch -- "${repo_path}" >/dev/null 2>&1 ||
+        git cat-file -e "HEAD:${repo_path}" 2>/dev/null; then
+        echo "Refusing: off-host destination is already tracked: ${repo_path}" >&2
+        return 1
+      fi
+      mkdir -p -- "${repo_parent}"
+      if [ -e "${repo_path}" ] || [ -L "${repo_path}" ]; then
+        echo "Refusing: off-host destination already exists: ${repo_path}" >&2
+        return 1
+      fi
+      if [ "$(stat -c %d -- "${source_path}")" = "$(stat -c %d -- "${repo_parent}")" ]; then
+        # Preserve the local checkout view without copying encrypted bytes.
+        ln -- "${source_path}" "${repo_path}"
+        git add -- "${repo_path}"
+      else
+        # Across filesystems, record the encrypted blob directly in Git's
+        # index instead of creating a second worktree archive copy.
+        blob="$(git hash-object -w --path="${repo_path}" -- "${source_path}")"
+        git update-index --add --cacheinfo "100644,${blob},${repo_path}"
+      fi
+    }
+
+    index_encrypted_file "${ARCHIVE}" "${ARCHIVE##*/}"
+    index_encrypted_file "${VERIFICATION}" "${VERIFICATION##*/}"
+    if [ -d "${BACKUP_DIR}/carry-dated-evidence" ]; then
+      while IFS= read -r -d '' evidence_file; do
+        evidence_name="$(basename -- "${evidence_file}")"
+        index_encrypted_file "${evidence_file}" "carry-dated-evidence/${evidence_name}"
+      done < <(find "${BACKUP_DIR}/carry-dated-evidence" -maxdepth 1 -type f -name '*.enc' -print0)
+    fi
+    git -c commit.gpgsign=false -c gc.auto=0 commit -q -m "backup ${STAMP}" || exit 0
     git push -q "${OFFHOST_REMOTE}" "HEAD:refs/heads/${OFFHOST_BRANCH}"
     echo "Off-host backup pushed."
   ) || echo "Off-host push failed; local encrypted backup remains available" >&2

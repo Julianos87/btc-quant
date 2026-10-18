@@ -38,22 +38,31 @@ def test_notification_error_never_logs_telegram_token(monkeypatch, caplog):
 
 def test_backup_offsite_requires_encryption_and_checks_roundtrip():
     script = (ROOT / "scripts" / "backup_state.sh").read_text(encoding="utf-8")
+    stream_helper = (ROOT / "scripts" / "stream_encrypt_archive.py").read_text(
+        encoding="utf-8"
+    )
 
     assert '[[ "${ARCHIVE}" == *.enc ]]' in script
-    assert "openssl enc -aes-256-cbc -pbkdf2" in script
+    assert '"openssl",\n        "enc",\n        "-aes-256-cbc"' in stream_helper
     verifier = (ROOT / "scripts" / "verify_backup.py").read_text(encoding="utf-8")
     assert '"-d"' in verifier and "subprocess.PIPE" in verifier
     assert 'cmp --silent "${PLAIN_ARCHIVE}" "${ROUNDTRIP_ARCHIVE}"' not in script
     assert "ROUNDTRIP_ARCHIVE" not in script
-    assert 'STAGING_REQUIRED_BYTES="$((SOURCE_BYTES * 3 + 134217728))"' in script
+    assert 'STAGING_REQUIRED_BYTES="$((SOURCE_BYTES + 134217728))"' in script
+    assert 'TARGET_REQUIRED_BYTES="$((SOURCE_BYTES * 2 + 134217728 + POST_BACKUP_FREE_BYTES))"' in script
+    assert 'SOURCE_BYTES * 2 + 134217728 + POST_BACKUP_FREE_BYTES' in script
     assert "-mtime +30 -delete" not in script
     assert 'find "${BACKUP_DIR}" -maxdepth 1 -type f' not in script
-    assert '--plaintext-archive "${PLAIN_ARCHIVE}"' in script
+    assert "stream_encrypt_archive.py" in script
+    assert '--expected-plaintext-sha256 "${PLAINTEXT_SHA256_TMP}"' in script
+    assert "PLAIN_ARCHIVE" not in script
+    assert 'cp -- "${ARCHIVE}" .' not in script
+    assert 'cp -- "${VERIFICATION}" .' not in script
+    assert 'ENCRYPTED_TMP="${BACKUP_DIR}/.state-${STAMP}.tar.gz.enc.tmp"' in script
     assert "--write-archive-verification-record" in script
     assert '"${VERIFICATION}"' in script
-    assert "state-*.tar.gz.enc.verification.json" in script
-    assert "git add -A --" in script
-    assert ":(glob)state-*.tar.gz.enc.verification.json" in script
+    assert 'git hash-object -w --path="${repo_path}" -- "${source_path}"' in script
+    assert 'git update-index --add --cacheinfo "100644,${blob},${repo_path}"' in script
     assert "observations-[0-9]{8}-[0-9]+-[0-9]+" in script
     assert (
         "git add -A -- state-*.tar.gz.enc state-*.tar.gz.enc.verification.json carry-dated-evidence"

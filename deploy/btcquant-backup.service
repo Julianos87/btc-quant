@@ -7,6 +7,7 @@ User=btcquant
 WorkingDirectory=/opt/btcquant/current
 EnvironmentFile=-/opt/btcquant/.env
 Environment=BTCQUANT_ROOT=/opt/btcquant
+Environment=TMPDIR=/dev/shm
 ExecStart=/usr/bin/env bash /opt/btcquant/current/scripts/backup_state.sh
 NoNewPrivileges=true
 PrivateTmp=true
@@ -14,6 +15,7 @@ ProtectSystem=strict
 # La clé SSH hors-site réside dans ~btcquant/.ssh : lecture autorisée, écriture refusée.
 ProtectHome=read-only
 ReadWritePaths=/opt/btcquant/state /opt/btcquant/backups -/opt/btcquant/backups-repo
+ReadWritePaths=/dev/shm
 CapabilityBoundingSet=
 RestrictSUIDSGID=true
 LockPersonality=true

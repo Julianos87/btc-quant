@@ -758,16 +758,18 @@ def _latest_durable_decision(store: StateStore, engine: str) -> dict | None:
     """Expose the latest persisted motive; the browser never recomputes it."""
 
     try:
-        events = store.read_events(engine, limit=160)
+        events = store.read_events(
+            engine,
+            limit=1,
+            exclude_event_types=("checkpoint", "engine_state_saved"),
+        )
+        if not events:
+            events = store.read_events(engine, limit=1)
     except (OSError, sqlite3.Error):
         return None
     if not events:
         return None
-    meaningful = [
-        row for row in events if row.get("event_type") not in {"checkpoint", "engine_state_saved"}
-    ]
-    row = (meaningful or events)[-1]
-    return _durable_event_projection(row)
+    return _durable_event_projection(events[-1])
 
 
 def _order_projection(store: StateStore, engine: str) -> dict[str, dict]:
@@ -1021,6 +1023,8 @@ def _carry_two_leg_projection(carry_state: dict, carry_two_leg: dict) -> dict:
         "expected_perp_notional": _dashboard_number(
             economics.get("notional", plan.get("perp_notional"))
         ),
+        "expected_spot_qty": _dashboard_number(plan.get("spot_qty")),
+        "expected_perp_qty": _dashboard_number(plan.get("perp_qty")),
         "capital_available_at_decision": _dashboard_number(
             plan.get("capital_available", balance.get("cash_available"))
         ),
@@ -2289,15 +2293,30 @@ def execution_shadow():
         ), 503
 
 
+def _pack_equity_series(series: pd.Series, max_points: int = 1500) -> list[list[float | int]]:
+    """Serialize an equity curve with a strict point bound and endpoints kept."""
+
+    if max_points <= 0 or series.empty:
+        return []
+    if len(series) > max_points:
+        if max_points == 1:
+            series = series.iloc[[-1]]
+        else:
+            last_index = len(series) - 1
+            sample_indexes = [
+                (index * last_index) // (max_points - 1) for index in range(max_points)
+            ]
+            series = series.iloc[sample_indexes]
+    return [
+        [int(timestamp.timestamp() * 1000), round(float(value), 2)]
+        for timestamp, value in series.items()
+    ]
+
+
 @app.route("/api/equity")
 def equity():
     trend = _read_equity("trend", "equity_trend.csv")
     carry = _read_equity("carry", "equity_carry.csv")
-
-    def pack(s: pd.Series, max_points: int = 1500):
-        if len(s) > max_points:
-            s = s.resample("5min").last().dropna()
-        return [[int(ts.timestamp() * 1000), round(float(v), 2)] for ts, v in s.items()]
 
     combined = _combined_equity()
     if not (STATE / "btcquant.db").exists() and (not len(trend) or not len(carry)):
@@ -2308,9 +2327,9 @@ def equity():
         {
             "status": "OK" if len(trend) and len(carry) else "EMPTY_BUT_VALID",
             "source": "reporting",
-            "trend": pack(trend),
-            "carry": pack(carry),
-            "combined": pack(combined),
+            "trend": _pack_equity_series(trend),
+            "carry": _pack_equity_series(carry),
+            "combined": _pack_equity_series(combined),
             "buyhold": buyhold,
         }
     )

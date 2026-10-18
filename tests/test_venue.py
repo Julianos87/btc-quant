@@ -201,6 +201,26 @@ def test_funding_history_paginates_and_deduplicates_long_backlog():
     assert len(exchange.calls) == 4  # trois pages de données, puis la page vide
 
 
+def test_funding_history_rejects_conflicting_duplicate_payment():
+    timestamp = int(pd.Timestamp("2030-01-01T00:00:00Z").timestamp() * 1000)
+
+    class ConflictingExchange(_StubExchange):
+        def fetch_funding_rate_history(self, symbol, since=None, limit=None):
+            del symbol, limit
+            return [
+                {"fundingRate": 0.0001, "timestamp": timestamp},
+                {"fundingRate": -0.0002, "timestamp": timestamp},
+            ] if since <= timestamp else []
+
+    venue = Venue("hyperliquid", "BTC/USDC:USDC")
+    exchange = ConflictingExchange()
+    venue.exchange = exchange
+    venue.funding_exchange = exchange
+
+    with pytest.raises(ValueError, match="conflicting rates"):
+        venue.funding_history_since(pd.Timestamp(timestamp, unit="ms", tz="UTC"))
+
+
 def test_carry_annualizes_hourly_funding(tmp_path):
     """Funding horaire constant de 1.25e-5 → ~10,9 %/an : le carry doit entrer
     (seuil 3 %) et payer le coût de bascule, avec l'annualisation ×24×365
