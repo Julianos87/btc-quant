@@ -290,9 +290,7 @@ def write_archive_verification_record(
     if _BACKUP_NAME.fullmatch(archive_name) is None:
         raise ValueError("backup archive name is invalid")
     verification_name = (
-        f"{archive_name}{_VERIFICATION_SUFFIX}"
-        if verification_name is None
-        else verification_name
+        f"{archive_name}{_VERIFICATION_SUFFIX}" if verification_name is None else verification_name
     )
     if verification_name != f"{archive_name}{_VERIFICATION_SUFFIX}":
         raise ValueError("verification filename must bind the archive name")

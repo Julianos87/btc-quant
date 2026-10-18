@@ -1215,7 +1215,6 @@ def test_operational_journal_exposes_correlated_events_without_checkpoint_state(
     assert order["remaining_qty"] == pytest.approx(0.15)
 
 
-
 class DashboardOperationsTests(unittest.TestCase):
     def test_equity_packing_obeys_hard_point_cap_and_keeps_endpoints(self) -> None:
         index = pd.date_range("2026-01-01T00:00:00Z", periods=20_000, freq="min")

@@ -38,9 +38,7 @@ def test_notification_error_never_logs_telegram_token(monkeypatch, caplog):
 
 def test_backup_offsite_requires_encryption_and_checks_roundtrip():
     script = (ROOT / "scripts" / "backup_state.sh").read_text(encoding="utf-8")
-    stream_helper = (ROOT / "scripts" / "stream_encrypt_archive.py").read_text(
-        encoding="utf-8"
-    )
+    stream_helper = (ROOT / "scripts" / "stream_encrypt_archive.py").read_text(encoding="utf-8")
 
     assert '[[ "${ARCHIVE}" == *.enc ]]' in script
     assert '"openssl",\n        "enc",\n        "-aes-256-cbc"' in stream_helper
@@ -49,8 +47,11 @@ def test_backup_offsite_requires_encryption_and_checks_roundtrip():
     assert 'cmp --silent "${PLAIN_ARCHIVE}" "${ROUNDTRIP_ARCHIVE}"' not in script
     assert "ROUNDTRIP_ARCHIVE" not in script
     assert 'STAGING_REQUIRED_BYTES="$((SOURCE_BYTES + 134217728))"' in script
-    assert 'TARGET_REQUIRED_BYTES="$((SOURCE_BYTES * 2 + 134217728 + POST_BACKUP_FREE_BYTES))"' in script
-    assert 'SOURCE_BYTES * 2 + 134217728 + POST_BACKUP_FREE_BYTES' in script
+    assert (
+        'TARGET_REQUIRED_BYTES="$((SOURCE_BYTES * 2 + 134217728 + POST_BACKUP_FREE_BYTES))"'
+        in script
+    )
+    assert "SOURCE_BYTES * 2 + 134217728 + POST_BACKUP_FREE_BYTES" in script
     assert "-mtime +30 -delete" not in script
     assert 'find "${BACKUP_DIR}" -maxdepth 1 -type f' not in script
     assert "stream_encrypt_archive.py" in script
@@ -209,7 +210,12 @@ def test_backup_offhost_allowlist_rejects_nested_verification_sidecar(tmp_path: 
     runtime = tmp_path / "runtime"
     scripts = app / "scripts"
     scripts.mkdir(parents=True)
-    for name in ("backup_state.sh", "backup_database.py", "verify_backup.py", "stream_encrypt_archive.py"):
+    for name in (
+        "backup_state.sh",
+        "backup_database.py",
+        "verify_backup.py",
+        "stream_encrypt_archive.py",
+    ):
         shutil.copy2(ROOT / "scripts" / name, scripts / name)
     state = runtime / "state"
     state.mkdir(parents=True)
