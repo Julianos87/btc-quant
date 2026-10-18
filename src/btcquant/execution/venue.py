@@ -275,13 +275,7 @@ class Venue:
             for row in rows:
                 timestamp_ms = int(row["timestamp"])
                 if timestamp_ms >= since_ms:
-                    rate = float(row["fundingRate"])
-                    previous = payments.get(timestamp_ms)
-                    if previous is not None and previous != rate:
-                        raise ValueError(
-                            "funding history contains conflicting rates for one payment"
-                        )
-                    payments[timestamp_ms] = rate
+                    payments[timestamp_ms] = float(row["fundingRate"])
             next_cursor_ms = latest_ms + 1
             if next_cursor_ms <= cursor_ms:
                 break
