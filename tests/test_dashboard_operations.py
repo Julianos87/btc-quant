@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 import sys
+import tempfile
+import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import dashboard.app as dashboard_app
 
+from btcquant.execution.historical_state_reader import HistoricalStateReader
 from btcquant.execution.state_store import StateStore
 from btcquant.execution.shadow import BookTop, ShadowCollector, ShadowStore
+from btcquant.reporting.repository import ReportingRepository
+from dashboard.app import _carry_two_leg_projection, _pack_equity_series
 
 
 _MISSING = object()
@@ -1208,17 +1214,6 @@ def test_operational_journal_exposes_correlated_events_without_checkpoint_state(
     assert order["filled_qty"] == pytest.approx(0.1)
     assert order["remaining_qty"] == pytest.approx(0.15)
 
-from datetime import UTC, datetime, timedelta
-import tempfile
-import unittest
-from pathlib import Path
-
-import pandas as pd
-
-from btcquant.execution.historical_state_reader import HistoricalStateReader
-from btcquant.execution.state_store import StateStore
-from btcquant.reporting.repository import ReportingRepository
-from dashboard.app import _carry_two_leg_projection, _pack_equity_series
 
 
 class DashboardOperationsTests(unittest.TestCase):
