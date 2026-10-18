@@ -7,7 +7,6 @@ import hashlib
 import os
 from pathlib import Path
 import subprocess
-import sys
 
 
 def stream_encrypt_archive(source_dir: Path, encrypted_path: Path, digest_path: Path) -> str:

@@ -251,7 +251,7 @@ def _validate_decrypted_stream(archive: Path, expected_sha256: str) -> None:
         _validate_backup_tar_stream(reader)
         # Tar readers stop at the end-of-archive markers; drain any remaining
         # gzip bytes so the digest covers the exact full decrypted stream.
-        for chunk in iter(lambda: reader.read(1024 * 1024), b""):
+        for _chunk in iter(lambda: reader.read(1024 * 1024), b""):
             pass
     except Exception:
         process.kill()
