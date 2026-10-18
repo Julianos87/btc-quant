@@ -35,15 +35,29 @@ def test_streamed_encrypted_archive_verifies_and_restores_without_plain_archive(
 
     source_digest = stream_encrypt_archive.stream_encrypt_archive(work, encrypted, digest_path)
     assert digest_path.read_text(encoding="ascii").strip() == source_digest
-    assert source_digest == hashlib.sha256(
-        subprocess.run(
-            ["openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-iter", "200000",
-             "-in", str(encrypted), "-pass", "env:BACKUP_ENCRYPTION_KEY"],
-            env=os.environ.copy(),
-            check=True,
-            capture_output=True,
-        ).stdout
-    ).hexdigest()
+    assert (
+        source_digest
+        == hashlib.sha256(
+            subprocess.run(
+                [
+                    "openssl",
+                    "enc",
+                    "-d",
+                    "-aes-256-cbc",
+                    "-pbkdf2",
+                    "-iter",
+                    "200000",
+                    "-in",
+                    str(encrypted),
+                    "-pass",
+                    "env:BACKUP_ENCRYPTION_KEY",
+                ],
+                env=os.environ.copy(),
+                check=True,
+                capture_output=True,
+            ).stdout
+        ).hexdigest()
+    )
     assert not list(tmp_path.rglob("*.tar.gz"))
 
     proof_path = encrypted.with_name(f"{encrypted.name}.verification.json")
@@ -137,9 +151,7 @@ def test_backup_pipeline_keeps_reserve_and_pushes_verified_encrypted_bytes(
         ["git", "-C", str(repo), "config", "user.email", "fixture@example.invalid"],
         check=True,
     )
-    subprocess.run(
-        ["git", "-C", str(repo), "remote", "add", "origin", str(remote)], check=True
-    )
+    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", str(remote)], check=True)
     env = os.environ.copy()
     env.update(
         {
