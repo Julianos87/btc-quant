@@ -188,12 +188,11 @@ def _sha256_decrypted(archive: Path) -> str:
     return digest.hexdigest()
 
 
-def _validate_backup_tar(plaintext: Path) -> None:
+def _validate_backup_tar_stream(stream) -> None:
     """Read every tar member and reject unsafe links and missing DB snapshots."""
-
     safe_root = Path("/safe-root")
     found_database = False
-    with tarfile.open(plaintext, "r|gz") as bundle:
+    with tarfile.open(fileobj=stream, mode="r|gz") as bundle:
         for member in bundle:
             target = (safe_root / member.name).resolve()
             if not target.is_relative_to(safe_root):
@@ -206,11 +205,73 @@ def _validate_backup_tar(plaintext: Path) -> None:
         raise ValueError("state/btcquant.db is missing from the backup")
 
 
+def _validate_backup_tar(plaintext: Path) -> None:
+    with plaintext.open("rb") as stream:
+        _validate_backup_tar_stream(stream)
+
+
+class _DigestingReader:
+    """Hash exactly the bytes consumed from a streaming decryption pipe."""
+
+    def __init__(self, stream) -> None:
+        self.stream = stream
+        self.digest = hashlib.sha256()
+
+    def read(self, size: int = -1) -> bytes:
+        data = self.stream.read(size)
+        self.digest.update(data)
+        return data
+
+
+def _validate_decrypted_stream(archive: Path, expected_sha256: str) -> None:
+    """Compare exact decrypted bytes and validate tar safety without a copy."""
+
+    if not os.environ.get("BACKUP_ENCRYPTION_KEY"):
+        raise RuntimeError("BACKUP_ENCRYPTION_KEY est requise pour cette archive")
+    if re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
+        raise ValueError("expected plaintext SHA-256 is invalid")
+    command = [
+        "openssl",
+        "enc",
+        "-d",
+        "-aes-256-cbc",
+        "-pbkdf2",
+        "-iter",
+        "200000",
+        "-in",
+        str(archive),
+        "-pass",
+        "env:BACKUP_ENCRYPTION_KEY",
+    ]
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if process.stdout is None:
+        raise RuntimeError("OpenSSL output stream unavailable")
+    reader = _DigestingReader(process.stdout)
+    try:
+        _validate_backup_tar_stream(reader)
+        # Tar readers stop at the end-of-archive markers; drain any remaining
+        # gzip bytes so the digest covers the exact full decrypted stream.
+        for chunk in iter(lambda: reader.read(1024 * 1024), b""):
+            pass
+    except Exception:
+        process.kill()
+        _stdout, _stderr = process.communicate()
+        raise
+    _stdout, stderr = process.communicate()
+    if process.returncode != 0:
+        raise subprocess.CalledProcessError(process.returncode, command, stderr=stderr)
+    if reader.digest.hexdigest() != expected_sha256:
+        raise RuntimeError("decrypted bytes do not match the streamed archive input")
+
+
 def write_archive_verification_record(
     archive: Path,
     destination: Path,
     *,
     plaintext_archive: Path | None = None,
+    expected_plaintext_sha256: str | None = None,
+    archive_name: str | None = None,
+    verification_name: str | None = None,
 ) -> Path:
     """Verify the published encrypted container and atomically write its proof.
 
@@ -225,14 +286,29 @@ def write_archive_verification_record(
     archive = archive.resolve(strict=True)
     if not archive.is_file():
         raise ValueError("backup archive must be a regular file")
-    if _BACKUP_NAME.fullmatch(archive.name) is None:
+    archive_name = archive.name if archive_name is None else archive_name
+    if _BACKUP_NAME.fullmatch(archive_name) is None:
         raise ValueError("backup archive name is invalid")
-    if destination.name != f"{archive.name}{_VERIFICATION_SUFFIX}":
+    verification_name = (
+        f"{archive_name}{_VERIFICATION_SUFFIX}"
+        if verification_name is None
+        else verification_name
+    )
+    if verification_name != f"{archive_name}{_VERIFICATION_SUFFIX}":
+        raise ValueError("verification filename must bind the archive name")
+    if destination.name not in {
+        verification_name,
+        f".{verification_name}.tmp",
+    }:
         raise ValueError("verification record name must bind the archive name")
     if destination.exists() or destination.is_symlink():
         raise FileExistsError("verification record destination already exists")
 
-    if plaintext_archive is None:
+    if plaintext_archive is not None and expected_plaintext_sha256 is not None:
+        raise ValueError("provide either a staged plaintext archive or its streamed digest")
+    if expected_plaintext_sha256 is not None:
+        _validate_decrypted_stream(archive, expected_plaintext_sha256)
+    elif plaintext_archive is None:
         with tempfile.TemporaryDirectory(prefix="btcquant-archive-verify-") as temp_name:
             plaintext = Path(temp_name) / "state.tar.gz"
             _decrypt(archive, plaintext)
@@ -251,7 +327,7 @@ def write_archive_verification_record(
     if stat.st_size <= 0:
         raise ValueError("backup archive is empty")
     payload = {
-        "archive_name": archive.name,
+        "archive_name": archive_name,
         "archive_sha256": _sha256_file(archive),
         "archive_size_bytes": stat.st_size,
         "format_version": 1,
@@ -389,16 +465,38 @@ def main() -> None:
         help="Already-staged plaintext archive whose bytes are matched by streaming decryption",
     )
     parser.add_argument(
+        "--expected-plaintext-sha256",
+        type=Path,
+        help="Digest of the plaintext tar stream; validates by streaming decryption without a copy",
+    )
+    parser.add_argument(
+        "--archive-name",
+        help="Final archive basename to bind when verifying an uncommitted temporary file",
+    )
+    parser.add_argument(
+        "--verification-name",
+        help="Final verification basename when writing to a temporary path",
+    )
+    parser.add_argument(
         "--write-archive-verification-record",
         type=Path,
         help="Write an atomic sidecar after verifying encrypted archive bytes and tar contents",
     )
     args = parser.parse_args()
     if args.write_archive_verification_record is not None:
+        expected_digest = None
+        if args.expected_plaintext_sha256 is not None:
+            digest_path = args.expected_plaintext_sha256
+            if digest_path.is_symlink() or not digest_path.is_file():
+                raise ValueError("plaintext digest path must be a regular file")
+            expected_digest = digest_path.read_text(encoding="ascii").strip()
         record = write_archive_verification_record(
             args.archive,
             args.write_archive_verification_record,
             plaintext_archive=args.plaintext_archive,
+            expected_plaintext_sha256=expected_digest,
+            archive_name=args.archive_name,
+            verification_name=args.verification_name,
         )
         print(json.dumps({"status": "PASS", "verification_record": str(record)}, sort_keys=True))
         return

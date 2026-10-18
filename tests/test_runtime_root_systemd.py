@@ -120,6 +120,30 @@ def test_class_b_wrappers_delegate_runtime_root_to_rebalance_root() -> None:
         assert "User=root" in text, name
 
 
+def test_ops_status_can_create_wal_shm_without_writing_the_database() -> None:
+    text = _service_text("btcquant-ops-status.service")
+    assert "ProtectSystem=strict" in text
+    assert "ReadWritePaths=/opt/btcquant/state" in text
+    assert "ReadOnlyPaths=/opt/btcquant/state/btcquant.db" in text
+    assert "ReadOnlyPaths=-/opt/btcquant/state/btcquant.db-wal" in text
+    assert "ReadOnlyPaths=-/opt/btcquant/state/btcquant.db-journal" in text
+    reader = (ROOT / "src" / "btcquant" / "execution" / "readonly_state_db.py").read_text(
+        encoding="utf-8"
+    )
+    assert "?mode=ro" in reader
+    assert "PRAGMA query_only = ON" in reader
+
+
+def test_backup_uses_tmpfs_for_snapshot_staging_and_preserves_disk_reserve() -> None:
+    text = _service_text("btcquant-backup.service")
+    assert "ProtectSystem=strict" in text
+    assert "Environment=TMPDIR=/dev/shm" in text
+    assert "ReadWritePaths=/dev/shm" in text
+    script = (ROOT / "scripts" / "backup_state.sh").read_text(encoding="utf-8")
+    assert 'POST_BACKUP_FREE_BYTES="${BTCQUANT_BACKUP_POST_FREE_BYTES:-2684354560}"' in script
+    assert 'STAGING_REQUIRED_BYTES="$((SOURCE_BYTES + 134217728))"' in script
+
+
 def test_backup_unit_keeps_protecthome_read_only() -> None:
     text = _service_text("btcquant-backup.service")
     assert "ProtectHome=read-only" in text

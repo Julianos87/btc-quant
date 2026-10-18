@@ -1207,3 +1207,112 @@ def test_operational_journal_exposes_correlated_events_without_checkpoint_state(
     assert order["status"] == "PARTIAL"
     assert order["filled_qty"] == pytest.approx(0.1)
     assert order["remaining_qty"] == pytest.approx(0.15)
+
+from datetime import UTC, datetime, timedelta
+import tempfile
+import unittest
+from pathlib import Path
+
+import pandas as pd
+
+from btcquant.execution.historical_state_reader import HistoricalStateReader
+from btcquant.execution.state_store import StateStore
+from btcquant.reporting.repository import ReportingRepository
+from dashboard.app import _carry_two_leg_projection, _pack_equity_series
+
+
+class DashboardOperationsTests(unittest.TestCase):
+    def test_equity_packing_obeys_hard_point_cap_and_keeps_endpoints(self) -> None:
+        index = pd.date_range("2026-01-01T00:00:00Z", periods=20_000, freq="min")
+        series = pd.Series(range(len(index)), index=index, dtype=float)
+
+        packed = _pack_equity_series(series, max_points=1_500)
+
+        self.assertEqual(len(packed), 1_500)
+        self.assertEqual(packed[0][0], int(index[0].timestamp() * 1000))
+        self.assertEqual(packed[-1][0], int(index[-1].timestamp() * 1000))
+        self.assertEqual(_pack_equity_series(series, max_points=1), [packed[-1]])
+
+    def test_equity_reader_bounds_rows_in_sql(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "btcquant.db"
+            store = StateStore(database)
+            start = datetime(2026, 1, 1, tzinfo=UTC)
+            timestamps = [
+                start - timedelta(minutes=1),
+                start,
+                start + timedelta(minutes=1),
+                start + timedelta(minutes=2),
+            ]
+            for index, timestamp in enumerate(timestamps):
+                store.append_equity("carry", float(index), timestamp.isoformat())
+
+            rows = HistoricalStateReader(database).read_equity(
+                "carry",
+                start=timestamps[1].isoformat(),
+                end=timestamps[2].isoformat(),
+            )
+
+        self.assertEqual([row["equity"] for row in rows], [1.0, 2.0])
+
+    def test_sqlite_equity_cache_invalidates_when_wal_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "btcquant.db"
+            store = StateStore(database)
+            store.append_equity("trend", 100.0, "2026-01-01T00:00:00+00:00")
+            repository = ReportingRepository(root)
+
+            first = repository.read_engine_equity("trend")
+            store.append_equity("trend", 101.0, "2026-01-01T00:01:00+00:00")
+            second = repository.read_engine_equity("trend")
+
+        self.assertEqual(list(first.values), [100.0])
+        self.assertEqual(list(second.values), [100.0, 101.0])
+
+    def test_carry_projection_exposes_admission_components(self) -> None:
+        projection = _carry_two_leg_projection(
+            {"execution_state": "FLAT"},
+            {
+                "state": "FLAT",
+                "venue_spec": {"spot_base_name": "UBTC", "spot_quote_asset": "USDC"},
+                "balance": {"spot_qty": 0.0, "perp_qty": 0.0, "equity": 4_000.0},
+                "journal": [
+                    {
+                        "event_type": "carry_entry_blocked",
+                        "reason": "net_expected_non_positive",
+                        "economics": {
+                            "funding_expected": 16.5,
+                            "basis_expected": 0.0,
+                            "borrow_expected": 0.0,
+                            "entry_cost": 6.5,
+                            "exit_cost": 6.5,
+                            "uncertainty_reserve": 52.2,
+                            "net_expected_before_reserve": 3.5,
+                            "net_expected_after_reserve": -48.7,
+                            "signal_rate_annualized": 0.077,
+                            "signal_rate_unit": "simple_fraction_per_365.25_day_year",
+                            "funding_projection_horizon_days": 30.0,
+                        },
+                        "plan": {
+                            "spot_qty": 0.031,
+                            "perp_qty": 0.031,
+                            "spot_notional": 2_600.0,
+                            "perp_notional": 2_610.0,
+                            "market_freshness_seconds": 1.0,
+                        },
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(projection["last_decision_reason"], "net_expected_non_positive")
+        self.assertEqual(projection["expected_funding"], 16.5)
+        self.assertEqual(projection["expected_net_before_reserve"], 3.5)
+        self.assertEqual(projection["expected_net_after_reserve"], -48.7)
+        self.assertEqual(projection["expected_spot_qty"], 0.031)
+        self.assertEqual(projection["expected_perp_qty"], 0.031)
+
+
+if __name__ == "__main__":
+    unittest.main()

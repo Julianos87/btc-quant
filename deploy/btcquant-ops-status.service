@@ -12,6 +12,12 @@ ExecStart=/opt/btcquant/current/venv/bin/python -m btcquant.entrypoints.ops_stat
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
+# SQLite read-only WAL probes need to create/remove the shared-memory sidecar.
+# Keep the database and WAL read-only; the connection also uses mode=ro/query_only.
+ReadWritePaths=/opt/btcquant/state
+ReadOnlyPaths=/opt/btcquant/state/btcquant.db
+ReadOnlyPaths=-/opt/btcquant/state/btcquant.db-wal
+ReadOnlyPaths=-/opt/btcquant/state/btcquant.db-journal
 ProtectHome=read-only
 CapabilityBoundingSet=
 RestrictSUIDSGID=true

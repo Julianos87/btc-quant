@@ -16,14 +16,35 @@ class HistoricalStateReader:
         if not self.path.exists():
             raise FileNotFoundError(self.path)
 
-    def read_equity(self, engine: str) -> list[dict[str, Any]]:
+    def read_equity(
+        self,
+        engine: str,
+        *,
+        start: str | None = None,
+        end: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Read equity samples, optionally bounded to an inclusive UTC window.
+
+        ``equity_samples`` stores canonical ISO timestamps and has an
+        ``(engine, ts)`` index. Keeping the range in SQL is important for
+        readiness checks: they need the current campaign window, not the
+        complete lifetime history on every dashboard poll.
+        """
+
+        clauses = ["engine = ?"]
+        params: list[str] = [engine]
+        if start is not None:
+            clauses.append("ts >= ?")
+            params.append(start)
+        if end is not None:
+            clauses.append("ts <= ?")
+            params.append(end)
         with open_state_db_readonly(self.path) as connection:
             rows = connection.execute(
-                """
-                SELECT ts, equity FROM equity_samples
-                WHERE engine = ? ORDER BY ts
-                """,
-                (engine,),
+                "SELECT ts, equity FROM equity_samples WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY ts",
+                tuple(params),
             ).fetchall()
         return [dict(row) for row in rows]
 

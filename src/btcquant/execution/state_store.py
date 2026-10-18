@@ -5296,6 +5296,7 @@ class StateStore:
         *,
         limit: int | None = None,
         since_id: int | None = None,
+        exclude_event_types: Sequence[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Journal, du plus ancien au plus récent.
 
@@ -5313,6 +5314,11 @@ class StateStore:
         if since_id is not None:
             conditions.append("id > ?")
             params.append(since_id)
+        excluded = tuple(exclude_event_types or ())
+        if excluded:
+            placeholders = ", ".join("?" for _ in excluded)
+            conditions.append(f"event_type NOT IN ({placeholders})")
+            params.extend(excluded)
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
         if limit is None:
             query = f"SELECT * FROM events{where} ORDER BY id"

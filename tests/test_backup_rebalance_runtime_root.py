@@ -49,6 +49,7 @@ def _runtime_layout(tmp_path: Path) -> tuple[Path, Path]:
         "backup_state.sh",
         "backup_database.py",
         "verify_backup.py",
+        "stream_encrypt_archive.py",
         "backup_carry_dated_evidence.py",
     ):
         (release / "scripts" / name).write_text(
