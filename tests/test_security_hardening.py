@@ -209,7 +209,7 @@ def test_backup_offhost_allowlist_rejects_nested_verification_sidecar(tmp_path: 
     runtime = tmp_path / "runtime"
     scripts = app / "scripts"
     scripts.mkdir(parents=True)
-    for name in ("backup_state.sh", "backup_database.py", "verify_backup.py"):
+    for name in ("backup_state.sh", "backup_database.py", "verify_backup.py", "stream_encrypt_archive.py"):
         shutil.copy2(ROOT / "scripts" / name, scripts / name)
     state = runtime / "state"
     state.mkdir(parents=True)
@@ -460,7 +460,12 @@ def test_ops_status_timer_is_read_only_and_not_deployment_enabled():
     assert "PrivateTmp=true" in service
     assert "ProtectSystem=strict" in service
     assert "ProtectHome=read-only" in service
-    assert "ReadWritePaths=" not in service
+    # The state directory must be writable so SQLite can create WAL shared memory;
+    # the database and all persistent journal files remain read-only.
+    assert "ReadWritePaths=/opt/btcquant/state" in service
+    assert "ReadOnlyPaths=/opt/btcquant/state/btcquant.db" in service
+    assert "ReadOnlyPaths=-/opt/btcquant/state/btcquant.db-wal" in service
+    assert "ReadOnlyPaths=-/opt/btcquant/state/btcquant.db-journal" in service
     assert "[Install]" not in service
     assert "OnUnitActiveSec=6h" in timer
     assert "Persistent=true" in timer
@@ -707,6 +712,10 @@ def test_backup_script_fails_closed_without_encryption_key(tmp_path: Path, key: 
         (ROOT / "scripts" / "verify_backup.py").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
+    (app / "scripts" / "stream_encrypt_archive.py").write_text(
+        (ROOT / "scripts" / "stream_encrypt_archive.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     with sqlite3.connect(app / "state" / "btcquant.db") as connection:
         connection.execute("CREATE TABLE sample (value TEXT)")
         connection.execute("INSERT INTO sample VALUES ('fixture')")
@@ -786,6 +795,10 @@ def test_legacy_backup_snapshots_all_allowlisted_sqlite_wal_databases(tmp_path: 
     )
     (app / "scripts" / "verify_backup.py").write_text(
         (ROOT / "scripts" / "verify_backup.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (app / "scripts" / "stream_encrypt_archive.py").write_text(
+        (ROOT / "scripts" / "stream_encrypt_archive.py").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
 
@@ -893,6 +906,10 @@ def test_backup_script_does_not_invoke_compaction_and_publishes_only_encrypted(
     )
     (app / "scripts" / "verify_backup.py").write_text(
         (ROOT / "scripts" / "verify_backup.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (app / "scripts" / "stream_encrypt_archive.py").write_text(
+        (ROOT / "scripts" / "stream_encrypt_archive.py").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
     with sqlite3.connect(app / "state" / "btcquant.db") as connection:
