@@ -83,20 +83,37 @@ def test_cash_entry_funding_restart_exit_never_creates_debt(tmp_path):
     assert not restored.accounting_uncertain
 
 
-def test_cash_refuses_net_loss_without_erasing_reserve(tmp_path):
+def test_cash_refuses_negative_expected_return_without_reserve_filter(tmp_path):
     runner = make_runner(tmp_path)
     market = _market()
-    runner._open_two_leg(smooth_ann=0.0784, market=market, decision_timestamp=market.timestamp)
+    runner._open_two_leg(smooth_ann=0.03, market=market, decision_timestamp=market.timestamp)
     assert not runner.in_position and runner.borrow_principal == 0
     economics = runner.two_leg_journal[-1]["economics"]
     assert economics["borrow_expected"] == 0
-    assert economics["uncertainty_reserve"] > 0
+    assert economics["uncertainty_reserve"] == 0
     assert economics["net_expected"] < 0
-    assert economics["signal_rate_annualized"] == pytest.approx(0.0784)
+    assert economics["net_expected_after_reserve"] == pytest.approx(
+        economics["net_expected_before_reserve"]
+    )
+    assert economics["signal_rate_annualized"] == pytest.approx(0.03)
     assert economics["signal_rate_unit"] == "simple_fraction_per_365.25_day_year"
     assert economics["signal_smoothing_days"] == 14
     assert economics["signal_observation_interval_seconds"] == pytest.approx(3600)
     assert economics["funding_projection_horizon_days"] == pytest.approx(30)
+
+
+def test_cash_admits_positive_after_costs_at_eleven_percent_without_fixed_reserve(tmp_path):
+    runner = make_runner(tmp_path)
+    market = _market()
+    runner._open_two_leg(smooth_ann=0.11, market=market, decision_timestamp=market.timestamp)
+    assert runner.in_position and runner.borrow_principal == 0
+    economics = runner.two_leg_intent["economics"]
+    assert economics["uncertainty_reserve"] == 0
+    assert economics["net_expected_before_reserve"] > 0
+    assert economics["net_expected_after_reserve"] == pytest.approx(
+        economics["net_expected_before_reserve"]
+    )
+    assert economics["net_expected"] > 0
 
 
 def test_cash_short_margin_survives_twenty_percent_price_rise(tmp_path):
@@ -140,7 +157,7 @@ def test_cash_profile_preserves_trend_budget_and_parameters():
         assert cash[section] == original[section]
     assert cash["carry"]["leverage"] == 1
     assert cash["carry_execution"]["max_borrow"] == 0
-    assert cash["carry_execution"]["uncertainty_reserve_rate"] == 0.02
+    assert cash["carry_execution"]["uncertainty_reserve_rate"] == 0.0
     with pytest.raises(ValueError, match="provenance"):
         replace(carry_execution_from_config(cash), financing_source="REAL_ACCOUNT")
 

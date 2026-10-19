@@ -58,7 +58,7 @@ carry_execution:
   maintenance_margin_rate: 0.05
   holding_days: 30
   max_unhedged_seconds: 300
-  uncertainty_reserve_rate: 0.02 # 2 % du notionnel perp, distincts des 2 % de cash libre
+  uncertainty_reserve_rate: 0.0 # Filtre de réserve fixe désactivé ; marge, cash et couverture restent contrôlés
   fee_source: PAPER_SIMULATED_CONFIGURED_TAKER_ESTIMATES
   financing_source: PAPER_SIMULATED_CASH_FUNDED_SEPARATE_ACCOUNTS_V1
 
