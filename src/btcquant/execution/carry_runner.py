@@ -1952,7 +1952,86 @@ class CarryRunner:
             )
         return True
 
+    def _recover_two_leg_market_outage(self) -> bool:
+        """Reconcile only a transient mark outage; never clear ambiguous fills."""
+        if not (
+            self.accounting_uncertain
+            and self.accounting_uncertainty_reason
+            == "Snapshot spot/perp indisponible pendant une position carry"
+            and self.two_leg_state == CarryExecutionState.HEDGED
+            and self.in_position
+            and self.last_funding_ts is not None
+            and self.entry_timestamp is not None
+            and self.position_generation
+        ):
+            return False
+        balance = self.two_leg_balance
+        if not (
+            balance.spot_qty > 0
+            and balance.perp_qty > 0
+            and abs(balance.spot_qty - balance.perp_qty) <= 1e-12
+            and abs(balance.balance_sheet()["identity_residual"]) <= 1e-8
+        ):
+            return False
+        try:
+            now = pd.Timestamp.now(tz="UTC")
+            interval = self._native_funding_interval()
+            if interval is None:
+                return False
+            funding = normalize_funding_events(self._recent_funding(), context="carry recovery")
+            funding = funding[funding.index <= now]
+            if funding.empty:
+                return False
+            contiguous, missing = contiguous_funding(funding, self.last_funding_ts, interval)
+            self._apply_two_leg_funding(contiguous)
+            if (
+                missing is not None
+                or self.last_funding_ts.value // interval.value < now.value // interval.value
+            ):
+                return False
+        except ReconciliationRequired:
+            raise
+        except Exception as error:
+            self.store.record_incident(
+                "accounting:carry:funding_unavailable",
+                engine="carry",
+                severity="WARNING",
+                kind="carry_funding_unavailable",
+                message=str(error),
+                context={"phase": "market_outage_recovery"},
+            )
+            return False
+        market = self._two_leg_market()
+        if market is None:
+            return False
+        configured = self.carry_execution
+        spot_ts = market.spot_market_timestamp or market.timestamp
+        perp_ts = market.perp_market_timestamp or market.timestamp
+        if market.freshness_seconds > float(
+            getattr(configured, "max_market_age_seconds", 15.0)
+        ) or abs((pd.Timestamp(spot_ts) - pd.Timestamp(perp_ts)).total_seconds()) > float(
+            getattr(configured, "max_market_timestamp_skew_seconds", 5.0)
+        ):
+            return False
+        balance.mark(market)
+        self._sync_two_leg_legacy_fields()
+        self.accounting_uncertain = False
+        self.accounting_uncertainty_reason = None
+        self._two_leg_persist(
+            "carry_market_outage_reconciled",
+            {
+                "last_funding_ts": self.last_funding_ts.isoformat(),
+                "market_timestamp": str(market.timestamp),
+                "spot_qty": balance.spot_qty,
+                "perp_qty": balance.perp_qty,
+            },
+        )
+        self.store.resolve_incident("accounting:carry:funding_uncertainty")
+        self.store.resolve_incident("accounting:carry:funding_unavailable")
+        return True
+
     def _tick_two_leg(self) -> None:
+        self._recover_two_leg_market_outage()
         if (
             self.accounting_uncertain
             and self.accounting_uncertainty_reason

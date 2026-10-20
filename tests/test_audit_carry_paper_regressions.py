@@ -373,3 +373,134 @@ def test_legacy_oversized_journal_restores_without_changing_financial_state(tmp_
         == 4000
         for row in events
     )
+
+
+def _outage_runner(tmp_path):
+    now = pd.Timestamp.now(tz="UTC")
+    slot = now.floor("h")
+    venue = _QualifiedVenue(_market(timestamp=now.isoformat()))
+    runner = _qualified_runner(tmp_path, venue)
+    _seed_exit_position(runner, start=slot - pd.Timedelta(hours=2), spot_qty=1, perp_qty=1)
+    runner.two_leg_state = CarryExecutionState.HEDGED
+    runner.two_leg_balance.cash_locked = 100.0
+    runner.two_leg_balance.reserved_margin = 100.0
+    runner.two_leg_balance.mark(venue.market)
+    runner._sync_two_leg_legacy_fields()
+    runner.peak_equity = runner.equity
+    runner.day_start_equity = runner.equity
+    runner._mark_accounting_uncertain(
+        "Snapshot spot/perp indisponible pendant une position carry",
+        {"classification": "TWO_LEG_MARKET_ERROR"},
+    )
+    runner._recent_funding = lambda: pd.Series(
+        [0.001, -0.002], index=[slot - pd.Timedelta(hours=1), slot]
+    )
+    return runner, venue, slot
+
+
+def test_market_outage_reconciles_signed_payments_once(tmp_path):
+    runner, venue, slot = _outage_runner(tmp_path)
+    assert runner._recover_two_leg_market_outage()
+    assert not runner.accounting_uncertain
+    assert runner.last_funding_ts == slot
+    assert runner.two_leg_balance.funding_received == pytest.approx(0.1)
+    assert runner.two_leg_balance.funding_paid == pytest.approx(0.2)
+    assert not runner._recover_two_leg_market_outage()
+    revived = _qualified_runner(tmp_path, venue)
+    assert not revived.accounting_uncertain
+    assert revived.two_leg_balance.funding_received == pytest.approx(0.1)
+    assert revived.two_leg_balance.funding_paid == pytest.approx(0.2)
+    assert revived.spot_qty == revived.perp_qty == 1
+
+
+def test_market_outage_retries_after_network_returns(tmp_path):
+    runner, venue, slot = _outage_runner(tmp_path)
+    good_market = venue.market
+    venue.market = None
+    assert not runner._recover_two_leg_market_outage()
+    assert runner.accounting_uncertain
+    venue.market = good_market
+    assert runner._recover_two_leg_market_outage()
+    assert runner.last_funding_ts == slot
+
+
+def test_market_outage_keeps_gate_on_missing_payment_then_recovers(tmp_path):
+    runner, _, slot = _outage_runner(tmp_path)
+    runner._recent_funding = lambda: pd.Series([0.001], index=[slot])
+    assert not runner._recover_two_leg_market_outage()
+    assert runner.accounting_uncertain
+    assert runner.two_leg_balance.funding_received == 0
+    runner._recent_funding = lambda: pd.Series(
+        [0.001, 0.001], index=[slot - pd.Timedelta(hours=1), slot]
+    )
+    assert runner._recover_two_leg_market_outage()
+    assert runner.two_leg_balance.funding_received == pytest.approx(0.2)
+
+
+@pytest.mark.parametrize(
+    "reason,state",
+    [
+        ("transition two-leg ambiguë", CarryExecutionState.HEDGED),
+        (
+            "Snapshot spot/perp indisponible pendant une position carry",
+            CarryExecutionState.EXIT_PENDING,
+        ),
+    ],
+)
+def test_market_recovery_never_clears_other_uncertainty(tmp_path, reason, state):
+    runner, _, _ = _outage_runner(tmp_path)
+    runner.accounting_uncertainty_reason = reason
+    runner.two_leg_state = state
+    assert not runner._recover_two_leg_market_outage()
+    assert runner.accounting_uncertain
+
+
+def test_market_recovery_keeps_gate_on_missing_reference(tmp_path):
+    runner, venue, _ = _outage_runner(tmp_path)
+    venue.funding_reference_price = lambda timestamp: None
+    assert not runner._recover_two_leg_market_outage()
+    assert runner.accounting_uncertain
+    assert runner.two_leg_balance.funding_received == 0
+
+
+def test_tick_reconciles_outage_then_keeps_existing_hedge(tmp_path):
+    runner, _, slot = _outage_runner(tmp_path)
+    runner._tick_two_leg()
+    assert not runner.accounting_uncertain
+    assert runner.last_funding_ts == slot
+    assert runner.two_leg_state == CarryExecutionState.HEDGED
+    assert runner.spot_qty == runner.perp_qty == 1
+    runner._tick_two_leg()
+    assert runner.two_leg_balance.funding_received == pytest.approx(0.1)
+    assert runner.two_leg_balance.funding_paid == pytest.approx(0.2)
+
+
+def test_recovery_resumes_partial_funding_checkpoint_without_double_payment(tmp_path):
+    runner, venue, slot = _outage_runner(tmp_path)
+    good_reference = venue.funding_reference_price
+    venue.funding_reference_price = lambda timestamp: (
+        None if timestamp == slot else good_reference(timestamp)
+    )
+    assert not runner._recover_two_leg_market_outage()
+    assert runner.last_funding_ts == slot - pd.Timedelta(hours=1)
+    assert runner.two_leg_balance.funding_received == pytest.approx(0.1)
+    assert runner.accounting_uncertain
+    venue.funding_reference_price = good_reference
+    assert runner._recover_two_leg_market_outage()
+    assert runner.two_leg_balance.funding_received == pytest.approx(0.1)
+    assert runner.two_leg_balance.funding_paid == pytest.approx(0.2)
+
+
+@pytest.mark.parametrize("failure", ["stale", "unbalanced", "unpublished"])
+def test_market_recovery_retains_gate_until_all_evidence_is_valid(tmp_path, failure):
+    from dataclasses import replace
+
+    runner, venue, slot = _outage_runner(tmp_path)
+    if failure == "stale":
+        venue.market = replace(venue.market, freshness_seconds=300)
+    elif failure == "unbalanced":
+        runner.two_leg_balance.perp_qty = 0.5
+    else:
+        runner._recent_funding = lambda: pd.Series([0.001], index=[slot - pd.Timedelta(hours=1)])
+    assert not runner._recover_two_leg_market_outage()
+    assert runner.accounting_uncertain
