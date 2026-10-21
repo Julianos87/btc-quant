@@ -344,16 +344,16 @@ if [ -d "${REPO}/.git" ] && [[ "${ARCHIVE}" == *.enc ]]; then
       fi
     }
 
-    index_encrypted_file "${ARCHIVE}" "${ARCHIVE##*/}"
-    index_encrypted_file "${VERIFICATION}" "${VERIFICATION##*/}"
+    index_encrypted_file "${ARCHIVE}" "${ARCHIVE##*/}" || exit 7
+    index_encrypted_file "${VERIFICATION}" "${VERIFICATION##*/}" || exit 7
     if [ -d "${BACKUP_DIR}/carry-dated-evidence" ]; then
       while IFS= read -r -d '' evidence_file; do
         evidence_name="$(basename -- "${evidence_file}")"
-        index_encrypted_file "${evidence_file}" "carry-dated-evidence/${evidence_name}"
+        index_encrypted_file "${evidence_file}" "carry-dated-evidence/${evidence_name}" || exit 7
       done < <(find "${BACKUP_DIR}/carry-dated-evidence" -maxdepth 1 -type f -name '*.enc' -print0)
     fi
     git -c commit.gpgsign=false -c gc.auto=0 commit -q -m "backup ${STAMP}" || exit 0
-    git push -q "${OFFHOST_REMOTE}" "HEAD:refs/heads/${OFFHOST_BRANCH}"
+    git push -q "${OFFHOST_REMOTE}" "HEAD:refs/heads/${OFFHOST_BRANCH}" || exit 7
     echo "Off-host backup pushed."
   ) || echo "Off-host push failed; local encrypted backup remains available" >&2
 fi
