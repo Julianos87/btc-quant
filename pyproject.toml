@@ -29,7 +29,7 @@ btcquant-qualify-paper = "btcquant.entrypoints.paper_qualification:main"
 [tool.uv]
 # ccxt pins these transitive dependencies to versions rejected by pip-audit.
 # Keep the exchange version stable; validate patched HTTP libraries in CI.
-override-dependencies = ["multidict>=6.9.1,<7", "urllib3>=2.8.0,<3"]
+override-dependencies = ["certifi>=2026.10.19", "multidict>=6.9.1,<7", "urllib3>=2.8.0,<3"]
 # L'environnement standard couvre tests, exchanges et dashboard. Les outils
 # graphiques de recherche restent opt-in via `uv sync --group research`.
 default-groups = ["dev", "exchange", "dashboard"]

@@ -2,9 +2,9 @@
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
   "version": 1,
-  "serialNumber": "urn:uuid:1baf82aa-34f3-4fc0-bde6-4ae5c76176ab",
+  "serialNumber": "urn:uuid:cc554aac-f238-42b4-8669-505bab72d220",
   "metadata": {
-    "timestamp": "2026-10-10T14:08:44.825888566Z",
+    "timestamp": "2026-10-21T07:31:06.572052021Z",
     "tools": [
       {
         "vendor": "Astral Software Inc.",
@@ -35,10 +35,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "aiohttp-3@3.14.3",
+      "bom-ref": "aiohttp-3@3.14.5",
       "name": "aiohttp",
-      "version": "3.14.3",
-      "purl": "pkg:pypi/aiohttp@3.14.3"
+      "version": "3.14.5",
+      "purl": "pkg:pypi/aiohttp@3.14.5"
     },
     {
       "type": "library",
@@ -77,10 +77,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "certifi-9@2026.6.17",
+      "bom-ref": "certifi-9@2026.10.19",
       "name": "certifi",
-      "version": "2026.6.17",
-      "purl": "pkg:pypi/certifi@2026.6.17"
+      "version": "2026.10.19",
+      "purl": "pkg:pypi/certifi@2026.10.19"
     },
     {
       "type": "library",
@@ -349,10 +349,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "yarl-41@1.24.2",
+      "bom-ref": "yarl-41@1.25.1",
       "name": "yarl",
-      "version": "1.24.2",
-      "purl": "pkg:pypi/yarl@1.24.2"
+      "version": "1.25.1",
+      "purl": "pkg:pypi/yarl@1.25.1"
     },
     {
       "type": "library",
@@ -367,7 +367,7 @@
       "ref": "aiohappyeyeballs-2@2.7.1"
     },
     {
-      "ref": "aiohttp-3@3.14.3",
+      "ref": "aiohttp-3@3.14.5",
       "dependsOn": [
         "aiohappyeyeballs-2@2.7.1",
         "aiosignal-5@1.4.0",
@@ -376,13 +376,13 @@
         "multidict-23@6.9.1",
         "propcache-29@0.5.2",
         "typing-extensions-35@4.16.0",
-        "yarl-41@1.24.2"
+        "yarl-41@1.25.1"
       ]
     },
     {
       "ref": "aiohttp-fast-zlib-4@0.3.0",
       "dependsOn": [
-        "aiohttp-3@3.14.3"
+        "aiohttp-3@3.14.5"
       ]
     },
     {
@@ -415,11 +415,11 @@
       "ref": "ccxt-8@4.5.71",
       "dependsOn": [
         "aiohappyeyeballs-2@2.7.1",
-        "aiohttp-3@3.14.3",
+        "aiohttp-3@3.14.5",
         "aiohttp-fast-zlib-4@0.3.0",
         "aiosignal-5@1.4.0",
         "attrs-6@26.1.0",
-        "certifi-9@2026.6.17",
+        "certifi-9@2026.10.19",
         "cffi-10@2.0.0",
         "charset-normalizer-11@3.4.7",
         "coincurve-13@21.0.0",
@@ -435,12 +435,12 @@
         "urllib3-37@2.8.0",
         "uvloop-38@0.22.1",
         "winloop-40@0.6.3",
-        "yarl-41@1.24.2",
+        "yarl-41@1.25.1",
         "zlib-ng-42@1.0.0"
       ]
     },
     {
-      "ref": "certifi-9@2026.6.17"
+      "ref": "certifi-9@2026.10.19"
     },
     {
       "ref": "cffi-10@2.0.0",
@@ -546,7 +546,7 @@
     {
       "ref": "requests-33@2.34.2",
       "dependsOn": [
-        "certifi-9@2026.6.17",
+        "certifi-9@2026.10.19",
         "charset-normalizer-11@3.4.7",
         "idna-19@3.18",
         "urllib3-37@2.8.0"
@@ -577,7 +577,7 @@
       "ref": "winloop-40@0.6.3"
     },
     {
-      "ref": "yarl-41@1.24.2",
+      "ref": "yarl-41@1.25.1",
       "dependsOn": [
         "idna-19@3.18",
         "multidict-23@6.9.1",
