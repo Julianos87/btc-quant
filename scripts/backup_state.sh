@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Archive quotidienne de state/ (track record paper), conservée sans purge automatique.
+# Archive quotidienne de state/ avec rétention locale vérifiée sur deux dates.
 # Appelé par un timer systemd.
 #
 # APP_ROOT     : arbre physique de la release (venv + scripts).
