@@ -341,3 +341,27 @@ format is OpenSSL AES-256-CBC with PBKDF2, 200000 iterations and salt. Missing,
 empty or whitespace-only encryption keys fail closed before archive publication;
 encryption success alone is not a validity proof. BackupSet manifest, entry
 hashes and SQLite integrity checks remain mandatory after restore.
+
+## Local retention
+
+The daily backup job keeps the latest verified encrypted archive from each of
+the two most recent backup dates. This preserves yesterday when today has several
+manual backups. Before removing any older local copy, retention requires a clean
+mirror matching the remote branch, identical committed ciphertext, and a valid
+verification record or a successful isolated archive verification. Retained copies
+must also be verified off-host. A refusal preserves remaining files; it never
+lowers the disk reserve. Nonstandard manual archives and database checkpoints are
+not selected. Trading databases and dated evidence are not pruned.
+
+Local deletion receipts are fsynced under `backups/.retention/`. Remote archive
+history is never rewritten. The transfer mirror is rebuilt as a filtered shallow
+clone retaining the selected archives and dated evidence locally; the previous
+object store is removed only after the replacement passes validation. Ordinary
+Git additions remain supported by the previous release for rollback.
+
+Retention runs before staging and after publication under the backup lock. An
+upload failure or local/remote mismatch prevents deletion. To inspect without
+mutation, run `scripts/prune_local_backups.py --root /opt/btcquant`; apply requires
+`--apply`, with optional `--compact-mirror`. Run as the backup service user with
+its encryption environment. Full archive integrity verification remains separate
+from lightweight readiness probes.
