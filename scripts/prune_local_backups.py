@@ -104,9 +104,11 @@ def compact_mirror(repo: Path, backups: Path, keep: set[str], remote: str, branc
     evidence = repo / "carry-dated-evidence"
     byte_budget += sum(p.stat().st_size for p in evidence.glob("*.enc"))
     # A filtered clone must stay small; retain both mirrors until validated.
-    if shutil.disk_usage(backups).free < RESERVE + 3 * byte_budget + 268_435_456:
+    if shutil.disk_usage(repo).free < RESERVE + 3 * byte_budget + 268_435_456:
         raise ValueError("Insufficient disk reserve for mirror compaction")
-    stage = Path(tempfile.mkdtemp(prefix=".mirror-stage-", dir=backups))
+    # systemd bind-mounts each writable path separately. Keep atomic renames
+    # within the mirror mount, even when both paths share the physical device.
+    stage = Path(tempfile.mkdtemp(prefix=".mirror-stage-", dir=repo))
     clone = stage / "repo"
     retired = stage / "retired.git"
     committed = False
@@ -160,7 +162,9 @@ def compact_mirror(repo: Path, backups: Path, keep: set[str], remote: str, branc
         os.rename(repo / ".git", retired)
         try:
             os.rename(clone / ".git", repo / ".git")
-            if git(repo, "rev-parse", "HEAD") != head or git(repo, "status", "--porcelain"):
+            if git(repo, "rev-parse", "HEAD") != head or git(
+                repo, "status", "--porcelain", "--", ".", f":(exclude){stage.name}"
+            ):
                 raise ValueError("Replacement mirror failed validation")
         except Exception:
             if (repo / ".git").exists():

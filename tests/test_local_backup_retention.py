@@ -57,8 +57,18 @@ def layout(tmp_path):
     return tmp_path, backups, repo, remote, names
 
 
-def test_prune_keeps_two_days_and_remote_history(layout):
+def test_prune_keeps_two_days_and_remote_history(layout, monkeypatch):
     root, backups, repo, remote, names = layout
+    real_rename = retention.os.rename
+
+    def confined_rename(source, destination):
+        # Distinct systemd writable mounts reject cross-root renames even
+        # when both paths report the same underlying physical device.
+        assert Path(source).is_relative_to(repo)
+        assert Path(destination).is_relative_to(repo)
+        return real_rename(source, destination)
+
+    monkeypatch.setattr(retention.os, "rename", confined_rename)
     head = git(remote, "rev-parse", "HEAD")
     plan = retention.prune(root, apply=False, compact=False)
     assert plan["candidates"] == names[:1]
