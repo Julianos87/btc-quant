@@ -155,7 +155,7 @@
     },
     "lock": {
       "path": "uv.lock",
-      "sha256": "02ec358c2185c260e1225ed1e3a369904d53dcfa7d658ecbd31979367dc589b3"
+      "sha256": "c6972a7f721f61a9242e587784da67e9e81646f0abefb006589f0531c6990a12"
     }
   },
   "limitations": [
