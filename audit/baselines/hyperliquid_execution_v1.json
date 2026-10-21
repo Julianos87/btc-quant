@@ -129,18 +129,18 @@
   "quantitative_source_closure": {
     "version": "hyperliquid-scoped-source-v1",
     "files": {
-      "environments/testnet/config.yaml": "46dd7d30fbad2abbae6516b7dfb849fcec7eca3203de03c66b008d0f4f026427",
-      "pyproject.toml": "e5b217b9f6696a427d05fa7ede0f0dbb07316a30ffa1f79c69520b9d10f730dd",
-      "src/btcquant/backtest/engine.py": "424c203ef3b87df3d8f2a133c7b4ac56f79868d783af4094c29053609060b5ad",
-      "src/btcquant/backtest/metrics.py": "8f4226eeafde2201de96abe3c328093a4e9d43b50ea5d4aad61b222363335ad6",
       "src/btcquant/data.py": "b4757bd221edc27e04cc6beaf48ba70703d1dd772c60b2590063a4f7d7145774",
       "src/btcquant/data_integrity.py": "f7b85fa0a7591a4a64e5e708eb579221c6bd8538420ede0bb18c1f30b9ebcc0c",
-      "src/btcquant/execution/venue.py": "1dae0ec25f73b7c20ab07c502afb23f95d16f834e44a37737f42c96af725db18",
       "src/btcquant/hyperliquid_baseline.py": "9a2e7d546091fbf15786967e7ae4cb251afae559b7232214b70150f52c9318dd",
       "src/btcquant/indicators.py": "af9f48d76359d2384f955b6e31579241dbcc2a63527537a7087d90c8ffa65eae",
+      "src/btcquant/backtest/engine.py": "424c203ef3b87df3d8f2a133c7b4ac56f79868d783af4094c29053609060b5ad",
+      "src/btcquant/backtest/metrics.py": "8f4226eeafde2201de96abe3c328093a4e9d43b50ea5d4aad61b222363335ad6",
       "src/btcquant/strategies/base.py": "510e2f4ac12c6e30724dee0b7326c5a3f93095d1cefe1e3001d0bfbea3f3c53a",
       "src/btcquant/strategies/trend_ls.py": "52e5314f1b23627f2d217b6aef9988f0ba6a8a518c922622bc642aac9185e1da",
-      "uv.lock": "02ec358c2185c260e1225ed1e3a369904d53dcfa7d658ecbd31979367dc589b3"
+      "src/btcquant/execution/venue.py": "1dae0ec25f73b7c20ab07c502afb23f95d16f834e44a37737f42c96af725db18",
+      "environments/testnet/config.yaml": "46dd7d30fbad2abbae6516b7dfb849fcec7eca3203de03c66b008d0f4f026427",
+      "pyproject.toml": "fd68baa6a4b9cc809311304ef6ab80f4629a5c8bb1d46ab8bfab3de9cb193e19",
+      "uv.lock": "c6972a7f721f61a9242e587784da67e9e81646f0abefb006589f0531c6990a12"
     },
     "dashboard_and_order_adapters_excluded": true
   },
@@ -151,11 +151,11 @@
     },
     "pyproject": {
       "path": "pyproject.toml",
-      "sha256": "e5b217b9f6696a427d05fa7ede0f0dbb07316a30ffa1f79c69520b9d10f730dd"
+      "sha256": "fd68baa6a4b9cc809311304ef6ab80f4629a5c8bb1d46ab8bfab3de9cb193e19"
     },
     "lock": {
       "path": "uv.lock",
-      "sha256": "02ec358c2185c260e1225ed1e3a369904d53dcfa7d658ecbd31979367dc589b3"
+      "sha256": "c6972a7f721f61a9242e587784da67e9e81646f0abefb006589f0531c6990a12"
     }
   },
   "limitations": [
