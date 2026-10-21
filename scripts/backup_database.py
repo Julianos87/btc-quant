@@ -50,6 +50,10 @@ def create_backup(source_path: Path, destination_path: Path) -> None:
             source.execute("PRAGMA query_only=ON")
             if source.execute("PRAGMA query_only").fetchone()[0] != 1:
                 raise RuntimeError("Source SQLite non read-only")
+            # Pin one WAL read snapshot: concurrent engine writes must not restart
+            # the Online Backup copy or change the state checked for integrity.
+            source.execute("BEGIN")
+            source.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
             _check_integrity(source, "Source")
             with closing(sqlite3.connect(temporary)) as destination:
                 source.backup(destination, pages=256, sleep=0.1)

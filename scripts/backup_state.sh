@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Archive quotidienne de state/ (track record paper), conservée sans purge automatique.
+# Archive quotidienne de state/ avec rétention locale vérifiée sur deux dates.
 # Appelé par un timer systemd.
 #
 # APP_ROOT     : arbre physique de la release (venv + scripts).
@@ -36,6 +36,15 @@ fi
 OFFHOST_REMOTE="${BACKUP_OFFHOST_REMOTE:-origin}"
 OFFHOST_BRANCH="${BACKUP_OFFHOST_BRANCH:-backups}"
 mkdir -p "${BACKUP_DIR}"
+# Prune only verified off-host copies before calculating the staging budget.
+# A retention refusal preserves every unverified file; the disk guard still applies.
+RETENTION_PY="${APP_ROOT}/venv/bin/python"
+[ -x "${RETENTION_PY}" ] || RETENTION_PY="python3"
+if [ -d "${RUNTIME_ROOT}/backups-repo/.git" ]; then
+  "${RETENTION_PY}" "${APP_ROOT}/scripts/prune_local_backups.py" \
+    --root "${RUNTIME_ROOT}" --apply --compact-mirror || \
+    echo "Local retention refused; preserving remaining backups." >&2
+fi
 # A single lock covers archive generation and publication. systemd normally
 # serializes this oneshot, but manual/recovery starts must not pair another
 # invocation's archive with its verification sidecar.
@@ -303,8 +312,20 @@ if [ -d "${REPO}/.git" ] && [[ "${ARCHIVE}" == *.enc ]]; then
       fi
       if git ls-files --error-unmatch -- "${repo_path}" >/dev/null 2>&1 ||
         git cat-file -e "HEAD:${repo_path}" 2>/dev/null; then
-        echo "Refusing: off-host destination is already tracked: ${repo_path}" >&2
-        return 1
+        # Immutable evidence is already present after the first daily run.
+        # Verify its exact Git blob instead of failing every subsequent push.
+        local expected_blob
+        expected_blob="$(git rev-parse "HEAD:${repo_path}")" || return 1
+        if [ "$(git hash-object -- "${source_path}")" != "${expected_blob}" ]; then
+          echo "Refusing: existing off-host evidence differs: ${repo_path}" >&2
+          return 1
+        fi
+        if [ -e "${repo_path}" ] &&
+          [ "$(git hash-object -- "${repo_path}")" != "${expected_blob}" ]; then
+          echo "Refusing: local evidence mirror differs: ${repo_path}" >&2
+          return 1
+        fi
+        return 0
       fi
       mkdir -p -- "${repo_parent}"
       if [ -e "${repo_path}" ] || [ -L "${repo_path}" ]; then
@@ -323,16 +344,24 @@ if [ -d "${REPO}/.git" ] && [[ "${ARCHIVE}" == *.enc ]]; then
       fi
     }
 
-    index_encrypted_file "${ARCHIVE}" "${ARCHIVE##*/}"
-    index_encrypted_file "${VERIFICATION}" "${VERIFICATION##*/}"
+    index_encrypted_file "${ARCHIVE}" "${ARCHIVE##*/}" || exit 7
+    index_encrypted_file "${VERIFICATION}" "${VERIFICATION##*/}" || exit 7
     if [ -d "${BACKUP_DIR}/carry-dated-evidence" ]; then
       while IFS= read -r -d '' evidence_file; do
         evidence_name="$(basename -- "${evidence_file}")"
-        index_encrypted_file "${evidence_file}" "carry-dated-evidence/${evidence_name}"
+        index_encrypted_file "${evidence_file}" "carry-dated-evidence/${evidence_name}" || exit 7
       done < <(find "${BACKUP_DIR}/carry-dated-evidence" -maxdepth 1 -type f -name '*.enc' -print0)
     fi
     git -c commit.gpgsign=false -c gc.auto=0 commit -q -m "backup ${STAMP}" || exit 0
-    git push -q "${OFFHOST_REMOTE}" "HEAD:refs/heads/${OFFHOST_BRANCH}"
+    git push -q "${OFFHOST_REMOTE}" "HEAD:refs/heads/${OFFHOST_BRANCH}" || exit 7
     echo "Off-host backup pushed."
   ) || echo "Off-host push failed; local encrypted backup remains available" >&2
+fi
+
+# Publish before pruning: an upload failure cannot remove the previous copies.
+# Descriptor 8 is the lock already held by this backup job.
+if [ -d "${REPO}/.git" ]; then
+  "${PYBIN}" "${APP_ROOT}/scripts/prune_local_backups.py" \
+    --root "${RUNTIME_ROOT}" --apply --compact-mirror --lock-fd 8 || \
+    echo "Post-backup retention refused; preserving remaining backups." >&2
 fi
