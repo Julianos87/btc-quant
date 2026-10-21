@@ -151,7 +151,7 @@
     },
     "pyproject": {
       "path": "pyproject.toml",
-      "sha256": "e5b217b9f6696a427d05fa7ede0f0dbb07316a30ffa1f79c69520b9d10f730dd"
+      "sha256": "fd68baa6a4b9cc809311304ef6ab80f4629a5c8bb1d46ab8bfab3de9cb193e19"
     },
     "lock": {
       "path": "uv.lock",
