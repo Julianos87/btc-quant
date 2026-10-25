@@ -332,15 +332,20 @@ if [ -d "${REPO}/.git" ] && [[ "${ARCHIVE}" == *.enc ]]; then
         echo "Refusing: off-host destination already exists: ${repo_path}" >&2
         return 1
       fi
-      if [ "$(stat -c %d -- "${source_path}")" = "$(stat -c %d -- "${repo_parent}")" ]; then
-        # Preserve the local checkout view without copying encrypted bytes.
-        ln -- "${source_path}" "${repo_path}"
+      # st_dev alone cannot determine whether a link is permitted: systemd
+      # exposes these paths through separate bind mounts on the same device.
+      if ln -- "${source_path}" "${repo_path}" 2>/dev/null; then
         git add -- "${repo_path}"
       else
-        # Across filesystems, record the encrypted blob directly in Git's
-        # index instead of creating a second worktree archive copy.
+        if [ -e "${repo_path}" ] || [ -L "${repo_path}" ]; then
+          echo "Refusing: hard-link fallback destination already exists: ${repo_path}" >&2
+          return 1
+        fi
+        # Store encrypted bytes as a Git object without a second worktree copy.
         blob="$(git hash-object -w --path="${repo_path}" -- "${source_path}")"
         git update-index --add --cacheinfo "100644,${blob},${repo_path}"
+        # This blob intentionally has no checkout file in the mirror.
+        git update-index --skip-worktree -- "${repo_path}"
       fi
     }
 

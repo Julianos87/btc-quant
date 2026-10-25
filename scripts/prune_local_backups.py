@@ -100,9 +100,32 @@ def compact_mirror(repo: Path, backups: Path, keep: set[str], remote: str, branc
         raise ValueError("Mirror contains additional local branches")
     url = git(repo, "remote", "get-url", remote)
     selected = sorted(keep | {name + ".verification.json" for name in keep})
-    byte_budget = sum((repo / name).stat().st_size for name in selected)
-    evidence = repo / "carry-dated-evidence"
-    byte_budget += sum(p.stat().st_size for p in evidence.glob("*.enc"))
+    evidence_rows = subprocess.check_output(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "ls-tree",
+            "-r",
+            "-l",
+            "-z",
+            head,
+            "--",
+            "carry-dated-evidence",
+        ]
+    ).split(b"\0")
+    evidence_blobs: dict[str, tuple[str, int]] = {}
+    for row in evidence_rows:
+        if not row:
+            continue
+        metadata, raw_name = row.split(b"\t", 1)
+        _, kind, blob, size = metadata.decode("ascii").split(" ", 3)
+        name = raw_name.decode("utf-8")
+        if kind == "blob" and name.endswith(".enc"):
+            evidence_blobs[name] = (blob, int(size))
+    selected_sizes = {name: int(git(repo, "cat-file", "-s", f"{head}:{name}")) for name in selected}
+    byte_budget = sum(selected_sizes.values()) + sum(size for _, size in evidence_blobs.values())
+    checked_names = sorted(set(selected) | set(evidence_blobs))
     # A filtered clone must stay small; retain both mirrors until validated.
     if shutil.disk_usage(repo).free < RESERVE + 3 * byte_budget + 268_435_456:
         raise ValueError("Insufficient disk reserve for mirror compaction")
@@ -142,9 +165,33 @@ def compact_mirror(repo: Path, backups: Path, keep: set[str], remote: str, branc
         git(clone, "read-tree", "-mu", "HEAD")
         if git(clone, "rev-parse", "HEAD") != head or remote_head(repo, remote, branch) != head:
             raise ValueError("Remote changed during mirror compaction")
-        for name in selected:
-            if digest(clone / name) != digest(repo / name):
+        expected_blobs = {name: git(repo, "rev-parse", f"{head}:{name}") for name in selected}
+        expected_blobs.update({name: blob for name, (blob, _) in evidence_blobs.items()})
+        for name in checked_names:
+            if git(clone, "hash-object", "--", str(clone / name)) != expected_blobs[name]:
                 raise ValueError(f"Compacted mirror differs: {name}")
+        # Keep sparse-checkout paths materialized in this mirror before swapping
+        # indexes; the clone and mirror share this bind mount, so hard links are
+        # safe here and avoid a second copy of the retained ciphertext.
+        for name in checked_names:
+            target = repo / name
+            source_path = clone / name
+            if target.is_symlink():
+                raise ValueError(f"Refusing symlink in backup mirror: {name}")
+            if target.exists():
+                if git(repo, "hash-object", "--", str(target)) != expected_blobs[name]:
+                    raise ValueError(f"Local mirror differs: {name}")
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.link(source_path, target)
+            except OSError:
+                staged = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+                try:
+                    shutil.copyfile(source_path, staged)
+                    os.replace(staged, target)
+                finally:
+                    staged.unlink(missing_ok=True)
         object_bytes = sum(p.stat().st_size for p in (clone / ".git").rglob("*") if p.is_file())
         if object_bytes > 2 * byte_budget + 268_435_456:
             raise ValueError("Server did not provide a bounded filtered mirror")
