@@ -6,7 +6,10 @@ from dashboard import app as dashboard
 def css_declarations(css, selector):
     """Read component rules without depending on formatting or declaration order."""
     blocks = re.findall(r"(?:^|\n)\s*" + re.escape(selector) + r"\s*\{([^{}]*)\}", css)
-    return [dict(item.strip().split(":", 1) for item in block.split(";") if ":" in item) for block in blocks]
+    return [
+        dict(item.strip().split(":", 1) for item in block.split(";") if ":" in item)
+        for block in blocks
+    ]
 
 
 def test_dashboard_loads_external_versioned_assets(monkeypatch):
@@ -126,7 +129,10 @@ def test_dashboard_visual_hierarchy_uses_progressive_disclosure(monkeypatch):
 
     assert "@media (max-width:899px)" in css
     assert css_declarations(css, ".position-table thead")[0]["display"] == "none"
-    assert css_declarations(css, ".position-table .protection-cell")[0]["grid-column"].replace(" ", "") == "1/-1"
+    assert (
+        css_declarations(css, ".position-table .protection-cell")[0]["grid-column"].replace(" ", "")
+        == "1/-1"
+    )
     assert "html, body { overflow-x:clip; }" not in css
     assert ".grid > .card" in css
     assert 'class="slot-detail-toggle"' in javascript
@@ -276,7 +282,10 @@ def test_v41_visual_qa_keeps_panels_content_led_and_events_structured(monkeypatc
     assert css_declarations(css, 'body[data-view="risk"] .risk-command')[0]["min-height"] == "0"
     assert css_declarations(css, ".risk-measure-track")[0]["position"] == "static"
     assert ".event-panel .event-meta" in css
-    assert css_declarations(css, ".monitor-command .ops-grid")[0]["grid-template-columns"] == "repeat(2,minmax(0,1fr))"
+    assert (
+        css_declarations(css, ".monitor-command .ops-grid")[0]["grid-template-columns"]
+        == "repeat(2,minmax(0,1fr))"
+    )
     assert 'class="slotclick is-flat"' in javascript
     assert 'class="event-meta"' in javascript
     assert "const active = !operational" in javascript
@@ -289,4 +298,9 @@ def test_postdeploy_layout_avoids_cross_column_row_cavities(monkeypatch):
     assert '"pulse price"\n      "exposure price"\n      "carry carry"' in css
     assert '"metrics metrics"\n      "conformity breakdown"\n      "yearly breakdown"' in css
     assert '"radar radar"\n      "trend trend"\n      "chart exposure"\n      "price carry"' in css
-    assert css_declarations(css, 'body[data-view="performance"] [data-card="metrics"] .metric')[0]["min-height"] == "78px"
+    assert (
+        css_declarations(css, 'body[data-view="performance"] [data-card="metrics"] .metric')[0][
+            "min-height"
+        ]
+        == "78px"
+    )

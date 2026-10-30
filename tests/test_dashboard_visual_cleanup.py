@@ -17,7 +17,10 @@ def _trend_summary(trend: dict) -> str:
     start = javascript.index("  function trendDirectionSummary")
     end = javascript.index("\n\n  function renderTrendOverview", start)
     helper = javascript[start:end]
-    script = 'const PREFS = {lang:"fr"}; const t = () => "Indisponible"; const LOCALE = () => "fr-FR";\n' + f"{helper}\nprocess.stdout.write(trendDirectionSummary({json.dumps(trend)}));"
+    script = (
+        'const PREFS = {lang:"fr"}; const t = () => "Indisponible"; const LOCALE = () => "fr-FR";\n'
+        + f"{helper}\nprocess.stdout.write(trendDirectionSummary({json.dumps(trend)}));"
+    )
     result = subprocess.run(
         ["node", "--input-type=commonjs", "--eval", script],
         check=True,
@@ -90,7 +93,9 @@ def test_wide_monitor_layout_keeps_sidebar_and_columns_independent() -> None:
     assert ".system-rail" not in css
     assert ".decision-board.monitor-masonry" in css
     for card, column in (("trend", "1"), ("carry", "2"), ("events", "1"), ("journal", "2")):
-        selector = f'body[data-view="monitor"] .decision-board.monitor-masonry > [data-card="{card}"]'
+        selector = (
+            f'body[data-view="monitor"] .decision-board.monitor-masonry > [data-card="{card}"]'
+        )
         rule = re.search(re.escape(selector) + r"\s*\{([^{}]*)\}", css)
         assert rule and f"grid-column:{column};" in rule.group(1)
     assert "card.style.gridRowEnd = rowEnd" in javascript
