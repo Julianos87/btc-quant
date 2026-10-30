@@ -2150,6 +2150,8 @@ body[data-view="risk"] .trend-hero-grid { grid-template-columns:1fr; }
 
   .tile.hero { min-height:132px; grid-column:auto; }
 
+  .metric-strip .tile.hero .sub { max-width:64%; }
+
   .grid > .card { padding:15px; }
 
   .legend { width:100%; margin-left:0; justify-content:flex-start; }
