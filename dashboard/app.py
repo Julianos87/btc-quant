@@ -1240,6 +1240,7 @@ def summary():
 
     # PnL du jour (UTC) sur l'équity combinée, net des apports du jour
     # (sans quoi l'apport du 1er du mois s'afficherait comme un gain)
+    day_pnl = None
     day_pnl_pct = None
     if len(trend_eq) and len(carry_eq):
         today = pd.Timestamp.now(tz="UTC").normalize()
@@ -1251,6 +1252,7 @@ def summary():
             since_start = flows[flows["ts"] > start_ts]
             day_total = total - _deposits_total(since_start)
             if start_day > 0:
+                day_pnl = day_total - start_day
                 day_pnl_pct = day_total / start_day - 1.0
 
     now_utc = pd.Timestamp.now(tz="UTC")
@@ -2094,6 +2096,7 @@ def summary():
                 "pnl_pct": total / invested - 1.0
                 if accounting_available and invested > 0
                 else None,
+                "day_pnl": day_pnl,
                 "day_pnl_pct": day_pnl_pct,
                 "allocation_trend": trend_equity / total
                 if accounting_available and total
