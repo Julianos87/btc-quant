@@ -51,15 +51,15 @@ const I18N = {
     alloc_real:"Allocation réelle", pending_deposit:"Apport en attente", online:"En ligne", offline:"Arrêté",
     state_stale:"Périmé", state_unknown:"Indisponible", protection_software:"logiciel",
     workspace:"Vue", view_monitor:"Surveillance", view_performance:"Performance", view_risk:"Risque",
-    status_good:"Tout est nominal", status_warn:"Surveillance requise", status_crit:"Action requise",
+    status_good:"Moteurs principaux opérationnels", status_warn:"Surveillance requise", status_crit:"Action requise",
     status_nominal_detail:"Trend et Carry répondent · protections armées",
     status_trend_down:"Trend ne répond plus", status_carry_down:"Carry ne répond plus",
     status_kill:"Kill-switch actif", status_lockout:"Lockout journalier actif",
     data_now:"données à l’instant", data_ago:"mis à jour il y a",
     performance_snapshot:"Synthèse de performance", performance_snapshot_note:"Résultats cumulés, avec les positions ouvertes valorisées.",
-    performance_total:"Depuis le départ", performance_day:"Aujourd’hui", performance_dd:"Drawdown actuel", performance_sharpe:"Sharpe réalisé",
+    performance_total:"Depuis le départ", performance_day:"Aujourd’hui", performance_dd:"Drawdown actuel", performance_sharpe:"Ratio de Sharpe",
     risk_radar:"Radar de risque", risk_radar_note:"Ce qui peut réellement dégrader le portefeuille maintenant.",
-    risk_stop:"Risque jusqu’aux stops", risk_margin:"Marge au stop la plus proche", risk_leverage:"Levier effectif", risk_policy:"Protection active",
+    risk_stop:"Baisse jusqu’aux stops", risk_margin:"Marge au stop la plus proche", risk_leverage:"Levier effectif", risk_policy:"Protection active",
     risk_no_stop:"aucun stop trend ouvert", risk_no_position:"aucune position trend", risk_armed:"limites armées", risk_lockout:"lockout journalier", risk_halted:"kill-switch déclenché", risk_engine_down:"moteur hors ligne",
     monitor_pulse:"Pulse opérationnel", monitor_pulse_note:"Les quatre signaux qui comptent pendant la surveillance.",
     monitor_trend:"Moteur Trend", monitor_carry:"Moteur Carry", monitor_next_bar:"Prochaine décision", monitor_binance:"Flux Hyperliquid",
@@ -197,15 +197,15 @@ const I18N = {
     waiting_zone:"waiting zone",
     inactive_suffix:"INACTIVE",
     waiting_label:"Waiting",
-    status_good:"All systems nominal", status_warn:"Monitoring required", status_crit:"Action required",
+    status_good:"Main engines operational", status_warn:"Monitoring required", status_crit:"Action required",
     status_nominal_detail:"Trend and Carry are responding · safeguards armed",
     status_trend_down:"Trend is not responding", status_carry_down:"Carry is not responding",
     status_kill:"Kill switch is active", status_lockout:"Daily lockout is active",
     data_now:"data received just now", data_ago:"updated",
     performance_snapshot:"Performance snapshot", performance_snapshot_note:"Cumulative results, including marked open positions.",
-    performance_total:"Since inception", performance_day:"Today", performance_dd:"Current drawdown", performance_sharpe:"Realized Sharpe",
+    performance_total:"Since inception", performance_day:"Today", performance_dd:"Current drawdown", performance_sharpe:"Sharpe ratio",
     risk_radar:"Risk radar", risk_radar_note:"What can actually degrade the portfolio right now.",
-    risk_stop:"Risk to trend stops", risk_margin:"Nearest stop distance", risk_leverage:"Effective leverage", risk_policy:"Active safeguard",
+    risk_stop:"Value decline to stops", risk_margin:"Nearest stop distance", risk_leverage:"Effective leverage", risk_policy:"Active safeguard",
     risk_no_stop:"no open trend stop", risk_no_position:"no trend position", risk_armed:"limits armed", risk_lockout:"daily lockout", risk_halted:"kill switch triggered", risk_engine_down:"engine offline",
     monitor_pulse:"Operations pulse", monitor_pulse_note:"The four signals that matter while monitoring.",
     monitor_trend:"Trend engine", monitor_carry:"Carry engine", monitor_next_bar:"Next decision", monitor_binance:"Hyperliquid flow",
@@ -304,9 +304,9 @@ function applyAccent() {
 }
 
 const VIEW_CARDS = {
-  monitor: new Set(["monitor_pulse", "accounting", "price", "events", "journal", "trend", "carry", "exposure", "readiness"]),
+  monitor: new Set(["monitor_pulse", "accounting", "price", "events", "journal", "trend", "carry", "dated_carry", "readiness"]),
   performance: new Set(["performance_brief", "accounting", "chart", "breakdown", "conformity", "yearly", "trades", "metrics", "readiness"]),
-  risk: new Set(["risk_radar", "accounting", "chart", "price", "events", "journal", "trend", "carry", "exposure"]),
+  risk: new Set(["risk_radar", "accounting", "chart", "price", "events", "journal", "trend", "carry", "dated_carry", "exposure"]),
 };
 const VIEW_TILES = {
   monitor: new Set(["equity", "day", "cumulative"]),
@@ -314,55 +314,13 @@ const VIEW_TILES = {
   risk: new Set(),
 };
 
-const monitorBoard = document.querySelector(".decision-board");
-let monitorLayoutFrame = 0;
-
-function monitorGridSpan(height, rowHeight, rowGap) {
-  const safeHeight = Math.max(0, Number(height) || 0);
-  const safeRow = Math.max(1, Number(rowHeight) || 1);
-  const safeGap = Math.max(0, Number(rowGap) || 0);
-  return Math.max(1, Math.ceil((safeHeight + safeGap) / (safeRow + safeGap)));
-}
-
-function layoutMonitorBoard() {
-  monitorLayoutFrame = 0;
-  if (!monitorBoard) return;
-  const useMasonry = document.body.dataset.view === "monitor"
-    && window.matchMedia("(min-width:1121px)").matches;
-  monitorBoard.classList.toggle("monitor-masonry", useMasonry);
-  const cards = [...monitorBoard.querySelectorAll(":scope > .card")];
-  if (!useMasonry) {
-    cards.forEach(card => card.style.removeProperty("grid-row-end"));
-    return;
-  }
-  const boardStyle = getComputedStyle(monitorBoard);
-  const rowHeight = Number.parseFloat(boardStyle.gridAutoRows) || 1;
-  const rowGap = Number.parseFloat(boardStyle.rowGap) || 0;
-  cards.forEach(card => {
-    if (card.dataset.viewHidden === "1" || !card.getClientRects().length) {
-      card.style.removeProperty("grid-row-end");
-      return;
-    }
-    const span = monitorGridSpan(card.getBoundingClientRect().height, rowHeight, rowGap);
-    const rowEnd = `span ${span}`;
-    if (card.style.gridRowEnd !== rowEnd) card.style.gridRowEnd = rowEnd;
-  });
-}
-
-function scheduleMonitorLayout() {
-  if (monitorLayoutFrame) return;
-  monitorLayoutFrame = requestAnimationFrame(layoutMonitorBoard);
-}
-
-if (monitorBoard && "ResizeObserver" in window) {
-  const monitorLayoutObserver = new ResizeObserver(scheduleMonitorLayout);
-  monitorBoard.querySelectorAll(":scope > .card").forEach(card => monitorLayoutObserver.observe(card));
-}
-
 function applyDashboardView() {
   const view = VIEW_CARDS[PREFS.view] ? PREFS.view : "monitor";
   PREFS.view = view;
   document.body.dataset.view = view;
+  const order = {monitor:["trend","carry","dated_carry","monitor_pulse","price","accounting","events","journal","readiness"],performance:["performance_brief","chart","metrics","breakdown","conformity","yearly","trades","accounting","readiness"],risk:["risk_radar","exposure","trend","carry","dated_carry","chart","price","accounting","events","journal"]};
+  const board = document.querySelector(".decision-board");
+  order[view].forEach(name => { const card = board?.querySelector(`[data-card="${name}"]`); if(card) board.append(card); });
   if (view === "risk") unit = "dd";
   if (view === "performance") unit = "pct";
   document.querySelectorAll("[data-card]").forEach(card => {
@@ -380,7 +338,7 @@ function applyDashboardView() {
     if (active) $("dashboard-content").setAttribute("aria-labelledby", button.id);
   });
   setPressed("#unit", button => button.dataset.u === unit);
-  scheduleMonitorLayout();
+
   requestAnimationFrame(() => {
     if (typeof drawChart === "function") scheduleRedraw("chart");
     if (typeof drawPChart === "function") scheduleRedraw("price");
@@ -598,7 +556,7 @@ async function refreshSummary() {
       : protectionLabel;
     const gap = stopPct == null ? "N/A" : (stopPct < 0 ? "stop dépassé" : percentNA(stopPct, 1) + " au stop");
     const stopPnl = sl.stop_pnl;
-    const stopPnlText = stopPnl == null ? "N/A" : stopPnl > 0 ? "gain protégé " + money(stopPnl) : stopPnl < 0 ? "risque au stop " + money(Math.abs(stopPnl)) : "PnL au stop 0 $";
+    const stopPnlText = stopPnl == null ? "N/A" : stopPnl > 0 ? "gain depuis l’entrée au stop " + money(stopPnl) : stopPnl < 0 ? "perte depuis l’entrée au stop " + money(Math.abs(stopPnl)) : "résultat depuis l’entrée au stop : 0 $";
     const positionText = sl.state === "FLAT" ? "aucune position" : "ouverte depuis " + durationNA(sl.position_age_s);
     return `<tr class="slotclick" data-name="${esc(sl.name)}" title="Voir les détails">
       <td class="slot-cell"><button type="button" class="slot-detail-toggle" id="slot-detail-${esc(sl.name)}" aria-haspopup="dialog" aria-label="Détails ${esc(sl.name)}"><strong class="position-primary">${esc(sl.name).replace("trend_ls_", "Donchian ")}</strong><small class="position-secondary">Voir les détails</small></button></td>
@@ -701,6 +659,18 @@ function renderDatedCarry(report) {
       ? `runner ${runner.status || "UNKNOWN"} (${runner.unit || unknownUnit}) · collector ${collector.status || "UNKNOWN"} (${collector.unit || unsetUnit}, ${collectorAge}) · market ${market.status || "UNKNOWN"} · archives ${archive.status || "UNKNOWN"} · DB integrity ${database.integrity || "UNKNOWN"} · disk ${disk.status || "UNKNOWN"} ${diskUsage} · settlement backlog ${settlements.status || "UNKNOWN"}`
       : `runner ${runner.status || "UNKNOWN"} (${runner.unit || unknownUnit}) · collecteur ${collector.status || "UNKNOWN"} (${collector.unit || unsetUnit}, ${collectorAge}) · marché ${market.status || "UNKNOWN"} · archives ${archive.status || "UNKNOWN"} · intégrité DB ${database.integrity || "UNKNOWN"} · disque ${disk.status || "UNKNOWN"} ${diskUsage} · backlog règlements ${settlements.status || "UNKNOWN"}`;
   };
+  const summary = $("dated-carry-health-summary");
+  if (summary) {
+    const issues = [
+      ["Collecteur", components.collector && components.collector.status],
+      ["Marché", components.collector && components.collector.market_data && components.collector.market_data.status],
+      ["Moteur", components.runner && components.runner.status],
+      ["Intégrité des données", components.database && components.database.integrity],
+      ["Disque", components.disk && components.disk.status],
+      ["Règlements", components.settlement_backlog && components.settlement_backlog.status],
+    ].filter(([, status]) => !["OK", "HEALTHY", "VERIFIED", "FRESH", "PASS", "AVAILABLE"].includes(status));
+    summary.textContent = `Expérimentation uniquement · ${issues.length ? issues.map(([name, status]) => `${name} : ${status === "DEGRADED" ? "dégradé" : status === "STALE" ? "données périmées" : status && status !== "UNKNOWN" ? status : "non vérifié"}`).join(" · ") : "Composants vérifiés"}. Qualification globale non établie.`;
+  }
   const key = {
     NOT_DEPLOYED:"dated_not_deployed", AVAILABLE:"dated_available", STALE:"dated_stale",
     UNKNOWN:"dated_unknown", ACCOUNTING_UNCERTAIN:"dated_accounting_uncertain",
@@ -1018,7 +988,7 @@ function renderRiskRadar(s) {
   };
   $("risk-radar").innerHTML =
     gauge(t("performance_dd"), fmtDrawdown(m.cur_dd, 1), m.max_dd == null ? "max N/A" : `maximum observé ${fmtDrawdown(m.max_dd, 1)}`, m.cur_dd < -0.08 ? "crit" : m.cur_dd < -0.04 ? "warn" : "", ddRatio == null ? null : ddRatio / .10, "échelle descriptive 10 %") +
-    gauge(t("risk_stop"), fmt$(profile.risk, 0), profile.positions.length ? `${profile.positions.length} position${profile.positions.length > 1 ? "s" : ""} Trend · risque calculé aux stops` : t("risk_no_stop"), riskRatio != null && riskRatio > .03 ? "warn" : "", riskRatio == null ? null : riskRatio / .10, riskRatio == null ? "N/A" : `${fmtPct(riskRatio, 1)} de l’équity`) +
+    gauge(t("risk_stop"), fmt$(profile.risk, 0), profile.positions.length ? `${profile.positions.length} position${profile.positions.length > 1 ? "s" : ""} Trend · depuis le prix actuel` : t("risk_no_stop"), riskRatio != null && riskRatio > .03 ? "warn" : "", riskRatio == null ? null : riskRatio / .10, riskRatio == null ? "N/A" : `${fmtPct(riskRatio, 1)} de l’équity`) +
     gauge(t("risk_margin"), margin, profile.nearest == null ? t("risk_no_position") : `${profile.positions.length} stop${profile.positions.length > 1 ? "s" : ""} actif${profile.positions.length > 1 ? "s" : ""}`, marginTone, profile.nearest == null ? null : Math.min(profile.nearest / .10, 1), "distance observée") +
     gauge("Exposition brute", s.totals.gross_equity_ratio == null ? "N/A" : `${fmtNum(s.totals.gross_equity_ratio, 2)}×`, s.totals.portfolio_gross_notional == null ? "notionnel indisponible" : fmt$(s.totals.portfolio_gross_notional, 0), lev > 1.5 ? "crit" : lev > 1.05 ? "warn" : "", exposureRatio == null ? null : exposureRatio / 2, "échelle descriptive 2×") +
     gauge(t("risk_policy"), protection, incidents ? `${incidents} incident${incidents > 1 ? "s" : ""} actif${incidents > 1 ? "s" : ""}` : `${t("risk_leverage")} · ${fmtNum(lev, 2)}×`, protectionTone, protectionTone === "crit" ? 1 : protectionTone === "warn" ? .6 : .22, "état opérationnel");
@@ -1205,7 +1175,7 @@ function renderTrendAccounting(s) {
     const order = slot.market_order || {};
     const stop = slot.stop_order || {};
     const stopStatus = slot.protection_status || "UNKNOWN";
-    return `<article class="trend-accounting-row"><div class="trend-accounting-head"><strong>${esc(String(slot.name || "").replace("trend_ls_", "Donchian "))}</strong><span class="badge ${statusClass(stopStatus)}">${esc(stopStatus)}</span></div><div class="trend-accounting-values"><span>sens / qty<strong>${esc(slot.state || "UNKNOWN")} · ${fmtQty(slot.qty)}</strong></span><span>prix moyen / notionnel<strong>${dashboardValue(slot.avg_price, v => fmt$(v, 0))} · ${dashboardValue(slot.notional)}</strong></span><span>Gain / perte réalisé / latent<strong>${money(slot.realized_pnl)} · ${money(slot.upnl)}</strong></span><span>frais / funding<strong>${money(slot.fees)} · ${money(slot.funding_pnl)}</strong></span><span>stop demandé / protégé<strong>${dashboardValue(slot.stop_requested, v => fmt$(v, 0))} · ${dashboardValue(slot.protected_qty, v => fmtQty(v))}</strong></span><span>ordre / restant<strong>${esc(order.status || stop.status || "N/A")} · ${dashboardValue(slot.remaining_qty, v => fmtQty(v))}</strong></span><span>risque stop<strong>${money(slot.risk_to_stop)} <small>slippage profil visible ci-dessus</small></strong></span></div></article>`;
+    return `<article class="trend-accounting-row"><div class="trend-accounting-head"><strong>${esc(String(slot.name || "").replace("trend_ls_", "Donchian "))}</strong><span class="badge ${statusClass(stopStatus)}">${esc(stopStatus)}</span></div><div class="trend-accounting-values"><span>sens / qty<strong>${esc(slot.state || "UNKNOWN")} · ${fmtQty(slot.qty)}</strong></span><span>prix moyen / notionnel<strong>${dashboardValue(slot.avg_price, v => fmt$(v, 0))} · ${dashboardValue(slot.notional)}</strong></span><span>Gain / perte réalisé / latent<strong>${money(slot.realized_pnl)} · ${money(slot.upnl)}</strong></span><span>frais / funding<strong>${money(slot.fees)} · ${money(slot.funding_pnl)}</strong></span><span>stop demandé / protégé<strong>${dashboardValue(slot.stop_requested, v => fmt$(v, 0))} · ${dashboardValue(slot.protected_qty, v => fmtQty(v))}</strong></span><span>ordre / restant<strong>${esc(order.status || stop.status || "N/A")} · ${dashboardValue(slot.remaining_qty, v => fmtQty(v))}</strong></span><span>perte depuis l’entrée au stop<strong>${money(slot.risk_to_stop)} <small>slippage profil visible ci-dessus</small></strong></span></div></article>`;
   }).join("") || '<div class="empty">Aucune position Trend exposée.</div>';
 }
 function renderCarryTwoLeg(carry) {
@@ -1337,8 +1307,44 @@ async function refreshAnalytics() {
   drawFunding(a.funding_cum || []);
 }
 
+// Keep annotations inside the plot, even when several levels coincide.
+function placeChartLabels(items, top, bottom, gap) {
+  items.sort((a, b) => a.y - b.y);
+  items.forEach((item, i) => { item.y = Math.max(top, item.y, i ? items[i - 1].y + gap : top); });
+  for (let i = items.length - 1; i >= 0; i--)
+    items[i].y = Math.min(items[i].y, i === items.length - 1 ? bottom : items[i + 1].y - gap);
+  return items;
+}
+function chartValueList(svg, rows, expandable = false) {
+  const id = svg.id + "-values";
+  let host = $(id);
+  if (!host) {
+    host = document.createElement(expandable ? "details" : "div");
+    host.id = id;
+    if (expandable) {
+      host.className = "chart-level-details";
+      const summary = document.createElement("summary");
+      summary.textContent = "Seuils et positions";
+      host.append(summary);
+    }
+    const list = document.createElement("dl");
+    list.className = "chart-values";
+    host.append(list);
+    svg.parentElement.after(host);
+  }
+  host.hidden = rows.length === 0;
+  host.querySelector("dl").innerHTML = rows.map(row => `<div style="--series-color:${row.color}"><dt>${esc(row.label)}</dt><dd class="num">${esc(row.value)}</dd></div>`).join("");
+}
+function chartPrice(value) {
+  return value != null && value !== "" && Number.isFinite(Number(value))
+    ? new Intl.NumberFormat("fr-FR", {maximumFractionDigits:2}).format(Number(value)) + " $"
+    : "Indisponible";
+}
+let fundingPoints = [];
 function drawFunding(pts) {
-  const svg = $("fundchart"), W = svg.clientWidth || 300, H = svg.clientHeight || 52;
+  fundingPoints = pts;
+  const svg = $("fundchart"), W = svg.clientWidth, H = svg.clientHeight;
+  if (!W || !H) return;
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   if (pts.length < 2) { svg.innerHTML = ""; return; }
   const ys = pts.map(p => p[1]), xs = pts.map(p => p[0]);
@@ -1368,7 +1374,7 @@ function drawFunding(pts) {
     document.documentElement.setAttribute("data-theme", next);
     $("theme-btn").setAttribute("aria-pressed", String(next === "dark"));
     localStorage.setItem("btcq-theme", next);
-    scheduleRedraw("chart", "spark", "price", "yearly");
+    scheduleRedraw("chart", "spark", "price", "yearly", "funding");
   };
 })();
 
@@ -1668,8 +1674,9 @@ function drawPChart() {
   const svg = $("pchart"), W = svg.clientWidth, H = svg.clientHeight;
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   const all = data.candles || [];
-  $("pos-note").textContent = data.positions.length
-    ? "— " + data.positions.map(p => `${p.name} ${p.direction === 1 ? "Long" : "Short"} @ ${Math.round(p.entry).toLocaleString("fr-FR")}`).join(" · ")
+  const positions = data.positions || [];
+  $("pos-note").textContent = positions.length
+    ? "— " + positions.map(p => `${p.name} ${p.direction === 1 ? "Long" : "Short"} @ ${Math.round(p.entry).toLocaleString("fr-FR")}`).join(" · ")
     : "— aucune position ouverte";
   const sideKnown = data.regime_up === true || data.regime_up === false;
   const isShort = data.regime_up === false;
@@ -1688,7 +1695,7 @@ function drawPChart() {
   const crossedNow = sideKnown && latestPrice != null && activeThresholds.some(
     value => isShort ? latestPrice < value : latestPrice > value
   );
-  const hasPosition = (data.positions || []).length > 0;
+  const hasPosition = (positions || []).length > 0;
   guide.dataset.status = hasPosition ? "position" : crossedNow ? "threshold" : "waiting";
   $("signal-mode").textContent = t(!sideKnown
     ? "signal_unknown_mode"
@@ -1697,7 +1704,7 @@ function drawPChart() {
     ? (isShort ? "signal_short_rule" : "signal_long_rule")
     : "signal_unknown_rule");
   if (W < 180 || H < 100) return;
-  if (all.length < 10 || !sideKnown) { svg.innerHTML = ""; pcView = null; return; }
+  if (all.length < 10 || !sideKnown) { svg.innerHTML = ""; pcView = null; chartValueList(svg, [], true); return; }
   // fenêtre affichée : les pcRange dernières bougies 1h (chips 2 j / 4 j / 8 j)
   const start = Math.max(0, all.length - pcRange);
   const candles = all.slice(start);
@@ -1714,14 +1721,14 @@ function drawPChart() {
     color: ch.active ? (PC_CHCOL[ch.name] || col("--s1")) : col("--muted"),
     label: `${ch.name} ${ch.direction}${ch.active ? "" : ` · ${t("inactive_suffix")}`}`,
   }));
-  const M = {t: 12, r: 132, b: 24, l: 10};
+  const M = {t: 16, r: 66, b: 28, l: 12};
   let lo = Math.min(...candles.map(c => c[3])), hi = Math.max(...candles.map(c => c[2]));
   const channelValues = rawChans.flatMap(ch => [...ch.high, ...ch.low]).filter(v => v != null);
   if (channelValues.length) {
     lo = Math.min(lo, ...channelValues);
     hi = Math.max(hi, ...channelValues);
   }
-  for (const p of data.positions) { lo = Math.min(lo, p.stop, p.entry); hi = Math.max(hi, p.stop, p.entry); }
+  for (const p of positions) { lo = Math.min(lo, p.stop, p.entry); hi = Math.max(hi, p.stop, p.entry); }
   const pad = (hi - lo) * .06; lo -= pad; hi += pad;
   const X = i => M.l + i / (candles.length - 1) * (W - M.l - M.r);
   const Y = v => H - M.b - (v - lo) / (hi - lo) * (H - M.t - M.b);
@@ -1750,15 +1757,18 @@ function drawPChart() {
     const last = waiting[waiting.length - 1], middle = (Y(last.high) + Y(last.low)) / 2;
     g += `<text x="${W - M.r - 8}" y="${middle.toFixed(1)}" text-anchor="end" fill="${col("--muted")}" font-size="13" font-weight="600" opacity=".8">${t("waiting_label")}</text>`;
   }
+  g += `<g clip-path="url(#pclip)">`;
   candles.forEach((c, i) => {
     const [ts, o, h, l, cl] = c, x = X(i), colr = cl >= o ? up : down;
     g += `<line x1="${x}" x2="${x}" y1="${Y(h)}" y2="${Y(l)}" stroke="${colr}" stroke-width="1"/>`;
     g += `<rect x="${x - bw/2}" y="${Y(Math.max(o, cl))}" width="${bw}" height="${Math.max(1, Math.abs(Y(o) - Y(cl)))}" fill="${colr}" rx="0.5"/>`;
   });
-  for (let i = 0; i < 5; i++) {
-    const idx = Math.round(i / 4 * (candles.length - 1));
+  g += `</g>`;
+  const dateTicks = Math.max(1, Math.min(4, Math.floor((W - M.l - M.r) / 105)));
+  for (let i = 0; i <= dateTicks; i++) {
+    const idx = Math.round(i / dateTicks * (candles.length - 1));
     const d = new Date(candles[idx][0]);
-    g += `<text x="${X(idx)}" y="${H - 7}" text-anchor="middle" fill="${col("--muted")}" font-size="13">${d.toLocaleDateString("fr-FR", {day:"2-digit", month:"2-digit"})} ${d.getHours()}h</text>`;
+    g += `<text x="${X(idx)}" y="${H - 7}" text-anchor="${i === 0 ? "start" : i === dateTicks ? "end" : "middle"}" fill="${col("--muted")}" font-size="13">${d.toLocaleDateString("fr-FR", {day:"2-digit", month:"2-digit"})} ${d.getHours()}h</text>`;
   }
   // canaux de Donchian 20/55/100 (calculés sur 4h, le timeframe de décision).
   // Les deux côtés sont visibles : plein/couleur pour la direction autorisée
@@ -1776,14 +1786,9 @@ function drawPChart() {
     });
     if (!d) return;
     g += `<path d="${d}" fill="none" stroke="${c}" stroke-width="${ch.active ? 1.35 : 1}" opacity="${ch.active ? .78 : .36}" ${ch.active ? "" : 'stroke-dasharray="3 4"'} clip-path="url(#pclip)"/>`;
-    labels.push({name: ch.label, color: c, active:ch.active, y: Y(last)});
+    labels.push({name: `${ch.name} ${ch.direction}${ch.active ? "" : " · inactif"}`, color: c, active:ch.active, value:last, y: Y(last)});
   });
-  // étiquettes empilées : si deux niveaux sont confondus, on les écarte de 12px
-  labels.sort((a, b) => a.y - b.y);
-  for (let i = 1; i < labels.length; i++)
-    labels[i].y = Math.max(labels[i].y, labels[i - 1].y + 12);
-  for (const l of labels)
-    g += `<text x="${W - M.r - 4}" y="${(l.y - 3).toFixed(1)}" text-anchor="end" fill="${l.color}" font-size="13" font-weight="600" opacity="${l.active ? 1 : .72}">${l.name}</text>`;
+  // Threshold names and prices stay in the accessible list below; lines remain in the plot.
   // lignes d'entrée/stop + étiquettes à gauche, empilées comme les canaux à
   // droite : quand plusieurs systèmes sont entrés à des niveaux proches (cas
   // fréquent, les trois Donchian suivent souvent le même mouvement), les
@@ -1795,16 +1800,14 @@ function drawPChart() {
   // stop garde le rouge universel (convention "danger" à ne pas diluer) mais
   // porte une pastille de la couleur du système pour dire QUI stoppe où.
   const posLabels = [];
-  for (const p of data.positions) {
+  for (const p of positions) {
     const sysColor = PC_CHCOL[p.name] || col("--s1"), sc = col("--crit");
     g += `<line x1="${M.l}" x2="${W - M.r}" y1="${Y(p.entry)}" y2="${Y(p.entry)}" stroke="${sysColor}" stroke-width="1.4" stroke-dasharray="5 4"/>`;
     g += `<line x1="${M.l}" x2="${W - M.r}" y1="${Y(p.stop)}" y2="${Y(p.stop)}" stroke="${sc}" stroke-width="1.3" stroke-dasharray="2 3"/>`;
     posLabels.push({text: `${p.name} ENTRÉE`, textColor: sysColor, dotColor: sysColor, y: Y(p.entry)});
     posLabels.push({text: `${p.name} STOP`, textColor: sc, dotColor: sysColor, y: Y(p.stop)});
   }
-  posLabels.sort((a, b) => a.y - b.y);
-  for (let i = 1; i < posLabels.length; i++)
-    posLabels[i].y = Math.max(posLabels[i].y, posLabels[i - 1].y + 11);
+  placeChartLabels(posLabels, M.t + 10, H - M.b - 8, 18);
   for (const l of posLabels) {
     g += `<circle cx="${M.l + 3}" cy="${(l.y - 6.5).toFixed(1)}" r="3" fill="${l.dotColor}" stroke="${col("--surface-solid")}" stroke-width="1"/>`;
     g += `<text x="${M.l + 10}" y="${(l.y - 3).toFixed(1)}" fill="${l.textColor}" font-size="13" font-weight="600">${l.text}</text>`;
@@ -1814,7 +1817,7 @@ function drawPChart() {
   // entry_ts dans la fenêtre affichée ; sinon (entrée plus ancienne que la
   // plage 2j/4j/8j sélectionnée) on n'affiche rien ici, la pastille de marge
   // ci-dessus reste le seul repère — pas de marqueur trompeur en bord de graphe.
-  for (const p of data.positions) {
+  for (const p of positions) {
     if (!p.entry_ts) continue;
     const entryMs = Date.parse(String(p.entry_ts).replace(" ", "T"));
     if (isNaN(entryMs) || entryMs < candles[0][0] || entryMs > candles[candles.length - 1][0]) continue;
@@ -1831,7 +1834,14 @@ function drawPChart() {
   }
   g += `<g id="pcursor"></g>`;
   svg.innerHTML = g;
-  pcView = {candles, chans, positions: data.positions, X, Y, M, W, H};
+  pcView = {candles, chans, positions: positions, X, Y, M, W, H};
+  chartValueList(svg, [
+    ...labels.map(l => ({label:l.name, value:chartPrice(l.value), color:l.color})),
+    ...positions.flatMap(p => [
+      {label:`${p.name} · entrée`, value:chartPrice(p.entry), color:PC_CHCOL[p.name] || col("--s1")},
+      {label:`${p.name} · stop`, value:chartPrice(p.stop), color:col("--crit")},
+    ]),
+  ], true);
 }
 
 // survol : réticule aimanté à la bougie + infobulle OHLC / canaux / position
@@ -1942,6 +1952,11 @@ function drawChart() {
   if (W < 180 || H < 100) return;
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   const cutoff = range ? Date.now() - range * 3600e3 : 0;
+  const caption = svg.closest("[data-card]").querySelector(".stage-heading p");
+  if (caption) caption.textContent = unit === "dd"
+    ? "Recul depuis le plus haut observé dans la période affichée."
+    : unit === "pct" ? "Base 100 au premier relevé de chaque série dans la période affichée."
+    : "Valeur du portefeuille et des stratégies en dollars, positions ouvertes valorisées.";
 
   let series;
   if (unit === "dd") {
@@ -1973,11 +1988,11 @@ function drawChart() {
 
   const all = series.flatMap(s => s.pts);
   if (all.length < 4) {
-    svg.innerHTML = `<text x="${W/2}" y="${H/2}" text-anchor="middle" fill="${col("--muted")}" font-size="13">
-      Historique en construction — les courbes se dessinent après quelques minutes de fonctionnement.</text>`;
+    svg.innerHTML = `<text x="${W/2}" y="${H/2}" text-anchor="middle" fill="${col("--muted")}" font-size="13">Historique en construction</text>`;
+    chartValueList(svg, []);
     return;
   }
-  const M = {t: 18, r: 108, b: 32, l: 20};
+  const M = {t: 20, r: 16, b: 32, l: 20};
   const xs = all.map(p => p[0]), ys = all.map(p => p[1]);
   const x0 = Math.min(...xs), x1 = Math.max(...xs);
   let y0 = Math.min(...ys), y1 = Math.max(...ys);
@@ -2003,7 +2018,7 @@ function drawChart() {
     const lab = (x1 - x0 < 86400e3 * 2)
       ? d.toLocaleTimeString("fr-FR", {hour: "2-digit", minute: "2-digit"})
       : d.toLocaleDateString("fr-FR", {day: "2-digit", month: "short"});
-    g += `<text x="${X(t)}" y="${H - 10}" text-anchor="middle" fill="${col("--muted")}" font-size="13">${lab}</text>`;
+    g += `<text x="${X(t)}" y="${H - 10}" text-anchor="${i === 0 ? "start" : i === nx ? "end" : "middle"}" fill="${col("--muted")}" font-size="13">${lab}</text>`;
   }
   // courbes
   for (const s of series) {
@@ -2046,24 +2061,13 @@ function drawChart() {
       }
     }
   }
-  // étiquettes de valeur à droite (façon terminal), anti-chevauchement
-  const tags = series.filter(s => s.pts.length).map(s => {
+  // Latest values live outside the plot: no reserved blank strip or colliding tags.
+  const latest = series.filter(s => s.pts.length).map(s => {
     const last = s.pts[s.pts.length - 1];
-    return {s, x: X(last[0]), y: Y(last[1]), v: last[1]};
-  }).sort((a, b) => a.y - b.y);
-  for (let i = 1; i < tags.length; i++) if (tags[i].y - tags[i-1].y < 22) tags[i].y = tags[i-1].y + 22;
-  for (const t of tags) {
-    if (t.s.pulse) g += `<circle cx="${t.x}" cy="${Y(t.v)}" r="4" fill="${t.s.color}" opacity=".9">
-        <animate attributeName="r" values="3.5;8;3.5" dur="2.6s" repeatCount="indefinite"/>
-        <animate attributeName="opacity" values=".9;.15;.9" dur="2.6s" repeatCount="indefinite"/></circle>`;
-    g += `<circle cx="${t.x}" cy="${Y(t.v)}" r="3.2" fill="${t.s.color}" stroke="${col("--surface-solid")}" stroke-width="1.6"/>`;
-    g += `<g transform="translate(${W - M.r + 10}, ${t.y})">
-      <rect x="0" y="-11" width="${M.r - 16}" height="22" rx="7" fill="${t.s.color}" opacity=".14"/>
-      <rect x="0" y="-11" width="3" height="22" rx="1.5" fill="${t.s.color}"/>
-      <text x="9" y="-1" fill="${t.s.color}" font-size="13" font-weight="600" letter-spacing="0">${t.s.label}</text>
-      <text x="9" y="9" fill="${col("--ink")}" font-size="13" font-weight="600" style="font-variant-numeric:tabular-nums">${fmtY(t.v)}${unit === "usd" ? " $" : ""}</text>
-    </g>`;
-  }
+    g += `<circle cx="${X(last[0])}" cy="${Y(last[1])}" r="3.2" fill="${s.color}" stroke="${col("--surface-solid")}" stroke-width="1.6"/>`;
+    return {label:s.label, value:fmtY(last[1]) + (unit === "usd" ? " $" : ""), color:s.color};
+  });
+  chartValueList(svg, latest);
   g += `<line id="xhair" y1="${M.t}" y2="${H - M.b}" stroke="${col("--axis")}" stroke-dasharray="3 3" visibility="hidden"/>`;
   svg.innerHTML = g;
 
@@ -2228,7 +2232,7 @@ async function openDrill(name, trigger=null) {
     const detail = (label, valueText, className="") => `<div class="modal-detail"><span>${label}</span><strong class="${className}">${valueText}</strong></div>`;
     const section = (title, rows) => `<section class="modal-section"><h4>${title}</h4><div class="modal-grid">${rows.join("")}</div></section>`;
     const stopPnl = slot.stop_pnl;
-    const stopPnlText = stopPnl == null ? "N/A" : stopPnl > 0 ? "gain protégé " + money(stopPnl) : stopPnl < 0 ? "risque au stop " + money(Math.abs(stopPnl)) : "PnL au stop 0 $";
+    const stopPnlText = stopPnl == null ? "N/A" : stopPnl > 0 ? "gain depuis l’entrée au stop " + money(stopPnl) : stopPnl < 0 ? "perte depuis l’entrée au stop " + money(Math.abs(stopPnl)) : "résultat depuis l’entrée au stop : 0 $";
     body += section("Position", [
       detail("État", value(slot.state || "UNKNOWN")),
       detail("Quantité", value(f(slot.qty))),
@@ -2373,10 +2377,11 @@ function scheduleRedraw(...names) {
     if (needs.has("spark")) drawSpark();
     if (needs.has("price")) drawPChart();
     if (needs.has("yearly")) drawYearly();
+    if (needs.has("funding")) drawFunding(fundingPoints);
   });
 }
 
-function redrawAll() { scheduleRedraw("chart", "spark", "price", "yearly"); if (lastSummary) renderExposureHealth(lastSummary); }
+function redrawAll() { scheduleRedraw("chart", "spark", "price", "yearly", "funding"); if (lastSummary) renderExposureHealth(lastSummary); }
 
 $("settings-btn").onclick = () => {
   buildDrawer();
@@ -2529,8 +2534,8 @@ function setRefreshState(state) {
   } else check.dataset.state = "out";
   if (state === "success" || state === "partial") refreshResetTimer = window.setTimeout(() => setRefreshState("idle"), state === "partial" ? 2600 : 1400);
 }
-window.addEventListener("resize", () => { scheduleRedraw("chart", "spark", "price", "yearly"); scheduleMonitorLayout(); });
-window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => scheduleRedraw("chart", "spark", "price", "yearly"));
+window.addEventListener("resize", () => { scheduleRedraw("chart", "spark", "price", "yearly", "funding"); });
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => scheduleRedraw("chart", "spark", "price", "yearly", "funding"));
 document.addEventListener("visibilitychange", () => { if (!document.hidden) { tick({force:true}); restartTimer(); } });
 async function tick(options={}) {
   if (tickPromise) {
@@ -2574,3 +2579,19 @@ refreshYearly(); // référence statique : un seul chargement, redessinée aux c
 restartTimer();
 
 "use strict";
+
+if ("ResizeObserver" in window) {
+  const chartNames = {chart:"chart", pchart:"price", ychart:"yearly", fundchart:"funding"};
+  const chartSizes = new WeakMap();
+  const chartObserver = new ResizeObserver(entries => {
+    for (const entry of entries) {
+      const size = `${entry.contentRect.width}:${entry.contentRect.height}`;
+      if (chartSizes.get(entry.target) === size) continue;
+      chartSizes.set(entry.target, size);
+      if (entry.contentRect.width > 0 && entry.contentRect.height > 0)
+        scheduleRedraw(chartNames[entry.target.id]);
+    }
+  });
+  Object.keys(chartNames).forEach(id => { if ($(id)) chartObserver.observe($(id)); });
+}
+if (document.fonts) document.fonts.ready.then(() => scheduleRedraw("chart", "price", "yearly", "funding"));

@@ -116,7 +116,7 @@
     </div>
 
     <div class="card performance-stage" data-card="chart">
-      <div class="stage-heading"><div><h2 data-i18n="cards.chart">Courbe d’équity</h2><p>Équity et drawdown sur le même horizon réalisé.</p></div><span class="stage-tag">PERFORMANCE</span></div>
+      <div class="stage-heading"><div><h2 data-i18n="cards.chart">Courbe du portefeuille</h2><p>Équity et drawdown sur le même horizon réalisé.</p></div><span class="stage-tag">PERFORMANCE</span></div>
       <div class="controls">
         <div class="chips" id="range">
           <button class="chip" data-r="24" aria-pressed="false">24 h</button>
@@ -176,22 +176,28 @@
     </div>
 
     <div class="card event-panel" data-card="events">
-      <div class="card-head">
-        <h2>Journal des événements</h2>
-        <span class="chips" id="evfilter">
-          <button class="chip on" data-f="all" aria-pressed="true">Tout</button>
-          <button class="chip" data-f="trend" aria-pressed="false">Trend</button>
-          <button class="chip" data-f="carry" aria-pressed="false">Carry</button>
-        </span>
-      </div>
-      <div id="events" tabindex="0" aria-label="Journal des événements défilable"><div class="empty">Chargement…</div></div>
+      <details class="journal-disclosure">
+        <summary><h2>Journal des événements</h2></summary>
+        <div class="event-filters">
+          <span class="chips" id="evfilter">
+            <button class="chip on" data-f="all" aria-pressed="true">Tout</button>
+            <button class="chip" data-f="trend" aria-pressed="false">Trend</button>
+            <button class="chip" data-f="carry" aria-pressed="false">Carry</button>
+          </span>
+        </div>
+        <div id="events" tabindex="0" aria-label="Journal des événements défilable"><div class="empty">Chargement…</div></div>
+      </details>
     </div>
 
     <div class="card journal-panel" data-card="journal">
-      <div class="panel-title-row"><h2>Journal opérationnel</h2><span class="panel-kind panel-kind-health">SQLITE</span></div>
-      <p class="panel-caption">Décision → intention → soumission → fills → comptabilité → protection.</p>
-      <div class="journal-sequence" id="journal-sequence">—</div>
-      <div id="journal-rows"><div class="empty">Journal durable en attente…</div></div>
+      <details class="journal-disclosure">
+        <summary><h2>Journal opérationnel</h2></summary>
+        <div class="journal-content">
+          <p class="panel-caption">Décision → intention → soumission → fills → comptabilité → protection.</p>
+          <div class="journal-sequence" id="journal-sequence">—</div>
+          <div id="journal-rows"><div class="empty">Journal durable en attente…</div></div>
+        </div>
+      </details>
     </div>
 
     <div class="card trend-hero-panel" data-card="trend">
@@ -202,12 +208,6 @@
           <div class="decision-next"><span>Prochaine clôture 4 h</span><strong class="num" id="trend-next-boundary">N/A</strong><small id="trend-next-countdown">frontière planifiée · aucune action garantie</small></div>
         </div>
       </div>
-      <div class="engine-summary trend-summary" id="trend-overview">
-        <div class="summary-item"><span>Positions ouvertes</span><strong class="num" id="trend-open-slots">—</strong><small id="trend-open-detail">—</small></div>
-        <div class="summary-item"><span>Exposition</span><strong class="num" id="trend-total-notional">—</strong><small>notionnel estimé · prix observé</small></div>
-        <div class="summary-item"><span>Gain / perte en cours</span><strong class="num" id="trend-total-upnl">—</strong><small id="trend-total-upnl-pct">% du notionnel d’entrée</small></div>
-        <div class="summary-item"><span>Équity Trend</span><strong class="num" id="trend-eq">—</strong><small><span id="trend-beat"></span></small></div>
-      </div>
       <div class="table-wrap position-table-wrap">
       <table class="position-table">
         <thead><tr><th>Slot</th><th>Position</th><th>Prix</th><th>Gain / perte en cours</th><th>Stop / protection</th></tr></thead>
@@ -215,6 +215,12 @@
       </table>
       </div>
       <details class="technical-details trend-tech-details"><summary>Détails de la stratégie</summary>
+      <div class="engine-summary trend-summary" id="trend-overview">
+        <div class="summary-item"><span>Positions ouvertes</span><strong class="num" id="trend-open-slots">—</strong><small id="trend-open-detail">—</small></div>
+        <div class="summary-item"><span>Exposition</span><strong class="num" id="trend-total-notional">—</strong><small>notionnel estimé · prix observé</small></div>
+        <div class="summary-item"><span>Gain / perte en cours</span><strong class="num" id="trend-total-upnl">—</strong><small id="trend-total-upnl-pct">% du notionnel d’entrée</small></div>
+        <div class="summary-item"><span>Valeur Trend</span><strong class="num" id="trend-eq">—</strong><small><span id="trend-beat"></span></small></div>
+      </div>
         <div class="decision-matrix" aria-label="Matrice décisionnelle Trend">
           <div><span>Régime EMA</span><strong id="trend-regime-visual">N/A</strong></div>
           <div><span>Distance Donchian</span><strong id="trend-donchian-visual" class="num">N/A</strong></div>
@@ -270,7 +276,9 @@
         <div class="technical-note">Les sources et horodatages décrivent les références effectivement enregistrées par le moteur.</div>
       </details>
 
+    </div>
 
+    <div class="card dated-carry-card" data-card="dated_carry">
       <section class="dated-carry-panel" aria-labelledby="dated-carry-title" aria-live="polite">
         <div class="dated-carry-heading">
           <div>
@@ -295,19 +303,29 @@
           <div><span data-i18n="dated_net_reserve">Net avant réserve / réserve / après</span><strong id="dated-carry-net-reserve">N/A</strong></div>
         </div>
         </details>
+        <p class="dated-carry-health-summary" id="dated-carry-health-summary" role="status">État expérimental : vérification en attente.</p>
+        <details class="technical-details"><summary>État et provenance du portefeuille expérimental</summary>
         <div class="dated-carry-foot" id="dated-carry-health">État général inconnu · la disponibilité du collecteur et du runner, ainsi que l’intégrité DB, ne sont pas vérifiées par cet état.</div>
         <small data-i18n="dated_economics_note">Prix/quantités et PnL proviennent du checkpoint Paper, pas de fills réels. La marge immobilisée est un besoin de liquidité, pas une perte. La réserve est un seuil de décision, pas une charge. Rentabilité : INSUFFICIENT_EVIDENCE.</small>
+        </details>
       </section>
     </div>
 
     <div class="card" data-card="breakdown">
-      <h2>Répartition &amp; records</h2>
-      <div class="contribution-table-wrap"><div class="section-label">Contributions comptables</div><div id="contribution-table"><div class="empty" style="padding:8px 0">N/A</div></div></div>
-      <div style="font-size:13px;color:var(--muted);text-transform:none;letter-spacing:normal;margin:10px 0 4px;font-weight:500">Par sous-système</div>
-      <div id="brk-strat"><div class="empty" style="padding:10px 0">en attente de trades</div></div>
-      <div style="font-size:13px;color:var(--muted);text-transform:none;letter-spacing:normal;margin:12px 0 4px;font-weight:500">Par direction</div>
-      <div id="brk-dir"><div class="empty" style="padding:10px 0">en attente de trades</div></div>
-      <div class="records" id="records"></div>
+      <h2>Contributions et résultats</h2>
+      <div class="breakdown-columns">
+        <section aria-label="Contributions comptables">
+          <h3>Contributions comptables</h3>
+          <div class="contribution-table-wrap"><div id="contribution-table"><div class="empty">Indisponible</div></div></div>
+          <div class="records" id="records"></div>
+        </section>
+        <section aria-label="Résultats par stratégie et direction">
+          <h3>Par sous-système</h3>
+          <div id="brk-strat"><div class="empty">En attente de trades</div></div>
+          <h3 class="breakdown-subheading">Par direction</h3>
+          <div id="brk-dir"><div class="empty">En attente de trades</div></div>
+        </section>
+      </div>
     </div>
 
     <div class="card" data-card="conformity">
@@ -458,8 +476,6 @@
 <script src="/static/dashboard_state.js" defer></script>
 <script src="/static/dashboard.js" defer></script>
 <script src="/static/effects.js" defer></script>
-
-
 
 </body>
 </html>

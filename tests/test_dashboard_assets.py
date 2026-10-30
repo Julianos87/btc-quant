@@ -291,16 +291,51 @@ def test_v41_visual_qa_keeps_panels_content_led_and_events_structured(monkeypatc
     assert "const active = !operational" in javascript
 
 
-def test_postdeploy_layout_avoids_cross_column_row_cavities(monkeypatch):
-    monkeypatch.setattr(dashboard, "AUTH_TOKEN", None)
-    css = (dashboard.ROOT / "dashboard" / "static" / "dashboard.css").read_text(encoding="utf-8")
+def test_experimental_carry_scope_and_warning_remain_explicit():
+    from html.parser import HTMLParser
 
-    assert '"pulse price"\n      "exposure price"\n      "carry carry"' in css
-    assert '"metrics metrics"\n      "conformity breakdown"\n      "yearly breakdown"' in css
-    assert '"radar radar"\n      "trend trend"\n      "chart exposure"\n      "price carry"' in css
-    assert (
-        css_declarations(css, 'body[data-view="performance"] [data-card="metrics"] .metric')[0][
-            "min-height"
-        ]
-        == "78px"
-    )
+    class ScopeParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.stack = []
+            self.ids = {}
+
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            if "id" in attrs:
+                self.ids[attrs["id"]] = {
+                    "cards": [a["data-card"] for _, a in self.stack if "data-card" in a],
+                    "in_details": any(t == "details" for t, _ in self.stack),
+                }
+            if tag not in {
+                "area",
+                "base",
+                "br",
+                "col",
+                "embed",
+                "hr",
+                "img",
+                "input",
+                "link",
+                "meta",
+                "param",
+                "source",
+                "track",
+                "wbr",
+            }:
+                self.stack.append((tag, attrs))
+
+        def handle_endtag(self, tag):
+            for index in range(len(self.stack) - 1, -1, -1):
+                if self.stack[index][0] == tag:
+                    del self.stack[index:]
+                    break
+
+    parser = ScopeParser()
+    parser.feed((dashboard.ROOT / "dashboard" / "index.html").read_text(encoding="utf-8"))
+    assert parser.ids["carry-pos"]["cards"] == ["carry"]
+    assert parser.ids["dated-carry-title"]["cards"] == ["dated_carry"]
+    warning = parser.ids["dated-carry-health-summary"]
+    assert warning["cards"] == ["dated_carry"]
+    assert not warning["in_details"]
+    assert parser.ids["dated-carry-health"]["in_details"]

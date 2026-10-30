@@ -219,7 +219,8 @@ fi
 # Le code reste détenu par root (release immuable), mais les services systemd
 # s'exécutent sous btcquant et doivent pouvoir traverser/lire la release.
 chown -R root:btcquant "${STAGING}"
-chmod -R o-rwx "${STAGING}"
+# uv can install cache files with owner-only modes; the service group must read them.
+chmod -R g+rX,o-rwx "${STAGING}"
 chmod +x "${STAGING}/scripts/backup_state.sh" "${STAGING}/scripts/backup-health.sh" \
   "${STAGING}/deploy/"*.sh
 mv "${STAGING}" "${TARGET}"
