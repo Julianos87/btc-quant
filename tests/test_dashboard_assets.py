@@ -1,4 +1,12 @@
+import re
+
 from dashboard import app as dashboard
+
+
+def css_declarations(css, selector):
+    """Read component rules without depending on formatting or declaration order."""
+    blocks = re.findall(r"(?:^|\n)\s*" + re.escape(selector) + r"\s*\{([^{}]*)\}", css)
+    return [dict(item.strip().split(":", 1) for item in block.split(";") if ":" in item) for block in blocks]
 
 
 def test_dashboard_loads_external_versioned_assets(monkeypatch):
@@ -14,7 +22,7 @@ def test_dashboard_loads_external_versioned_assets(monkeypatch):
     assert b'<script src="/static/effects.js" defer></script>' in page.data
     assert b'data-view="monitor"' in page.data
     assert b'id="board"' in page.data
-    assert b"Paper synth" in page.data
+    assert b'id="carry-explainer"' in page.data
     assert b"<style>" not in page.data
     assert b"<script>" not in page.data
     assert b"fonts.googleapis.com" not in page.data
@@ -58,8 +66,8 @@ def test_frontend_escapes_remote_text_before_html_injection():
         'label: `${ch.name} ${ch.direction}${ch.active ? "" : ` · ${t("inactive_suffix")}`}`'
         in javascript
     )
-    assert 'direction:"LONG", active:!isShort' in javascript
-    assert 'direction:"SHORT", active:isShort' in javascript
+    assert 'direction:"Long", active:!isShort' in javascript
+    assert 'direction:"Short", active:isShort' in javascript
     assert "const waiting = candles.map" in javascript
     assert "if (all.length < 10 || !sideKnown)" in javascript
 
@@ -96,9 +104,8 @@ def test_position_cards_expose_operational_detail_contract(monkeypatch):
     assert b"? Inconnu" in javascript
     assert b"! Non prot\xc3\xa9g\xc3\xa9" in javascript
     assert b"carry.position_status" in javascript
-    assert b"badge unknown" in javascript
-    assert "ÉTAT INCONNU".encode() in javascript
-    assert b"aucune position venue" in page
+    assert "État indisponible".encode() in javascript
+    assert "pas des positions réelles".encode() in page
 
 
 def test_dashboard_visual_hierarchy_uses_progressive_disclosure(monkeypatch):
@@ -118,8 +125,8 @@ def test_dashboard_visual_hierarchy_uses_progressive_disclosure(monkeypatch):
     assert "Détails techniques" in html
 
     assert "@media (max-width:899px)" in css
-    assert ".position-table thead { display:none; }" in css
-    assert ".position-table .protection-cell { grid-column:1/-1;" in css
+    assert css_declarations(css, ".position-table thead")[0]["display"] == "none"
+    assert css_declarations(css, ".position-table .protection-cell")[0]["grid-column"].replace(" ", "") == "1/-1"
     assert "html, body { overflow-x:clip; }" not in css
     assert ".grid > .card" in css
     assert 'class="slot-detail-toggle"' in javascript
@@ -161,7 +168,9 @@ def test_dashboard_interactions_are_accessible_and_fail_closed(monkeypatch):
 
     assert "overflow-x:clip" not in css
     assert "overflow-x:hidden" not in css
-    assert ".mode .blink, .fresh-dot" in css
+    reduced_motion = css.split("@media (prefers-reduced-motion:reduce)", 1)[1]
+    for selector in (".mode .blink", ".fresh-dot"):
+        assert css_declarations(reduced_motion, selector)[0]["animation"] == "none !important"
     assert ".workspace-tab" in css
     assert ".t-text-swap" in css
     assert ".t-success-check" in css
@@ -231,7 +240,7 @@ def test_v3_decision_board_exposes_only_observed_position_and_risk_context(monke
 
     assert 'class="card trend-hero-panel"' in html
     assert 'class="decision-matrix"' in html
-    assert 'id="position-visuals"' in html
+    assert 'id="position-visuals"' not in html
     assert 'class="card focus-card risk risk-command"' in html
     assert 'id="market-price-panel"' in html
     assert "ATR exposé" in html
@@ -263,18 +272,11 @@ def test_v41_visual_qa_keeps_panels_content_led_and_events_structured(monkeypatc
     )
 
     assert "--workspace-rail:224px" in css
-    assert "--workspace-gutter:clamp(14px,3vw,48px)" in css
-    assert (
-        ".system-rail { position:fixed; z-index:5; top:280px; left:calc(var(--workspace-gutter) + 15px);"
-        in css
-    )
-    assert ".system-rail { left:calc(var(--workspace-gutter) + 12px); width:184px; }" in css
-    assert ".system-rail { position:fixed; z-index:5; top:280px;" in css
-    assert ".system-rail { top:280px; grid-template-columns:1fr; }" in css
-    assert 'body[data-view="risk"] .risk-command { min-height:0;' in css
-    assert ".risk-measure-track { position:static;" in css
+    assert ".system-rail" not in css  # Removed duplicate status rail.
+    assert css_declarations(css, 'body[data-view="risk"] .risk-command')[0]["min-height"] == "0"
+    assert css_declarations(css, ".risk-measure-track")[0]["position"] == "static"
     assert ".event-panel .event-meta" in css
-    assert ".monitor-command .ops-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }" in css
+    assert css_declarations(css, ".monitor-command .ops-grid")[0]["grid-template-columns"] == "repeat(2,minmax(0,1fr))"
     assert 'class="slotclick is-flat"' in javascript
     assert 'class="event-meta"' in javascript
     assert "const active = !operational" in javascript
@@ -287,6 +289,4 @@ def test_postdeploy_layout_avoids_cross_column_row_cavities(monkeypatch):
     assert '"pulse price"\n      "exposure price"\n      "carry carry"' in css
     assert '"metrics metrics"\n      "conformity breakdown"\n      "yearly breakdown"' in css
     assert '"radar radar"\n      "trend trend"\n      "chart exposure"\n      "price carry"' in css
-    assert (
-        'body[data-view="performance"] [data-card="metrics"] .metric {\n    min-height:78px;' in css
-    )
+    assert css_declarations(css, 'body[data-view="performance"] [data-card="metrics"] .metric')[0]["min-height"] == "78px"

@@ -30,7 +30,7 @@ function fetchDashboard(url, options = {}) {
 // ── i18n ───────────────────────────────────────────────────
 const I18N = {
   fr: {
-    paper:"PAPER TRADING", theme:"Thème", settings:"Réglages", btcusdt:"BTC-PERP / USDC",
+    paper:"Paper", theme:"Thème", settings:"Réglages", btcusdt:"BTC-PERP / USDC",
     h24:"24 heures", funding_ann:"Funding annualisé", live_perf:"Performance en direct",
     realized:"réalisé", exposure_title:"Exposition", system_health_label:"Santé système", exposure_health:"Exposition & santé", gross_exposure:"Exposition brute portefeuille",
     leverage_note:"ratio d’exposition brute · repère = 1× ; descriptif, pas le levier du moteur", next_bar:"Prochaine bougie 4 h",
@@ -47,15 +47,16 @@ const I18N = {
     portfolio:"Portefeuille", all:"Tout", closed_trades:"Trades clôturés", from:"Du", to:"au",
     reset:"Réinitialiser", no_trades:"Aucun trade clôturé pour l’instant — le journal se remplit à la première sortie de position.",
     auto_refresh:"Actualisation automatique", real_data:"données réelles Hyperliquid, exécution simulée",
-    equity_total:"Équity totale", pnl_day:"PnL du jour · UTC", since_midnight:"depuis 00:00 UTC",
-    alloc_real:"Allocation réelle", pending_deposit:"Apport en attente", online:"EN LIGNE", offline:"ARRÊTÉ",
+    equity_total:"Valeur du portefeuille", pnl_day:"Gain / perte du jour", since_midnight:"depuis 00:00 UTC",
+    alloc_real:"Allocation réelle", pending_deposit:"Apport en attente", online:"En ligne", offline:"Arrêté",
+    state_stale:"Périmé", state_unknown:"Indisponible", protection_software:"logiciel",
     workspace:"Vue", view_monitor:"Surveillance", view_performance:"Performance", view_risk:"Risque",
     status_good:"Tout est nominal", status_warn:"Surveillance requise", status_crit:"Action requise",
     status_nominal_detail:"Trend et Carry répondent · protections armées",
     status_trend_down:"Trend ne répond plus", status_carry_down:"Carry ne répond plus",
     status_kill:"Kill-switch actif", status_lockout:"Lockout journalier actif",
     data_now:"données à l’instant", data_ago:"mis à jour il y a",
-    performance_snapshot:"Synthèse de performance", performance_snapshot_note:"Le bilan réalisé, sans bruit opérationnel.",
+    performance_snapshot:"Synthèse de performance", performance_snapshot_note:"Résultats cumulés, avec les positions ouvertes valorisées.",
     performance_total:"Depuis le départ", performance_day:"Aujourd’hui", performance_dd:"Drawdown actuel", performance_sharpe:"Sharpe réalisé",
     risk_radar:"Radar de risque", risk_radar_note:"Ce qui peut réellement dégrader le portefeuille maintenant.",
     risk_stop:"Risque jusqu’aux stops", risk_margin:"Marge au stop la plus proche", risk_leverage:"Levier effectif", risk_policy:"Protection active",
@@ -73,28 +74,28 @@ const I18N = {
     carry_modeled_qty:"Perp qty modélisé", carry_modeled_spot:"Spot notionnel modélisé",
     carry_modeled_perp:"Perp notionnel modélisé",
     carry_uncertain:"Comptabilité Carry incertaine — pas d'exposition venue",
-    dated_title:"Carry BTC à échéance · PAPER expérimental", dated_instrument:"Contrat / échéance UTC",
+    dated_title:"Carry BTC à échéance · Paper expérimental", dated_instrument:"Contrat / échéance UTC",
     dated_capital:"Capital / cash total", dated_cash_margin:"Cash libre / marge réservée",
     dated_stress:"Réserve de stress", dated_spot:"Spot BTC / prix moyen",
     dated_future:"Future vendu BTC / prix moyen", dated_residual:"Déséquilibre constaté",
-    dated_settlement:"Dernier règlement officiel / compteur", dated_pnl:"PnL réalisé / latent",
+    dated_settlement:"Dernier règlement officiel / compteur", dated_pnl:"Gain / perte réalisé / latent",
     dated_fees:"Frais comptabilisés", dated_premium:"Prime brute estimée à l’entrée",
     dated_net_reserve:"Net avant réserve / réserve / après",
-    dated_not_deployed:"NON DÉPLOYÉ", dated_available:"SNAPSHOT LISIBLE",
-    dated_stale:"SNAPSHOT PÉRIMÉ", dated_unknown:"ÉTAT INCONNU",
-    dated_accounting_uncertain:"COMPTABILITÉ INCERTAINE", dated_incident:"INCIDENT OUVERT",
-    dated_unbalanced:"JAMBES DÉSÉQUILIBRÉES",
+    dated_not_deployed:"Non déployé", dated_available:"Données disponibles",
+    dated_stale:"Données périmées", dated_unknown:"État inconnu",
+    dated_accounting_uncertain:"Comptabilité incertaine", dated_incident:"Incident ouvert",
+    dated_unbalanced:"Jambes déséquilibrées",
     dated_no_snapshot:"Aucun état Carry à échéance disponible.",
-    dated_readiness_unknown:"Readiness globale UNKNOWN · liveness du collecteur, runner et intégrité DB non prouvées par ce snapshot.",
+    dated_readiness_unknown:"État général inconnu · la disponibilité du collecteur et du runner, ainsi que l’intégrité DB, ne sont pas vérifiées par cet état.",
     dated_product_note:"Spot BTC acheté + future BTC_USDC linéaire vendu · portefeuille expérimental isolé, exclu des totaux Tandem.",
-    dated_economics_note:"Valeurs issues du checkpoint PAPER, sans fills réels. La marge immobilisée est un besoin de liquidité, pas une perte; la réserve est un seuil de décision, pas une charge. Rentabilité : INSUFFICIENT_EVIDENCE.",
+    dated_economics_note:"Valeurs issues du checkpoint Paper, sans fills réels. La marge immobilisée est un besoin de liquidité, pas une perte; la réserve est un seuil de décision, pas une charge. Rentabilité : INSUFFICIENT_EVIDENCE.",
     dated_unknown_unit:"unité inconnue", dated_unset_unit:"unité non fixée",
     paper_vs_bt:"Hyperliquid 1 m · backtest Binance 4 h",
-    readiness_title:"Qualification", testnet_guard:"Testnet non autorisé · cette carte décrit uniquement la qualification PAPER.", readiness_note:"Critères fixés à froid — le passage ne se décide pas au feeling.",
-    decision_current:"Décision actuelle", decision_unknown:"UNKNOWN", decision_unavailable:"Régime 4 h indisponible — aucune direction confirmée.",
+    readiness_title:"Qualification", testnet_guard:"Testnet non autorisé · cette carte décrit uniquement la qualification Paper.", readiness_note:"Critères fixés à froid — le passage ne se décide pas au feeling.",
+    decision_current:"Décision actuelle", decision_unknown:"Indisponible", decision_unavailable:"Régime 4 h indisponible — aucune direction confirmée.",
     decision_open:"position(s) ouverte(s)", decision_next_close:"prochaine clôture 4 h", decision_protected:"protégé(s)",
     decision_bullish:"haussier", decision_bearish:"baissier",
-    rdy_ready:"PRÊT", rdy_not_ready:"NON PRÊT", rdy_blocked:"BLOQUÉ",
+    rdy_ready:"Prêt", rdy_not_ready:"Non prêt", rdy_blocked:"Bloqué",
     rdy_ready_why:"Tous les critères sont au vert. La décision de passer au testnet reste humaine.",
     rdy_wait_why:"Le système est sain, mais la campagne n'a pas encore assez de preuves.",
     rdy_block_why:"Un critère opérationnel bloque le passage, indépendamment de la durée de campagne.",
@@ -116,14 +117,14 @@ const I18N = {
     threshold_inactive:"direction inactive",
     waiting_zone:"zone d’attente",
     inactive_suffix:"INACTIF",
-    waiting_label:"ATTENTE",
+    waiting_label:"Attente",
     cards:{performance_brief:"Synthèse de performance", risk_radar:"Radar de risque", monitor_pulse:"Pulse opérationnel",
       chart:"Courbe d’équity", price:"Graphe prix", events:"Journal", trend:"Moteur Trend",
       carry:"Moteur Carry", breakdown:"Répartition & records", conformity:"Est-ce normal ?", yearly:"Années précédentes",
       trades:"Trades clôturés", metrics:"Performance en direct", exposure:"Exposition", readiness:"Qualification"},
   },
   en: {
-    paper:"PAPER TRADING", theme:"Theme", settings:"Settings", btcusdt:"BTC-PERP / USDC",
+    paper:"Paper", theme:"Theme", settings:"Settings", btcusdt:"BTC-PERP / USDC",
     h24:"24 hours", funding_ann:"Annualized funding", live_perf:"Live performance",
     realized:"realized", exposure_title:"Exposure", system_health_label:"System health", exposure_health:"Exposure & health", gross_exposure:"Portfolio gross exposure",
     leverage_note:"gross exposure ratio · descriptive 1× marker, not engine leverage", next_bar:"Next 4h candle",
@@ -141,7 +142,8 @@ const I18N = {
     reset:"Reset", no_trades:"No closed trades yet — the log fills on the first position exit.",
     auto_refresh:"Auto refresh", real_data:"real Hyperliquid data, simulated execution",
     equity_total:"Total equity", pnl_day:"Daily PnL · UTC", since_midnight:"since 00:00 UTC",
-    alloc_real:"Real allocation", pending_deposit:"Pending deposit", online:"ONLINE", offline:"STOPPED",
+    alloc_real:"Real allocation", pending_deposit:"Pending deposit", online:"Online", offline:"Stopped",
+    state_stale:"Stale", state_unknown:"Unavailable", protection_software:"software",
     workspace:"View", view_monitor:"Monitor", view_performance:"Performance", view_risk:"Risk",
     yearly_title:"Previous years", yearly_sub:"backtest · same settings as live",
     yearly_note:"Simulation with real fees, slippage and funding — not realized results. Calendar-year returns; each year's worst drawdown on hover.",
@@ -152,27 +154,27 @@ const I18N = {
     carry_modeled_qty:"Modeled perp qty", carry_modeled_spot:"Modeled spot notional",
     carry_modeled_perp:"Modeled perp notional",
     carry_uncertain:"Carry accounting uncertain — no venue exposure",
-    dated_title:"Dated BTC carry · experimental PAPER", dated_instrument:"Contract / expiry UTC",
+    dated_title:"Dated BTC carry · experimental Paper", dated_instrument:"Contract / expiry UTC",
     dated_capital:"Capital / total cash", dated_cash_margin:"Free cash / reserved margin",
     dated_stress:"Stress cash buffer", dated_spot:"Spot BTC / average entry",
     dated_future:"Sold future BTC / average entry", dated_residual:"Recorded hedge residual",
     dated_settlement:"Latest official settlement / count", dated_pnl:"Realized / unrealized PnL",
     dated_fees:"Booked fees", dated_premium:"Estimated gross entry premium",
     dated_net_reserve:"Net before reserve / reserve / after",
-    dated_not_deployed:"NOT DEPLOYED", dated_available:"SNAPSHOT READABLE",
-    dated_stale:"STALE SNAPSHOT", dated_unknown:"UNKNOWN STATE",
-    dated_accounting_uncertain:"ACCOUNTING UNCERTAIN", dated_incident:"OPEN INCIDENT",
-    dated_unbalanced:"UNBALANCED LEGS",
+    dated_not_deployed:"Not deployed", dated_available:"Data available",
+    dated_stale:"Stale data", dated_unknown:"Unknown state",
+    dated_accounting_uncertain:"Accounting uncertain", dated_incident:"Open incident",
+    dated_unbalanced:"Unbalanced legs",
     dated_no_snapshot:"No dated Carry state is available.",
     dated_readiness_unknown:"Overall readiness UNKNOWN · this snapshot does not prove collector/runner liveness or database integrity.",
     dated_product_note:"Buy BTC spot + sell a linear BTC_USDC future · isolated experimental allocation, excluded from Tandem totals.",
-    dated_economics_note:"Values come from the PAPER checkpoint, not real fills. Reserved margin is a liquidity requirement, not a loss; the reserve is a decision hurdle, not an expense. Profitability: INSUFFICIENT_EVIDENCE.",
+    dated_economics_note:"Values come from the Paper checkpoint, not real fills. Reserved margin is a liquidity requirement, not a loss; the reserve is a decision hurdle, not an expense. Profitability: INSUFFICIENT_EVIDENCE.",
     dated_unknown_unit:"unknown unit", dated_unset_unit:"unit not defined",
     paper_vs_bt:"Hyperliquid 1m · Binance 4h backtest",
-    readiness_title:"Qualification", testnet_guard:"Testnet is not authorized · this card describes PAPER qualification only.", readiness_note:"Criteria set in advance — the transition is not a gut call.",
-    decision_current:"Current decision", decision_unknown:"UNKNOWN", decision_unavailable:"4h regime unavailable — no direction confirmed.",
+    readiness_title:"Qualification", testnet_guard:"Testnet is not authorized · this card describes Paper qualification only.", readiness_note:"Criteria set in advance — the transition is not a gut call.",
+    decision_current:"Current decision", decision_unknown:"Unavailable", decision_unavailable:"4h regime unavailable — no direction confirmed.",
     decision_open:"position(s) open", decision_next_close:"next 4h close", decision_protected:"protected", decision_bullish:"bullish", decision_bearish:"bearish",
-    rdy_ready:"READY", rdy_not_ready:"NOT READY", rdy_blocked:"BLOCKED",
+    rdy_ready:"Ready", rdy_not_ready:"Not ready", rdy_blocked:"Blocked",
     rdy_ready_why:"Every criterion is green. The testnet decision remains a human call.",
     rdy_wait_why:"The system is healthy, but the campaign does not yet have enough evidence.",
     rdy_block_why:"An operational criterion blocks promotion, independent of campaign duration.",
@@ -194,13 +196,13 @@ const I18N = {
     threshold_inactive:"inactive direction",
     waiting_zone:"waiting zone",
     inactive_suffix:"INACTIVE",
-    waiting_label:"WAITING",
+    waiting_label:"Waiting",
     status_good:"All systems nominal", status_warn:"Monitoring required", status_crit:"Action required",
     status_nominal_detail:"Trend and Carry are responding · safeguards armed",
     status_trend_down:"Trend is not responding", status_carry_down:"Carry is not responding",
     status_kill:"Kill switch is active", status_lockout:"Daily lockout is active",
     data_now:"data received just now", data_ago:"updated",
-    performance_snapshot:"Performance snapshot", performance_snapshot_note:"Realized results, without operational noise.",
+    performance_snapshot:"Performance snapshot", performance_snapshot_note:"Cumulative results, including marked open positions.",
     performance_total:"Since inception", performance_day:"Today", performance_dd:"Current drawdown", performance_sharpe:"Realized Sharpe",
     risk_radar:"Risk radar", risk_radar_note:"What can actually degrade the portfolio right now.",
     risk_stop:"Risk to trend stops", risk_margin:"Nearest stop distance", risk_leverage:"Effective leverage", risk_policy:"Active safeguard",
@@ -220,7 +222,13 @@ function applyI18n() {
   document.documentElement.lang = PREFS.lang;
   document.querySelectorAll("[data-i18n]").forEach(el => {
     const v = el.dataset.i18n.split(".").reduce((o, kk) => (o && o[kk] != null) ? o[kk] : null, I18N[PREFS.lang] || I18N.fr);
-    if (typeof v === "string") el.textContent = v;
+    if (typeof v === "string") {
+      el.textContent = v;
+      if (el.classList.contains("workspace-tab-label")) {
+        el.dataset.compact = PREFS.lang === "en" ? el.dataset.shortEn : el.dataset.shortFr;
+        el.parentElement.setAttribute("aria-label", v);
+      }
+    }
   });
   $("f-refresh").textContent = PREFS.refresh
     ? t("auto_refresh") + " " + (PREFS.refresh/1000) + " s" : (PREFS.lang==="en"?"Manual refresh":"Rafraîchissement manuel");
@@ -301,7 +309,7 @@ const VIEW_CARDS = {
   risk: new Set(["risk_radar", "accounting", "chart", "price", "events", "journal", "trend", "carry", "exposure"]),
 };
 const VIEW_TILES = {
-  monitor: new Set(["equity", "day", "funding", "allocation"]),
+  monitor: new Set(["equity", "day", "cumulative"]),
   performance: new Set(),
   risk: new Set(),
 };
@@ -408,6 +416,10 @@ $("dashboard-view").addEventListener("keydown", event => {
 });
 
 function markSummaryUnavailable() {
+  ["t-equity", "t-delta", "t-sub", "t-day", "t-day-note", "trend-total-notional", "trend-total-upnl", "carry-pnl-net", "carry-spot-notional", "carry-perp-notional"].forEach(id => { if ($(id)) $(id).textContent = "—"; });
+  $("slots").innerHTML = '<tr><td colspan="5">Positions indisponibles — actualisez les données.</td></tr>';
+  $("carry-pos").textContent = "État indisponible";
+
   const freshness = $("data-freshness");
   freshness.classList.remove("stale");
   freshness.classList.add("unknown");
@@ -440,11 +452,13 @@ async function refreshSummary() {
 
   $("t-equity").textContent = fmt$(s.totals.equity);
   const d = $("t-delta");
-  d.style.display = "inline-flex";
-  d.textContent = (s.totals.pnl >= 0 ? "▲ " : "▼ ") + fmtPct(s.totals.pnl_pct);
-  d.className = "delta num " + (s.totals.pnl >= 0 ? "pos" : "neg");
-  $("t-sub").textContent = `départ ${fmt$(s.totals.initial)}${s.totals.deposits > 0 ? " + apports " + fmt$(s.totals.deposits) : ""} · PnL ${(s.totals.pnl >= 0 ? "+" : "") + fmt$(s.totals.pnl, 2)}`;
-  $("t-day").textContent = fmtPct(s.totals.day_pnl_pct); cls($("t-day"), s.totals.day_pnl_pct);
+  d.textContent = signedMoney(s.totals.pnl);
+  d.className = "val num";
+  cls(d, s.totals.pnl);
+  $("t-sub").textContent = "Depuis le début · hors flux · " + fmtPct(s.totals.pnl_pct) + " du capital engagé";
+  $("t-day").textContent = signedMoney(s.totals.day_pnl);
+  cls($("t-day"), s.totals.day_pnl);
+  $("t-day-note").textContent = "Premier relevé du jour UTC · " + fmtPct(s.totals.day_pnl_pct) + " de la valeur au relevé · hors flux";
 
   if (s.funding.next_ts) {
     const mins = Math.max(0, Math.round((s.funding.next_ts - Date.now()) / 60000));
@@ -485,6 +499,8 @@ async function refreshSummary() {
   if (s.btc.freshness !== "FRESH") issues.push([s.btc.freshness === "STALE" ? "warn" : "crit", "prix BTC non frais — valorisation non LIVE"]);
   if (s.trend.halted) issues.push(["crit", "KILL-SWITCH Trend déclenché : drawdown maximal atteint, positions liquidées"]);
   if (s.carry.halted) issues.push(["crit", "KILL-SWITCH Carry déclenché : drawdown maximal atteint, position fermée"]);
+  if (s.carry.accounting_uncertain === true) issues.push(["crit", "Carry : comptabilité incertaine"]);
+  if (["UNBALANCED", "PARTIALLY_HEDGED", "RECONCILIATION_REQUIRED"].includes(s.carry.execution_state)) issues.push(["crit", "Carry : couverture à vérifier"]);
   if (s.carry.daily_lockout) issues.push(["warn", "Carry : limite de perte journalière atteinte — plus d'entrées avant demain (UTC)"]);
   if (s.trend.daily_lockout) issues.push(["warn", "limite de perte journalière atteinte — plus de nouvelles entrées avant demain (UTC)"]);
   if (pendingDeposit > 0) issues.push(["warn", `apport en attente : ${fmt$(pendingDeposit)} — nouvelle tentative quotidienne à 04:30 UTC`]);
@@ -509,19 +525,19 @@ async function refreshSummary() {
   function trendDirectionSummary(trend) {
     const rawOpen = trend && trend.open_slots;
     const open = typeof rawOpen === "number" && Number.isFinite(rawOpen) && rawOpen >= 0 ? rawOpen : null;
-    if (open == null) return "état indisponible";
+    if (open == null) return t("state_unknown");
     const slots = trend && trend.slots;
     const states = ["LONG", "SHORT", "UNKNOWN", "FLAT"];
-    if (!Array.isArray(slots) || slots.some(slot => !slot || !states.includes(slot.state))) return "N/A";
-    if (open === 0) return "FLAT";
+    if (!Array.isArray(slots) || slots.some(slot => !slot || !states.includes(slot.state))) return t("state_unknown");
+    if (open === 0) return PREFS.lang === "en" ? "No open positions" : "Aucune position ouverte";
     const counts = {LONG:0, SHORT:0, UNKNOWN:0, FLAT:0};
     slots.forEach(slot => counts[slot.state]++);
     const labels = [
-      counts.LONG ? counts.LONG + " LONG" : "",
-      counts.SHORT ? counts.SHORT + " SHORT" : "",
-      counts.UNKNOWN ? counts.UNKNOWN + " UNKNOWN" : "",
+      counts.LONG ? counts.LONG + " Long" : "",
+      counts.SHORT ? counts.SHORT + " Short" : "",
+      counts.UNKNOWN ? counts.UNKNOWN + " " + t("state_unknown").toLocaleLowerCase(LOCALE()) : "",
     ].filter(Boolean);
-    return labels.length ? labels.join(" · ") : "N/A";
+    return labels.length ? labels.join(" · ") : t("state_unknown");
   }
 
   function renderTrendOverview(summary) {
@@ -531,10 +547,11 @@ async function refreshSummary() {
     $("trend-open-slots").textContent = open == null ? "—" : (open + "/" + (total == null ? "—" : total));
     $("trend-open-detail").textContent = trendDirectionSummary(trend);
     $("trend-total-notional").textContent = trend.total_notional == null ? "N/A" : fmt$(trend.total_notional, 0);
-    $("trend-total-upnl").textContent = trend.total_upnl == null ? "N/A" : fmt$(trend.total_upnl, 0);
+    $("trend-total-upnl").textContent = trend.total_upnl == null ? "N/A" : signedMoney(trend.total_upnl);
     $("trend-total-upnl-pct").textContent = trend.total_upnl_pct == null ? "N/A" : fmtPct(trend.total_upnl_pct, 2);
     $("trend-protection").textContent = trend.protection_status === "NONE" ? "Aucune position" : (trend.protected_slots == null || open == null ? "N/A" : trend.protected_slots + "/" + open + " protégés");
-    $("trend-protection-mode").textContent = trend.protection_mode || "UNKNOWN";
+    $("trend-protection-mode").textContent = trend.protection_mode === "SOFTWARE"
+      ? t("protection_software") : trend.protection_mode || t("state_unknown");
     const next = summary.health && summary.health.next_bar_ts;
     $("trend-next-boundary").textContent = fmtTimeUTC(next);
     $("trend-next-countdown").textContent = next ? "dans " + cdText(next) + " · aucune action garantie" : "N/A";
@@ -544,7 +561,7 @@ async function refreshSummary() {
       : stopProfile.positions.length ? fmt$(stopProfile.risk, 0) : "N/A";
     if ($("trend-risk-visual")) $("trend-risk-visual").textContent = risk;
     renderTrendDecisionContext(summary);
-    renderPositionVisuals(trend.slots || []);
+
   }
 
   renderTrendOverview(s);
@@ -555,18 +572,13 @@ async function refreshSummary() {
   $("slots").innerHTML = (s.trend.slots || []).map(sl => {
     const badge = sl.state === "LONG" ? "long" : sl.state === "SHORT" ? "short" : sl.state === "FLAT" ? "flat" : "unknown";
     const arrow = sl.state === "LONG" ? "▲ " : sl.state === "SHORT" ? "▼ " : sl.state === "UNKNOWN" ? "? " : "";
+    const directionLabel = sl.state === "LONG" ? "Long" : sl.state === "SHORT" ? "Short" : t("state_unknown");
     const f = v => v == null || !Number.isFinite(Number(v)) ? "N/A" : Number(v).toLocaleString(LOCALE(), {maximumFractionDigits: 2});
     const money = v => v == null || !Number.isFinite(Number(v)) ? "N/A" : fmt$(v, 0);
     if (sl.state === "FLAT") {
-      return `<tr class="slotclick is-flat" data-name="${esc(sl.name)}" title="Voir les détails">
-        <td class="slot-cell"><button type="button" class="slot-detail-toggle" id="slot-detail-${esc(sl.name)}" aria-haspopup="dialog" aria-label="Détails ${esc(sl.name)}"><strong class="position-primary">${esc(sl.name).replace("trend_ls_", "Donchian ")}</strong><small class="position-secondary">Surveillance active</small></button></td>
-        <td class="position-cell"><span class="badge flat">FLAT</span><small class="position-secondary">Aucune position ouverte</small></td>
-        <td class="price-cell"><span class="cell-label">Statut</span><strong>En attente de signal</strong><small class="position-secondary">aucun prix d’entrée à comparer</small></td>
-        <td class="pnl-cell"><strong>—</strong><small class="position-secondary">aucun PnL latent</small></td>
-        <td class="protection-cell"><span class="badge flat">Aucune protection requise</span><small class="position-secondary">un stop est créé uniquement avec une position</small></td>
-      </tr>`;
+      return `<tr class="slotclick is-flat" data-name="${esc(sl.name)}" title="Voir les détails"><td class="slot-cell"><button type="button" class="slot-detail-toggle" id="slot-detail-${esc(sl.name)}" aria-haspopup="dialog" aria-label="Détails ${esc(sl.name)}"><strong class="position-primary">${esc(sl.name).replace("trend_ls_", "Donchian ")}</strong></button></td><td class="position-cell" colspan="4">En attente · aucune position <span aria-hidden="true">›</span></td></tr>`;
     }
-    const pnl = money(sl.upnl);
+    const pnl = signedMoney(sl.upnl);
     const pnlCls = sl.upnl > 0 ? "up" : sl.upnl < 0 ? "down" : "";
     const stopPct = sl.stop_distance_pct;
     const protectionLabel = {
@@ -579,8 +591,10 @@ async function refreshSummary() {
     const protectionClass = sl.protection_status === "ACTIVE" || sl.protection_status === "REPLACEMENT_PENDING"
       ? "protected"
       : sl.protection_status === "UNSAFE" ? "unsafe" : "unknown";
+    const protectionMode = sl.protection_mode === "SOFTWARE" ? t("protection_software")
+      : (sl.protection_mode || t("state_unknown").toLocaleLowerCase(LOCALE()));
     const protection = sl.protection_status === "ACTIVE" || sl.protection_status === "REPLACEMENT_PENDING"
-      ? `${protectionLabel} · ${sl.protection_mode || "UNKNOWN"}`
+      ? `${protectionLabel} · ${protectionMode}`
       : protectionLabel;
     const gap = stopPct == null ? "N/A" : (stopPct < 0 ? "stop dépassé" : percentNA(stopPct, 1) + " au stop");
     const stopPnl = sl.stop_pnl;
@@ -588,7 +602,7 @@ async function refreshSummary() {
     const positionText = sl.state === "FLAT" ? "aucune position" : "ouverte depuis " + durationNA(sl.position_age_s);
     return `<tr class="slotclick" data-name="${esc(sl.name)}" title="Voir les détails">
       <td class="slot-cell"><button type="button" class="slot-detail-toggle" id="slot-detail-${esc(sl.name)}" aria-haspopup="dialog" aria-label="Détails ${esc(sl.name)}"><strong class="position-primary">${esc(sl.name).replace("trend_ls_", "Donchian ")}</strong><small class="position-secondary">Voir les détails</small></button></td>
-      <td class="position-cell"><span class="badge ${badge}">${arrow}${sl.state}</span><small class="position-secondary">${positionText}</small></td>
+      <td class="position-cell"><span class="badge ${badge}">${arrow}${directionLabel}</span><small class="position-secondary">${positionText}</small></td>
       <td class="price-cell num"><span class="cell-label">entrée → observé</span><strong>${f(sl.entry)} → ${f(sl.market_price)}</strong><small class="position-secondary">${money(sl.notional)} · notionnel estimé</small></td>
       <td class="pnl-cell num ${pnlCls}"><strong>${pnl}</strong><small class="position-secondary">${percentNA(sl.upnl_pct)} · notionnel d’entrée</small></td>
       <td class="protection-cell"><span class="badge protection-${protectionClass}">${protection}</span><strong class="stop-price">Stop ${f(sl.stop)}</strong><small class="stop-profit">${stopPnlText}</small><small class="position-secondary">${gap}</small></td>
@@ -608,7 +622,7 @@ async function refreshSummary() {
       && Number.isFinite(Number(slot.entry)) && Number.isFinite(Number(slot.market_price))
       && Number.isFinite(Number(slot.stop)));
     if (!visible.length) {
-      root.innerHTML = '<div class="position-visual-empty"><span>POSITIONS / PROTECTION</span><strong>Aucune position Trend ouverte</strong><small>Les rails entrée · prix · stop apparaissent lorsqu’une position observable est active.</small></div>';
+      root.innerHTML = '<div class="position-visual-empty"><span>Positions et protection</span><strong>Aucune position Trend ouverte</strong><small>Les rails entrée · prix · stop apparaissent lorsqu’une position observable est active.</small></div>';
       return;
     }
     const num = value => Number(value).toLocaleString(LOCALE(), {maximumFractionDigits: 0});
@@ -629,14 +643,15 @@ async function refreshSummary() {
       const pnl = Number(slot.upnl || 0);
       const pnlText = (pnl >= 0 ? "+" : "") + fmt$(pnl, 0);
       const protection = slot.protection_status === "ACTIVE" || slot.protection_status === "REPLACEMENT_PENDING"
-        ? "PROTÉGÉ" : slot.protection_status === "UNSAFE" ? "NON PROTÉGÉ" : "INCONNU";
+        ? "Protégé" : slot.protection_status === "UNSAFE" ? "Non protégé" : t("state_unknown");
+      const directionLabel = slot.state === "LONG" ? "Long" : "Short";
       return `<article class="position-rail" data-side="${side}">
-        <div class="position-rail-head"><div><span>${esc(slot.name.replace("trend_ls_", "Donchian "))}</span><strong>${slot.state}</strong></div><div><strong class="num ${pnl >= 0 ? "up" : "down"}">${pnlText}</strong><small>${protection}</small></div></div>
+        <div class="position-rail-head"><div><span>${esc(slot.name.replace("trend_ls_", "Donchian "))}</span><strong>${directionLabel}</strong></div><div><strong class="num ${pnl >= 0 ? "up" : "down"}">${pnlText}</strong><small>${protection}</small></div></div>
         <div class="position-track" aria-label="${esc(slot.name)} : entrée ${num(slot.entry)}, prix observé ${num(slot.market_price)}, stop ${num(slot.stop)}">
           <span class="track-line"></span><span class="track-zone"></span>
-          <span class="track-marker marker-stop" style="left:${markerPositions.stop.toFixed(2)}%;--label-shift:${labelShift("stop")}px"><i></i><b>STOP</b><em class="num">${num(slot.stop)}</em></span>
-          <span class="track-marker marker-entry" style="left:${markerPositions.entry.toFixed(2)}%;--label-shift:${labelShift("entry")}px"><i></i><b>ENTRÉE</b><em class="num">${num(slot.entry)}</em></span>
-          <span class="track-marker marker-price" style="left:${markerPositions.price.toFixed(2)}%;--label-shift:${labelShift("price")}px"><i></i><b>PRIX</b><em class="num">${num(slot.market_price)}</em></span>
+          <span class="track-marker marker-stop" style="left:${markerPositions.stop.toFixed(2)}%;--label-shift:${labelShift("stop")}px"><i></i><b>Stop</b><em class="num">${num(slot.stop)}</em></span>
+          <span class="track-marker marker-entry" style="left:${markerPositions.entry.toFixed(2)}%;--label-shift:${labelShift("entry")}px"><i></i><b>Entrée</b><em class="num">${num(slot.entry)}</em></span>
+          <span class="track-marker marker-price" style="left:${markerPositions.price.toFixed(2)}%;--label-shift:${labelShift("price")}px"><i></i><b>Prix</b><em class="num">${num(slot.market_price)}</em></span>
         </div>
         <div class="position-rail-foot"><span>Qty <strong class="num">${fmtQty(slot.qty)}</strong></span><span>Notionnel <strong class="num">${fmt$(slot.notional, 0)}</strong></span><span>${slot.stop_distance_pct == null ? "Distance stop N/A" : `Stop ${percentNA(slot.stop_distance_pct, 1)}`}</span></div>
       </article>`;
@@ -792,6 +807,9 @@ function fmtTimeUTC(value) {
   return date.toLocaleString(LOCALE(), {day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit", timeZone:"UTC"}) + " UTC";
 }
 
+function signedMoney(value, decimals = 0) {
+  return value == null || !Number.isFinite(Number(value)) ? "—" : (Number(value) > 0 ? "+" : "") + fmt$(Number(value), decimals);
+}
 function renderCarryCard(carry) {
   const positionStatus = ["OPEN", "FLAT", "UNKNOWN"].includes(carry.position_status)
     ? carry.position_status
@@ -805,15 +823,15 @@ function renderCarryCard(carry) {
       : "OK";
   if ($("carry-mode")) $("carry-mode").textContent =
     carry.mode === "PAPER_SYNTHETIC" ? t("carry_mode_value") : carry.mode || t("carry_mode_value");
-  const positionBadge = positionStatus === "OPEN"
-    ? `<span class="badge long">● OPEN</span>`
-    : positionStatus === "FLAT"
-      ? `<span class="badge flat">FLAT</span>`
-      : `<span class="badge unknown">? ÉTAT INCONNU</span>`;
-  const modelNote = carry.mode === "PAPER_TWO_LEG"
-    ? t("carry_two_leg") + " · " + (carry.qualification || "UNKNOWN")
-    : t("carry_synthetic");
-  $("carry-pos").innerHTML = positionBadge + '<span class="carry-synth">' + modelNote + '</span>';
+  const labels = {OPEN:"Positions simulées ouvertes", FLAT:"En attente", UNKNOWN:"État indisponible"};
+  const execution = carry.execution_state;
+  const transitions = {UNBALANCED:"Jambes déséquilibrées", PARTIALLY_HEDGED:"Couverture partielle", RECONCILIATION_REQUIRED:"Réconciliation requise", EXITING:"Fermeture en cours", ENTERING:"Ouverture en cours", CLOSED:"Positions fermées"};
+  $("carry-pos").textContent = transitions[execution] || (carry.halted ? "Arrêt de sécurité" : labels[positionStatus]);
+  if ($("carry-explainer")) $("carry-explainer").textContent = carry.mode === "PAPER_TWO_LEG"
+    ? "Achat spot et vente perp simulés pour percevoir le financement en limitant l’exposition au BTC. Coûts, intérêts et risques de couverture restent présents."
+    : carry.mode === "PAPER_SYNTHETIC"
+      ? "Modèle historique : financement et coûts simulés, sans exécution ni valorisation séparée des jambes."
+      : "Modèle Carry indisponible : aucune position réelle ne peut être déduite de cet état.";
 
   const qty = $("carry-perp-qty");
   if (qty) qty.textContent = open && carry.perp_qty != null ? fmtQty(carry.perp_qty) : knownFlat ? fmtQty(0) : "N/A";
@@ -826,12 +844,12 @@ function renderCarryCard(carry) {
     : fmt$(carry.gross_notional, 0) + " / " + fmt$(carry.net_notional, 0);
   if ($("carry-gross-primary")) $("carry-gross-primary").textContent = grossNet == null ? "N/A" : fmt$(carry.gross_notional, 0);
   if ($("carry-net-primary")) $("carry-net-primary").textContent = grossNet == null ? "N/A" : fmt$(carry.net_notional, 0);
-  if ($("carry-pnl-net")) $("carry-pnl-net").textContent = carry.pnl_net == null || positionStatus === "UNKNOWN" ? "N/A" : fmt$(carry.pnl_net, 0);
+  if ($("carry-pnl-net")) $("carry-pnl-net").textContent = carry.pnl_net == null || positionStatus === "UNKNOWN" ? "—" : signedMoney(carry.pnl_net);
   if ($("carry-costs")) $("carry-costs").textContent = carry.costs == null || positionStatus === "UNKNOWN" ? "N/A" : fmt$(carry.costs, 0);
   if ($("carry-notional-source")) $("carry-notional-source").textContent =
     (carry.notional_source || "N/A") + " · persisted " + (carry.persisted_notional_status || "N/A");
   if ($("carry-gross-net")) $("carry-gross-net").textContent = grossNet || "N/A";
-  if ($("carry-entry-age")) $("carry-entry-age").textContent = open ? durationNA(carry.position_age_s) : "N/A";
+  if ($("carry-entry-age")) $("carry-entry-age").textContent = open ? "Depuis " + durationNA(carry.position_age_s) : "Aucune durée de position ouverte";
   if ($("carry-funding-age")) $("carry-funding-age").textContent = open ? durationNA(carry.last_funding_age_s) : "N/A";
   if ($("carry-entry-price")) $("carry-entry-price").textContent = !open || carry.entry_price == null ? "N/A" : fmt$(carry.entry_price, 2);
   if ($("carry-borrow-principal")) $("carry-borrow-principal").textContent = !open || carry.borrow_principal == null ? "N/A" : fmt$(carry.borrow_principal, 0);
@@ -869,7 +887,7 @@ function setState(el, alive, freshness) {
   const fresh = state === "FRESH";
   const stale = state === "STALE";
   el.className = "estate " + (fresh ? "on" : stale ? "warn" : "off");
-  el.innerHTML = '<span class="dot"></span>' + (fresh ? t("online") : stale ? "STALE" : "UNKNOWN");
+  el.innerHTML = '<span class="dot"></span>' + (fresh ? t("online") : stale ? t("state_stale") : t("state_unknown"));
 }
 function beat(age) {
   if (age == null) return "";
@@ -893,6 +911,10 @@ function renderCockpitStatus(s) {
   };
   component("trend", s.trend);
   component("carry", s.carry);
+  if (s.carry.halted || s.carry.accounting_uncertain === true || ["UNBALANCED", "PARTIALLY_HEDGED", "RECONCILIATION_REQUIRED"].includes(s.carry.execution_state)) critical.push("Carry : protection ou comptabilité à vérifier");
+  for (const alert of (s.alerts || [])) {
+    (alert.severity === "CRITICAL" ? critical : warnings).push(alert.message || alert.code || "Alerte opérationnelle");
+  }
   if (s.trend.halted) critical.push(t("status_kill"));
   if (s.trend.daily_lockout) warnings.push(t("status_lockout"));
   for (const incident of incidents) {
@@ -1007,7 +1029,7 @@ function renderMonitorPulse(s) {
   const engine = (name, label, alive, age, freshness) => {
     const fresh = freshness === "FRESH" && alive;
     const stale = freshness === "STALE";
-    const status = fresh ? t("monitor_ready") : stale ? "STALE" : "UNKNOWN";
+    const status = fresh ? t("monitor_ready") : stale ? t("state_stale") : t("state_unknown");
     const tone = fresh ? "" : BTCQuantOperationalState.componentAvailabilitySeverity(name, {alive, freshness}, h);
     return '<div class="ops-item ' + tone + '"><span class="ops-dot"></span><div class="ops-copy"><div class="ops-label">'
       + label + '</div><div class="ops-value">' + status + '</div><div class="ops-note">'
@@ -1085,7 +1107,8 @@ async function refreshTrades({append = false} = {}) {
       const pnlCls = r.pnl > 0 ? "up" : r.pnl < 0 ? "down" : "";
       const badge = r.direction === "LONG" ? "long" : "short";
       const arrow = r.direction === "LONG" ? "▲" : "▼";
-      return `<tr><td class="num">${String(r.exit_ts).slice(5, 16).replace("T", " ")}</td><td>${esc(String(r.strategy).replace("trend_ls_", "D"))}</td><td><span class="badge ${badge}">${arrow} ${esc(r.direction)}</span></td><td class="num ${pnlCls}" style="font-weight:650">${(r.pnl >= 0 ? "+" : "") + fmt$(r.pnl, 1)}</td><td style="color:var(--muted);font-size:11.5px">${esc(r.reason)}</td></tr>`;
+      const direction = r.direction === "LONG" ? "Long" : "Short";
+      return `<tr><td class="num">${String(r.exit_ts).slice(5, 16).replace("T", " ")}</td><td>${esc(String(r.strategy).replace("trend_ls_", "D"))}</td><td><span class="badge ${badge}">${arrow} ${direction}</span></td><td class="num ${pnlCls}" style="font-weight:600">${(r.pnl >= 0 ? "+" : "") + fmt$(r.pnl, 1)}</td><td style="color:var(--muted);font-size:13px">${esc(r.reason)}</td></tr>`;
     }).join("") + "</tbody></table>";
     return true;
   } catch (error) {
@@ -1115,8 +1138,8 @@ function renderAccountingPanel(s) {
     `<div class="accounting-cell"><span>${label}</span><strong class="num ${tone}">${value}</strong><small>${note}</small></div>`;
   grid.innerHTML = [
     row("Equity totale", dashboardValue(portfolio.equity), "cash + actifs valorisés − passifs"),
-    row("PnL réalisé", dashboardValue(portfolio.realized_pnl), "trades clôturés persistés"),
-    row("PnL latent", dashboardValue(portfolio.unrealized_pnl), "deux jambes et positions marquées"),
+    row("Gain / perte réalisé", dashboardValue(portfolio.realized_pnl), "trades clôturés persistés"),
+    row("Gain / perte en cours", dashboardValue(portfolio.unrealized_pnl), "deux jambes et positions marquées"),
     row("Cash disponible", dashboardValue(portfolio.cash_available), "comptes dont le solde est connu"),
     row("Collatéral immobilisé", dashboardValue(portfolio.collateral_locked), "réservé par la comptabilité carry"),
     row("Dette + intérêts", dashboardValue(portfolio.debt), "passif explicite, sans double comptage"),
@@ -1134,7 +1157,7 @@ function renderAccountingPanel(s) {
   if (alerts) {
     const items = Array.isArray(s.alerts) ? s.alerts : [];
     alerts.innerHTML = items.length ? items.map(item =>
-      `<div class="accounting-alert ${item.severity === "CRITICAL" ? "critical" : "warning"}"><strong>${item.severity === "CRITICAL" ? "ACTION" : "SURVEILLER"}</strong><span>${esc(item.message || item.code || "État à vérifier")}</span></div>`
+      `<div class="accounting-alert ${item.severity === "CRITICAL" ? "critical" : "warning"}"><strong>${item.severity === "CRITICAL" ? "Action" : "Surveiller"}</strong><span>${esc(item.message || item.code || "État à vérifier")}</span></div>`
     ).join("") : '<div class="accounting-ok">Aucune alerte comptable active dans la source durable.</div>';
   }
   const decisions = $("decision-explanation");
@@ -1182,7 +1205,7 @@ function renderTrendAccounting(s) {
     const order = slot.market_order || {};
     const stop = slot.stop_order || {};
     const stopStatus = slot.protection_status || "UNKNOWN";
-    return `<article class="trend-accounting-row"><div class="trend-accounting-head"><strong>${esc(String(slot.name || "").replace("trend_ls_", "Donchian "))}</strong><span class="badge ${statusClass(stopStatus)}">${esc(stopStatus)}</span></div><div class="trend-accounting-values"><span>sens / qty<strong>${esc(slot.state || "UNKNOWN")} · ${fmtQty(slot.qty)}</strong></span><span>prix moyen / notionnel<strong>${dashboardValue(slot.avg_price, v => fmt$(v, 0))} · ${dashboardValue(slot.notional)}</strong></span><span>PnL réalisé / latent<strong>${money(slot.realized_pnl)} · ${money(slot.upnl)}</strong></span><span>frais / funding<strong>${money(slot.fees)} · ${money(slot.funding_pnl)}</strong></span><span>stop demandé / protégé<strong>${dashboardValue(slot.stop_requested, v => fmt$(v, 0))} · ${dashboardValue(slot.protected_qty, v => fmtQty(v))}</strong></span><span>ordre / restant<strong>${esc(order.status || stop.status || "N/A")} · ${dashboardValue(slot.remaining_qty, v => fmtQty(v))}</strong></span><span>risque stop<strong>${money(slot.risk_to_stop)} <small>slippage profil visible ci-dessus</small></strong></span></div></article>`;
+    return `<article class="trend-accounting-row"><div class="trend-accounting-head"><strong>${esc(String(slot.name || "").replace("trend_ls_", "Donchian "))}</strong><span class="badge ${statusClass(stopStatus)}">${esc(stopStatus)}</span></div><div class="trend-accounting-values"><span>sens / qty<strong>${esc(slot.state || "UNKNOWN")} · ${fmtQty(slot.qty)}</strong></span><span>prix moyen / notionnel<strong>${dashboardValue(slot.avg_price, v => fmt$(v, 0))} · ${dashboardValue(slot.notional)}</strong></span><span>Gain / perte réalisé / latent<strong>${money(slot.realized_pnl)} · ${money(slot.upnl)}</strong></span><span>frais / funding<strong>${money(slot.fees)} · ${money(slot.funding_pnl)}</strong></span><span>stop demandé / protégé<strong>${dashboardValue(slot.stop_requested, v => fmt$(v, 0))} · ${dashboardValue(slot.protected_qty, v => fmtQty(v))}</strong></span><span>ordre / restant<strong>${esc(order.status || stop.status || "N/A")} · ${dashboardValue(slot.remaining_qty, v => fmtQty(v))}</strong></span><span>risque stop<strong>${money(slot.risk_to_stop)} <small>slippage profil visible ci-dessus</small></strong></span></div></article>`;
   }).join("") || '<div class="empty">Aucune position Trend exposée.</div>';
 }
 function renderCarryTwoLeg(carry) {
@@ -1218,7 +1241,7 @@ function renderCarryTwoLeg(carry) {
   const fundingHurdle = two.required_funding_rate_annualized == null
     ? "N/A (composantes ou horizon manquants)"
     : fmtPct(two.required_funding_rate_annualized, 2);
-  root.innerHTML = `<div class="carry-leg-block"><span>Jambe spot · ${esc(venue.spot_symbol || "BTC/USDC")} · ${esc(spotIdentity)}${esc(spotQualification)}</span><strong>${qty(two.spot_qty)} · prix ${dashboardValue(two.spot_price, v => fmt$(v, 0))}</strong><small>marché ${esc(venue.spot_market_id || "N/A")} · coût d’acquisition ${money(two.spot_cost_basis)} · PnL latent ${money(two.spot_unrealized_pnl)}</small></div><div class="carry-leg-block"><span>Jambe perp · ${esc(venue.perp_symbol || "BTC/USDC:USDC")}</span><strong>${qty(two.perp_qty)} · prix moyen ${dashboardValue(two.perp_avg_price, v => fmt$(v, 0))}</strong><small>prix de marché ${dashboardValue(two.perp_price, v => fmt$(v, 0))} · PnL latent ${money(two.perp_unrealized_pnl)}</small></div><div class="carry-leg-block"><span>Écart spot / perp</span><strong>${dashboardValue(two.basis, v => fmt$(v, 2))} · ${dashboardValue(two.basis_pct, v => fmtPct(v, 2))}</strong><small>N/A si l’un des deux marks horodatés manque</small></div><div class="carry-leg-block"><span>Couverture résiduelle</span><strong class="${two.residual_qty != null && two.residual_qty > 0 ? "down" : ""}">${qty(two.residual_qty)}</strong><small>état ${esc(state)} · durée ${durationNA(two.duration_s)}</small></div><div class="carry-leg-block"><span>Cash / collatéral</span><strong>${money(two.cash_available)} / ${money(two.cash_locked)}</strong><small>capital disponible à la décision ${money(two.capital_available_at_decision)} · capital simultané requis ${totalCash} · compte perp ${esc(venue.perp_account || "N/A")}</small></div><div class="carry-leg-block"><span>Dette / intérêts</span><strong>${money(two.debt)} / ${money(two.accrued_interest)}</strong><small>taux emprunt ${two.borrow_rate_ann == null ? "N/A" : fmtPct(two.borrow_rate_ann, 2)}</small></div><div class="carry-leg-block"><span>Notionnel estimé spot / perp</span><strong>${money(two.expected_spot_notional)} / ${money(two.expected_perp_notional)}</strong><small>valeurs du plan d’entrée, absentes des anciens événements si N/A</small></div><div class="carry-leg-block"><span>Signal funding annualisé simple</span><strong>${esc(signalRate)} · lissage ${esc(smoothing)}</strong><small>unité ${esc(signalUnit)} · intervalle natif ${esc(observationInterval)}</small></div><div class="carry-leg-block"><span>Projection sur ${esc(horizon)}</span><strong>funding ${money(two.expected_funding)} · basis ${money(two.expected_basis)}</strong><small>${esc(two.funding_rate_basis || "hypothèse de projection absente de l’événement")} · emprunt prévu ${money(two.expected_borrow)}</small></div><div class="carry-leg-block"><span>Coûts d’entrée / sortie estimés</span><strong>${money(two.expected_entry_cost)} / ${money(two.expected_exit_cost)}</strong><small>commissions spot / perp ${two.spot_fee_rate == null ? "N/A" : fmtPct(two.spot_fee_rate, 3)} / ${two.perp_fee_rate == null ? "N/A" : fmtPct(two.perp_fee_rate, 3)} · frais comptabilisés ${money(two.fees)}</small></div><div class="carry-leg-block"><span>Seuil financement annualisé simple requis</span><strong>${esc(fundingHurdle)}</strong><small>hurdle d’admission avec réserve incluse ; la réserve est un coussin, pas une dépense débitée</small></div><div class="carry-leg-block"><span>Net attendu · avant / après réserve</span><strong>${money(two.expected_net_before_reserve)} / ${money(two.expected_net_after_reserve)}</strong><small>réserve ${money(two.uncertainty_reserve)} · réalisé ${money(two.booked_net)}</small></div><div class="carry-leg-block"><span>Funding encaissé / payé · marge</span><strong>${money(two.funding_net)} · ${esc((two.margin && two.margin.status) || "NOT_CALCULATED")}</strong><small>${esc((two.margin && two.margin.reason) || "N/A")}</small></div><div class="carry-leg-block"><span>Marché · âge / heure / tick spot-perp</span><strong>${esc(freshness)} · ${esc(timestamp)} · ${esc(priceSteps)}</strong><small>dernière décision : ${esc(decision)}</small></div>`;
+  root.innerHTML = `<div class="carry-leg-block"><span>Jambe spot · ${esc(venue.spot_symbol || "BTC/USDC")} · ${esc(spotIdentity)}${esc(spotQualification)}</span><strong>${qty(two.spot_qty)} · prix ${dashboardValue(two.spot_price, v => fmt$(v, 0))}</strong><small>marché ${esc(venue.spot_market_id || "N/A")} · coût d’acquisition ${money(two.spot_cost_basis)} · Gain / perte en cours ${money(two.spot_unrealized_pnl)}</small></div><div class="carry-leg-block"><span>Jambe perp · ${esc(venue.perp_symbol || "BTC/USDC:USDC")}</span><strong>${qty(two.perp_qty)} · prix moyen ${dashboardValue(two.perp_avg_price, v => fmt$(v, 0))}</strong><small>prix de marché ${dashboardValue(two.perp_price, v => fmt$(v, 0))} · Gain / perte en cours ${money(two.perp_unrealized_pnl)}</small></div><div class="carry-leg-block"><span>Écart spot / perp</span><strong>${dashboardValue(two.basis, v => fmt$(v, 2))} · ${dashboardValue(two.basis_pct, v => fmtPct(v, 2))}</strong><small>N/A si l’un des deux marks horodatés manque</small></div><div class="carry-leg-block"><span>Couverture résiduelle</span><strong class="${two.residual_qty != null && two.residual_qty > 0 ? "down" : ""}">${qty(two.residual_qty)}</strong><small>état ${esc(state)} · durée ${durationNA(two.duration_s)}</small></div><div class="carry-leg-block"><span>Cash / collatéral</span><strong>${money(two.cash_available)} / ${money(two.cash_locked)}</strong><small>capital disponible à la décision ${money(two.capital_available_at_decision)} · capital simultané requis ${totalCash} · compte perp ${esc(venue.perp_account || "N/A")}</small></div><div class="carry-leg-block"><span>Dette / intérêts</span><strong>${money(two.debt)} / ${money(two.accrued_interest)}</strong><small>taux emprunt ${two.borrow_rate_ann == null ? "N/A" : fmtPct(two.borrow_rate_ann, 2)}</small></div><div class="carry-leg-block"><span>Notionnel estimé spot / perp</span><strong>${money(two.expected_spot_notional)} / ${money(two.expected_perp_notional)}</strong><small>valeurs du plan d’entrée, absentes des anciens événements si N/A</small></div><div class="carry-leg-block"><span>Signal funding annualisé simple</span><strong>${esc(signalRate)} · lissage ${esc(smoothing)}</strong><small>unité ${esc(signalUnit)} · intervalle natif ${esc(observationInterval)}</small></div><div class="carry-leg-block"><span>Projection sur ${esc(horizon)}</span><strong>funding ${money(two.expected_funding)} · basis ${money(two.expected_basis)}</strong><small>${esc(two.funding_rate_basis || "hypothèse de projection absente de l’événement")} · emprunt prévu ${money(two.expected_borrow)}</small></div><div class="carry-leg-block"><span>Coûts d’entrée / sortie estimés</span><strong>${money(two.expected_entry_cost)} / ${money(two.expected_exit_cost)}</strong><small>commissions spot / perp ${two.spot_fee_rate == null ? "N/A" : fmtPct(two.spot_fee_rate, 3)} / ${two.perp_fee_rate == null ? "N/A" : fmtPct(two.perp_fee_rate, 3)} · frais comptabilisés ${money(two.fees)}</small></div><div class="carry-leg-block"><span>Seuil financement annualisé simple requis</span><strong>${esc(fundingHurdle)}</strong><small>hurdle d’admission avec réserve incluse ; la réserve est un coussin, pas une dépense débitée</small></div><div class="carry-leg-block"><span>Net attendu · avant / après réserve</span><strong>${money(two.expected_net_before_reserve)} / ${money(two.expected_net_after_reserve)}</strong><small>réserve ${money(two.uncertainty_reserve)} · variation de valeur du modèle ${money(two.booked_net)}</small></div><div class="carry-leg-block"><span>Funding encaissé / payé · marge</span><strong>${money(two.funding_net)} · ${esc((two.margin && two.margin.status) || "NOT_CALCULATED")}</strong><small>${esc((two.margin && two.margin.reason) || "N/A")}</small></div><div class="carry-leg-block"><span>Marché · âge / heure / tick spot-perp</span><strong>${esc(freshness)} · ${esc(timestamp)} · ${esc(priceSteps)}</strong><small>dernière décision : ${esc(decision)}</small></div>`;
 }
 function renderContributions(contributions) {
   const root = $("contribution-table");
@@ -1290,7 +1313,7 @@ async function refreshAnalytics() {
       const wr = r.n ? Math.round(r.wins / r.n * 100) : 0;
       return `<div class="brk">
         <div class="brk-top"><span><b>${esc(r.name)}</b> <span class="n">${r.n} trades · ${wr}% ✓</span></span>
-          <span class="num" style="color:${c};font-weight:650">${money(r.pnl)}</span></div>
+          <span class="num" style="color:${c};font-weight:600">${money(r.pnl)}</span></div>
         <div class="brk-bar"><i style="width:${Math.abs(r.pnl)/max*100}%;background:${c}"></i></div></div>`;
     }).join("");
   }
@@ -1395,7 +1418,7 @@ function kvRow(k, v, note, status) {
   return `<div class="kv" style="flex-wrap:wrap">
     <span class="k"><span style="display:inline-block;width:7px;height:7px;border-radius:99px;background:${dot};margin-right:8px"></span>${k}</span>
     <span class="num">${v}</span>
-    ${note ? `<div style="flex-basis:100%;font-size:11.5px;color:var(--muted);padding:2px 0 0 15px">${note}</div>` : ""}
+    ${note ? `<div style="flex-basis:100%;font-size:13px;color:var(--muted);padding:2px 0 0 15px">${note}</div>` : ""}
   </div>`;
 }
 
@@ -1459,14 +1482,14 @@ function renderReadiness(report) {
   const verdictLabel = decided.verdict === "PRÊT" ? t("rdy_ready")
     : decided.verdict === "BLOQUÉ" ? t("rdy_blocked") : t("rdy_not_ready");
   const why = decided.tone === "block" ? t("rdy_block_why") : decided.tone === "ok" ? t("rdy_ready_why") : t("rdy_wait_why");
-  badge.textContent = `PAPER · ${verdictLabel}`;
+  badge.textContent = `Paper · ${verdictLabel}`;
   badge.className = "estate " + (decided.tone === "ok" ? "on" : decided.tone === "block" ? "off" : "");
   badge.style.color = decided.tone === "wait" ? "var(--warn)" : "";
   const outstanding = ux.blockers(report);
   root.innerHTML = `
     <div class="rdy-banner" data-tone="${decided.tone}">
       <div class="rdy-kicker">${esc(ux.campaignLine(report, readinessLabels()))}</div>
-      <div class="rdy-verdict">${esc(`PAPER · ${verdictLabel}`)}</div>
+      <div class="rdy-verdict">${esc(`Paper · ${verdictLabel}`)}</div>
       <div class="rdy-why">${esc(why)}</div>
       <div class="rdy-counts">${esc(`${nOk} / ${nTotal} ${t("rdy_counts")}`)} · ${esc(`${remain} ${t("rdy_remain")}`)}</div>
       <div class="rdy-scores">
@@ -1525,7 +1548,7 @@ function drawYearly() {
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   const years = (yearlyData && yearlyData.years) || [];
   if (!years.length) {
-    svg.innerHTML = `<text x="${W/2}" y="${H/2}" text-anchor="middle" fill="${col("--muted")}" font-size="12">${t("yearly_missing")}</text>`;
+    svg.innerHTML = `<text x="${W/2}" y="${H/2}" text-anchor="middle" fill="${col("--muted")}" font-size="13">${t("yearly_missing")}</text>`;
     $("ynote").textContent = "";
     return;
   }
@@ -1548,7 +1571,7 @@ function drawYearly() {
   for (let v = Math.ceil(vmin / step) * step; v <= vmax + 1e-9; v += step) {
     const y = Y(v);
     g += `<line x1="${M.l}" x2="${W - M.r}" y1="${y}" y2="${y}" stroke="${col("--grid")}"/>`;
-    g += `<text x="${M.l + 2}" y="${y - 4}" fill="${col("--muted")}" font-size="10" style="font-variant-numeric:tabular-nums">${fmtPct(v, 0)}</text>`;
+    g += `<text x="${M.l + 2}" y="${y - 4}" fill="${col("--muted")}" font-size="13" style="font-variant-numeric:tabular-nums">${fmtPct(v, 0)}</text>`;
   }
   const y0 = Y(0);
   g += `<line x1="${M.l}" x2="${W - M.r}" y1="${y0}" y2="${y0}" stroke="${col("--axis")}" stroke-width="1.2"/>`;
@@ -1569,8 +1592,8 @@ function drawYearly() {
     const both = yr.btc != null && (yr.btc >= 0) === (lp >= 0);
     const ref = both ? (lp >= 0 ? Math.min(Y(lp), Y(yr.btc)) : Math.max(Y(lp), Y(yr.btc))) : Y(lp);
     g += `<text x="${cx.toFixed(1)}" y="${(lp >= 0 ? ref - 6 : ref + 12).toFixed(1)}" text-anchor="middle"
-      fill="${col("--ink-2")}" font-size="9.5" font-weight="700" style="font-variant-numeric:tabular-nums">${fmtPct(lp, 0)}</text>`;
-    g += `<text x="${cx.toFixed(1)}" y="${H - 7}" text-anchor="middle" fill="${col("--muted")}" font-size="10.5">${yr.year}${yr.partial ? "*" : ""}</text>`;
+      fill="${col("--ink-2")}" font-size="13" font-weight="600" style="font-variant-numeric:tabular-nums">${fmtPct(lp, 0)}</text>`;
+    g += `<text x="${cx.toFixed(1)}" y="${H - 7}" text-anchor="middle" fill="${col("--muted")}" font-size="13">${yr.year}${yr.partial ? "*" : ""}</text>`;
     g += `</g>`;
   });
   svg.innerHTML = g;
@@ -1610,7 +1633,7 @@ function renderTrendDecisionContext(summary = lastSummary, priceData = pcData) {
   const active = !operational
     ? t("decision_unknown")
     : states.length ? states.join(" / ") : regime ? `${regime} ${PREFS.lang === "en" ? "allowed" : "autorisé"}` : t("decision_unknown");
-  value.textContent = active;
+  value.textContent = PREFS.lang === "fr" ? ({LONG:"Position acheteuse", SHORT:"Position vendeuse", "LONG autorisé":"Recherche d’un achat", "SHORT autorisé":"Recherche d’une vente"}[active] || active) : active;
   root.dataset.tone = active === t("decision_unknown") ? "unknown" : slots.length ? "position" : regime.toLowerCase();
   if ($("trend-regime-visual")) $("trend-regime-visual").textContent = regime ? (regime === "LONG" ? "BULL" : "BEAR") : "UNKNOWN";
   if ($("market-regime-panel")) $("market-regime-panel").textContent = regime ? (regime === "LONG" ? "BULL" : "BEAR") : "UNKNOWN";
@@ -1646,7 +1669,7 @@ function drawPChart() {
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   const all = data.candles || [];
   $("pos-note").textContent = data.positions.length
-    ? "— " + data.positions.map(p => `${p.name} ${p.direction === 1 ? "LONG" : "SHORT"} @ ${Math.round(p.entry).toLocaleString("fr-FR")}`).join(" · ")
+    ? "— " + data.positions.map(p => `${p.name} ${p.direction === 1 ? "Long" : "Short"} @ ${Math.round(p.entry).toLocaleString("fr-FR")}`).join(" · ")
     : "— aucune position ouverte";
   const sideKnown = data.regime_up === true || data.regime_up === false;
   const isShort = data.regime_up === false;
@@ -1684,8 +1707,8 @@ function drawPChart() {
     low: (ch.low || []).slice(start),
   }));
   const chans = rawChans.flatMap(ch => [
-    {name: ch.name, direction:"LONG", active:!isShort, vals:ch.high},
-    {name: ch.name, direction:"SHORT", active:isShort, vals:ch.low},
+    {name: ch.name, direction:"Long", active:!isShort, vals:ch.high},
+    {name: ch.name, direction:"Short", active:isShort, vals:ch.low},
   ]).map(ch => ({
     ...ch,
     color: ch.active ? (PC_CHCOL[ch.name] || col("--s1")) : col("--muted"),
@@ -1710,7 +1733,7 @@ function drawPChart() {
   for (let i = 0; i <= 4; i++) {
     const v = lo + (hi - lo) * i / 4, y = Y(v);
     g += `<line x1="${M.l}" x2="${W - M.r}" y1="${y}" y2="${y}" stroke="${col("--grid")}"/>`;
-    g += `<text x="${W - M.r + 8}" y="${y + 4}" fill="${col("--muted")}" font-size="10.5" style="font-variant-numeric:tabular-nums">${Math.round(v).toLocaleString("fr-FR")}</text>`;
+    g += `<text x="${W - M.r + 8}" y="${y + 4}" fill="${col("--muted")}" font-size="13" style="font-variant-numeric:tabular-nums">${Math.round(v).toLocaleString("fr-FR")}</text>`;
   }
   // Corridor sans signal : sous le plus proche seuil LONG et au-dessus du
   // plus proche seuil SHORT. Les enveloppes suivent les paliers 4 h dans le
@@ -1725,7 +1748,7 @@ function drawPChart() {
     const bottom = [...waiting].reverse().map(p => `${X(p.i).toFixed(1)},${Y(p.low).toFixed(1)}`).join(" ");
     g += `<polygon points="${top} ${bottom}" fill="${col("--muted")}" opacity=".055" clip-path="url(#pclip)"/>`;
     const last = waiting[waiting.length - 1], middle = (Y(last.high) + Y(last.low)) / 2;
-    g += `<text x="${W - M.r - 8}" y="${middle.toFixed(1)}" text-anchor="end" fill="${col("--muted")}" font-size="9.5" font-weight="700" opacity=".8">${t("waiting_label")}</text>`;
+    g += `<text x="${W - M.r - 8}" y="${middle.toFixed(1)}" text-anchor="end" fill="${col("--muted")}" font-size="13" font-weight="600" opacity=".8">${t("waiting_label")}</text>`;
   }
   candles.forEach((c, i) => {
     const [ts, o, h, l, cl] = c, x = X(i), colr = cl >= o ? up : down;
@@ -1735,7 +1758,7 @@ function drawPChart() {
   for (let i = 0; i < 5; i++) {
     const idx = Math.round(i / 4 * (candles.length - 1));
     const d = new Date(candles[idx][0]);
-    g += `<text x="${X(idx)}" y="${H - 7}" text-anchor="middle" fill="${col("--muted")}" font-size="10.5">${d.toLocaleDateString("fr-FR", {day:"2-digit", month:"2-digit"})} ${d.getHours()}h</text>`;
+    g += `<text x="${X(idx)}" y="${H - 7}" text-anchor="middle" fill="${col("--muted")}" font-size="13">${d.toLocaleDateString("fr-FR", {day:"2-digit", month:"2-digit"})} ${d.getHours()}h</text>`;
   }
   // canaux de Donchian 20/55/100 (calculés sur 4h, le timeframe de décision).
   // Les deux côtés sont visibles : plein/couleur pour la direction autorisée
@@ -1760,7 +1783,7 @@ function drawPChart() {
   for (let i = 1; i < labels.length; i++)
     labels[i].y = Math.max(labels[i].y, labels[i - 1].y + 12);
   for (const l of labels)
-    g += `<text x="${W - M.r - 4}" y="${(l.y - 3).toFixed(1)}" text-anchor="end" fill="${l.color}" font-size="${l.active ? 10 : 9.2}" font-weight="${l.active ? 700 : 600}" opacity="${l.active ? 1 : .72}">${l.name}</text>`;
+    g += `<text x="${W - M.r - 4}" y="${(l.y - 3).toFixed(1)}" text-anchor="end" fill="${l.color}" font-size="13" font-weight="600" opacity="${l.active ? 1 : .72}">${l.name}</text>`;
   // lignes d'entrée/stop + étiquettes à gauche, empilées comme les canaux à
   // droite : quand plusieurs systèmes sont entrés à des niveaux proches (cas
   // fréquent, les trois Donchian suivent souvent le même mouvement), les
@@ -1784,7 +1807,7 @@ function drawPChart() {
     posLabels[i].y = Math.max(posLabels[i].y, posLabels[i - 1].y + 11);
   for (const l of posLabels) {
     g += `<circle cx="${M.l + 3}" cy="${(l.y - 6.5).toFixed(1)}" r="3" fill="${l.dotColor}" stroke="${col("--surface-solid")}" stroke-width="1"/>`;
-    g += `<text x="${M.l + 10}" y="${(l.y - 3).toFixed(1)}" fill="${l.textColor}" font-size="10" font-weight="700">${l.text}</text>`;
+    g += `<text x="${M.l + 10}" y="${(l.y - 3).toFixed(1)}" fill="${l.textColor}" font-size="13" font-weight="600">${l.text}</text>`;
   }
   // pastille SUR la bougie où le trade a réellement été pris (distincte de la
   // ligne horizontale, qui ne dit que "le niveau" — pas "quand"). Nécessite
@@ -1803,7 +1826,7 @@ function drawPChart() {
     const sysColor = PC_CHCOL[p.name] || col("--s1");
     const ex = X(idx).toFixed(1), ey = Y(p.entry).toFixed(1);
     const tri = p.direction === 1 ? "M0 -7 L6 4.5 L-6 4.5 Z" : "M0 7 L6 -4.5 L-6 -4.5 Z";
-    const title = escapeSvg(`${p.name} ${p.direction === 1 ? "LONG" : "SHORT"} — entrée réelle @ ${Math.round(p.entry).toLocaleString("fr-FR")}`);
+    const title = escapeSvg(`${p.name} ${p.direction === 1 ? "Long" : "Short"} — entrée réelle @ ${Math.round(p.entry).toLocaleString("fr-FR")}`);
     g += `<g transform="translate(${ex} ${ey})" fill="${sysColor}" stroke="${col("--surface-solid")}" stroke-width="1.4"><title>${title}</title><path d="${tri}"/></g>`;
   }
   g += `<g id="pcursor"></g>`;
@@ -1972,7 +1995,7 @@ function drawChart() {
   for (let i = 0; i <= 5; i++) {
     const v = y0 + (y1 - y0) * i / 5, y = Y(v);
     g += `<line x1="${M.l}" x2="${W - M.r}" y1="${y}" y2="${y}" stroke="${col("--grid")}"/>`;
-    g += `<text x="${M.l + 2}" y="${y - 5}" fill="${col("--muted")}" font-size="10.5" style="font-variant-numeric:tabular-nums">${fmtY(v)}</text>`;
+    g += `<text x="${M.l + 2}" y="${y - 5}" fill="${col("--muted")}" font-size="13" style="font-variant-numeric:tabular-nums">${fmtY(v)}</text>`;
   }
   const nx = Math.max(1, Math.min(6, Math.floor(W / 150)));
   for (let i = 0; i <= nx; i++) {
@@ -1980,7 +2003,7 @@ function drawChart() {
     const lab = (x1 - x0 < 86400e3 * 2)
       ? d.toLocaleTimeString("fr-FR", {hour: "2-digit", minute: "2-digit"})
       : d.toLocaleDateString("fr-FR", {day: "2-digit", month: "short"});
-    g += `<text x="${X(t)}" y="${H - 10}" text-anchor="middle" fill="${col("--muted")}" font-size="10.5">${lab}</text>`;
+    g += `<text x="${X(t)}" y="${H - 10}" text-anchor="middle" fill="${col("--muted")}" font-size="13">${lab}</text>`;
   }
   // courbes
   for (const s of series) {
@@ -2037,8 +2060,8 @@ function drawChart() {
     g += `<g transform="translate(${W - M.r + 10}, ${t.y})">
       <rect x="0" y="-11" width="${M.r - 16}" height="22" rx="7" fill="${t.s.color}" opacity=".14"/>
       <rect x="0" y="-11" width="3" height="22" rx="1.5" fill="${t.s.color}"/>
-      <text x="9" y="-1" fill="${t.s.color}" font-size="9.5" font-weight="700" letter-spacing=".5">${t.s.label.toUpperCase()}</text>
-      <text x="9" y="9" fill="${col("--ink")}" font-size="10.5" font-weight="600" style="font-variant-numeric:tabular-nums">${fmtY(t.v)}${unit === "usd" ? " $" : ""}</text>
+      <text x="9" y="-1" fill="${t.s.color}" font-size="13" font-weight="600" letter-spacing="0">${t.s.label}</text>
+      <text x="9" y="9" fill="${col("--ink")}" font-size="13" font-weight="600" style="font-variant-numeric:tabular-nums">${fmtY(t.v)}${unit === "usd" ? " $" : ""}</text>
     </g>`;
   }
   g += `<line id="xhair" y1="${M.t}" y2="${H - M.b}" stroke="${col("--axis")}" stroke-dasharray="3 3" visibility="hidden"/>`;
@@ -2057,7 +2080,7 @@ function drawChart() {
       while (hi - lo > 1) { const m = (lo + hi) >> 1; (s.pts[m][0] < t) ? lo = m : hi = m; }
       const p = (Math.abs(s.pts[lo][0] - t) < Math.abs(s.pts[hi][0] - t)) ? s.pts[lo] : s.pts[hi];
       rows += `<div class="row"><span><span class="swatch" style="background:${s.color};width:8px;height:8px;display:inline-block;margin-right:7px;border-radius:3px"></span>${s.label}</span>
-        <span class="num" style="font-weight:650">${fmtY(p[1])}${unit === "usd" ? " $" : ""}</span></div>`;
+        <span class="num" style="font-weight:600">${fmtY(p[1])}${unit === "usd" ? " $" : ""}</span></div>`;
     }
     tip.innerHTML = `<div class="t">${new Date(t).toLocaleString("fr-FR")}</div>` + rows;
     tip.style.display = "block";
@@ -2217,7 +2240,7 @@ async function openDrill(name, trigger=null) {
       detail("Notionnel estimé", value(moneyNA(slot.notional, 0))),
       detail("Frais d’entrée", value(moneyNA(slot.entry_fee, 2))),
       detail("Cash poche", value(moneyNA(slot.cash, 0))),
-      detail("PnL latent estimé", value(moneyNA(slot.upnl, 2))),
+      detail("Gain / perte en cours estimé", value(moneyNA(slot.upnl, 2))),
       detail("PnL %", value(percentNA(slot.upnl_pct) + " · notionnel d’entrée")),
     ]) + section("Protection", [
       detail("Stop", value(f(slot.stop))),
@@ -2246,18 +2269,18 @@ async function openDrill(name, trigger=null) {
   }
   if (d.position) {
     const p = d.position;
-    body += `<div class="kv"><span class="k">Position courante</span><span class="badge ${p.direction===1?"long":"short"}">${p.direction===1?"▲ LONG":"▼ SHORT"}</span></div>
+    body += `<div class="kv"><span class="k">Position courante</span><span class="badge ${p.direction===1?"long":"short"}">${p.direction===1?"▲ Long":"▼ Short"}</span></div>
       <div class="kv"><span class="k">Entrée / Stop</span><span class="num">${Math.round(p.entry_price).toLocaleString(LOCALE())} / ${Math.round(p.stop_price).toLocaleString(LOCALE())}</span></div>`;
   } else {
     body += `<div class="kv"><span class="k">Position courante</span><span class="badge flat">EN ATTENTE</span></div>`;
   }
   if (d.trades && d.trades.length) {
-    body += `<h2 style="margin:16px 0 8px;font-size:12px">Derniers trades</h2><table>
+    body += `<h2 style="margin:16px 0 8px;font-size:16px">Derniers trades</h2><table>
       <thead><tr><th>Sortie</th><th>Sens</th><th>PnL</th><th>Motif</th></tr></thead><tbody>` +
       d.trades.map(r => `<tr><td class="num">${String(r.exit_ts).slice(5,16).replace("T"," ")}</td>
         <td><span class="badge ${r.direction==="LONG"?"long":"short"}">${esc(r.direction)}</span></td>
-        <td class="num ${r.pnl>0?"up":"down"}" style="font-weight:650">${money(r.pnl)}</td>
-        <td style="color:var(--muted);font-size:11.5px">${esc(r.reason)}</td></tr>`).join("") + "</tbody></table>";
+        <td class="num ${r.pnl>0?"up":"down"}" style="font-weight:600">${money(r.pnl)}</td>
+        <td style="color:var(--muted);font-size:13px">${esc(r.reason)}</td></tr>`).join("") + "</tbody></table>";
   } else {
     body += `<div class="empty">Aucun trade clôturé pour ce sous-système.</div>`;
   }

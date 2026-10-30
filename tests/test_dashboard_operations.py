@@ -35,6 +35,7 @@ def _summary_fixture(
     ledger=_MISSING,
     trend_override=None,
     carry_override=None,
+    equity_history=None,
 ):
     """Build a read-only summary fixture without changing production state."""
 
@@ -72,8 +73,13 @@ def _summary_fixture(
         }
     store.save_engine_state("trend", trend_state)
     store.save_engine_state("carry", carry_state)
-    store.append_equity("trend", 6_000.0, now.isoformat())
-    store.append_equity("carry", 4_000.0, now.isoformat())
+    if equity_history is None:
+        store.append_equity("trend", 6_000.0, now.isoformat())
+        store.append_equity("carry", 4_000.0, now.isoformat())
+    else:
+        for engine, samples in equity_history.items():
+            for timestamp, amount in samples:
+                store.append_equity(engine, amount, timestamp.isoformat())
     if ledger is not _MISSING:
         monkeypatch.setattr(StateStore, "read_funding_ledger", lambda _self: ledger)
     if trend_override is not None or carry_override is not None:
@@ -1310,3 +1316,26 @@ class DashboardOperationsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_summary_reports_daily_dollar_result_after_external_flows(tmp_path, monkeypatch):
+    now = datetime.now(UTC)
+    start = now - timedelta(minutes=3)
+    end = now - timedelta(minutes=1)
+    deposit_at = start + timedelta(minutes=1)
+    flows = pd.DataFrame(
+        [{"ts": pd.Timestamp(deposit_at), "trend_flow": 1_000.0, "carry_flow": 0.0}]
+    )
+    monkeypatch.setattr(dashboard_app, "_read_flows", lambda: flows)
+    summary = _summary_fixture(
+        tmp_path,
+        monkeypatch,
+        {"slots": {}},
+        equity_history={
+            "trend": [(start, 6_000.0), (end, 7_100.0)],
+            "carry": [(start, 4_000.0), (end, 4_050.0)],
+        },
+    )
+
+    assert summary["totals"]["day_pnl"] == pytest.approx(150.0)
+    assert summary["totals"]["day_pnl_pct"] == pytest.approx(0.015)

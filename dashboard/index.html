@@ -8,39 +8,30 @@
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#0a0b0d">
 <link rel="apple-touch-icon" href="/icon.svg">
+<link rel="preload" href="/static/fonts/Inter-Variable-Latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/static/dashboard.css">
 
 </head>
 <body data-view="monitor">
-<!--
-  THESIS: Turn the dashboard into an operator workspace: one navigation rail, one working canvas, and a different primary task for Monitor, Performance and Risk.
-  OWN-WORLD: A dark-first operations desk with a persistent state rail, quiet analytical canvas, and semantic light only where a condition changes the operator's judgement.
-  STORY: The operator chooses a task, sees its dominant decision surface, then opens supporting evidence without reading a wall of equally weighted cards.
-  FIRST VIEWPORT: A left rail anchors mode, navigation and trust; Monitor uses Trend as the working canvas with market and event evidence beside it, not beneath it.
-  FORM: Operator workspace with a depth-axis discipline, surface candidate 6, seed 627597ff; the creator-bench challenger donates tactile navigation hierarchy without its material costume.
-  FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance.
--->
-<canvas id="fx" aria-hidden="true"></canvas>
+
 <div class="workspace-shell">
 <aside class="workspace-rail" aria-label="Navigation de l'espace opérateur">
-  <div class="workspace-brand"><div class="logo">₿</div><div><strong>TANDEM</strong><span>OPERATOR WORKSPACE</span></div></div>
-  <span class="workspace-mode"><i></i>PAPER · LECTURE SEULE</span>
+  <div class="workspace-brand"><div class="logo">₿</div><div><strong>TANDEM</strong><span>Portefeuille BTC</span></div></div>
   <nav class="workspace-nav" id="dashboard-view" role="tablist" aria-label="Espaces du dashboard">
-    <button class="workspace-tab" id="view-monitor" role="tab" data-view="monitor" aria-controls="dashboard-content" data-i18n="view_monitor"><span>01</span>Surveillance</button>
-    <button class="workspace-tab" id="view-performance" role="tab" data-view="performance" aria-controls="dashboard-content" data-i18n="view_performance"><span>02</span>Performance</button>
-    <button class="workspace-tab" id="view-risk" role="tab" data-view="risk" aria-controls="dashboard-content" data-i18n="view_risk"><span>03</span>Risque</button>
+    <button class="workspace-tab" id="view-monitor" role="tab" data-view="monitor" aria-controls="dashboard-content"><span aria-hidden="true">01</span><span class="workspace-tab-label" data-i18n="view_monitor" data-short-fr="Suivi" data-short-en="Monitor">Surveillance</span></button>
+    <button class="workspace-tab" id="view-performance" role="tab" data-view="performance" aria-controls="dashboard-content"><span aria-hidden="true">02</span><span class="workspace-tab-label" data-i18n="view_performance" data-short-fr="Perf." data-short-en="Perf.">Performance</span></button>
+    <button class="workspace-tab" id="view-risk" role="tab" data-view="risk" aria-controls="dashboard-content"><span aria-hidden="true">03</span><span class="workspace-tab-label" data-i18n="view_risk" data-short-fr="Risque" data-short-en="Risk">Risque</span></button>
   </nav>
-  <div class="workspace-rail-note"><span>CADENCE</span><strong>4 H · CAUSAL</strong><small>La clôture décide. Le dashboard observe.</small></div>
 </aside>
 <section class="workspace-canvas">
 <a class="skip-link" href="#dashboard-content">Aller au contenu principal</a>
 
 <header class="workspace-header">
-  <div class="workspace-context"><span>BTCQUANT / PAPER</span><strong>Market &amp; decision desk</strong></div>
-  <span class="mode"><span class="blink"></span><span data-i18n="paper">PAPER TRADING</span></span>
+  <div class="workspace-context"><strong>Portefeuille</strong></div>
+  <span class="mode"><span class="blink"></span><span data-i18n="paper">Paper</span></span>
   <button type="button" class="iconbtn" id="theme-btn" title="Basculer le thème" aria-label="Basculer le thème" aria-pressed="false"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"/></svg><span data-i18n="theme">Thème</span></button>
   <button type="button" class="iconbtn" id="settings-btn" title="Préférences" aria-label="Préférences" aria-expanded="false" aria-controls="drawer"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/><path d="m19 13.5 1.3 1-.9 1.6-1.5-.5a7.8 7.8 0 0 1-1.4 1.1l.1 1.6-1.8.6-.8-1.4a7.7 7.7 0 0 1-1.8.2l-.8 1.4-1.8-.6.1-1.6a7.8 7.8 0 0 1-1.4-1.1l-1.5.5-.9-1.6 1.3-1a7.4 7.4 0 0 1 0-1.8l-1.3-1 .9-1.6 1.5.5A7.8 7.8 0 0 1 9.8 8l-.1-1.6 1.8-.6.8 1.4a7.7 7.7 0 0 1 1.8-.2l.8-1.4 1.8.6-.1 1.6a7.8 7.8 0 0 1 1.4 1.1l1.5-.5.9 1.6-1.3 1a7.4 7.4 0 0 1 0 1.8Z"/></svg><span data-i18n="settings">Réglages</span></button>
-  <span class="spacer"></span>
+
   <div class="hm"><div class="lab" data-i18n="btcusdt">BTC-PERP / USDC</div><div class="val num display" id="h-price">—</div></div>
   <div class="hm"><div class="lab" data-i18n="h24">24 heures</div><div class="val num" id="h-change">—</div></div>
   <div class="hm"><div class="lab" data-i18n="funding_ann">Funding annualisé</div><div class="val num" id="h-funding">—</div></div>
@@ -61,55 +52,21 @@
   </button>
 </section>
 
-<section class="workspace-brief" aria-live="polite">
-  <div data-brief="monitor"><span>Surveillance</span><h2>Décision, marché, protection.</h2><p>Lire l’intention Trend avant les détails d’exposition.</p></div>
-  <div data-brief="performance"><span>Performance</span><h2>Résultat réalisé, puis attribution.</h2><p>La courbe explique le résultat ; les modules apportent la preuve.</p></div>
-  <div data-brief="risk"><span>Risque</span><h2>Ce qui peut dégrader le portefeuille.</h2><p>Stops, drawdown et protection passent avant les métriques de confort.</p></div>
-  <div class="workspace-brief-rule" aria-hidden="true"></div>
-</section>
-
-<section class="truth-rail system-rail" aria-label="Contrat d'état du cockpit">
-  <article class="truth-node truth-paper">
-    <span class="truth-wire" aria-hidden="true"></span>
-    <span class="truth-label">Mode opératoire</span>
-    <strong>PAPER</strong>
-    <small>simulation · aucune exécution venue</small>
-  </article>
-  <article class="truth-node truth-readonly">
-    <span class="truth-wire" aria-hidden="true"></span>
-    <span class="truth-label">Contrat des données</span>
-    <strong>LECTURE SEULE</strong>
-    <small>état, ledger et métriques observés</small>
-  </article>
-  <article class="truth-node truth-auth">
-    <span class="truth-wire" aria-hidden="true"></span>
-    <span class="truth-label">Autorisation externe</span>
-    <strong>TESTNET BLOQUÉ</strong>
-    <small>qualification PAPER ≠ permission</small>
-  </article>
-  <article class="truth-node truth-clock">
-    <span class="truth-wire" aria-hidden="true"></span>
-    <span class="truth-label">Cadence de décision</span>
-    <strong>4 H · CAUSAL</strong>
-    <small>signal à la clôture · refresh 30 s</small>
-  </article>
-</section>
-
 <main id="dashboard-content" aria-labelledby="view-monitor" tabindex="-1">
 <div id="alert" role="alert" aria-live="assertive"><span class="ic" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><path d="m12 3 9 17H3L12 3Z"/><path d="M12 9v5m0 3h.01"/></svg></span><span id="alert-msg"></span></div>
 
 <section class="tiles metric-strip" id="top-tiles" aria-label="Indicateurs de la vue active">
   <div class="card tile hero" data-view-tile="equity">
-    <div class="eyebrow" data-i18n="equity_total">Équity totale</div>
-    <div><span class="val num" id="t-equity">—</span><span class="delta num" id="t-delta" style="display:none"></span></div>
-    <div class="sub num" id="t-sub">—</div>
-    <svg id="spark"></svg>
+    <div class="eyebrow" data-i18n="equity_total">Valeur du portefeuille</div>
+    <div><span class="val num" id="t-equity">—</span></div>
+    <div class="sub">Valeur actuelle · positions valorisées incluses</div>
+    <svg id="spark" role="img" aria-label="Courbe du portefeuille"></svg>
   </div>
   <div class="card tile" data-view-tile="day">
-    <div class="eyebrow" data-i18n="pnl_day">PnL du jour · UTC</div>
-    <div class="val num" id="t-day">—</div>
-    <div class="sub" data-i18n="since_midnight">depuis 00:00 UTC</div>
+    <div class="eyebrow" data-i18n="pnl_day">Gain / perte du jour</div>
+    <div class="val num" id="t-day">—</div><div class="sub" id="t-day-note">UTC</div>
   </div>
+  <div class="card tile" data-view-tile="cumulative"><div class="eyebrow">Gain / perte cumulé</div><div class="val num" id="t-delta">—</div><div class="sub" id="t-sub">—</div></div>
   <div class="card tile" data-view-tile="funding">
     <div class="eyebrow" data-i18n="next_funding">Prochain funding</div>
     <div class="val num" id="t-next">—</div>
@@ -126,33 +83,35 @@
 
 <div class="grid decision-board" id="board">
     <div class="card focus-card performance performance-command" data-card="performance_brief">
-      <div class="panel-title-row"><h2 data-i18n="performance_snapshot">Synthèse de performance</h2><span class="panel-kind">RÉALISÉ</span></div>
-      <div class="focus-intro" data-i18n="performance_snapshot_note">Le bilan réalisé, sans bruit opérationnel.</div>
+      <div class="panel-title-row"><h2 data-i18n="performance_snapshot">Synthèse de performance</h2></div>
+      <div class="focus-intro" data-i18n="performance_snapshot_note">Résultats cumulés, avec les positions ouvertes valorisées.</div>
       <div class="focus-grid" id="performance-brief"><div class="empty" style="grid-column:1/-1">Chargement…</div></div>
     </div>
 
     <div class="card focus-card risk risk-command" data-card="risk_radar">
-      <div class="panel-title-row"><h2 data-i18n="risk_radar">Radar de risque</h2><span class="panel-kind panel-kind-risk">LIVE</span></div>
+      <div class="panel-title-row"><h2 data-i18n="risk_radar">Radar de risque</h2><span class="panel-kind panel-kind-risk">En direct</span></div>
       <div class="focus-intro" data-i18n="risk_radar_note">Ce qui peut réellement dégrader le portefeuille maintenant.</div>
       <div class="focus-grid" id="risk-radar"><div class="empty" style="grid-column:1/-1">Chargement…</div></div>
     </div>
 
     <div class="card focus-card monitor monitor-command" data-card="monitor_pulse">
-      <div class="panel-title-row"><h2 data-i18n="monitor_pulse">Pulse opérationnel</h2><span class="panel-kind panel-kind-health">SANTÉ</span></div>
+      <div class="panel-title-row"><h2 data-i18n="monitor_pulse">Pulse opérationnel</h2><span class="panel-kind panel-kind-health">Santé</span></div>
       <div class="focus-intro" data-i18n="monitor_pulse_note">Les quatre signaux qui comptent pendant la surveillance.</div>
       <div class="ops-grid" id="monitor-pulse"><div class="empty" style="grid-column:1/-1">Chargement…</div></div>
     </div>
 
     <div class="card accounting-panel" data-card="accounting">
       <div class="panel-title-row"><h2>Comptabilité réconciliée</h2><span class="panel-kind" id="portfolio-accounting-state">—</span></div>
+      <div class="accounting-alerts" id="accounting-alerts" role="status" aria-live="polite"></div>
+      <details class="technical-details"><summary>Bilan, décisions et hypothèses</summary>
       <p class="panel-caption">Bilan lu depuis les états durables. Une donnée non qualifiée reste visible comme N/A.</p>
       <div class="accounting-grid" id="portfolio-accounting-grid"><div class="empty">En attente du bilan…</div></div>
-      <div class="accounting-alerts" id="accounting-alerts" role="status" aria-live="polite"></div>
       <div class="decision-explanation" id="decision-explanation"><span class="section-label">Dernières décisions persistées</span><div class="decision-explanation-grid"></div></div>
       <details class="technical-details realism-details">
-        <summary>Degré de réalisme PAPER</summary>
+        <summary>Degré de réalisme Paper</summary>
         <div class="realism-grid" id="realism-band"><div class="empty">N/A</div></div>
         <div class="technical-note">Les courbes portant une méthode différente restent séparées ; le navigateur ne recalcule pas les décisions.</div>
+      </details>
       </details>
     </div>
 
@@ -236,13 +195,26 @@
     </div>
 
     <div class="card trend-hero-panel" data-card="trend">
-      <div class="trend-hero-topline"><div><span class="trend-engine-label">MOTEUR TREND · 4×</span><span class="estate" id="trend-state"><span class="dot"></span>—</span></div><span class="trend-hero-guard" id="trend-guard">—</span></div>
+      <div class="trend-hero-topline"><div><h2 class="trend-engine-label">Trend</h2><span class="estate" id="trend-state"><span class="dot"></span>—</span></div><span class="trend-hero-guard" id="trend-guard">—</span></div>
       <div class="trend-hero-grid">
         <div class="decision-context decision-hero" id="trend-decision-context" data-tone="unknown">
-          <div class="decision-core"><span class="decision-label" data-i18n="decision_current">Décision actuelle</span><strong id="trend-decision">UNKNOWN</strong><span class="decision-detail" id="trend-decision-detail">Régime 4 h indisponible — aucune direction confirmée.</span></div>
-          <div class="decision-vector" aria-hidden="true"><span class="vector-line"></span><span class="vector-point"></span></div>
+          <div class="decision-core"><span class="decision-label" data-i18n="decision_current">Décision actuelle</span><strong id="trend-decision">Indisponible</strong><span class="decision-detail" id="trend-decision-detail">Régime 4 h indisponible — aucune direction confirmée.</span></div>
           <div class="decision-next"><span>Prochaine clôture 4 h</span><strong class="num" id="trend-next-boundary">N/A</strong><small id="trend-next-countdown">frontière planifiée · aucune action garantie</small></div>
         </div>
+      </div>
+      <div class="engine-summary trend-summary" id="trend-overview">
+        <div class="summary-item"><span>Positions ouvertes</span><strong class="num" id="trend-open-slots">—</strong><small id="trend-open-detail">—</small></div>
+        <div class="summary-item"><span>Exposition</span><strong class="num" id="trend-total-notional">—</strong><small>notionnel estimé · prix observé</small></div>
+        <div class="summary-item"><span>Gain / perte en cours</span><strong class="num" id="trend-total-upnl">—</strong><small id="trend-total-upnl-pct">% du notionnel d’entrée</small></div>
+        <div class="summary-item"><span>Équity Trend</span><strong class="num" id="trend-eq">—</strong><small><span id="trend-beat"></span></small></div>
+      </div>
+      <div class="table-wrap position-table-wrap">
+      <table class="position-table">
+        <thead><tr><th>Slot</th><th>Position</th><th>Prix</th><th>Gain / perte en cours</th><th>Stop / protection</th></tr></thead>
+        <tbody id="slots"></tbody>
+      </table>
+      </div>
+      <details class="technical-details trend-tech-details"><summary>Détails de la stratégie</summary>
         <div class="decision-matrix" aria-label="Matrice décisionnelle Trend">
           <div><span>Régime EMA</span><strong id="trend-regime-visual">N/A</strong></div>
           <div><span>Distance Donchian</span><strong id="trend-donchian-visual" class="num">N/A</strong></div>
@@ -251,50 +223,36 @@
           <div><span>Risque aux stops</span><strong id="trend-risk-visual" class="num">N/A</strong></div>
           <div><span>Protection</span><strong id="trend-protection">—</strong><small id="trend-protection-mode">N/A</small></div>
         </div>
-      </div>
-      <div class="engine-summary trend-summary" id="trend-overview">
-        <div class="summary-item"><span>Slots ouverts</span><strong class="num" id="trend-open-slots">—</strong><small id="trend-open-detail">—</small></div>
-        <div class="summary-item"><span>Exposition</span><strong class="num" id="trend-total-notional">—</strong><small>notionnel estimé · prix observé</small></div>
-        <div class="summary-item"><span>PnL latent estimé</span><strong class="num" id="trend-total-upnl">—</strong><small id="trend-total-upnl-pct">% du notionnel d’entrée</small></div>
-        <div class="summary-item"><span>Équity Trend</span><strong class="num" id="trend-eq">—</strong><small><span id="trend-beat"></span></small></div>
-      </div>
       <div class="trend-accounting-grid" id="trend-accounting-grid"><div class="empty">Bilan Trend en attente…</div></div>
-      <div class="position-visuals" id="position-visuals" aria-live="polite"><div class="empty">Position et protection en attente…</div></div>
-      <div class="table-wrap position-table-wrap">
-      <table class="position-table">
-        <thead><tr><th>Slot</th><th>Position</th><th>Prix</th><th>PnL latent</th><th>Stop / protection</th></tr></thead>
-        <tbody id="slots"></tbody>
-      </table>
-      </div>
       <div class="card-note trend-footnote">Sortie : stop suiveur ou retournement EMA50/200. Estimations hors frais de sortie et slippage.</div>
+      </details>
     </div>
 
-    <div class="card" data-card="carry">
-      <h2>Carry perp canonique <span style="color:var(--muted);font-weight:600">produit perpétuel</span> <span class="estate" id="carry-state"><span class="dot"></span>—</span></h2>
-      <div class="eequity num" id="carry-eq">—</div>
-      <div class="esub">cash-and-carry · encaisse le funding toutes les heures
-        <span class="beat num" id="carry-beat"></span></div>
-      <div class="carry-state-strip">
-        <div><span class="label">Mode</span><strong id="carry-mode">Paper synthétique</strong></div>
-        <div><span class="label">Position</span><strong id="carry-pos">—</strong></div>
-        <div><span class="label">Comptabilité</span><strong id="carry-accounting">—</strong></div>
+    <div class="card carry-panel" data-card="carry">
+      <div class="carry-heading"><h2>Carry</h2><span class="estate" id="carry-state"><span class="dot"></span>—</span></div>
+      <p class="carry-explainer" id="carry-explainer">Chargement du modèle Carry…</p>
+      <div class="carry-overview">
+        <div class="carry-now"><span>Activité actuelle</span><strong id="carry-pos">—</strong><small id="carry-entry-age">—</small></div>
+        <div class="carry-result"><span>Gain / perte net cumulé</span><strong class="num" id="carry-pnl-net">—</strong><small>Depuis le début du suivi · hors dépôts et retraits</small></div>
       </div>
-      <div class="carry-primary-grid">
-        <div class="carry-metric"><span>Spot</span><strong class="num" id="carry-spot-notional">—</strong></div>
-        <span class="sr-only" id="carry-gross-net">—</span>
-        <div class="carry-metric"><span>Perp</span><strong class="num" id="carry-perp-notional">—</strong></div>
-        <div class="carry-metric"><span>Brut 2 jambes</span><strong class="num" id="carry-gross-primary">—</strong></div>
-        <div class="carry-metric"><span>Delta notionnel</span><strong class="num" id="carry-net-primary">—</strong></div>
-        <div class="carry-metric carry-pnl-metric"><span>PnL Carry</span><strong class="num" id="carry-pnl-net">—</strong><small>cumulé hors flux</small></div>
-        <div class="carry-metric"><span>Funding cumulé</span><strong class="num" id="carry-funding-gross">N/A</strong></div>
-        <div class="carry-metric"><span>Emprunt cumulé</span><strong class="num" id="carry-borrow-cost">N/A</strong></div>
+      <div class="carry-pair-summary">
+        <div><span>Achat spot · exposition modélisée</span><strong class="num" id="carry-spot-notional">—</strong></div>
+        <div><span>Vente perp · exposition modélisée</span><strong class="num" id="carry-perp-notional">—</strong></div>
       </div>
-      <div class="carry-pnl-note">Funding <span class="num" id="carry-funding-gross-note">N/A</span> · Emprunt <span class="num" id="carry-borrow-cost-note">N/A</span></div>
-      <div class="carry-two-leg-grid" id="carry-two-leg-grid"><div class="empty">Bilan des deux jambes en attente…</div></div>
-      <div class="carry-open-age"><span id="carry-entry-age">—</span><span class="carry-age-separator">·</span><span>dernier funding <span id="carry-funding-age">—</span></span></div>
-      <div class="rdy-note" id="carry-uncertain" style="display:none" data-i18n="carry_uncertain">Comptabilité Carry incertaine — pas d'exposition venue</div>
-      <div class="carry-chart-head"><span>Courbe PnL Carry cumulé</span><strong class="num" id="carry-funding">—</strong></div>
-      <svg id="fundchart" style="width:100%;height:52px;display:block;margin-top:8px" aria-label="PnL Carry cumulé hors flux"></svg>
+      <p class="carry-signal" id="carry-rule">Sortie : financement moyen sur 14 jours négatif, arrêt de sécurité ou protection de marge ; une sortie peut rester partielle.</p>
+      <div class="rdy-note carry-warning" id="carry-uncertain" style="display:none" role="alert" data-i18n="carry_uncertain">Comptabilité Carry incertaine — vérifier les détails</div>
+      <details class="technical-details carry-result-details"><summary>Positions et résultat</summary>
+        <p class="technical-note">Les quantités, prix et résultats ci-dessous proviennent du modèle enregistré. Ce sont des exécutions simulées, pas des positions réelles. Les composantes cumulées ne représentent pas le résultat de la seule position ouverte.</p>
+        <div class="carry-ledger-grid">
+          <div><span>Financement reçu / payé · cumul du ledger</span><strong id="carry-funding-gross">—</strong></div>
+          <div><span>Coût d’emprunt · cumul du ledger</span><strong id="carry-borrow-cost">—</strong></div>
+        </div>
+        <div class="carry-two-leg-grid" id="carry-two-leg-grid"></div>
+        <p class="technical-note">Le net cumulé est la variation de valeur de Carry, hors apports et retraits. Les frais et intérêts déjà comptabilisés ne sont pas soustraits une seconde fois. Le détail du modèle et le ledger peuvent couvrir des historiques différents.</p>
+        <div class="carry-chart-head"><span>Gain / perte net cumulé dans le temps</span><strong class="num" id="carry-funding">—</strong></div>
+        <svg id="fundchart" style="width:100%;height:52px;display:block;margin-top:8px" aria-label="Gain ou perte Carry cumulé hors flux"></svg>
+      </details>
+      <div class="sr-only"><span id="carry-eq"></span><span id="carry-beat"></span><span id="carry-mode"></span><span id="carry-accounting"></span><span id="carry-gross-primary"></span><span id="carry-net-primary"></span><span id="carry-gross-net"></span><span id="carry-funding-gross-note"></span><span id="carry-borrow-cost-note"></span><span id="carry-funding-age"></span></div>
       <details class="technical-details carry-tech-details">
         <summary>Détails techniques</summary>
         <div class="detail-grid">
@@ -309,20 +267,20 @@
           <div class="kv"><span class="k">Statut ledger</span><span id="carry-ledger-status">N/A</span></div>
           <div class="kv"><span class="k">Autres coûts d’exécution</span><span id="carry-costs">N/A</span></div>
         </div>
-        <div class="technical-note">Prix funding : close H1 précédent · jambes spot/perp modélisées en paper, aucune position venue déduite.</div>
+        <div class="technical-note">Les sources et horodatages décrivent les références effectivement enregistrées par le moteur.</div>
       </details>
-      <div class="card-note">Sortie : funding lissé 14 j &lt; 0. Jambes spot/perp modélisées en paper, aucune position venue déduite.</div>
+
 
       <section class="dated-carry-panel" aria-labelledby="dated-carry-title" aria-live="polite">
         <div class="dated-carry-heading">
           <div>
-          <h3 id="dated-carry-title" data-i18n="dated_title">Carry BTC à échéance · PAPER expérimental</h3>
+          <h3 id="dated-carry-title" data-i18n="dated_title">Carry BTC à échéance · Paper expérimental</h3>
             <p data-i18n="dated_product_note">Spot BTC acheté + future BTC_USDC linéaire vendu · portefeuille isolé, exclu des totaux Tandem</p>
           </div>
-          <span class="dated-carry-badge" id="dated-carry-status">NON DÉPLOYÉ</span>
+          <span class="dated-carry-badge" id="dated-carry-status">Non déployé</span>
         </div>
         <p class="dated-carry-reason" id="dated-carry-reason">Aucun état expérimental disponible.</p>
-        <div class="dated-carry-grid">
+        <details class="technical-details"><summary>Positions et résultat du portefeuille expérimental</summary><div class="dated-carry-grid">
           <div><span data-i18n="dated_instrument">Contrat / échéance UTC</span><strong id="dated-carry-instrument">N/A</strong></div>
           <div><span data-i18n="dated_capital">Capital / cash total</span><strong id="dated-carry-capital">N/A</strong></div>
           <div><span data-i18n="dated_cash_margin">Cash libre / marge réservée</span><strong id="dated-carry-cash-margin">N/A</strong></div>
@@ -331,40 +289,41 @@
           <div><span data-i18n="dated_future">Future short BTC / prix moyen</span><strong id="dated-carry-future">N/A</strong></div>
           <div><span data-i18n="dated_residual">Déséquilibre constaté</span><strong id="dated-carry-residual">N/A</strong></div>
           <div><span data-i18n="dated_settlement">Dernier règlement officiel / compteur</span><strong id="dated-carry-settlement">N/A</strong></div>
-          <div><span data-i18n="dated_pnl">PnL réalisé / latent</span><strong id="dated-carry-pnl">N/A</strong></div>
+          <div><span data-i18n="dated_pnl">Gain / perte réalisé / en cours</span><strong id="dated-carry-pnl">N/A</strong></div>
           <div><span data-i18n="dated_fees">Frais comptabilisés</span><strong id="dated-carry-fees">N/A</strong></div>
           <div><span data-i18n="dated_premium">Prime brute estimée à l’entrée</span><strong id="dated-carry-premium">N/A</strong></div>
           <div><span data-i18n="dated_net_reserve">Net avant réserve / réserve / après</span><strong id="dated-carry-net-reserve">N/A</strong></div>
         </div>
-        <div class="dated-carry-foot" id="dated-carry-health">Readiness globale UNKNOWN · liveness du collecteur, runner et intégrité DB non prouvées par ce snapshot.</div>
-        <small data-i18n="dated_economics_note">Prix/quantités et PnL proviennent du checkpoint PAPER, pas de fills réels. La marge immobilisée est un besoin de liquidité, pas une perte. La réserve est un seuil de décision, pas une charge. Rentabilité : INSUFFICIENT_EVIDENCE.</small>
+        </details>
+        <div class="dated-carry-foot" id="dated-carry-health">État général inconnu · la disponibilité du collecteur et du runner, ainsi que l’intégrité DB, ne sont pas vérifiées par cet état.</div>
+        <small data-i18n="dated_economics_note">Prix/quantités et PnL proviennent du checkpoint Paper, pas de fills réels. La marge immobilisée est un besoin de liquidité, pas une perte. La réserve est un seuil de décision, pas une charge. Rentabilité : INSUFFICIENT_EVIDENCE.</small>
       </section>
     </div>
 
     <div class="card" data-card="breakdown">
       <h2>Répartition &amp; records</h2>
       <div class="contribution-table-wrap"><div class="section-label">Contributions comptables</div><div id="contribution-table"><div class="empty" style="padding:8px 0">N/A</div></div></div>
-      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.9px;margin:10px 0 4px;font-weight:700">Par sous-système</div>
+      <div style="font-size:13px;color:var(--muted);text-transform:none;letter-spacing:normal;margin:10px 0 4px;font-weight:500">Par sous-système</div>
       <div id="brk-strat"><div class="empty" style="padding:10px 0">en attente de trades</div></div>
-      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.9px;margin:12px 0 4px;font-weight:700">Par direction</div>
+      <div style="font-size:13px;color:var(--muted);text-transform:none;letter-spacing:normal;margin:12px 0 4px;font-weight:500">Par direction</div>
       <div id="brk-dir"><div class="empty" style="padding:10px 0">en attente de trades</div></div>
       <div class="records" id="records"></div>
     </div>
 
     <div class="card" data-card="conformity">
-      <h2>Est-ce normal ? <span style="color:var(--muted);font-weight:500;font-size:11px">réalisé vs backtest</span></h2>
+      <h2>Est-ce normal ? <span style="color:var(--muted);font-weight:500;font-size:13px">réalisé vs backtest</span></h2>
       <div id="conformity" style="margin-top:6px"><div class="empty">Chargement…</div></div>
     </div>
 
     <div class="card" data-card="yearly">
-      <h2><span data-i18n="yearly_title">Années précédentes</span> <span style="color:var(--muted);font-weight:500;font-size:11px" data-i18n="yearly_sub">backtest · mêmes réglages que le live</span>
+      <h2><span data-i18n="yearly_title">Années précédentes</span> <span style="color:var(--muted);font-weight:500;font-size:13px" data-i18n="yearly_sub">backtest · mêmes réglages que le live</span>
         <span class="legend">
           <span><span class="swatch" style="background:var(--s1)"></span><span data-i18n="portfolio">Portefeuille</span></span>
           <span><span class="swatch" style="background:var(--muted)"></span>BTC</span>
         </span>
       </h2>
       <svg id="ychart" class="yearly-chart" role="img" aria-label="Rendements annuels du backtest, portefeuille et BTC"></svg>
-      <div id="ynote" style="font-size:10.5px;color:var(--muted);margin-top:6px"></div>
+      <div id="ynote" style="font-size:13px;color:var(--muted);margin-top:6px"></div>
     </div>
 
     <div class="card" data-card="trades">
@@ -372,21 +331,21 @@
         <a class="iconbtn" href="/api/trades.csv" download style="margin-left:auto;text-decoration:none"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14"/></svg>CSV</a>
       </h2>
       <div class="controls" style="margin:8px 0 2px">
-        <label class="sk" for="tr-from" style="font-size:11.5px;color:var(--muted)" data-i18n="from">Du</label>
-        <input type="date" id="tr-from" style="background:var(--surface-2);border:1px solid var(--ring);color:var(--ink);border-radius:8px;padding:4px 8px;font:inherit;font-size:12px">
-        <label class="sk" for="tr-to" style="font-size:11.5px;color:var(--muted)" data-i18n="to">au</label>
-        <input type="date" id="tr-to" style="background:var(--surface-2);border:1px solid var(--ring);color:var(--ink);border-radius:8px;padding:4px 8px;font:inherit;font-size:12px">
-        <label class="sk" for="tr-limit" style="font-size:11.5px;color:var(--muted)">Afficher</label>
-        <select id="tr-limit" aria-label="Nombre de trades affichés" style="background:var(--surface-2);border:1px solid var(--ring);color:var(--ink);border-radius:8px;padding:4px 8px;font:inherit;font-size:12px"><option value="12">12</option><option value="25">25</option><option value="50">50</option><option value="100">100</option></select>
+        <label class="sk" for="tr-from" style="font-size:13px;color:var(--muted)" data-i18n="from">Du</label>
+        <input type="date" id="tr-from" style="background:var(--surface-2);border:1px solid var(--ring);color:var(--ink);border-radius:8px;padding:4px 8px;font:inherit;font-size:13px">
+        <label class="sk" for="tr-to" style="font-size:13px;color:var(--muted)" data-i18n="to">au</label>
+        <input type="date" id="tr-to" style="background:var(--surface-2);border:1px solid var(--ring);color:var(--ink);border-radius:8px;padding:4px 8px;font:inherit;font-size:13px">
+        <label class="sk" for="tr-limit" style="font-size:13px;color:var(--muted)">Afficher</label>
+        <select id="tr-limit" aria-label="Nombre de trades affichés" style="background:var(--surface-2);border:1px solid var(--ring);color:var(--ink);border-radius:8px;padding:4px 8px;font:inherit;font-size:13px"><option value="12">12</option><option value="25">25</option><option value="50">50</option><option value="100">100</option></select>
         <button class="iconbtn" id="tr-clear" data-i18n="reset">Réinitialiser</button>
       </div>
-      <div id="tr-scope" class="trade-scope" role="status" aria-live="polite" style="margin-top:7px;color:var(--muted);font-size:11.5px">0 trade affiché sur 0 dans la période</div>
+      <div id="tr-scope" class="trade-scope" role="status" aria-live="polite" style="margin-top:7px;color:var(--muted);font-size:13px">0 trade affiché sur 0 dans la période</div>
       <div id="trades" style="margin-top:10px"><div class="empty" data-i18n="no_trades">Aucun trade clôturé pour l’instant — le journal se remplit à la première sortie de position.</div></div>
       <button class="iconbtn trade-more" id="tr-more" type="button" hidden aria-controls="trades">Afficher plus</button>
     </div>
 
     <div class="card" data-card="metrics">
-      <h2 data-i18n="live_perf">Performance en direct <span style="color:var(--muted);font-weight:500;font-size:11px" data-i18n="realized">réalisé</span></h2>
+      <h2 data-i18n="live_perf">Performance en direct <span style="color:var(--muted);font-weight:500;font-size:13px" data-i18n="realized">réalisé</span></h2>
       <div class="panel-source-state" data-panel-status="metrics" role="status" aria-live="polite" hidden></div>
       <div class="metrics-grid" id="metrics"><div class="empty" style="grid-column:1/-1" data-i18n="collecting">Collecte en cours…</div></div>
     </div>
@@ -401,7 +360,7 @@
       </div>
       <div class="gauge-track"><div class="gauge-fill" id="exp-gauge" style="width:0"></div>
         <div class="gauge-mark" style="left:100%"></div></div>
-      <div style="font-size:10.5px;color:var(--muted)" data-i18n="leverage_note">ratio d’exposition brute · repère = 1× ; descriptif, pas le levier du moteur</div>
+      <div style="font-size:13px;color:var(--muted)" data-i18n="leverage_note">ratio d’exposition brute · repère = 1× ; descriptif, pas le levier du moteur</div>
       <div class="exposure-breakdown exposure-components">
         <div><span>Trend brut</span><strong class="num" id="exp-trend">—</strong></div>
         <div><span>Carry spot</span><strong class="num" id="exp-carry-spot">—</strong></div>
@@ -432,8 +391,8 @@
       <h2><span data-i18n="readiness_title">Qualification</span>
         <span class="estate" id="rdy-badge">—</span>
       </h2>
-      <div style="font-size:11px;color:var(--muted);margin:4px 0 6px" data-i18n="readiness_note">Critères fixés à froid — le passage ne se décide pas au feeling.</div>
-      <div class="authorization-note" role="note"><span class="authorization-mark" aria-hidden="true">!</span><span data-i18n="testnet_guard">Testnet non autorisé · cette carte décrit uniquement la qualification PAPER.</span></div>
+      <div style="font-size:13px;color:var(--muted);margin:4px 0 6px" data-i18n="readiness_note">Critères fixés à froid — le passage ne se décide pas au feeling.</div>
+      <div class="authorization-note" role="note"><span class="authorization-mark" aria-hidden="true">!</span><span data-i18n="testnet_guard">Testnet non autorisé · cette carte décrit uniquement la qualification Paper.</span></div>
       <div id="readiness"><div class="empty">Chargement…</div></div>
     </div>
 </div>
@@ -475,12 +434,6 @@
       <span><input type="number" id="pref-dd" min="1" max="30" step="1" style="width:56px"> %</span></div>
   </div>
 
-  <div class="setgrp">
-    <div class="gl">Effets visuels</div>
-    <div class="fx-note">Fond animé (WebGL) réagissant au régime de marché et à la volatilité — à couper pour économiser la batterie.</div>
-    <div class="setrow"><label class="sk" for="pref-fx">Fond animé</label>
-      <label class="toggle"><input type="checkbox" id="pref-fx" checked><span class="sl"></span></label></div>
-  </div>
 
   <div class="setgrp">
     <div class="gl" data-i18n="grp_cards">Cartes visibles</div>
