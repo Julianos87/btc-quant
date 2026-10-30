@@ -2476,6 +2476,7 @@ function refreshPlan({background = document.hidden} = {}) {
   // foreground forces the visible secondary panels through visibilitychange.
   if (background) return plan;
   if (PREFS.view === "monitor") {
+    if (VIEW_TILES.monitor.has("equity")) plan.push(["equity", refreshEquity]);
     if (cardIsVisible("events")) plan.push(["events", refreshEvents]);
     if (cardIsVisible("journal")) plan.push(["journal", refreshJournal]);
     if (cardIsVisible("price")) plan.push(["price", refreshPrice]);
