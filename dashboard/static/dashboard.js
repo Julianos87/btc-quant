@@ -11,19 +11,51 @@ const PREFS_DEFAULT = {
   notif: false, notifPos: true, ddAlert: 12, view: "monitor",
   hidden: {}, // { cardKey: true }
 };
-let PREFS = Object.assign({}, PREFS_DEFAULT, JSON.parse(localStorage.getItem("btcq-prefs") || "{}"));
-const savePrefs = () => localStorage.setItem("btcq-prefs", JSON.stringify(PREFS));
+function readStorage(key) { try { return localStorage.getItem(key); } catch (_) { return null; } }
+function writeStorage(key, value) { try { localStorage.setItem(key, value); } catch (_) { /* Private/blocked storage: preferences remain in memory. */ } }
+function normalizePreferences(value) {
+  const out = {...PREFS_DEFAULT, hidden: {}};
+  if (!value || typeof value !== "object" || Array.isArray(value)) return out;
+  for (const [key, allowed] of Object.entries({lang:["fr","en"], currency:["usd","eur","btc","pct"], view:["monitor","performance","risk"], range:[0,24,168], refresh:[0,10000,30000,60000]}))
+    if (allowed.includes(value[key])) out[key] = value[key];
+  for (const key of ["notif", "notifPos"]) if (typeof value[key] === "boolean") out[key] = value[key];
+  if (typeof value.ddAlert === "number" && Number.isFinite(value.ddAlert)) out.ddAlert = Math.max(1, Math.min(30, value.ddAlert));
+  if (typeof value.accent === "string" && /^(#[0-9a-f]{6})?$/i.test(value.accent)) out.accent = value.accent;
+  if (value.hidden && typeof value.hidden === "object" && !Array.isArray(value.hidden))
+    for (const [key, hidden] of Object.entries(value.hidden)) if (/^[a-z_]+$/.test(key) && typeof hidden === "boolean" && !["__proto__","constructor","prototype"].includes(key)) out.hidden[key] = hidden;
+  return out;
+}
+function loadPreferences() { try { return normalizePreferences(JSON.parse(readStorage("btcq-prefs") || "{}")); } catch (_) { return normalizePreferences(null); } }
+let PREFS = loadPreferences();
+const savePrefs = () => writeStorage("btcq-prefs", JSON.stringify(PREFS));
 const LOCALE = () => PREFS.lang === "en" ? "en-US" : "fr-FR";
 const DASHBOARD_STATE = window.BTCQuantDashboardState;
 if (!DASHBOARD_STATE) throw new Error("dashboard_state_unavailable");
 
 const FETCH_TIMEOUT_MS = 12000;
-function fetchDashboard(url, options = {}) {
-  return DASHBOARD_STATE.fetchResponseWithTimeout(fetch, url, options, {
+let sessionExpired = false;
+function showSessionExpired() {
+  sessionExpired = true;
+  let notice = $("session-expired");
+  if (!notice) { notice = document.createElement("div"); notice.id = "session-expired"; notice.className = "session-notice"; notice.setAttribute("role", "alert"); document.body.prepend(notice); }
+  notice.hidden = false;
+  notice.innerHTML = PREFS.lang === "en" ? 'Session expired. <a href="/login">Sign in again</a> to refresh data.' : 'Session expirée. <a href="/login">Se reconnecter</a> pour actualiser les données.';
+}
+async function fetchDashboard(url, options = {}) {
+  if (sessionExpired) throw Object.assign(new Error("session_expired"), {name:"SessionExpiredError"});
+  const response = await DASHBOARD_STATE.fetchResponseWithTimeout(fetch, url, options, {
     timeoutMs: FETCH_TIMEOUT_MS,
     setTimeoutImpl: window.setTimeout,
     clearTimeoutImpl: window.clearTimeout,
   });
+  const loginRedirect = response.redirected && /\/login(?:[?#]|$)/.test(response.url || "");
+  if (response.status === 401 || loginRedirect) {
+    // Consume the redirect body so the common deadline is released.
+    if (response.ok && typeof response.json === "function") response.json().catch(() => {});
+    showSessionExpired();
+    throw Object.assign(new Error("session_expired"), {name:"SessionExpiredError"});
+  }
+  return response;
 }
 
 
@@ -65,8 +97,8 @@ const I18N = {
     monitor_trend:"Moteur Trend", monitor_carry:"Moteur Carry", monitor_next_bar:"Prochaine décision", monitor_binance:"Flux Hyperliquid",
     monitor_ready:"opérationnel", monitor_silent:"ne répond plus", monitor_latency:"latence API", monitor_funding:"prochain funding",
     sharpe:"Sharpe", sortino:"Sortino", calmar:"Calmar", vol:"Volatilité",
-    yearly_title:"Années précédentes", yearly_sub:"backtest · mêmes réglages que le live",
-    yearly_note:"Simulation avec frais, slippage et funding réels — pas des résultats réalisés. Rendements par année civile ; pire creux de l’année au survol.",
+    yearly_title:"Années précédentes", yearly_sub:"référence historique · comparabilité non établie",
+    yearly_note:"Simulation selon les hypothèses de frais, slippage et funding du backtest — pas des résultats réalisés. Rendements par année civile ; pire creux de l’année au survol.",
     yearly_partial:"année incomplète", yearly_missing:"Référence annuelle absente — lancer scripts/make_yearly_reference.py",
     carry_synthetic:"paper synthétique · pas de position venue",
     carry_two_leg:"paper deux jambes · qualification explicite",
@@ -97,7 +129,7 @@ const I18N = {
     decision_bullish:"haussier", decision_bearish:"baissier",
     rdy_ready:"Prêt", rdy_not_ready:"Non prêt", rdy_blocked:"Bloqué",
     rdy_ready_why:"Tous les critères sont au vert. La décision de passer au testnet reste humaine.",
-    rdy_wait_why:"Le système est sain, mais la campagne n'a pas encore assez de preuves.",
+    rdy_wait_why:"La qualification n'a pas encore assez de preuves. Consulter les contrôles ci-dessous.",
     rdy_block_why:"Un critère opérationnel bloque le passage, indépendamment de la durée de campagne.",
     rdy_health:"Santé système", rdy_stats:"Qualification", rdy_exec:"Exécution",
     rdy_blockers:"Principaux critères manquants", rdy_show:"Voir tous les critères", rdy_hide:"Masquer le détail",
@@ -120,7 +152,7 @@ const I18N = {
     waiting_label:"Attente",
     cards:{performance_brief:"Synthèse de performance", risk_radar:"Radar de risque", monitor_pulse:"Pulse opérationnel",
       chart:"Courbe d’équity", price:"Graphe prix", events:"Journal", trend:"Moteur Trend",
-      carry:"Moteur Carry", breakdown:"Répartition & records", conformity:"Est-ce normal ?", yearly:"Années précédentes",
+      carry:"Moteur Carry", breakdown:"Répartition & records", conformity:"Référence historique", yearly:"Années précédentes",
       trades:"Trades clôturés", metrics:"Performance en direct", exposure:"Exposition", readiness:"Qualification"},
   },
   en: {
@@ -145,8 +177,8 @@ const I18N = {
     alloc_real:"Real allocation", pending_deposit:"Pending deposit", online:"Online", offline:"Stopped",
     state_stale:"Stale", state_unknown:"Unavailable", protection_software:"software",
     workspace:"View", view_monitor:"Monitor", view_performance:"Performance", view_risk:"Risk",
-    yearly_title:"Previous years", yearly_sub:"backtest · same settings as live",
-    yearly_note:"Simulation with real fees, slippage and funding — not realized results. Calendar-year returns; each year's worst drawdown on hover.",
+    yearly_title:"Previous years", yearly_sub:"historical reference · comparability unverified",
+    yearly_note:"Simulation using the backtest fee, slippage and funding assumptions — not realized results. Calendar-year returns; each year's worst drawdown on hover.",
     yearly_partial:"partial year", yearly_missing:"Yearly reference missing — run scripts/make_yearly_reference.py",
     carry_synthetic:"synthetic paper · no venue position",
     carry_two_leg:"two-leg paper · explicit qualification",
@@ -176,7 +208,7 @@ const I18N = {
     decision_open:"position(s) open", decision_next_close:"next 4h close", decision_protected:"protected", decision_bullish:"bullish", decision_bearish:"bearish",
     rdy_ready:"Ready", rdy_not_ready:"Not ready", rdy_blocked:"Blocked",
     rdy_ready_why:"Every criterion is green. The testnet decision remains a human call.",
-    rdy_wait_why:"The system is healthy, but the campaign does not yet have enough evidence.",
+    rdy_wait_why:"Qualification does not yet have enough evidence. Review the checks below.",
     rdy_block_why:"An operational criterion blocks promotion, independent of campaign duration.",
     rdy_health:"System health", rdy_stats:"Qualification", rdy_exec:"Execution",
     rdy_blockers:"Outstanding criteria", rdy_show:"Show all criteria", rdy_hide:"Hide details",
@@ -213,7 +245,7 @@ const I18N = {
     sharpe:"Sharpe", sortino:"Sortino", calmar:"Calmar", vol:"Volatility",
     cards:{performance_brief:"Performance snapshot", risk_radar:"Risk radar", monitor_pulse:"Operations pulse",
       chart:"Equity curve", price:"Price chart", events:"Event log", trend:"Trend engine",
-      carry:"Carry engine", breakdown:"Breakdown & records", conformity:"Is this normal?", yearly:"Previous years",
+      carry:"Carry engine", breakdown:"Breakdown & records", conformity:"Historical reference", yearly:"Previous years",
       trades:"Closed trades", metrics:"Live performance", exposure:"Exposure", readiness:"Qualification"},
   },
 };
@@ -260,6 +292,7 @@ let tradeLimit = 12;
 const cls = (el, v) => { el.classList.toggle("up", v > 0); el.classList.toggle("down", v < 0); };
 let range = PREFS.range, unit = "pct", chartData = null, showBH = false, lastSummary = null, lastTradeRows = [];
 let tradePageOffset = 0, tradeLoadedRows = [];
+let tradeAppliedFilter = null;
 let lastMetrics = null;
 let lastSummaryUpdatedAt = null;
 
@@ -1027,32 +1060,62 @@ function renderViewFocus(s) {
   renderMonitorPulse(s);
 }
 
-async function refreshTrades({append = false} = {}) {
+function tradeFilter() { return {from:$("tr-from")?.value || "", to:$("tr-to")?.value || ""}; }
+function tradeFilterKey(filter) { return JSON.stringify(filter); }
+function tradeNotice(message = "", retry = false) {
+  let node = $("tr-status");
+  if (!node) { node = document.createElement("div"); node.id = "tr-status"; node.className = "panel-status"; node.setAttribute("role", "status"); node.setAttribute("aria-live", "polite"); $("trades").before(node); }
+  node.textContent = message; node.hidden = !message;
+  let button = $("tr-retry");
+  if (!button) { button = document.createElement("button"); button.id = "tr-retry"; button.type = "button"; node.after(button); }
+  button.hidden = !retry;
+  button.textContent = PREFS.lang === "en" ? "Retry filter" : "Réessayer le filtre";
+  button.onclick = () => requestTrades();
+}
+async function requestTrades(options = {}) {
+  return runPanel("trades", () => refreshTrades(options), true, Date.now());
+}
+async function refreshTrades({append = false, reset = false} = {}) {
+  const filter = tradeFilter();
+  const changed = tradeFilterKey(filter) !== tradeFilterKey(tradeAppliedFilter);
+  append = append && !changed && !reset;
   const requestSequence = tradeRequestGate.begin();
   if (tradeAbortController) tradeAbortController.abort();
   const controller = new AbortController();
   tradeAbortController = controller;
-  if (!append) {
-    tradePageOffset = 0;
-    tradeLoadedRows = [];
-  }
   const offset = append ? tradePageOffset : 0;
+  const limit = changed || reset || append ? tradeLimit : Math.max(tradeLimit, tradePageOffset);
   const p = new URLSearchParams();
-  const f = $("tr-from") && $("tr-from").value, to = $("tr-to") && $("tr-to").value;
-  if (f) p.set("from", f); if (to) p.set("to", to);
-  p.set("limit", String(tradeLimit));
-  p.set("offset", String(offset));
+  if (filter.from) p.set("from", filter.from); if (filter.to) p.set("to", filter.to);
+  p.set("limit", String(Math.min(500, limit))); p.set("offset", String(offset));
   const exportLink = document.querySelector('a[href^="/api/trades.csv"]');
-  if (exportLink) exportLink.href = "/api/trades.csv" + (f || to ? "?" + new URLSearchParams([...p].filter(([key]) => key !== "limit" && key !== "offset")).toString() : "");
+  if (changed) tradeNotice(PREFS.lang === "en" ? "Applying filter… previous results are still shown." : "Application du filtre… résultats précédents encore affichés.");
   try {
     const response = await fetchDashboard("/api/trades?" + p.toString(), {signal: controller.signal});
     if (!response.ok) throw new Error("trades_http_" + response.status);
     const tr = await response.json();
     if (!tradeRequestGate.isCurrent(requestSequence)) return false;
+    // Preserve windows larger than the API page cap without partially replacing
+    // the table when a later page fails.
+    if (!append && Array.isArray(tr.rows)) {
+      while (tr.has_more && tr.rows.length < limit) {
+        p.set("offset", String(tr.rows.length));
+        p.set("limit", String(Math.min(500, limit - tr.rows.length)));
+        const nextResponse = await fetchDashboard("/api/trades?" + p.toString(), {signal:controller.signal});
+        if (!nextResponse.ok) throw new Error("trades_http_" + nextResponse.status);
+        const next = await nextResponse.json();
+        if (!tradeRequestGate.isCurrent(requestSequence)) return false;
+        if (!Array.isArray(next.rows) || !next.rows.length) { tr.has_more = false; break; }
+        tr.rows.push(...next.rows); tr.has_more = next.has_more;
+      }
+    }
     const stats = tr.stats || {n: 0, wins: 0, pnl: 0};
     const rows = Array.isArray(tr.rows) ? tr.rows : [];
     const total = Number.isFinite(Number(stats.n)) ? Number(stats.n) : 0;
     tradeLoadedRows = append ? tradeLoadedRows.concat(rows) : rows;
+    tradeAppliedFilter = filter;
+    tradeNotice();
+    if (exportLink) exportLink.href = "/api/trades.csv" + (filter.from || filter.to ? "?" + new URLSearchParams([...p].filter(([key]) => key !== "limit" && key !== "offset")).toString() : "");
     tradePageOffset = offset + rows.length;
     const displayed = tradeLoadedRows.length;
     const st = $("tr-stats"), scope = $("tr-scope"), more = $("tr-more");
@@ -1067,7 +1130,7 @@ async function refreshTrades({append = false} = {}) {
     scheduleRedraw("chart");
     if (!total) {
       st.textContent = "0 trade";
-      $("trades").innerHTML = `<div class="empty">${t("no_trades")}</div>`;
+      $("trades").innerHTML = `<div class="empty">${filter.from || filter.to ? (PREFS.lang === "en" ? "No closed trades in this period." : "Aucun trade clôturé dans cette période.") : t("no_trades")}</div>`;
       if (more) more.hidden = true;
       return true;
     }
@@ -1084,6 +1147,11 @@ async function refreshTrades({append = false} = {}) {
   } catch (error) {
     if (!tradeRequestGate.isCurrent(requestSequence)) return false;
     if (error.name === "AbortError") return false;
+    const previous = tradeAppliedFilter ? (PREFS.lang === "en" ? ` Previous period: ${tradeAppliedFilter.from || "all"} → ${tradeAppliedFilter.to || "all"}.` : ` Période précédente : ${tradeAppliedFilter.from || "tout"} → ${tradeAppliedFilter.to || "tout"}.`) : "";
+    const message = tradeAppliedFilter
+      ? (PREFS.lang === "en" ? "Filter not applied — previous results." : "Filtre non appliqué — résultats précédents.")
+      : (PREFS.lang === "en" ? "Trades unavailable. Retry loading." : "Trades indisponibles. Réessayer le chargement.");
+    tradeNotice(message + previous, error.name !== "SessionExpiredError");
     throw error;
   } finally {
     if (tradeRequestGate.isCurrent(requestSequence)) tradeAbortController = null;
@@ -1362,10 +1430,10 @@ function drawFunding(pts) {
 
 // ── thème manuel (persistant) ──
 (function initTheme() {
-  const saved = localStorage.getItem("btcq-theme");
-  if (saved) document.documentElement.setAttribute("data-theme", saved);
-  const initialTheme = document.documentElement.getAttribute("data-theme")
-    || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const saved = readStorage("btcq-theme");
+  const initialTheme = ["dark", "light"].includes(saved) ? saved
+    : (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  document.documentElement.setAttribute("data-theme", initialTheme);
   $("theme-btn").setAttribute("aria-pressed", String(initialTheme === "dark"));
   $("theme-btn").onclick = () => {
     const cur = document.documentElement.getAttribute("data-theme")
@@ -1373,7 +1441,7 @@ function drawFunding(pts) {
     const next = cur === "dark" ? "light" : "dark";
     document.documentElement.setAttribute("data-theme", next);
     $("theme-btn").setAttribute("aria-pressed", String(next === "dark"));
-    localStorage.setItem("btcq-theme", next);
+    writeStorage("btcq-theme", next);
     scheduleRedraw("chart", "spark", "price", "yearly", "funding");
   };
 })();
@@ -1389,38 +1457,23 @@ async function refreshConformity() {
   const response = await fetchDashboard("/api/conformity"); if (!response.ok) throw new Error("conformity_http_" + response.status); const c = await response.json();
   const ref = c.reference, rz = c.realized, dd = c.drawdown;
   if (!ref) { $("conformity").innerHTML = '<div class="empty">Référence backtest absente.</div>'; return; }
-  const pct = v => (v*100).toFixed(1).replace(".", ",") + " %";
-  let rows = "";
-
-  if (dd && dd.current != null) {
-    const share = dd.backtest_time_at_least_as_deep;
-    const normal = share != null && share > 0.02;
-    rows += kvRow("Drawdown actuel", `<b class="${dd.current < -0.001 ? "down" : ""}">${pct(dd.current)}</b>`,
-      share == null ? "" :
-      share >= 1 ? "niveau courant, rien d'anormal" :
-      `le backtest a passé ${pct(share)} du temps au moins aussi bas ${normal ? "→ normal" : "→ zone extrême"}`,
-      share == null || normal ? "ok" : "warn");
-  }
+  const pct = v => v == null || !Number.isFinite(Number(v)) ? "N/A" : (v*100).toFixed(1).replace(".", ",") + " %";
+  const comparable = c.comparison?.comparable === true;
+  const label = comparable ? "Référence comparable selon les métadonnées disponibles." : "Référence indicative — comparabilité non établie. Aucune conclusion de normalité.";
+  let rows = `<p class="reference-note">${esc(label)} ${esc(ref.profile || "")}${ref.generated_at ? ` · ${esc(ref.generated_at)}` : ""}</p>`;
+  if (!comparable && Array.isArray(c.comparison?.reasons)) rows += `<p class="reference-note">${c.comparison.reasons.map(esc).join(" · ")}</p>`;
+  if (dd?.current != null) rows += kvRow("Drawdown actuel du portefeuille", `<b class="${dd.current < 0 ? "down" : ""}">${pct(dd.current)}</b>`, "Trend + Carry · aucune fréquence historique équivalente établie", "neutral");
   if (rz) {
-    const [lo, hi] = rz.win_rate_ci;
-    const overlap = ref.win_rate >= lo && ref.win_rate <= hi;
-    rows += kvRow("Win rate", `${pct(rz.win_rate)} <span style="color:var(--muted)">(${rz.n} trades)</span>`,
-      rz.n < 20 ? `échantillon trop petit pour conclure (attendu : ${pct(ref.win_rate)})`
-        : overlap ? `cohérent avec le backtest (${pct(ref.win_rate)})`
-        : `s'écarte du backtest (${pct(ref.win_rate)}) — à surveiller`,
-      rz.n < 20 || overlap ? "ok" : "warn");
-    rows += kvRow("Série de pertes en cours", `${rz.current_loss_streak}`,
-      `pire série du backtest : ${ref.worst_loss_streak} pertes d'affilée`,
-      rz.current_loss_streak <= ref.worst_loss_streak ? "ok" : "warn");
-  } else {
-    rows += kvRow("Trades", "0", `attendu : ~${ref.trades_per_year}/an — patience, c'est le design`, "ok");
+    rows += kvRow("Win rate réalisé", `${pct(rz.win_rate)} <span>(${Number(rz.n) || 0} trades)</span>`, "", "neutral");
+    rows += kvRow("Série de pertes en cours", `${Number(rz.current_loss_streak) || 0}`, "", "neutral");
   }
-  rows += kvRow("Mois attendus", `${pct(ref.monthly_return_p10)} à ${pct(ref.monthly_return_p90)}`,
-    `pire mois historique : ${pct(ref.worst_month)}`, "ok");
+  rows += kvRow("Référence : win rate historique", pct(ref.win_rate), "Valeur descriptive du backtest", "neutral");
+  rows += kvRow("Référence : rendements mensuels P10–P90", `${pct(ref.monthly_return_p10)} à ${pct(ref.monthly_return_p90)}`, `Pire mois historique : ${pct(ref.worst_month)} · ne constitue pas une prévision`, "neutral");
   $("conformity").innerHTML = rows;
 }
+
 function kvRow(k, v, note, status) {
-  const dot = status === "warn" ? "var(--warn)" : "var(--good)";
+  const dot = status === "neutral" ? "var(--muted)" : status === "warn" ? "var(--warn)" : "var(--good)";
   return `<div class="kv" style="flex-wrap:wrap">
     <span class="k"><span style="display:inline-block;width:7px;height:7px;border-radius:99px;background:${dot};margin-right:8px"></span>${k}</span>
     <span class="num">${v}</span>
@@ -1435,6 +1488,7 @@ let readinessDetailOpen = false;
 function readinessLabels() {
   return {
     running: t("rdy_running"),
+    notStarted: PREFS.lang === "en" ? "Campaign not started" : "Campagne non démarrée",
     protocol: t("rdy_protocol"),
     campaign: t("rdy_campaign"),
     inactive: t("rdy_inactive"),
@@ -1487,7 +1541,8 @@ function renderReadiness(report) {
   const remain = Number.isFinite(nOk) && Number.isFinite(nTotal) ? Math.max(0, nTotal - nOk) : 0;
   const verdictLabel = decided.verdict === "PRÊT" ? t("rdy_ready")
     : decided.verdict === "BLOQUÉ" ? t("rdy_blocked") : t("rdy_not_ready");
-  const why = decided.tone === "block" ? t("rdy_block_why") : decided.tone === "ok" ? t("rdy_ready_why") : t("rdy_wait_why");
+  const notStarted = report.campaign_status === "NOT_STARTED";
+  const why = notStarted ? (PREFS.lang === "en" ? "Campaign not started. An operator must start the qualification campaign before evidence can be collected." : "Campagne non démarrée. Un opérateur doit lancer la campagne de qualification avant la collecte de preuves.") : decided.tone === "block" ? t("rdy_block_why") : decided.tone === "ok" ? t("rdy_ready_why") : t("rdy_wait_why");
   badge.textContent = `Paper · ${verdictLabel}`;
   badge.className = "estate " + (decided.tone === "ok" ? "on" : decided.tone === "block" ? "off" : "");
   badge.style.color = decided.tone === "wait" ? "var(--warn)" : "";
@@ -1603,7 +1658,7 @@ function drawYearly() {
     g += `</g>`;
   });
   svg.innerHTML = g;
-  $("ynote").textContent = t("yearly_note")
+  $("ynote").textContent = (yearlyData.profile || "Référence historique") + (yearlyData.generated_at || yearlyData.generated ? ` · ${yearlyData.generated_at || yearlyData.generated}` : "") + " · " + t("yearly_note")
     + (yearlyData.span ? ` · ${yearlyData.span[0]} → ${yearlyData.span[1]}` : "")
     + (years.some(y => y.partial) ? ` · * ${t("yearly_partial")}` : "");
 }
@@ -2395,7 +2450,7 @@ function closeDrawer() {
 $("drawer-close").onclick = closeDrawer;
 $("drawer-bd").onclick = closeDrawer;
 $("pref-lang").onchange = e => { PREFS.lang = e.target.value; savePrefs(); applyI18n(); buildDrawer(); redrawAll(); };
-$("pref-currency").onchange = e => { PREFS.currency = e.target.value; savePrefs(); if (lastSummary) refreshSummary(); refreshTrades(); refreshAnalytics(); };
+$("pref-currency").onchange = e => { PREFS.currency = e.target.value; savePrefs(); if (lastSummary) refreshSummary(); requestTrades(); refreshAnalytics(); };
 $("pref-range").onchange = e => { PREFS.range = +e.target.value; range = PREFS.range;
   setPressed("#range", x => +x.dataset.r === range); savePrefs(); scheduleRedraw("chart"); };
 $("pref-refresh").onchange = e => { PREFS.refresh = +e.target.value; savePrefs(); applyI18n(); restartTimer(); };
@@ -2416,9 +2471,9 @@ $("bh-toggle").onclick = () => {
   $("bh-toggle").setAttribute("aria-pressed", String(showBH));
   scheduleRedraw("chart");
 };
-$("tr-from").onchange = () => refreshTrades(); $("tr-to").onchange = () => refreshTrades(); $("tr-limit").onchange = e => { tradeLimit = Math.max(1, Math.min(500, Number(e.target.value) || 12)); refreshTrades(); };
-$("tr-clear").onclick = () => { $("tr-from").value = ""; $("tr-to").value = ""; refreshTrades(); };
-$("tr-more").onclick = () => refreshTrades({append: true});
+$("tr-from").onchange = () => requestTrades(); $("tr-to").onchange = () => requestTrades(); $("tr-limit").onchange = e => { tradeLimit = Math.max(1, Math.min(500, Number(e.target.value) || 12)); requestTrades({reset:true}); };
+$("tr-clear").onclick = () => { $("tr-from").value = ""; $("tr-to").value = ""; requestTrades(); };
+$("tr-more").onclick = () => requestTrades({append: true});
 
 // ── boucle de rafraîchissement : groupes visibles et fréquences ──
 let timer = null;
@@ -2539,6 +2594,7 @@ window.addEventListener("resize", () => { scheduleRedraw("chart", "spark", "pric
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => scheduleRedraw("chart", "spark", "price", "yearly", "funding"));
 document.addEventListener("visibilitychange", () => { if (!document.hidden) { tick({force:true}); restartTimer(); } });
 async function tick(options={}) {
+  if (sessionExpired) { showSessionExpired(); return false; }
   if (tickPromise) {
     if (!options.feedback) { const result = await tickPromise; if (options.force) { await new Promise(resolve => window.setTimeout(resolve, 0)); return tick(options); } return result.ok; }
     setRefreshState("loading");

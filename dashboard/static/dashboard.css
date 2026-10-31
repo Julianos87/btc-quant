@@ -1220,7 +1220,7 @@ body[data-view="monitor"] .card[data-card="trend"] { border-top:2px solid var(--
   font-size:13px;
 }
 
-.workspace-tab span { color:var(--axis); font:500 13px/1.2 var(--font-ui); }
+.workspace-tab span { color:inherit; font:500 13px/1.2 var(--font-ui); }
 
 .workspace-tab:hover { color:var(--ink); background:color-mix(in srgb,var(--surface-2) 78%,transparent); }
 
@@ -1228,17 +1228,17 @@ body[data-view="monitor"] .card[data-card="trend"] { border-top:2px solid var(--
 
 .workspace-tab.on { color:#06151a; background:var(--s1); box-shadow:none; }
 
-.workspace-tab[aria-selected="true"] span { color:color-mix(in srgb,#06151a 68%,transparent); }
+.workspace-tab[aria-selected="true"] span { color:inherit; }
 
-.workspace-tab.on span { color:color-mix(in srgb,#06151a 68%,transparent); }
+.workspace-tab.on span { color:inherit; }
 
 :root[data-theme="light"] .workspace-tab[aria-selected="true"] { color:#fff; }
 
 :root[data-theme="light"] .workspace-tab.on { color:#fff; }
 
-:root[data-theme="light"] .workspace-tab[aria-selected="true"] span { color:color-mix(in srgb,#fff 78%,transparent); }
+:root[data-theme="light"] .workspace-tab[aria-selected="true"] span { color:inherit; }
 
-:root[data-theme="light"] .workspace-tab.on span { color:color-mix(in srgb,#fff 78%,transparent); }
+:root[data-theme="light"] .workspace-tab.on span { color:inherit; }
 
 .workspace-canvas { padding:0 clamp(18px,3.5vw,54px) 48px; min-width:0; max-width:100%; width:100%; background:var(--page); }
 
@@ -1246,7 +1246,7 @@ header.workspace-header { padding:17px 0 15px; grid-template-columns:minmax(0,1f
 
 .workspace-context span { display:block; color:var(--muted); font-weight:var(--weight-label); font-size:13px; letter-spacing:normal; }
 
-.workspace-context strong { display:block; color:var(--ink); font-weight:var(--weight-label); letter-spacing:normal; margin-top:2px; font-size:14px; }
+.workspace-context h1 { margin:0; display:block; color:var(--ink); font-weight:var(--weight-label); letter-spacing:normal; margin-top:2px; font-size:14px; }
 
 header.workspace-header .spacer { min-width:0; }
 
@@ -1624,7 +1624,7 @@ body[data-view="performance"] [data-card="yearly"] { align-self:start; }
   --good-bg:rgba(8,122,88,.11);
   --warn:#7c4f09;
   --warn-bg:rgba(203,145,40,.16);
-  --crit:#be3e50;
+  --crit:#b23547;
   --crit-bg:rgba(190,62,80,.11);
   --shadow:0 17px 34px -31px rgba(20,44,47,.34);
   --shadow-hover:0 21px 40px -30px rgba(20,44,47,.4);
@@ -2516,7 +2516,7 @@ body[data-view="risk"] .trend-hero-grid { grid-template-columns:1fr; }
 
   .workspace-context { grid-column:1; grid-row:1 / 3; }
 
-  .workspace-context strong { white-space:nowrap; font-size:13px; }
+  .workspace-context h1 { margin:0; white-space:nowrap; font-size:13px; }
 
   .workspace-header .mode { grid-column:2 / 4; grid-row:1; justify-self:end; }
 
@@ -2608,3 +2608,8 @@ body[data-view="risk"] .trend-hero-grid { grid-template-columns:1fr; }
 
   .risk-measure { transition:none !important; }
 }
+
+/* Explicit recovery states remain readable in both themes. */
+.recovery-notice { padding:10px 12px; margin-block:8px; color:var(--ink); background:var(--surface-2); border:1px solid var(--ring); border-radius:8px; font-size:13px; }
+.recovery-notice a { color:var(--ink); text-decoration:underline; text-underline-offset:3px; }
+[hidden] { display:none !important; }

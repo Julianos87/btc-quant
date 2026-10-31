@@ -19,10 +19,23 @@ class ReportingReadError(RuntimeError):
 
 
 class ReportingRepository:
-    def __init__(self, state_dir: Path) -> None:
+    def __init__(self, state_dir: Path, *, allow_legacy: bool = True) -> None:
+        self.allow_legacy = allow_legacy
         self.state_dir = state_dir
         self.database = state_dir / "btcquant.db"
         self._cache: dict[str, tuple[object, Any]] = {}
+
+    @property
+    def source_kind(self) -> str:
+        """Selected source, including when its result is empty or unreadable.
+
+        An existing database is authoritative. Legacy files are only supported
+        for installations that have not migrated to SQLite; they never fill
+        gaps in a database or hide a read error.
+        """
+        if self.database.exists():
+            return "sqlite"
+        return "legacy" if self.allow_legacy else "none"
 
     @staticmethod
     def file_key(path: Path) -> tuple[int, int] | None:
@@ -59,18 +72,18 @@ class ReportingRepository:
         return payload
 
     def read_engine_state(self, engine: str, legacy_path: Path | None = None) -> dict | None:
-        """Lit explicitement un moteur SQLite, puis son éventuel fallback JSON."""
+        """Lit le moteur canonique, ou le JSON si SQLite est absent."""
 
         if self.database.exists():
             try:
-                state = StateStore(
+                return StateStore(
                     self.database, initialize=False, read_only=True
                 ).load_engine_state(engine)
-                if state is not None:
-                    return state
             except Exception as exc:
                 raise ReportingReadError(f"état SQLite illisible pour {engine}") from exc
-        return self.read_json(legacy_path) if legacy_path is not None else None
+        return (
+            self.read_json(legacy_path) if self.allow_legacy and legacy_path is not None else None
+        )
 
     def age_seconds(self, path: Path) -> float | None:
         return time.time() - path.stat().st_mtime if path.exists() else None
@@ -83,7 +96,9 @@ class ReportingRepository:
                 return OperationalStateReader(self.database).engine_age_seconds(engine)
             except Exception as exc:
                 raise ReportingReadError(f"horodatage SQLite illisible pour {engine}") from exc
-        return self.age_seconds(legacy_path) if legacy_path is not None else None
+        return (
+            self.age_seconds(legacy_path) if self.allow_legacy and legacy_path is not None else None
+        )
 
     def read_engine_equity(
         self,
@@ -104,11 +119,13 @@ class ReportingRepository:
                     frame = pd.DataFrame(rows)
                     index = pd.to_datetime(frame["ts"], utc=True, format="ISO8601")
                     series = pd.Series(frame["equity"].values, index=index).sort_index()
-                    self._cache[cache_key] = (source_key, series)
-                    return series
+                else:
+                    series = pd.Series(dtype=float)
+                self._cache[cache_key] = (source_key, series)
+                return series
             except Exception as exc:
                 raise ReportingReadError(f"equity SQLite illisible pour {engine}") from exc
-        if legacy_path is None:
+        if not self.allow_legacy or legacy_path is None:
             return pd.Series(dtype=float)
         return self._parsed(legacy_path, self._parse_equity)
 
@@ -136,10 +153,11 @@ class ReportingRepository:
         if self.database.exists():
             try:
                 rows = HistoricalStateReader(self.database).read_trades()
-                if rows:
-                    return pd.DataFrame(rows).drop(columns=["id"], errors="ignore")
+                return pd.DataFrame(rows).drop(columns=["id"], errors="ignore")
             except Exception as exc:
                 raise ReportingReadError("trades SQLite illisibles") from exc
+        if not self.allow_legacy:
+            return pd.DataFrame()
         return self._parsed(self.state_dir / "trades.csv", self._parse_trades)
 
     @staticmethod
@@ -159,8 +177,11 @@ class ReportingRepository:
                     frame = pd.DataFrame(rows).drop(columns=["id"], errors="ignore")
                     frame["ts"] = pd.to_datetime(frame["ts"], utc=True, format="ISO8601")
                     return frame.sort_values("ts")
+                return pd.DataFrame(columns=["ts", "kind", "trend_flow", "carry_flow"])
             except Exception as exc:
                 raise ReportingReadError("flux SQLite illisibles") from exc
+        if not self.allow_legacy:
+            return pd.DataFrame(columns=["ts", "kind", "trend_flow", "carry_flow"])
         return self._parsed(self.state_dir / "flows.csv", self._parse_flows)
 
     @staticmethod
