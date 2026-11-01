@@ -1225,6 +1225,38 @@ def test_operational_journal_exposes_correlated_events_without_checkpoint_state(
         fee=0.02,
         broker_order_id="paper-1",
     )
+    with store._transaction() as connection:
+        stop_event_id = store._insert_event(
+            connection,
+            "trend",
+            "external_stop_fill_observed",
+            {"price": 110.0, "fee": 0.02},
+            "order",
+            "stop-1",
+            "false-stop-intent",
+        )
+        trade_event_id = store._insert_event(
+            connection,
+            "trend",
+            "trade_closed",
+            {"strategy": "trend_ls_20", "pnl": -1.2},
+            "strategy",
+            "trend_ls_20",
+            "false-stop-intent",
+        )
+        store._insert_event(
+            connection,
+            "trend",
+            "paper_trade_reversed",
+            {
+                "source_trade_event_id": trade_event_id,
+                "source_stop_event_id": stop_event_id,
+                "realized_pnl_excluded": -1.2,
+            },
+            "trade",
+            "1",
+            "false-stop-reversal",
+        )
 
     response = dashboard_app.app.test_client().get(
         "/api/operational-journal",
@@ -1239,6 +1271,12 @@ def test_operational_journal_exposes_correlated_events_without_checkpoint_state(
     assert event["reason"].startswith("signal valide")
     assert event["details"]["intent_id"] == "intent-dashboard-1"
     assert "state" not in event["details"]
+    reversed_sources = [
+        item for item in payload["events"] if item["event_type"] == "paper_trade_reversed_source"
+    ]
+    assert len(reversed_sources) == 2
+    assert all("pnl" not in item["details"] for item in reversed_sources)
+    assert all("annulée" in item["reason"] for item in reversed_sources)
     order = next(item for item in payload["orders"] if item["id"] == order_id)
     assert order["status"] == "PARTIAL"
     assert order["filled_qty"] == pytest.approx(0.1)

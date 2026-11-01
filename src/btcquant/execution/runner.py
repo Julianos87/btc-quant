@@ -621,7 +621,9 @@ class LiveRunner:
                 "slot": slot.strategy.name,
                 "qty": float(qty),
                 "stop_price": float(stop_price),
-                "version": 1,
+                # v2 prevents a restored PAPER position from reusing a
+                # terminal stop intention that belonged to an annulled fill.
+                "version": 2,
             },
             ensure_ascii=True,
             separators=(",", ":"),

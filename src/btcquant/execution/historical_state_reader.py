@@ -50,7 +50,25 @@ class HistoricalStateReader:
 
     def read_trades(self) -> list[dict[str, Any]]:
         with open_state_db_readonly(self.path) as connection:
-            rows = connection.execute("SELECT * FROM trades ORDER BY exit_ts").fetchall()
+            has_events = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='events'"
+            ).fetchone()
+            if has_events is None:
+                rows = connection.execute("SELECT * FROM trades ORDER BY exit_ts, id").fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT t.* FROM trades AS t
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM events AS reversal
+                        WHERE reversal.engine = 'trend'
+                          AND reversal.event_type = 'paper_trade_reversed'
+                          AND reversal.aggregate_type = 'trade'
+                          AND reversal.aggregate_id = CAST(t.id AS TEXT)
+                    )
+                    ORDER BY t.exit_ts, t.id
+                    """
+                ).fetchall()
         return [dict(row) for row in rows]
 
     def read_flows(self) -> list[dict[str, Any]]:

@@ -2190,12 +2190,29 @@ def operational_journal():
     try:
         store = StateStore(database, initialize=False, read_only=True)
         event_rows = store.read_events(limit=120)
+        reversed_sources = {}
+        for row in event_rows:
+            if row.get("event_type") != "paper_trade_reversed":
+                continue
+            reversal = _dashboard_event_payload(row)
+            for field in ("source_trade_event_id", "source_stop_event_id"):
+                source_id = reversal.get(field)
+                if source_id is not None:
+                    reversed_sources[int(source_id)] = int(row["id"])
         events = []
         for row in event_rows:
             projected = _durable_event_projection(row)
             payload = projected.pop("payload", {})
             if isinstance(payload, dict):
                 payload = {key: value for key, value in payload.items() if key != "state"}
+            reversal_event_id = reversed_sources.get(int(row["id"]))
+            if reversal_event_id is not None:
+                projected["event_type"] = "paper_trade_reversed_source"
+                projected["reason"] = "Clôture Paper annulée; perte retirée des résultats"
+                if isinstance(payload, dict):
+                    payload.pop("pnl", None)
+                    payload["source_event_type"] = row.get("event_type")
+                    payload["reversed_by_event_id"] = reversal_event_id
             projected["details"] = payload
             events.append(projected)
         order_rows = store.read_orders()
