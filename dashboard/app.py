@@ -39,6 +39,7 @@ from btcquant.reporting.repository import ReportingReadError, ReportingRepositor
 from btcquant.reporting.prometheus import render_prometheus
 from btcquant.execution.health import (
     execution_health,
+    trend_progress_health,
     execution_safety_health,
 )
 from btcquant.execution.state_contract import (
@@ -1315,10 +1316,12 @@ def summary():
         return max(0.0, float((now_utc - parsed).total_seconds())) if parsed else None
 
     mark_price = _positive_number(price) if market_valuation_status != "UNKNOWN" else None
+    trend_progression = {"status": "UNKNOWN", "slots": [], "reason_codes": ["DATABASE_UNAVAILABLE"]}
     trend_health = None
     if store is not None:
         try:
             trend_health = execution_health(store, "trend")
+            trend_progression = trend_progress_health(store, config=PROFILE_CONFIG)
         except Exception:
             app.logger.exception("Trend protection source unavailable")
     protection_by_slot = dict(trend_health.slot_protection) if trend_health else {}
@@ -1333,7 +1336,7 @@ def summary():
             status = "REPLACEMENT_PENDING"
         elif protected:
             status = "ACTIVE"
-        elif reason == PROTECTION_MODE_UNKNOWN:
+        elif reason in {PROTECTION_MODE_UNKNOWN, "EXCHANGE_STOP_UNVERIFIED"}:
             status = "UNKNOWN"
         else:
             status = "UNSAFE"
@@ -1997,6 +2000,7 @@ def summary():
             },
             "trend": {
                 "alive": trend_age is not None and trend_age < 240,
+                "progression": trend_progression,
                 "freshness": trend_freshness,
                 "observed_at": trend_observed_at.isoformat() if trend_observed_at else None,
                 "age_s": trend_age,
@@ -2155,6 +2159,7 @@ def summary():
                 "valuation_status": market_valuation_status,
                 "source_skew": state_price_temporal["max_source_skew_seconds"],
                 "alerts": accounting_alerts,
+                "trend_progression": trend_progression,
                 "latest_decisions": {"trend": trend_decision, "carry": carry_decision},
                 "last_reconciliation": reconciliation_event,
                 **operational,

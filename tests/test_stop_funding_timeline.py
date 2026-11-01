@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 from types import SimpleNamespace
 from btcquant.execution.funding_service import FundingPayment, FundingPoll
+from btcquant.execution.historical_state_reader import HistoricalStateReader
 
 from btcquant.execution.broker import PaperBroker, ProtectiveOrderSnapshot
 from btcquant.execution.errors import ReconciliationRequired
@@ -30,7 +31,13 @@ def test_stop_fill_checkpoints_remaining_exposure_and_survives_restart(tmp_path,
         StopDecisionKind.FILLED if filled == 1 else StopDecisionKind.PARTIAL_FILLED,
         previous_stop_id="filled-stop",
         snapshot=ProtectiveOrderSnapshot(
-            "filled-stop", "FILLED" if filled == 1 else "PARTIAL", 1.0, filled, 0.0, 90.0
+            "filled-stop",
+            "FILLED" if filled == 1 else "PARTIAL",
+            1.0,
+            filled,
+            0.0,
+            90.0,
+            filled_at="2026-10-24T04:00:00+00:00",
         ),
     )
     runner._materialize_filled_stop(slot, decision)
@@ -41,7 +48,10 @@ def test_stop_fill_checkpoints_remaining_exposure_and_survives_restart(tmp_path,
         restored_slot, pd.Timestamp.now(tz="UTC") + pd.Timedelta(seconds=1)
     )
     assert known and exposure["qty"] == pytest.approx(1 - filled)
-    assert exposure["intent_id"] == "observed-stop-filled-stop"
+    assert exposure["intent_id"].startswith("observed-stop-v2-")
+    assert HistoricalStateReader(runner.store.path).read_trades()[0]["exit_ts"] == (
+        "2026-10-24T04:00:00+00:00"
+    )
     old, _ = restored._exposure_at(restored_slot, pd.Timestamp("2026-01-01T01:00:00Z"))
     assert old["qty"] == 1.0
     timestamp = pd.Timestamp.now(tz="UTC") + pd.Timedelta(hours=1)

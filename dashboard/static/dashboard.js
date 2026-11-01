@@ -83,6 +83,7 @@ const I18N = {
     alloc_real:"Allocation réelle", pending_deposit:"Apport en attente", online:"En ligne", offline:"Arrêté",
     state_stale:"Périmé", state_unknown:"Indisponible", protection_software:"logiciel",
     workspace:"Vue", view_monitor:"Surveillance", view_performance:"Performance", view_risk:"Risque",
+    accounting_title:"Situation comptable", accounting_read:"Données lues", accounting_unverified:"Réconciliation non attestée", progression_stale:"Trend : progression des bougies en retard", progression_unknown:"Trend : progression des bougies non vérifiée", stop_unverified:"Trend : protection des positions non vérifiée",
     status_good:"Moteurs principaux opérationnels", status_warn:"Surveillance requise", status_crit:"Action requise",
     status_nominal_detail:"Trend et Carry répondent · protections armées",
     status_trend_down:"Trend ne répond plus", status_carry_down:"Carry ne répond plus",
@@ -229,6 +230,7 @@ const I18N = {
     waiting_zone:"waiting zone",
     inactive_suffix:"INACTIVE",
     waiting_label:"Waiting",
+    accounting_title:"Accounting position", accounting_read:"Data read", accounting_unverified:"Reconciliation not attested", progression_stale:"Trend: bar processing is delayed", progression_unknown:"Trend: bar processing unverified", stop_unverified:"Trend: position protection unverified",
     status_good:"Main engines operational", status_warn:"Monitoring required", status_crit:"Action required",
     status_nominal_detail:"Trend and Carry are responding · safeguards armed",
     status_trend_down:"Trend is not responding", status_carry_down:"Carry is not responding",
@@ -475,7 +477,7 @@ async function refreshSummary() {
   $("carry-beat").textContent = beat(s.carry.age_s);
 
   // bannière d'alerte : l'anormal doit sauter aux yeux
-  const issues = [];
+  const issues = trendQualityIssues(s);
   const health = s.health || {};
   const componentIssue = (name, item, label) => {
     const severity = BTCQuantOperationalState.componentAvailabilitySeverity(name, item, health);
@@ -507,7 +509,7 @@ async function refreshSummary() {
     $("alert-msg").textContent = issues.map(i => i[1]).join(" · ");
   } else a.style.display = "none";
   $("trend-eq").textContent = fmt$(s.trend.equity, 2);
-  $("trend-guard").textContent = s.trend.halted ? "⛔ KILL-SWITCH DÉCLENCHÉ" : s.trend.daily_lockout ? "⚠ lockout journalier" : "coupe-circuits armés";
+  $("trend-guard").textContent = trendQualityIssues(s).length ? trendQualityIssues(s).map(item => item[1]).join(" · ") : s.trend.halted ? "⛔ KILL-SWITCH DÉCLENCHÉ" : s.trend.daily_lockout ? "⚠ lockout journalier" : "coupe-circuits armés";
   $("carry-eq").textContent = fmt$(s.carry.equity, 2);
   renderCarryCard(s.carry);
   if ($("carry-last")) $("carry-last").textContent = s.carry.last_funding_ts
@@ -899,8 +901,23 @@ function beat(age) {
   return `· dernière activité il y a ${(age/3600).toFixed(1)} h`;
 }
 
+// A recent heartbeat proves a process responded, not that it processed bars
+// or that exchange protection remains effective.
+function trendQualityIssues(s) {
+  const trend = s.trend || {};
+  const progression = trend.progression || s.health?.trend_progression;
+  const issues = [];
+  if (progression?.status !== "FRESH") issues.push([progression?.status === "STALE" ? "crit" : "warn", t(progression?.status === "STALE" ? "progression_stale" : "progression_unknown")]);
+  const openSlots = Array.isArray(trend.slots) ? trend.slots.filter(slot => slot.state !== "FLAT" && Number(slot.qty) > 0) : [];
+  const hasOpen = Number(trend.open_slots) > 0 || openSlots.length > 0;
+  if (hasOpen && (!["ACTIVE", "REPLACEMENT_PENDING"].includes(trend.protection_status) || openSlots.length !== Number(trend.open_slots) || openSlots.some(slot => slot.protection_protected !== true)))
+    issues.push(["crit", t("stop_unverified")]);
+  return issues;
+}
+
 function renderCockpitStatus(s) {
   const critical = [], warnings = [];
+  for (const [severity, message] of trendQualityIssues(s)) (severity === "crit" ? critical : warnings).push(message);
   const health = s.health || {};
   const incidents = health.open_incidents || [];
   const safety = health.safety_status || "UNKNOWN";
@@ -993,7 +1010,8 @@ function renderRiskRadar(s) {
   const componentDown = (name, item) => required.has(name)
     && (!item || !item.alive || item.freshness !== "FRESH");
   const engineDown = componentDown("trend", s.trend) || componentDown("carry", s.carry);
-  const protection = safety === "FAIL"
+  const qualityIssues = trendQualityIssues(s);
+  const protection = qualityIssues.length ? qualityIssues.map(item => item[1]).join(" · ") : safety === "FAIL"
     ? "UNSAFE"
     : safety === "UNKNOWN"
       ? "UNKNOWN"
@@ -1004,9 +1022,10 @@ function renderRiskRadar(s) {
           : s.trend.daily_lockout
             ? t("risk_lockout")
             : t("risk_armed");
-  const protectionTone = safety !== "PASS" || engineDown || s.trend.halted
+  const qualityCritical = qualityIssues.some(item => item[0] === "crit");
+  const protectionTone = qualityCritical || safety !== "PASS" || engineDown || s.trend.halted
     ? "crit"
-    : s.trend.daily_lockout
+    : qualityIssues.length || s.trend.daily_lockout
       ? "warn"
       : "";
   const margin = profile.nearest == null ? "—" : fmtPct(profile.nearest, 1);
@@ -1030,10 +1049,11 @@ function renderRiskRadar(s) {
 function renderMonitorPulse(s) {
   const h = s.health || {};
   const engine = (name, label, alive, age, freshness) => {
-    const fresh = freshness === "FRESH" && alive;
+    const issues = name === "trend" ? trendQualityIssues(s) : [];
+    const fresh = freshness === "FRESH" && alive && !issues.length;
     const stale = freshness === "STALE";
-    const status = fresh ? t("monitor_ready") : stale ? t("state_stale") : t("state_unknown");
-    const tone = fresh ? "" : BTCQuantOperationalState.componentAvailabilitySeverity(name, {alive, freshness}, h);
+    const status = issues.length ? issues.map(item => item[1]).join(" · ") : fresh ? t("monitor_ready") : stale ? t("state_stale") : t("state_unknown");
+    const tone = issues.length ? (issues.some(item => item[0] === "crit") ? "crit" : "warn") : fresh ? "" : BTCQuantOperationalState.componentAvailabilitySeverity(name, {alive, freshness}, h);
     return '<div class="ops-item ' + tone + '"><span class="ops-dot"></span><div class="ops-copy"><div class="ops-label">'
       + label + '</div><div class="ops-value">' + status + '</div><div class="ops-note">'
       + (beat(age).replace(/^·\s*/, "") || "—") + '</div></div></div>';
@@ -1184,11 +1204,11 @@ function renderAccountingPanel(s) {
     row("Exposition brute", dashboardValue(portfolio.gross_exposure), "notionnels absolus"),
     row("Exposition nette", dashboardValue(portfolio.net_exposure), "long − short"),
     row("Marge disponible", dashboardValue(portfolio.margin_available), "N/A si le modèle n’est pas qualifié"),
-    row("Réconciliation", portfolio.last_reconciliation ? fmtTimeUTC(portfolio.last_reconciliation.ts) : "N/A", portfolio.last_reconciliation ? portfolio.last_reconciliation.event_type : "aucune preuve durable")
+    row(PREFS.lang === "en" ? "Last reconciliation event" : "Dernier événement de réconciliation", portfolio.last_reconciliation ? esc(fmtTimeUTC(portfolio.last_reconciliation.ts)) : "N/A", portfolio.last_reconciliation ? esc(portfolio.last_reconciliation.event_type || "") + " · " + t("accounting_unverified") : t("accounting_unverified"))
   ].join("");
   const state = $("portfolio-accounting-state");
   if (state) {
-    state.textContent = portfolio.status || "UNKNOWN";
+    state.textContent = `${t("accounting_read")} · ${portfolio.status || "UNKNOWN"}`;
     state.className = "panel-kind " + statusClass(portfolio.status);
   }
   const alerts = $("accounting-alerts");
@@ -1196,7 +1216,7 @@ function renderAccountingPanel(s) {
     const items = Array.isArray(s.alerts) ? s.alerts : [];
     alerts.innerHTML = items.length ? items.map(item =>
       `<div class="accounting-alert ${item.severity === "CRITICAL" ? "critical" : "warning"}"><strong>${item.severity === "CRITICAL" ? "Action" : "Surveiller"}</strong><span>${esc(item.message || item.code || "État à vérifier")}</span></div>`
-    ).join("") : '<div class="accounting-ok">Aucune alerte comptable active dans la source durable.</div>';
+    ).join("") : `<div class="accounting-ok">${PREFS.lang === "en" ? "No active accounting alert reported." : "Aucune alerte comptable active signalée."} ${t("accounting_unverified")}.</div>`;
   }
   const decisions = $("decision-explanation");
   if (decisions) {
@@ -1682,7 +1702,7 @@ function renderTrendDecisionContext(summary = lastSummary, priceData = pcData) {
   // A public price regime is not enough to claim an operational decision:
   // require a fresh, alive Trend summary as well, otherwise source outages
   // would look like an actionable LONG/SHORT state.
-  const operational = trend.alive === true && trend.freshness === "FRESH";
+  const operational = trend.alive === true && trend.freshness === "FRESH" && trendQualityIssues(summary || {}).length === 0;
   const regimeKnown = operational && priceData && (priceData.regime_up === true || priceData.regime_up === false);
   const regime = regimeKnown ? (priceData.regime_up ? "LONG" : "SHORT") : null;
   const states = operational

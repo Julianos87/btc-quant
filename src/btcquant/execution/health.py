@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+import os
+from pathlib import Path
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -140,6 +142,86 @@ def evaluate_open_slot_protection(
     return EXCHANGE_STOP_CONFIRMED, True, transition_pending
 
 
+def trend_progress_health(
+    store: StateStore,
+    *,
+    now: datetime | None = None,
+    config: dict | None = None,
+) -> dict[str, Any]:
+    """Read configured bar deadlines without treating heartbeat as progress."""
+    if config is None:
+        from btcquant.config import load_config
+
+        root = Path(os.environ.get("BTCQUANT_ROOT", Path.cwd()))
+        path = root / "environments" / "paper" / "config.yaml"
+        config = load_config(path) if path.is_file() else {}
+    durations = {"1h": 3600, "2h": 7200, "4h": 14400, "6h": 21600, "12h": 43200, "1d": 86400}
+    strategies = config.get("strategies") or {}
+    timeframes = (
+        {
+            name: durations[item.get("timeframe", "4h")]
+            for name, item in strategies.items()
+            if item.get("enabled", True) and item.get("market", "perp") == "perp"
+        }
+        if strategies
+        else None
+    )
+    buffer = float((config.get("execution") or {}).get("poll_buffer_seconds", 20.0))
+    if not math.isfinite(buffer) or buffer < 0:
+        raise ValueError("invalid poll buffer")
+    return OperationalStateReader(
+        store.path, timeout_seconds=store.read_timeout_seconds
+    ).engine_progress(
+        "trend",
+        now=now,
+        slot_timeframes=timeframes,
+        poll_buffer_seconds=buffer,
+    )
+
+
+def _exchange_stop_proven(
+    slot_name: str,
+    slot: Mapping[str, Any],
+    orders: list[dict[str, Any]],
+) -> tuple[bool, str]:
+    """Require the current durable order, not merely a reused broker identifier."""
+    transition = slot.get("stop_transition") or {}
+    broker_id = slot.get("stop_order_id") or transition.get("previous_stop_id")
+    local_id = slot.get("stop_order_local_id") or transition.get("previous_local_order_id")
+    intent = slot.get("stop_intent_id")
+    if not broker_id or not local_id or not intent:
+        return False, "EXCHANGE_STOP_UNVERIFIED"
+    matching = [order for order in orders if str(order.get("broker_order_id")) == str(broker_id)]
+    if len(matching) > 1:
+        return False, "EXCHANGE_STOP_ID_COLLISION"
+    if not matching:
+        return False, "EXCHANGE_STOP_UNVERIFIED"
+    order = matching[0]
+    position = slot.get("position") or {}
+    try:
+        opened = datetime.fromisoformat(str(position["entry_time"]))
+        created = datetime.fromisoformat(str(order["created_at"]))
+        if opened.tzinfo is None or created.tzinfo is None:
+            return False, "EXCHANGE_STOP_UNVERIFIED"
+        valid = (
+            order["id"] == local_id
+            and order["intent_id"] == intent
+            and order["slot"] == slot_name
+            and order["order_type"] == "STOP"
+            and order["status"] == "OPEN"
+            and created >= opened
+            and order["side"] == ("SELL" if position["direction"] == 1 else "BUY")
+            and software_stop_contract_valid(position)
+            and math.isclose(float(order["requested_qty"]), float(position["qty"]), rel_tol=1e-9)
+            and math.isclose(
+                float(order["reference_price"]), float(position["stop_price"]), rel_tol=1e-9
+            )
+        )
+    except (KeyError, TypeError, ValueError):
+        valid = False
+    return valid, EXCHANGE_STOP_CONFIRMED if valid else "EXCHANGE_STOP_UNVERIFIED"
+
+
 @dataclass(frozen=True)
 class _IncidentCondition:
     active: bool
@@ -158,7 +240,8 @@ def execution_health(
 ) -> ExecutionHealth:
     cfg = thresholds or HealthThresholds()
     current = now or datetime.now(UTC)
-    orders = store.read_orders(engine)[-cfg.order_window :]
+    all_orders = store.read_orders(engine)
+    orders = all_orders[-cfg.order_window :]
     unresolved = store.unresolved_orders(engine)
     state = store.load_engine_state(engine) or {}
     unprotected_slots: list[str] = []
@@ -175,6 +258,10 @@ def execution_health(
             protection_mode=protection_mode,
             reconciliation_required=reconciliation_required,
         )
+        if protected and protection_mode == STOP_PROTECTION_EXCHANGE:
+            proven, proof_reason = _exchange_stop_proven(str(slot_name), slot, all_orders)
+            if not proven:
+                protected, reason = False, proof_reason
         slot_protection.append((str(slot_name), reason))
         if transition_pending:
             stop_transition_slots.append(str(slot_name))

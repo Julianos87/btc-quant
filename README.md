@@ -13,7 +13,7 @@ TANDEM est un portefeuille systématique expérimental sur Bitcoin composé de d
 | Poche | Allocation initiale | Profil paper |
 |---|---:|---|
 | Trend following | 60 % | Ensemble Donchian long/short à x4 |
-| Cash-and-carry | 40 % | Modèle de funding à x3 |
+| Cash-and-carry | 40 % | Carry cash PAPER à x1, sans dette |
 
 Le VPS exécute actuellement les deux moteurs en **paper trading**. Aucun ordre réel n’est envoyé par les services actifs.
 
@@ -45,10 +45,21 @@ recherche prudent, mais ce n’est pas celui lancé par le service VPS principal
 Le service `btcquant-carry` lance :
 
 ```bash
-btcquant-carry --capital 4000 --leverage 3
+/opt/btcquant/current/venv/bin/btcquant-carry --config /opt/btcquant/current/environments/paper/carry_cash.yaml
 ```
 
-Le modèle paper simule une position spot longue et une position perpétuelle courte. Il entre lorsque le funding annualisé lissé dépasse 3 % et sort lorsqu’il devient négatif.
+Le profil canonique `environments/paper/carry_cash.yaml` simule un achat spot
+UBTC et un short perp BTC sur les marchés publics Hyperliquid, avec un budget
+initial de 4 000 USDC et un levier maximal de 1×. La dette est désactivée
+(`borrow_enabled: false`, `max_borrow: 0`). Le spot et la marge perp sont
+financés séparément. Le filtre de réserve économique fixe est à **0 %**
+(`uncertainty_reserve_rate: 0.0`) ; les **2 % de cash libre**
+(`cash_utilization: 0.98`) sont une autre contrainte, toujours active.
+
+Le signal d'entrée est un funding annualisé lissé supérieur à 3 %, sous réserve
+des contrôles de coûts, financement, identité des instruments et qualité des
+carnets. Le signal de sortie est un funding négatif. Ces règles ne constituent
+pas une preuve de rentabilité. Voir [le profil cash PAPER](docs/CARRY_CASH_FUNDED_PAPER.md).
 
 Le dernier paiement comptabilisé est persisté avec l’equity. Après une
 interruption, le runner pagine tout l’historique depuis ce checkpoint, même si
@@ -56,7 +67,10 @@ l’arrêt dépasse la fenêtre de lissage de 14 jours. Chaque paiement et son
 nouveau checkpoint sont enregistrés atomiquement ; un crash pendant le
 rattrapage reprend au premier paiement non validé, sans perte ni double crédit.
 
-### Coût de financement du levier — chiffré depuis le 18 juillet 2026
+### Référence historique du modèle à levier — non représentative du profil actif
+
+Les tableaux ci-dessous documentent l’ancien modèle de funding avec emprunt.
+Ils ne qualifient pas le Carry cash PAPER à deux jambes actuellement exécuté.
 
 Un carry à levier L immobilise L×capital de spot alors qu’on ne dispose que du
 capital : les (L−1)×capital manquants doivent être **empruntés**, et cet emprunt
@@ -84,25 +98,23 @@ chiffres du carry sont donc conditionnels à cette hypothèse :
 | 20 % | -1,9 % | -0,55 | -54,7 % |
 
 À levier 1, la position est intégralement financée par le capital : aucun
-emprunt, donc aucune dépendance à ce taux. C’est le seul profil réalisable sans
-compte sur marge, et il présente le meilleur couple rendement/risque :
+emprunt, donc aucune dépendance à ce taux. Les chiffres ci-dessous restent ceux du modèle historique simplifié ; ils ne
+démontrent pas le rendement/risque du profil cash actuel :
 
 | Levier | CAGR | Sharpe | Max DD |
 |---:|---:|---:|---:|
 | **x1** | +11,7 % | **9,56** | **-1,1 %** |
 | x2 | +14,3 % | 5,86 | -3,4 % |
-| x3 (profil actif) | +16,9 % | 4,59 | -9,9 % |
+| x3 (référence historique) | +16,9 % | 4,59 | -9,9 % |
 | x4 | +19,6 % | 3,96 | -17,7 % |
 
-Passer de x1 à x3 gagne 5 points de CAGR mais multiplie le drawdown par 9 et
-divise le Sharpe par deux, tout en introduisant une dépendance à un taux
-d’emprunt volatil. Le profil paper reste à x3 pour l’instant ; **ce choix mérite
-d’être rediscuté avant tout passage en réel**.
+Le profil actif est le Carry cash à 1×, sans dette. La comparaison historique
+entre leviers n'est ni une validation de ce profil ni une recommandation de levier.
 
 ## Résultats historiques de référence
 
 Le fichier `dashboard/yearly_reference.json`, régénéré le 2 août 2026,
-rejoue le profil paper adaptatif 60/40 sur la période du 10 septembre 2019 au
+rejoue une référence historique Trend x4 + Carry x3, allocation adaptative 60/40 sur la période du 10 septembre 2019 au
 30 juillet 2026 avec funding historique :
 
 | Année | Portefeuille 60/40 | Trend | Carry | BTC |
@@ -175,27 +187,17 @@ Auparavant, les paramètres divergeaient (entrée 3 % contre 5 %, lissage 14 j
 contre 7 j), si bien qu'aucune référence publiée ne décrivait le moteur
 réellement exécuté.
 
-Deux écarts de simulation subsistent et sont assumés :
+Le chemin historique de funding et le profil cash à deux jambes ne sont pas
+interchangeables. Le Carry canonique simule désormais des exécutions sur les
+carnets spot UBTC et perp BTC, une comptabilité séparée des deux jambes et des
+contraintes de marge. Le basis UBTC/BTC, les coûts, le funding et les incidents
+de couverture peuvent modifier son résultat. Ces simulations ne qualifient pas
+une exécution réelle ni les performances du backtest x3.
 
-| | `backtest_carry()` | `CarryRunner` |
-|---|---|---|
-| Basis spot/perp | modélisé quand les prix sont fournis | non modélisé |
-| Marge, haircut, liquidation | modélisés | non modélisés |
-
-Le paper carry ne peut donc pas perdre par divergence de basis ni être liquidé,
-alors que le backtest le peut. Le noyau de décision est unifié, mais la courbe
-paper ne qualifie toujours pas les risques de marché et de marge d'une
-exécution réelle.
-
-Le carry dispose en revanche désormais de ses propres coupe-circuits — arrêt à
--25 % de drawdown, blocage des entrées à -3 % sur la journée UTC — appliqués par
-le même `PortfolioRiskService` que le trend.
-
-Le capital total, l'allocation trend/carry, le levier et les seuils carry sont
-déclarés une seule fois dans `environments/paper/config.yaml` (`portfolio:` et `carry:`).
-Runner, dashboard, digest, rééquilibrage et références utilisent les mêmes
-objets de configuration immuables ; le chargement refuse toute divergence avec
-`risk.initial_capital`.
+Le profil actif Carry se trouve dans `environments/paper/carry_cash.yaml` ;
+Trend conserve `environments/paper/config.yaml`. Les références historiques
+conservent leur propre provenance et leurs paramètres. Toute comparaison doit
+vérifier explicitement le modèle, les marchés, les coûts et la période.
 
 ### Simulateur d'exécution commun
 
@@ -371,7 +373,7 @@ déployable et scénarios d'exécution hypothétiques.
 | Backtest trend | Implémenté |
 | Paper trading trend x4 | Actif |
 | Backtest carry | Funding, basis, emprunt variable, haircuts, marge et liquidation |
-| Paper trading carry x3 | Actif |
+| Paper trading Carry cash x1, sans dette | Actif |
 | Rééquilibrage 60/40 | Implémenté |
 | Dashboard et suivi des apports | Implémentés |
 | Persistance | SQLite transactionnel, migration JSON/CSV automatique |
@@ -680,10 +682,10 @@ Lancer le paper runner trend actif :
 btcquant-trend --config environments/paper/config.yaml
 ```
 
-Lancer le paper runner carry :
+Commande du service Carry canonique (ne pas lancer un second processus en parallèle du service) :
 
 ```bash
-btcquant-carry --capital 4000 --leverage 3
+/opt/btcquant/current/venv/bin/btcquant-carry --config /opt/btcquant/current/environments/paper/carry_cash.yaml
 ```
 
 Générer la référence annuelle du portefeuille :
@@ -703,7 +705,8 @@ python -m dashboard.app
 ```text
 environments/
   dev/config.yaml            profil local de recherche à x1
-  paper/config.yaml          profil actif paper, état btcquant.db
+  paper/config.yaml          profil Trend paper, état btcquant.db
+  paper/carry_cash.yaml      profil Carry cash paper x1, sans dette
   testnet/config.yaml        profil P1 Hyperliquid, état btcquant-testnet.db
 src/btcquant/
   data.py                    données et cache
@@ -731,8 +734,8 @@ sbom.cdx.json                inventaire CycloneDX des dépendances de production
 ## Limites
 
 - Le profil trend x4 a connu un drawdown simulé supérieur à 50 %.
-- Les résultats du carry dépendent d'une hypothèse de taux d'emprunt (10 %/an par défaut) qui n'est ni observée ni garantie, et qui se dégrade justement quand le funding est élevé.
-- Le carry x3 exige un compte sur marge : il n'est pas réalisable avec le seul capital de la poche.
+- Les résultats historiques du modèle Carry avec emprunt dépendent d’un taux hypothétique de 10 %/an. Le profil cash actif ne porte aucune dette.
+- La référence Carry x3 suppose un financement distinct ; elle ne décrit pas le profil cash PAPER actif.
 - Les coûts réels, les fills partiels et les risques de marge peuvent différer fortement de la simulation.
 - Les composants live ne sont pas validés pour une utilisation en production.
 

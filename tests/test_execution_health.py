@@ -201,16 +201,37 @@ def test_position_without_confirmed_stop_is_a_critical_incident(tmp_path):
 
 def test_replacement_keeps_old_stop_protection_but_alerts_pending_transition(tmp_path):
     store = StateStore(tmp_path / "btcquant.db")
+    intent_id = "replacement-stop-intent"
+    position = {
+        "qty": 0.01,
+        "direction": 1,
+        "stop_price": 90.0,
+        "entry_time": "2026-08-20T12:00:23+00:00",
+    }
+    local_order_id = store.begin_order(
+        "trend",
+        "trend_ls_55",
+        intent_id,
+        "STOP",
+        "SELL",
+        position["qty"],
+        "replacement",
+        reference_price=position["stop_price"],
+    )
+    store.complete_order(local_order_id, status="OPEN", broker_order_id="old-stop")
     store.save_engine_state(
         "trend",
         {
             "slots": {
                 "trend_ls_55": {
-                    "position": {"qty": 0.01},
+                    "position": position,
                     "stop_order_id": "old-stop",
+                    "stop_order_local_id": local_order_id,
+                    "stop_intent_id": intent_id,
                     "stop_transition": {
                         "phase": "PLACING",
                         "previous_stop_id": "old-stop",
+                        "previous_local_order_id": local_order_id,
                     },
                 }
             },

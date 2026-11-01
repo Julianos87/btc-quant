@@ -7,12 +7,15 @@ l'ignore et exécute au marché.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import re
+import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from ..domain.execution import (
@@ -134,6 +137,7 @@ class ProtectiveOrderSnapshot:
     remaining_qty: float
     average_price: float | None = None
     fee: float = 0.0
+    filled_at: str | None = None
 
 
 class Broker(ABC):
@@ -387,6 +391,16 @@ class PaperBroker(Broker):
         if not self.supports_stop_orders:
             return
         if order_id in self._stops:
+            existing = self._stops[order_id]
+            if (
+                existing["qty"] != float(qty)
+                or existing["stop_price"] != float(stop_price)
+                or existing["direction"] != int(direction)
+                or (client_order_id is not None and existing["client_order_id"] != client_order_id)
+            ):
+                raise ValueError(
+                    f"Identité de stop PAPER réutilisée avec un contenu différent : {order_id}"
+                )
             return
         client = client_order_id or order_id
         existing_for_client = self._stop_by_client_id.get(client)
@@ -406,6 +420,7 @@ class PaperBroker(Broker):
             "remaining_qty": float(qty),
             "average_price": None,
             "fee": 0.0,
+            "filled_at": None,
         }
         self._stop_by_client_id[client] = order_id
 
@@ -422,15 +437,22 @@ class PaperBroker(Broker):
         if qty <= 0 or stop_price <= 0 or direction not in (-1, 1):
             raise ValueError("Stop PAPER invalide")
         if client_order_id and client_order_id in self._stop_by_client_id:
-            return self._stop_by_client_id[client_order_id]
-        # A restart restores stops before new placements. Never overwrite
-        # a durable stop if a legacy counter starts below a restored id.
-        while True:
-            self._sequence += 1
-            order_id = f"paper-stop-{self._sequence}"
-            if order_id not in self._stops:
-                break
-        client = client_order_id or order_id
+            order_id = self._stop_by_client_id[client_order_id]
+            existing = self._stops[order_id]
+            if (
+                existing["qty"] != float(qty)
+                or existing["stop_price"] != float(stop_price)
+                or existing["direction"] != int(direction)
+            ):
+                raise ValueError(f"Intention de stop PAPER réutilisée : {client_order_id}")
+            return order_id
+        # Runtime callers persist the client intention before submission. Its
+        # digest is stable across restarts and does not reuse historical ids.
+        # Ad-hoc callers without an intention get a process-independent UUID.
+        client = client_order_id or f"paper-stop-intent-{uuid.uuid4().hex}"
+        order_id = self.stop_order_id_for_client(client)
+        if order_id in self._stops:
+            raise ValueError(f"Collision d'identité de stop PAPER : {order_id}")
         self._stops[order_id] = {
             "id": order_id,
             "client_order_id": client,
@@ -442,9 +464,15 @@ class PaperBroker(Broker):
             "remaining_qty": float(qty),
             "average_price": None,
             "fee": 0.0,
+            "filled_at": None,
         }
         self._stop_by_client_id[client] = order_id
         return order_id
+
+    @staticmethod
+    def stop_order_id_for_client(client_order_id: str) -> str:
+        """Stable, collision-resistant Paper stop id for one durable intention."""
+        return "paper-stop-v2-" + hashlib.sha256(client_order_id.encode("utf-8")).hexdigest()
 
     def cancel_stop(self, order_id: str) -> None:
         if not self.supports_stop_orders:
@@ -505,6 +533,7 @@ class PaperBroker(Broker):
                 else None
             ),
             fee=self._stop_float(stop["fee"]),
+            filled_at=stop["filled_at"],
         )
 
     def _trigger_stop(
@@ -514,6 +543,7 @@ class PaperBroker(Broker):
         *,
         available_volume: float | None = None,
         order_book: Mapping[str, object] | None = None,
+        observed_at: str | None = None,
     ) -> None:
         if stop["status"] != "OPEN":
             return
@@ -545,6 +575,11 @@ class PaperBroker(Broker):
             if result.status in {FillStatus.REJECTED, FillStatus.EXPIRED}
             else "AMBIGUOUS"
         )
+        if result.qty > 0:
+            moment = datetime.fromisoformat(observed_at) if observed_at else datetime.now(UTC)
+            if moment.tzinfo is None:
+                raise ValueError("L'horodatage d'un fill PAPER doit inclure un fuseau")
+            stop["filled_at"] = moment.astimezone(UTC).isoformat()
 
     def observe_market_price(
         self,
@@ -552,6 +587,7 @@ class PaperBroker(Broker):
         *,
         available_volume: float | None = None,
         order_book: Mapping[str, object] | None = None,
+        observed_at: str | None = None,
     ) -> None:
         if not self.supports_stop_orders:
             return
@@ -568,6 +604,7 @@ class PaperBroker(Broker):
                     price,
                     available_volume=available_volume,
                     order_book=order_book,
+                    observed_at=observed_at,
                 )
 
     def observe_market_bar(
@@ -578,6 +615,7 @@ class PaperBroker(Broker):
         *,
         available_volume: float | None = None,
         order_book: Mapping[str, object] | None = None,
+        observed_at: str | None = None,
     ) -> None:
         if not self.supports_stop_orders:
             return
@@ -595,6 +633,7 @@ class PaperBroker(Broker):
                     trigger,
                     available_volume=available_volume,
                     order_book=order_book,
+                    observed_at=observed_at,
                 )
 
     def market_buy(self, qty: float, ref_price: float) -> BrokerOrderResult:

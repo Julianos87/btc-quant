@@ -225,6 +225,9 @@ def test_dashboard_scripts_load_ux_helper_before_dashboard() -> None:
 
 def test_cockpit_never_reports_nominal_with_carry_accounting_or_coverage_alert() -> None:
     javascript = (ROOT / "dashboard" / "static" / "dashboard.js").read_text()
+    quality = javascript.split("function trendQualityIssues(s) {", 1)[1].split(
+        "\nfunction renderCockpitStatus", 1
+    )[0]
     function = javascript.split("function renderCockpitStatus(s) {", 1)[1].split(
         "\nfunction updateDataFreshness", 1
     )[0]
@@ -234,8 +237,10 @@ const nodes = {};
 const $ = id => nodes[id] ||= {dataset:{}, textContent:''};
 const t = key => key;
 const BTCQuantOperationalState = {componentAvailabilitySeverity: () => null};
+function trendQualityIssues(s) {
 """
-        + "function renderCockpitStatus(s) {"
+        + quality
+        + "\nfunction renderCockpitStatus(s) {"
         + function
     )
     source += """
@@ -245,10 +250,39 @@ const states = [
   {carry:{},alerts:[{severity:'WARNING',message:'Qualification requise'}]},
   {carry:{}}
 ].map(item => {
-  renderCockpitStatus({trend:{},health:{safety_status:'PASS'},...item});
+  renderCockpitStatus({trend:{progression:{status:'FRESH'},slots:[],open_slots:0,protection_status:'ACTIVE'},health:{safety_status:'PASS'},...item});
   return nodes['cockpit-status'].dataset.status;
 });
 console.log(JSON.stringify(states));
 """
     result = subprocess.run(["node", "-e", source], check=True, capture_output=True, text=True)
     assert json.loads(result.stdout) == ["crit", "crit", "warn", "good"]
+
+
+def test_trend_unknown_progress_is_warning_and_unproven_open_stop_is_critical() -> None:
+    javascript = (ROOT / "dashboard" / "static" / "dashboard.js").read_text()
+    quality = javascript.split("function trendQualityIssues(s) {", 1)[1].split(
+        "\nfunction renderCockpitStatus", 1
+    )[0]
+    source = (
+        "function trendQualityIssues(s) {"
+        + quality
+        + "\n"
+        + """
+const t = key => key;
+console.log(JSON.stringify([
+  trendQualityIssues({trend:{}}),
+  trendQualityIssues({trend:{
+    progression:{status:'FRESH'},
+    protection_status:'UNKNOWN',
+    open_slots:1,
+    slots:[{state:'OPEN',qty:1,protection_protected:false}]
+  }})
+]));
+"""
+    )
+    result = subprocess.run(["node", "-e", source], check=True, capture_output=True, text=True)
+    assert json.loads(result.stdout) == [
+        [["warn", "progression_unknown"]],
+        [["crit", "stop_unverified"]],
+    ]

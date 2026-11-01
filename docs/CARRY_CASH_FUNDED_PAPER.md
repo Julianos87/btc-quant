@@ -1,7 +1,7 @@
 # Carry PAPER sans emprunt
 
 Le moteur Carry canonique utilise `environments/paper/carry_cash.yaml` : budget
-PAPER de 4 000 USDC, emprunt désactivé et plafond de dette nul. Le profil
+PAPER initial de 4 000 USDC, levier maximal de 1×, emprunt désactivé et plafond de dette nul. Le profil
 historique ×3 n'est pas repris comme preuve pour cette simulation. Trend garde
 son budget PAPER de 6 000 et ses règles dans `config.yaml`; cette livraison ne
 modifie pas ses stratégies ni ses données.
@@ -33,7 +33,7 @@ Le budget disponible finance ensemble l'achat spot, la marge initiale du short,
 les commissions et les coûts d'entrée ; le spot n'est pas réutilisé comme
 collatéral perp. La simulation réserve 50 % du notionnel perp en marge initiale,
 5 % comme seuil de maintenance, et laisse 2 % du budget disponible en cash.
-Le filtre économique réserve séparément 2 % du notionnel perp contre les risques.
+Le filtre de réserve économique fixe est désactivé (`uncertainty_reserve_rate: 0.0`, soit 0 %). Ce paramètre est distinct des 2 % de cash libre imposés par `cash_utilization: 0.98`.
 Aux prix égaux,
 4 000 USDC donnent donc environ 2 610 USDC de notionnel spot, avant arrondi au
 pas de quantité. Ce calcul est une règle PAPER, pas une capacité de marge
@@ -52,9 +52,7 @@ profondeur se reflètent dans les prix d'exécution. La marge fixe de slippage d
 5 bps sert au filtre économique et n'est pas débitée une seconde fois du PnL.
 Les commissions sont comptées séparément par jambe et le funding est crédité ou
 débité uniquement pendant la détention simulée de la jambe courte. Aucune
-convergence future du basis n'est ajoutée comme gain attendu. La réserve de
-risque de 2 % du notionnel perp est une protection d'entrée, non un frais ni une
-perte comptable ; le buffer de cash libre est une autre somme.
+convergence future du basis n'est ajoutée comme gain attendu. L’ancienne réserve économique de 2 % était un filtre d’entrée, non un frais ni une perte comptable. Elle est à 0 % dans le profil actif ; le buffer de cash libre reste à 2 %.
 
 Une entrée est bloquée si un carnet est périmé de plus de 15 secondes,
 désynchronisé de plus de 5 secondes, incomplet, ou si l'identité ou la taille
@@ -72,6 +70,20 @@ les trous, doublons, âges et écarts d'horloge. Rétention : 60 jours ou au plu
 remplacée par un prix ou un funding synthétique.
 
 ## Services et gouvernance de recherche
+
+La commande versionnée du service canonique `btcquant-carry.service` est :
+
+```bash
+/opt/btcquant/current/venv/bin/btcquant-carry --config /opt/btcquant/current/environments/paper/carry_cash.yaml
+```
+
+Elle décrit le lancement systemd ; ne pas démarrer une seconde instance sur le
+même état. Pour consulter son état sans modifier le service :
+
+```bash
+systemctl status btcquant-carry.service --no-pager
+```
+
 
 - `btcquant-carry.service` reste le Carry canonique sous
   `/opt/btcquant/state/btcquant.db`.
@@ -92,6 +104,9 @@ pas un holdout aveugle. Un futur choix de réserve ou d'horizon doit satisfaire
 les portes de recherche préenregistrées et un holdout futur intact.
 
 ## Diagnostic historique et verdict économique
+
+Les calculs ci-dessous utilisent l’ancienne réserve économique de 2 %. Ils
+sont conservés comme historique et ne décrivent pas le paramètre actif à 0 %.
 
 Le diagnostic antérieur, `scripts/diagnose_carry_cash.py`, repose sur des
 observations Hyperliquid de janvier à août 2026 : prix spot UBTC et perp BTC,
@@ -130,9 +145,9 @@ holdout aveugle.
 Le fonctionnement technique du simulateur, son accounting de deux jambes, son
 redémarrage et sa collecte de données sont testés séparément. Ils ne démontrent
 pas la rentabilité. Tant que les minimums du protocole et le holdout futur ne
-sont pas satisfaits, le verdict économique demeure `INSUFFICIENT_EVIDENCE` ; la
-réserve de 2 % reste en vigueur et aucun paramètre n'est adopté sur la base de
-ces anciennes fenêtres.
+sont pas satisfaits, le verdict économique demeure `INSUFFICIENT_EVIDENCE` ; la modification du filtre économique à 0 % ne transforme pas ces anciennes
+fenêtres en validation de rentabilité. Les exigences de preuve restent distinctes
+du choix de configuration actif.
 
 Sources primaires : [métadonnées spot](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint/spot),
 [pas et précision](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/tick-and-lot-size),

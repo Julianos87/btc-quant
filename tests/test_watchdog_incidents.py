@@ -2,12 +2,25 @@
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime, timedelta
 
 from btcquant.execution.shadow import ShadowStore
 from btcquant.execution.state_store import StateStore
 from btcquant.execution.operational_state_reader import OperationalStateReader
 from btcquant.entrypoints import watchdog
+
+
+def fresh_trend_state(now: datetime | None = None) -> dict[str, object]:
+    current = now or datetime.now(UTC)
+    expected = (math.floor((current.timestamp() - 20) / 14_400) - 1) * 14_400
+    bar = datetime.fromtimestamp(expected, UTC).isoformat()
+    return {
+        "slots": {
+            name: {"last_bar_ts": bar, "position": None}
+            for name in ("trend_ls_20", "trend_ls_55", "trend_ls_100")
+        }
+    }
 
 
 def test_watchdog_deduplicates_and_resolves_execution_alerts(tmp_path, monkeypatch):
@@ -17,7 +30,7 @@ def test_watchdog_deduplicates_and_resolves_execution_alerts(tmp_path, monkeypat
     monkeypatch.setattr(watchdog, "notify", messages.append)
 
     store = StateStore(tmp_path / "btcquant.db")
-    store.save_engine_state("trend", {"slots": {}})
+    store.save_engine_state("trend", fresh_trend_state())
     order_id = store.begin_order(
         "trend",
         "strategy",
@@ -97,7 +110,7 @@ def test_watchdog_monitors_the_carry_engine(tmp_path, monkeypatch):
     assert [engine for engine, _, _ in watchdog.CHECKS] == ["trend", "carry"]
 
     store = StateStore(tmp_path / "btcquant.db")
-    store.save_engine_state("trend", {"slots": {}})
+    store.save_engine_state("trend", fresh_trend_state())
     # aucun checkpoint carry : le moteur n'a jamais démarré
 
     watchdog.main(["--database", str(tmp_path / "btcquant.db")])
@@ -116,7 +129,7 @@ def test_watchdog_resolves_the_carry_alert_once_the_engine_writes(tmp_path, monk
     monkeypatch.setattr(watchdog, "notify", lambda _message: None)
 
     store = StateStore(tmp_path / "btcquant.db")
-    store.save_engine_state("trend", {"slots": {}})
+    store.save_engine_state("trend", fresh_trend_state())
     watchdog.main(["--database", str(tmp_path / "btcquant.db")])
 
     store.save_engine_state("carry", {"equity": 4000.0, "in_position": False})
@@ -135,7 +148,7 @@ def test_watchdog_alerts_once_for_stale_shadow_then_resolves(tmp_path, monkeypat
     monkeypatch.setattr(watchdog, "notify", messages.append)
     main_database = tmp_path / "btcquant.db"
     store = StateStore(main_database)
-    store.save_engine_state("trend", {"slots": {}})
+    store.save_engine_state("trend", fresh_trend_state())
     store.save_engine_state("carry", {"equity": 4000.0})
     shadow_database = tmp_path / "execution-shadow.db"
     shadow = ShadowStore(shadow_database)
@@ -274,7 +287,7 @@ def test_profile_required_to_optional_does_not_leave_stale_incident_blocking(tmp
     monkeypatch.setenv("BTCQUANT_REQUIRED_ENGINES", "trend,carry")
     database = tmp_path / "btcquant.db"
     store = StateStore(database)
-    store.save_engine_state("trend", {"slots": {}})
+    store.save_engine_state("trend", fresh_trend_state())
     store.save_engine_state("carry", {"slots": {}, "reconciliation_required": False})
     store.record_incident(
         "engine:carry:stale",

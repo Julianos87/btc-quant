@@ -298,10 +298,21 @@ def test_shadow_endpoint_and_prometheus_metrics(tmp_path, monkeypatch):
     assert "btcquant_shadow_last_success_age_seconds" in metrics_text
 
 
-def test_readyz_checks_engines_incidents_and_shadow_freshness(tmp_path, monkeypatch):
+def test_readyz_checks_engines_progress_incidents_and_shadow_freshness(tmp_path, monkeypatch):
     monkeypatch.setattr(dashboard_app, "STATE", tmp_path)
     store = StateStore(tmp_path / "btcquant.db")
-    store.save_engine_state("trend", {"slots": {}})
+    now = datetime.now(UTC)
+    bar_seconds = 4 * 60 * 60
+    latest_closed_bar = (int((now.timestamp() - 20) // bar_seconds) - 1) * bar_seconds
+    store.save_engine_state(
+        "trend",
+        {
+            "slots": {
+                name: {"last_bar_ts": datetime.fromtimestamp(latest_closed_bar, UTC).isoformat()}
+                for name in ("trend_ls_20", "trend_ls_55", "trend_ls_100")
+            }
+        },
+    )
     store.save_engine_state("carry", {"equity": 4000.0})
     ShadowStore(tmp_path / "execution-shadow.db").record_success(datetime.now(UTC))
     client = dashboard_app.app.test_client()
@@ -311,6 +322,19 @@ def test_readyz_checks_engines_incidents_and_shadow_freshness(tmp_path, monkeypa
     assert response.status_code == 200
     assert response.get_json()["status"] == "ready"
     assert "checks" not in response.get_json()
+
+    store.save_engine_state(
+        "trend",
+        {
+            "slots": {
+                name: {"last_bar_ts": "2026-10-28T04:00:00+00:00"}
+                for name in ("trend_ls_20", "trend_ls_55", "trend_ls_100")
+            }
+        },
+    )
+    blocked = client.get("/api/operational-health")
+    assert blocked.status_code == 503
+    assert blocked.get_json()["checks"]["trend_progression"] is False
 
     store.record_incident(
         "test:critical",
@@ -713,7 +737,7 @@ def test_summary_keeps_flat_and_stale_values_explicitly_unknown(tmp_path, monkey
         ("SOFTWARE", None, None, False, "SOFTWARE_STOP_ACTIVE", "ACTIVE", True),
         (None, None, None, False, "PROTECTION_MODE_UNKNOWN", "UNKNOWN", False),
         ("EXCHANGE", None, None, False, "EXCHANGE_STOP_MISSING", "UNSAFE", False),
-        ("EXCHANGE", "stop-1", None, False, "EXCHANGE_STOP_CONFIRMED", "ACTIVE", True),
+        ("EXCHANGE", "stop-1", None, False, "EXCHANGE_STOP_UNVERIFIED", "UNKNOWN", False),
         (
             "SOFTWARE",
             None,

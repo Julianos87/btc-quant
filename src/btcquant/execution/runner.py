@@ -16,6 +16,7 @@ Principes :
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
@@ -41,7 +42,7 @@ from ..backup import assert_writer_recovery_clear
 from ..notify import notify
 from ..risk import RiskConfig, position_size
 from ..strategies.base import Direction, Position, Strategy
-from .broker import Broker, Fill
+from .broker import Broker, Fill, PaperBroker
 from .atomic_financial_writer import StateStoreAtomicFinancialWriter
 from .clock import SystemClock
 from .data_quality import validate_closed_ohlcv
@@ -417,6 +418,8 @@ class LiveRunner:
         raw = validate_trend_state(stored) if stored is not None else None
         if raw is None:
             return
+        if isinstance(self.broker, PaperBroker) and self.broker.supports_stop_orders:
+            raw = self._migrate_legacy_paper_stop_collisions(raw)
         for slot in self.slots:
             s = raw.get("slots", {}).get(slot.strategy.name)
             if not s:
@@ -470,6 +473,65 @@ class LiveRunner:
         if reconstruct_legacy_timelines:
             self._reconstruct_missing_position_timelines(raw)
         log.info("État trend rechargé depuis %s", self.store.path)
+
+    def _migrate_legacy_paper_stop_collisions(self, state: TrendStatePayload) -> TrendStatePayload:
+        """Re-key only an active Paper stop proven to collide with a legacy fill."""
+        orders = self.store.read_orders("trend")
+        repaired = state
+        for slot_name, slot_state in (state.get("slots") or {}).items():
+            broker_order_id = slot_state.get("stop_order_id")
+            local_order_id = slot_state.get("stop_order_local_id")
+            intent_id = slot_state.get("stop_intent_id")
+            if (
+                slot_state.get("position") is None
+                or not broker_order_id
+                or not isinstance(local_order_id, int)
+                or not intent_id
+            ):
+                continue
+            matching = [
+                order for order in orders if order.get("broker_order_id") == broker_order_id
+            ]
+            legacy_fill = [
+                order
+                for order in matching
+                if order.get("id") != local_order_id
+                and str(order.get("intent_id", "")).startswith("observed-stop-")
+            ]
+            if not legacy_fill:
+                continue
+            active = [order for order in matching if order.get("id") == local_order_id]
+            if (
+                len(active) != 1
+                or active[0].get("engine") != "trend"
+                or active[0].get("slot") != slot_name
+                or active[0].get("intent_id") != intent_id
+                or active[0].get("order_type") != "STOP"
+                or active[0].get("status") != "OPEN"
+            ):
+                raise ReconciliationRequired(
+                    f"Stop PAPER {slot_name} en collision sans ordre OPEN lié au checkpoint"
+                )
+            new_broker_order_id = PaperBroker.stop_order_id_for_client(str(intent_id))
+            if new_broker_order_id == broker_order_id:
+                raise ReconciliationRequired("Identité PAPER legacy inattendue")
+            if repaired is state:
+                repaired = copy.deepcopy(state)
+            previous_state = repaired
+            repaired = copy.deepcopy(previous_state)
+            repaired["slots"][slot_name]["stop_order_id"] = new_broker_order_id
+            self.store.migrate_paper_stop_identity_and_checkpoint(
+                engine="trend",
+                slot=slot_name,
+                local_order_id=local_order_id,
+                intent_id=str(intent_id),
+                old_broker_order_id=str(broker_order_id),
+                new_broker_order_id=new_broker_order_id,
+                expected_state=previous_state,
+                state=repaired,
+            )
+            active[0]["broker_order_id"] = new_broker_order_id
+        return repaired
 
     def _state_payload(self) -> TrendStatePayload:
         raw: TrendStatePayload = {
@@ -556,6 +618,7 @@ class LiveRunner:
                 "direction": int(direction),
                 "position_generation": position_generation,
                 "previous_stop_id": slot.stop_order_id,
+                "slot": slot.strategy.name,
                 "qty": float(qty),
                 "stop_price": float(stop_price),
                 "version": 1,
@@ -1029,6 +1092,29 @@ class LiveRunner:
                     reason="startup_missing_stop",
                 )
 
+    @staticmethod
+    def _observed_stop_intent_id(
+        *,
+        slot_name: str,
+        broker_order_id: str,
+        stop_intent_id: str | None,
+        position_generation: str,
+    ) -> str:
+        """Stable fill identity; legacy broker IDs need position and intention scope."""
+        payload = json.dumps(
+            {
+                "engine": "trend",
+                "slot": slot_name,
+                "broker_order_id": broker_order_id,
+                "stop_intent_id": stop_intent_id,
+                "position_generation": position_generation,
+            },
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return "observed-stop-v2-" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
     def _materialize_filled_stop(
         self,
         slot: StrategySlot,
@@ -1039,6 +1125,12 @@ class LiveRunner:
         assert decision.snapshot is not None
         assert decision.previous_stop_id is not None
         snapshot = decision.snapshot
+        observed_intent = self._observed_stop_intent_id(
+            slot_name=slot.strategy.name,
+            broker_order_id=snapshot.broker_order_id,
+            stop_intent_id=slot.stop_intent_id,
+            position_generation=self._position_generation(pos),
+        )
         fill_qty = float(snapshot.filled_qty)
         if fill_qty <= 0 or fill_qty > pos.qty + 1e-9:
             self._require_manual_reconciliation(
@@ -1046,6 +1138,14 @@ class LiveRunner:
                 slot=slot,
                 context={"filled_qty": fill_qty, "local_qty": pos.qty},
             )
+        exit_ts = None
+        if snapshot.filled_at:
+            observed_at = pd.Timestamp(snapshot.filled_at)
+            if observed_at.tzinfo is None:
+                self._require_manual_reconciliation(
+                    "Horodatage du fill PAPER sans fuseau", slot=slot
+                )
+            exit_ts = observed_at.tz_convert("UTC").isoformat()
         fill_price = snapshot.average_price or pos.stop_price
         fill = Fill(
             price=fill_price,
@@ -1068,7 +1168,10 @@ class LiveRunner:
             accounting.trade_pnl,
             "stop_exchange",
             qty=fill_qty,
+            exit_ts=exit_ts,
         )
+        if isinstance(self.broker, PaperBroker) and exit_ts is not None:
+            trade["execution_provenance"] = "PAPER_SIMULATED_STOP"
         if partial:
             assert accounting.remaining_position is not None
             slot.position = accounting.remaining_position
@@ -1079,7 +1182,6 @@ class LiveRunner:
         slot.stop_order_local_id = None
         slot.stop_intent_id = None
         slot.entry_fee = accounting.remaining_entry_fee
-        observed_intent = f"observed-stop-{snapshot.broker_order_id}"
         if not any(item.get("intent_id") == observed_intent for item in slot.position_timeline):
             slot.position_timeline.append(
                 {
@@ -1099,7 +1201,7 @@ class LiveRunner:
             recorded = self.store.record_observed_fill_and_checkpoint(
                 engine="trend",
                 slot=slot.strategy.name,
-                intent_id=f"observed-stop-{snapshot.broker_order_id}",
+                intent_id=observed_intent,
                 broker_order_id=snapshot.broker_order_id,
                 side="SELL" if pos.direction == 1 else "BUY",
                 requested_qty=float(snapshot.requested_qty),
@@ -2321,7 +2423,28 @@ class LiveRunner:
                     if entry_time.tzinfo is None
                     else entry_time.tz_convert("UTC")
                 )
-                if entry_time <= last_ts:
+                stop_active_at_bar_open = True
+                if isinstance(self.broker, PaperBroker):
+                    stop_order = (
+                        self.store.read_order_by_intent(slot.stop_intent_id)
+                        if slot.stop_intent_id
+                        else None
+                    )
+                    try:
+                        created_at = pd.Timestamp(stop_order["created_at"])
+                        if created_at.tzinfo is None:
+                            stop_active_at_bar_open = False
+                        else:
+                            created_at = created_at.tz_convert("UTC")
+                            stop_active_at_bar_open = (
+                                stop_order["id"] == slot.stop_order_local_id
+                                and stop_order["broker_order_id"] == slot.stop_order_id
+                                and stop_order["status"] == "OPEN"
+                                and created_at <= last_ts
+                            )
+                    except (KeyError, TypeError, ValueError):
+                        stop_active_at_bar_open = False
+                if entry_time <= last_ts and stop_active_at_bar_open:
                     observe_bar(
                         float(raw_row["open"]),
                         float(raw_row["high"]),
@@ -2329,6 +2452,15 @@ class LiveRunner:
                         available_volume=(
                             float(raw_row["volume"]) if pd.notna(raw_row.get("volume")) else None
                         ),
+                        observed_at=(
+                            last_ts
+                            + pd.Timedelta(seconds=TIMEFRAME_SECONDS[slot.strategy.timeframe])
+                        ).isoformat(),
+                    )
+                elif isinstance(self.broker, PaperBroker) and not stop_active_at_bar_open:
+                    log.debug(
+                        "Bougie PAPER ignorée pour le stop %s : ordre non prouvé actif à l'ouverture",
+                        slot.stop_order_id,
                     )
 
         if slot.position is not None and not self.broker.supports_stop_orders:
@@ -2790,7 +2922,7 @@ class LiveRunner:
         self._apply_funding_payments(price)
         observe_price = getattr(self.broker, "observe_market_price", None)
         if callable(observe_price):
-            observe_price(price)
+            observe_price(price, observed_at=self.clock.utc_now().isoformat())
         self._monitor_exchange_stops()
         self._maybe_reconcile_position()
         # Le risque est évalué avant toute stratégie : un kill switch liquide
