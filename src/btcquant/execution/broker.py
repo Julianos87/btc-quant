@@ -521,6 +521,9 @@ class PaperBroker(Broker):
                 filled_qty=0.0,
                 remaining_qty=0.0,
             )
+        filled_at = stop["filled_at"]
+        if filled_at is not None and not isinstance(filled_at, str):
+            raise ValueError("Horodatage du fill PAPER invalide")
         return ProtectiveOrderSnapshot(
             broker_order_id=str(order_id),
             status=str(stop["status"]),
@@ -533,7 +536,7 @@ class PaperBroker(Broker):
                 else None
             ),
             fee=self._stop_float(stop["fee"]),
-            filled_at=stop["filled_at"],
+            filled_at=filled_at,
         )
 
     def _trigger_stop(

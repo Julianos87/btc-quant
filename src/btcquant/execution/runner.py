@@ -2430,20 +2430,23 @@ class LiveRunner:
                         if slot.stop_intent_id
                         else None
                     )
-                    try:
-                        created_at = pd.Timestamp(stop_order["created_at"])
-                        if created_at.tzinfo is None:
-                            stop_active_at_bar_open = False
-                        else:
-                            created_at = created_at.tz_convert("UTC")
-                            stop_active_at_bar_open = (
-                                stop_order["id"] == slot.stop_order_local_id
-                                and stop_order["broker_order_id"] == slot.stop_order_id
-                                and stop_order["status"] == "OPEN"
-                                and created_at <= last_ts
-                            )
-                    except (KeyError, TypeError, ValueError):
+                    if stop_order is None:
                         stop_active_at_bar_open = False
+                    else:
+                        try:
+                            created_at = pd.Timestamp(stop_order["created_at"])
+                            if created_at.tzinfo is None:
+                                stop_active_at_bar_open = False
+                            else:
+                                created_at = created_at.tz_convert("UTC")
+                                stop_active_at_bar_open = (
+                                    stop_order["id"] == slot.stop_order_local_id
+                                    and stop_order["broker_order_id"] == slot.stop_order_id
+                                    and stop_order["status"] == "OPEN"
+                                    and created_at <= last_ts
+                                )
+                        except (KeyError, TypeError, ValueError):
+                            stop_active_at_bar_open = False
                 if entry_time <= last_ts and stop_active_at_bar_open:
                     observe_bar(
                         float(raw_row["open"]),
