@@ -357,7 +357,7 @@ header .spacer { flex:1; }
 
 .refresh-action:hover { border-color:color-mix(in srgb,var(--s1) 40%,var(--ring)); color:var(--ink); }
 
-.refresh-action:disabled { cursor:wait; opacity:.78; }
+.refresh-action[aria-disabled="true"] { cursor:wait; opacity:.78; }
 
 .refresh-action[data-state="error"] { color:var(--crit); border-color:color-mix(in srgb,var(--crit) 38%,var(--ring)); }
 
@@ -1590,7 +1590,7 @@ body[data-view="performance"] [data-card="yearly"] { align-self:start; }
 
 .risk-measure-copy > span { color:var(--muted); font-weight:var(--weight-label); text-transform:none; font-size:13px; letter-spacing:normal; }
 
-.risk-measure-copy strong { color:var(--ink); letter-spacing:normal; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-variant-numeric:tabular-nums; font-size:21px; line-height:1.05; }
+.risk-measure-copy strong { color:var(--ink); letter-spacing:normal; white-space:normal; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; font-size:21px; line-height:1.2; }
 
 .risk-measure-copy small { color:var(--ink-2); min-height:0; line-height:1.35; font-size:13px; }
 
@@ -1748,7 +1748,7 @@ body[data-view="performance"] [data-card="yearly"] .yearly-chart { height:clamp(
 
 .realism-item { min-width:0; display:grid; grid-template-columns:auto 1fr; gap:3px 10px; padding:9px 10px; border:1px solid var(--ring); border-radius:7px; background:var(--surface-2); }
 
-.realism-item strong { grid-row:1 / span 5; align-self:start; color:var(--s1); font-size:13px; }
+.realism-item strong { grid-row:1 / span 5; align-self:start; color:var(--ink); font-size:13px; }
 
 .realism-item span { color:var(--muted); font-size:13px; }
 
@@ -1820,7 +1820,7 @@ body[data-view="performance"] [data-card="yearly"] .yearly-chart { height:clamp(
 
 .journal-row.critical { color:var(--crit); }
 
-.journal-engine { color:var(--s1); font-size:13px; text-transform:none; letter-spacing:normal; }
+.journal-engine { color:var(--ink-2); font-size:13px; text-transform:none; letter-spacing:normal; }
 
 .decision-board > * { min-width:0; max-width:100%; }
 

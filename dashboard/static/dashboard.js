@@ -562,6 +562,7 @@ async function refreshSummary() {
   renderTrendAccounting(s);
   renderCarryTwoLeg(s.carry || {});
   renderContributions(s.performance_contributions || {});
+  const focusedSlot = $("slots").contains(document.activeElement) ? document.activeElement.id : null;
   $("slots").innerHTML = (s.trend.slots || []).map(sl => {
     const badge = sl.state === "LONG" ? "long" : sl.state === "SHORT" ? "short" : sl.state === "FLAT" ? "flat" : "unknown";
     const arrow = sl.state === "LONG" ? "▲ " : sl.state === "SHORT" ? "▼ " : sl.state === "UNKNOWN" ? "? " : "";
@@ -607,6 +608,7 @@ async function refreshSummary() {
       event.target.closest(".slot-detail-toggle") || tr.querySelector(".slot-detail-toggle")
     );
   });
+  if (focusedSlot) $(focusedSlot)?.focus({preventScroll:true});
 
   function renderPositionVisuals(slots) {
     const root = $("position-visuals");
@@ -2600,7 +2602,7 @@ function setRefreshState(state) {
   const button = $("refresh-btn");
   const check = button.querySelector(".t-success-check");
   button.dataset.state = state;
-  button.disabled = state === "loading";
+  button.setAttribute("aria-disabled", String(state === "loading"));
   button.setAttribute("aria-busy", String(state === "loading"));
   $("dashboard-content").setAttribute("aria-busy", String(state === "loading"));
   swapText($("refresh-label"), refreshLabel(state));
@@ -2642,7 +2644,10 @@ async function tick(options={}) {
     tickPromise = null;
   }
 }
-$("refresh-btn").onclick = () => tick({feedback:true});
+$("refresh-btn").onclick = event => {
+  if (event.currentTarget.getAttribute("aria-disabled") === "true") return;
+  return tick({feedback:true});
+};
 
 
 // ── init ───────────────────────────────────────────────────
