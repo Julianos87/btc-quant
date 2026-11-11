@@ -2004,6 +2004,134 @@ class StateStore:
             event_aggregate_id=event_aggregate_id,
         )
 
+    def migrate_paper_stop_identity_and_checkpoint(
+        self,
+        *,
+        engine: str,
+        slot: str,
+        local_order_id: int,
+        intent_id: str,
+        old_broker_order_id: str,
+        new_broker_order_id: str,
+        expected_state: Mapping[str, Any],
+        state: Mapping[str, Any],
+    ) -> None:
+        """Re-key one colliding local PAPER stop without rewriting its history.
+
+        Only an OPEN Trend stop, still bound to the exact checkpoint, can be
+        migrated. The original broker id remains in the event/order history;
+        the active projection receives the stable v2 identity atomically.
+        """
+        if engine != "trend":
+            raise ValueError("La migration d'identité de stop concerne Trend PAPER uniquement")
+        expected_new_id = "paper-stop-v2-" + hashlib.sha256(intent_id.encode("utf-8")).hexdigest()
+        if new_broker_order_id != expected_new_id:
+            raise ValueError("Nouvelle identité PAPER non déterministe")
+        before = json.loads(self._json(expected_state))
+        after = json.loads(self._json(state))
+        before_slot = (before.get("slots") or {}).get(slot) or {}
+        after_slot = (after.get("slots") or {}).get(slot) or {}
+        if (
+            before_slot.get("stop_order_id") != old_broker_order_id
+            or before_slot.get("stop_order_local_id") != local_order_id
+            or before_slot.get("stop_intent_id") != intent_id
+            or before_slot.get("position") is None
+            or after_slot.get("stop_order_id") != new_broker_order_id
+            or after_slot.get("stop_order_local_id") != local_order_id
+            or after_slot.get("stop_intent_id") != intent_id
+        ):
+            raise ReconciliationRequired("Checkpoint différent de l'intention PAPER à migrer")
+        expected_after = json.loads(self._json(before))
+        expected_after["slots"][slot]["stop_order_id"] = new_broker_order_id
+        if sha256_json(after) != sha256_json(expected_after):
+            raise ReconciliationRequired("La migration ne peut modifier que l'identité du stop")
+
+        now = utc_now()
+        with self._transaction() as connection:
+            stored = connection.execute(
+                "SELECT payload FROM engine_state WHERE engine = ?", (engine,)
+            ).fetchone()
+            if stored is None or sha256_json(json.loads(stored["payload"])) != sha256_json(before):
+                raise ReconciliationRequired("Checkpoint Trend modifié avant migration du stop")
+            order = connection.execute(
+                "SELECT * FROM orders WHERE id = ?", (local_order_id,)
+            ).fetchone()
+            if (
+                order is None
+                or order["engine"] != engine
+                or order["slot"] != slot
+                or order["intent_id"] != intent_id
+                or order["order_type"] != "STOP"
+                or order["status"] != "OPEN"
+                or order["broker_order_id"] != old_broker_order_id
+            ):
+                raise ReconciliationRequired("Ordre stop PAPER absent ou non ouvert à migrer")
+            position = before_slot["position"]
+            try:
+                opened = datetime.fromisoformat(str(position["entry_time"]))
+                created = datetime.fromisoformat(str(order["created_at"]))
+                valid_order = (
+                    opened.tzinfo is not None
+                    and created.tzinfo is not None
+                    and created >= opened
+                    and order["side"] == ("SELL" if position["direction"] == 1 else "BUY")
+                    and math.isclose(
+                        float(order["requested_qty"]), float(position["qty"]), rel_tol=1e-9
+                    )
+                    and math.isclose(
+                        float(order["reference_price"]),
+                        float(position["stop_price"]),
+                        rel_tol=1e-9,
+                    )
+                )
+            except (KeyError, TypeError, ValueError):
+                valid_order = False
+            if not valid_order:
+                raise ReconciliationRequired("Ordre PAPER non lié économiquement à la position")
+            legacy_fill = connection.execute(
+                "SELECT 1 FROM orders WHERE engine = ? AND broker_order_id = ? "
+                "AND intent_id LIKE 'observed-stop-%' AND id <> ? LIMIT 1",
+                (engine, old_broker_order_id, local_order_id),
+            ).fetchone()
+            if legacy_fill is None:
+                raise ReconciliationRequired("Aucune collision d'identité legacy démontrée")
+            collision = connection.execute(
+                "SELECT id FROM orders WHERE broker_order_id = ? AND id <> ? LIMIT 1",
+                (new_broker_order_id, local_order_id),
+            ).fetchone()
+            if collision is not None:
+                raise ReconciliationRequired("La nouvelle identité PAPER est déjà utilisée")
+            changed = connection.execute(
+                "UPDATE orders SET broker_order_id = ?, updated_at = ? "
+                "WHERE id = ? AND status = 'OPEN' AND broker_order_id = ?",
+                (new_broker_order_id, now, local_order_id, old_broker_order_id),
+            )
+            if changed.rowcount != 1:
+                raise ReconciliationRequired("L'ordre PAPER a changé pendant la migration")
+            self._save_engine_state_in_transaction(
+                connection,
+                engine,
+                after,
+                now=now,
+                event_type="paper_stop_identity_migrated",
+                event_payload={
+                    "slot": slot,
+                    "local_order_id": local_order_id,
+                    "intent_id": intent_id,
+                    "old_broker_order_id": old_broker_order_id,
+                    "new_broker_order_id": new_broker_order_id,
+                    "position_generation": {
+                        "entry_time": after_slot["position"].get("entry_time"),
+                        "initial_qty": after_slot["position"].get("initial_qty"),
+                    },
+                    "reason": "legacy_broker_id_collision",
+                    "state_before_sha256": sha256_json(before),
+                    "state_after_sha256": sha256_json(after),
+                },
+                event_aggregate_type="order",
+                event_aggregate_id=str(local_order_id),
+            )
+
     def save_engine_state_after_reconciliation(
         self,
         engine: str,
@@ -5085,11 +5213,65 @@ class StateStore:
 
         now = utc_now()
         with self._transaction() as connection:
-            existing = connection.execute(
-                "SELECT id FROM orders WHERE intent_id = ?",
-                (intent_id,),
-            ).fetchone()
-            if existing is not None:
+            # An identity replay is only a no-op when the economic fill AND
+            # original position agree. A recycled legacy broker id is not proof.
+            candidates = connection.execute(
+                "SELECT * FROM orders WHERE intent_id = ? OR "
+                "(broker_order_id = ? AND intent_id LIKE 'observed-stop-%')",
+                (intent_id, broker_order_id),
+            ).fetchall()
+            for existing in candidates:
+                if existing["intent_id"] not in (intent_id, f"observed-stop-{broker_order_id}"):
+                    raise ReconciliationRequired(
+                        "OBSERVED_STOP_IDENTITY_CONFLICT: intention ou génération différente"
+                    )
+                expected = {
+                    "engine": engine,
+                    "slot": slot,
+                    "broker_order_id": broker_order_id,
+                    "side": side,
+                    "requested_qty": requested_qty,
+                    "filled_qty": filled_qty,
+                    "price": price,
+                    "fee": fee,
+                    "reason": reason,
+                    "order_type": "STOP",
+                    "status": "FILLED",
+                }
+                if any(existing[key] != value for key, value in expected.items()):
+                    raise ReconciliationRequired(
+                        "OBSERVED_STOP_IDENTITY_CONFLICT: fill économique différent"
+                    )
+                previous_trade = connection.execute(
+                    "SELECT payload FROM events WHERE engine = ? AND event_type = 'trade_closed' "
+                    "AND correlation_id = ? ORDER BY id LIMIT 1",
+                    (engine, existing["intent_id"]),
+                ).fetchone()
+                if previous_trade is None:
+                    raise ReconciliationRequired(
+                        "OBSERVED_STOP_IDENTITY_CONFLICT: preuve de position absente"
+                    )
+                previous = json.loads(previous_trade["payload"])
+                fields = (
+                    "strategy",
+                    "direction",
+                    "qty",
+                    "entry_price",
+                    "exit_price",
+                    "pnl",
+                    "reason",
+                )
+                if any(previous.get(key) != trade.get(key) for key in fields):
+                    raise ReconciliationRequired(
+                        "OBSERVED_STOP_IDENTITY_CONFLICT: position ou résultat différent"
+                    )
+                if datetime.fromisoformat(previous["entry_ts"]) != datetime.fromisoformat(
+                    trade["entry_ts"]
+                ):
+                    raise ReconciliationRequired(
+                        "OBSERVED_STOP_IDENTITY_CONFLICT: génération de position différente"
+                    )
+            if candidates:
                 return False
             cursor = connection.execute(
                 """

@@ -245,4 +245,6 @@ def test_historical_reader_runs_one_select_per_method(tmp_path, monkeypatch):
     selects = [
         statement for statement in statements if statement.lstrip().upper().startswith("SELECT")
     ]
-    assert len(selects) == 3
+    data_selects = [statement for statement in selects if "sqlite_master" not in statement]
+    assert len(data_selects) == 3
+    assert sum("sqlite_master" in statement for statement in selects) == 1

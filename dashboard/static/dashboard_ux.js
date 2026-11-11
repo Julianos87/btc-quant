@@ -70,6 +70,7 @@
 
   function campaignLine(report, labels) {
     const L = labels || {};
+    if (report?.campaign_status === "NOT_STARTED") return L.notStarted || "Campagne non démarrée";
     const id = report && report.campaign_id != null ? `#${report.campaign_id}` : "";
     const running = report && report.campaign_status === "RUNNING" ? ` · ${L.running || "En cours"}` : "";
     const proto = report && report.protocol_version != null
@@ -144,6 +145,7 @@
       return {verdict: "UNAVAILABLE", tone: "block", healthBroken: false};
     }
     if (healthBroken) return {verdict: "BLOQUÉ", tone: "block", healthBroken: true};
+    if (report.campaign_status === "NOT_STARTED") return {verdict:"NON PRÊT", tone:"wait", healthBroken};
     if (report.ready) return {verdict: "PRÊT", tone: "ok", healthBroken: false};
     return {verdict: "NON PRÊT", tone: "wait", healthBroken: false};
   }
@@ -161,7 +163,8 @@
       const ib = QUAL_PRIORITY.indexOf(b.key);
       return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
     });
-    return [...health, ...rest].slice(0, 5);
+    const meta = groups.meta.filter(item => !item.passed && toneFor(item) !== "na");
+    return [...health, ...meta, ...rest].slice(0, 5);
   }
 
   function carryPresentation(carry) {

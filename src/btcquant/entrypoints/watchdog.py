@@ -15,7 +15,11 @@ import logging
 import os
 from pathlib import Path
 
-from btcquant.execution.health import execution_health, sync_execution_incidents
+from btcquant.execution.health import (
+    execution_health,
+    sync_execution_incidents,
+    trend_progress_health,
+)
 from btcquant.backup import assert_writer_recovery_clear
 from btcquant.execution.readiness import service_component_profile
 from btcquant.execution.operational_state_reader import OperationalStateReader
@@ -145,6 +149,7 @@ def main(argv: list[str] | None = None) -> None:
         try:
             age = OperationalStateReader(store.path).engine_age_seconds(engine)
             health = execution_health(store, engine)
+            progress = trend_progress_health(store) if engine == "trend" else None
             store.resolve_incident(f"watchdog:{engine}:check_failed")
         except Exception as error:
             incident = store.record_incident(
@@ -185,6 +190,22 @@ def main(argv: list[str] | None = None) -> None:
                 )
         else:
             store.resolve_incident(fingerprint)
+
+        if progress is not None:
+            progress_fingerprint = f"engine:{engine}:progression"
+            if progress["status"] == "FRESH":
+                store.resolve_incident(progress_fingerprint)
+            else:
+                incident = store.record_incident(
+                    progress_fingerprint,
+                    engine=engine,
+                    severity="CRITICAL",
+                    kind="engine_progression_stalled",
+                    message=f"Progression stratégie {engine} {progress['status']} ; heartbeat distinct",
+                    context=progress,
+                )
+                if incident["is_new_or_reopened"]:
+                    notify(f"⚠ Watchdog : {incident['message']}")
 
         for incident in sync_execution_incidents(store, health):
             icon = "⛔" if incident["severity"] == "CRITICAL" else "⚠"

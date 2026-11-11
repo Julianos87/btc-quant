@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import math
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -53,6 +55,85 @@ class OperationalStateReader:
             return None
         updated = datetime.fromisoformat(row["updated_at"])
         return ((now or datetime.now(UTC)) - updated).total_seconds()
+
+    def engine_progress(
+        self,
+        engine: str,
+        *,
+        now: datetime | None = None,
+        slot_timeframes: dict[str, int] | None = None,
+        poll_buffer_seconds: float = 20.0,
+    ) -> dict[str, Any]:
+        """Separate heartbeat from completed strategy bars (timestamps are bar opens).
+
+        No market observation is inferred from wall-clock time: the expected
+        checkpoint is a deadline, not proof that a candle was received.
+        """
+        current = now or datetime.now(UTC)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=UTC)
+        with open_state_db_readonly(self.path, timeout_seconds=self.timeout_seconds) as connection:
+            row = connection.execute(
+                "SELECT payload FROM engine_state WHERE engine = ?", (engine,)
+            ).fetchone()
+            decision = connection.execute(
+                "SELECT ts FROM events WHERE engine = ? AND event_type LIKE '%decision%' "
+                "ORDER BY id DESC LIMIT 1",
+                (engine,),
+            ).fetchone()
+        state = json.loads(row["payload"]) if row else {}
+        persisted_slots = state.get("slots") or {}
+        configured = (
+            slot_timeframes
+            if slot_timeframes is not None
+            else {name: 14400 for name in persisted_slots}
+        )
+        slots = []
+        for name, seconds in configured.items():
+            raw = (persisted_slots.get(name) or {}).get("last_bar_ts")
+            expected = (
+                math.floor((current.timestamp() - poll_buffer_seconds) / seconds) - 1
+            ) * seconds
+            try:
+                parsed = datetime.fromisoformat(str(raw))
+                if parsed.tzinfo is None:
+                    raise ValueError("checkpoint timezone missing")
+                timestamp = parsed.timestamp()
+                # A checkpoint beyond the latest bar eligible after the poll
+                # buffer may belong to an unfinished candle or a bad clock.
+                latest_closed = (math.floor(current.timestamp() / seconds) - 1) * seconds
+                if timestamp > min(latest_closed, expected):
+                    raise ValueError("checkpoint beyond eligible closed bar")
+                lag = expected - timestamp
+                status = "STALE" if lag > 0 else "FRESH"
+            except (ValueError, TypeError, OverflowError):
+                lag, status = None, "UNKNOWN"
+            slots.append(
+                {
+                    "name": name,
+                    "status": status,
+                    "last_bar_ts": raw,
+                    "expected_last_bar_ts": datetime.fromtimestamp(expected, UTC).isoformat(),
+                    "lag_seconds": lag,
+                    "timeframe_seconds": seconds,
+                }
+            )
+        status = (
+            "STALE"
+            if any(slot["status"] == "STALE" for slot in slots)
+            else "UNKNOWN"
+            if not slots or any(slot["status"] == "UNKNOWN" for slot in slots)
+            else "FRESH"
+        )
+        return {
+            "status": status,
+            "slots": slots,
+            "reason_codes": [] if status == "FRESH" else [f"{engine.upper()}_PROGRESSION_{status}"],
+            "heartbeat_age_seconds": self.engine_age_seconds(engine, now=current),
+            "poll_buffer_seconds": poll_buffer_seconds,
+            "last_available_bar_ts": None,
+            "last_decision_at": decision["ts"] if decision else None,
+        }
 
     def engine_updated_at(self, engine: str) -> datetime | None:
         """Return the persisted engine timestamp without filesystem inference."""

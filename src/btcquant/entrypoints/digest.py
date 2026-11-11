@@ -79,6 +79,21 @@ def main() -> None:
     trend_eq = _equity("trend", "equity_trend.csv")
     carry_eq = _equity("carry", "equity_carry.csv")
 
+    # An empty canonical source is unknown, not an account worth zero.
+    if (
+        not trend_state
+        or not carry_state
+        or carry_state.get("equity") is None
+        or (trend_eq.empty and not trend_state.get("slots"))
+    ):
+        msg = (
+            "Tandem — bilan indisponible : données des moteurs incomplètes. "
+            "Équity et performance non calculées."
+        )
+        print(msg)
+        notify(msg)
+        return
+
     trend_val = (
         float(trend_eq.iloc[-1])
         if len(trend_eq)
@@ -137,7 +152,7 @@ def main() -> None:
         + (f" + apports {deposits:,.0f} $" if deposits else "")
         + f", {total / invested - 1:+.1%})",
         f"PnL {label} : {day_pnl:+.2%}" if day_pnl is not None else f"PnL {label} : n/d",
-        f"  Trend 4x : {trend_val:,.0f} $   Carry 3x : {carry_val:,.0f} $",
+        f"  Trend : {trend_val:,.0f} $   Carry : {carry_val:,.0f} $",
         f"Positions : {', '.join(positions) if positions else 'aucune (en attente de signal)'}",
         f"Trades clôturés ({label}) : {trades_today}",
     ]

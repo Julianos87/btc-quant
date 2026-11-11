@@ -7,6 +7,7 @@ Usage local : python -m dashboard.app  (puis http://localhost:8666)
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import logging
 import math
@@ -38,6 +39,7 @@ from btcquant.reporting.repository import ReportingReadError, ReportingRepositor
 from btcquant.reporting.prometheus import render_prometheus
 from btcquant.execution.health import (
     execution_health,
+    trend_progress_health,
     execution_safety_health,
 )
 from btcquant.execution.state_contract import (
@@ -416,8 +418,11 @@ def start_warm_loop() -> None:
 
 # les objets ccxt ne sont pas thread-safe ; le serveur Flask sert les requêtes
 # en parallèle (9 fetchs simultanés au chargement de la page) → on sérialise
-# tous les appels exchange derrière un verrou pour éviter les races.
+# les appels de chaque client exchange derrière son verrou (pas les lectures cache).
 _ex_lock = threading.Lock()
+_fx_lock = threading.Lock()
+_cache_key_locks: dict[str, threading.Lock] = {}
+_cache_key_locks_guard = threading.Lock()
 
 # ── venue : Hyperliquid depuis le 17/07/2026 ─────────────────────────────────
 # fetch_ticker y recharge le contexte de TOUS les marchés (~12 s mesurés) :
@@ -515,15 +520,27 @@ def _cached(key: str, ttl: float, fn):
         max_age_seconds=_CACHE_MAX_AGE_SECONDS.get(key, ttl),
         expected_interval_seconds=_CACHE_EXPECTED_INTERVAL_SECONDS.get(key),
     )
+    # Serialize only loaders sharing a CCXT client. Hot cache reads never wait
+    # behind network I/O. One refresh per key; concurrent readers use a bounded
+    # snapshot (or unavailable on a cold start), not an unbounded stale value.
+    with _cache_key_locks_guard:
+        key_lock = _cache_key_locks.setdefault(key, threading.Lock())
+    if not key_lock.acquire(blocking=False):
+        cached_snapshot = _cache_snapshot(key)
+        return None if cached_snapshot.freshness is Freshness.UNAVAILABLE else cached_snapshot.value
+
+    def load():
+        with _fx_lock if key == "fx_eur" else _ex_lock:
+            return fn()
+
     try:
-        with _ex_lock:
-            snapshot = _observation_cache.get(
-                key,
-                policy,
-                fn,
-                source=_CACHE_SOURCES.get(key, key),
-                observed_at=_cache_observed_at,
-            )
+        snapshot = _observation_cache.get(
+            key,
+            policy,
+            load,
+            source=_CACHE_SOURCES.get(key, key),
+            observed_at=_cache_observed_at,
+        )
         value = _cache_value(snapshot.value)
         if snapshot.value is not value:
             snapshot = SourceSnapshot(
@@ -539,10 +556,12 @@ def _cached(key: str, ttl: float, fn):
                 freshness_lateness_seconds=snapshot.freshness_lateness_seconds,
             )
         _cache_snapshots[key] = snapshot
-        return value
+        return None if snapshot.freshness is Freshness.UNAVAILABLE else value
     except Exception as error:
         log.warning("Source réseau dashboard indisponible pour %s (%s)", key, type(error).__name__)
         return None
+    finally:
+        key_lock.release()
 
 
 def _cache_snapshot(key: str) -> SourceSnapshot:
@@ -1240,6 +1259,7 @@ def summary():
 
     # PnL du jour (UTC) sur l'équity combinée, net des apports du jour
     # (sans quoi l'apport du 1er du mois s'afficherait comme un gain)
+    day_pnl = None
     day_pnl_pct = None
     if len(trend_eq) and len(carry_eq):
         today = pd.Timestamp.now(tz="UTC").normalize()
@@ -1251,6 +1271,7 @@ def summary():
             since_start = flows[flows["ts"] > start_ts]
             day_total = total - _deposits_total(since_start)
             if start_day > 0:
+                day_pnl = day_total - start_day
                 day_pnl_pct = day_total / start_day - 1.0
 
     now_utc = pd.Timestamp.now(tz="UTC")
@@ -1295,10 +1316,12 @@ def summary():
         return max(0.0, float((now_utc - parsed).total_seconds())) if parsed else None
 
     mark_price = _positive_number(price) if market_valuation_status != "UNKNOWN" else None
+    trend_progression = {"status": "UNKNOWN", "slots": [], "reason_codes": ["DATABASE_UNAVAILABLE"]}
     trend_health = None
     if store is not None:
         try:
             trend_health = execution_health(store, "trend")
+            trend_progression = trend_progress_health(store, config=PROFILE_CONFIG)
         except Exception:
             app.logger.exception("Trend protection source unavailable")
     protection_by_slot = dict(trend_health.slot_protection) if trend_health else {}
@@ -1313,7 +1336,7 @@ def summary():
             status = "REPLACEMENT_PENDING"
         elif protected:
             status = "ACTIVE"
-        elif reason == PROTECTION_MODE_UNKNOWN:
+        elif reason in {PROTECTION_MODE_UNKNOWN, "EXCHANGE_STOP_UNVERIFIED"}:
             status = "UNKNOWN"
         else:
             status = "UNSAFE"
@@ -1977,6 +2000,7 @@ def summary():
             },
             "trend": {
                 "alive": trend_age is not None and trend_age < 240,
+                "progression": trend_progression,
                 "freshness": trend_freshness,
                 "observed_at": trend_observed_at.isoformat() if trend_observed_at else None,
                 "age_s": trend_age,
@@ -2094,6 +2118,7 @@ def summary():
                 "pnl_pct": total / invested - 1.0
                 if accounting_available and invested > 0
                 else None,
+                "day_pnl": day_pnl,
                 "day_pnl_pct": day_pnl_pct,
                 "allocation_trend": trend_equity / total
                 if accounting_available and total
@@ -2134,6 +2159,7 @@ def summary():
                 "valuation_status": market_valuation_status,
                 "source_skew": state_price_temporal["max_source_skew_seconds"],
                 "alerts": accounting_alerts,
+                "trend_progression": trend_progression,
                 "latest_decisions": {"trend": trend_decision, "carry": carry_decision},
                 "last_reconciliation": reconciliation_event,
                 **operational,
@@ -2164,12 +2190,29 @@ def operational_journal():
     try:
         store = StateStore(database, initialize=False, read_only=True)
         event_rows = store.read_events(limit=120)
+        reversed_sources = {}
+        for row in event_rows:
+            if row.get("event_type") != "paper_trade_reversed":
+                continue
+            reversal = _dashboard_event_payload(row)
+            for field in ("source_trade_event_id", "source_stop_event_id"):
+                source_id = reversal.get(field)
+                if source_id is not None:
+                    reversed_sources[int(source_id)] = int(row["id"])
         events = []
         for row in event_rows:
             projected = _durable_event_projection(row)
             payload = projected.pop("payload", {})
             if isinstance(payload, dict):
                 payload = {key: value for key, value in payload.items() if key != "state"}
+            reversal_event_id = reversed_sources.get(int(row["id"]))
+            if reversal_event_id is not None:
+                projected["event_type"] = "paper_trade_reversed_source"
+                projected["reason"] = "Clôture Paper annulée; perte retirée des résultats"
+                if isinstance(payload, dict):
+                    payload.pop("pnl", None)
+                    payload["source_event_type"] = row.get("event_type")
+                    payload["reversed_by_event_id"] = reversal_event_id
             projected["details"] = payload
             events.append(projected)
         order_rows = store.read_orders()
@@ -2429,6 +2472,38 @@ def price_chart():
     )
 
 
+def _reference_comparison(data: dict, *, reference_scope: str, current_scope: str) -> dict:
+    """Fail closed: matching config bytes alone do not certify venue/model parity."""
+    config_path = ROOT / "environments" / "paper" / "config.yaml"
+    active_hash = (
+        hashlib.sha256(config_path.read_bytes()).hexdigest() if config_path.exists() else None
+    )
+    reference_hash = data.get("provenance", {}).get("config", {}).get("sha256")
+    reasons = ["Identité des modèles et des marchés non certifiée."]
+    codes = ["RUNTIME_MODEL_NOT_VERIFIED"]
+    if reference_scope != current_scope:
+        reasons.insert(
+            0, "La référence Trend seule ne représente pas le portefeuille Trend + Carry."
+        )
+        codes.insert(0, "SCOPE_MISMATCH")
+    if active_hash and reference_hash and active_hash != reference_hash:
+        reasons.append("La configuration de référence diffère de la configuration actuelle.")
+        codes.append("CONFIG_MISMATCH")
+    if not reference_hash:
+        reasons.append("Empreinte de configuration de référence indisponible.")
+        codes.append("REFERENCE_CONFIG_UNKNOWN")
+    return {
+        "comparable": False,
+        "status": "NOT_COMPARABLE" if reference_scope != current_scope else "UNVERIFIED",
+        "reference_scope": reference_scope,
+        "current_scope": current_scope,
+        "reasons": reasons,
+        "reason_codes": codes,
+        "active_config_sha256": active_hash,
+        "reference_config_sha256": reference_hash,
+    }
+
+
 @app.route("/api/conformity")
 def conformity():
     """Réalisé (paper) vs attendu (backtest) — la carte « Est-ce normal ? »."""
@@ -2438,7 +2513,17 @@ def conformity():
     if ref is not None:
         ref = {**ref, "provenance": baseline["provenance"]}
 
-    out = {"reference": ref, "realized": None, "drawdown": None}
+    if ref is not None:
+        ref["generated_at"] = baseline.get("generated_at_utc")
+        ref["period"] = baseline.get("provenance", {}).get("base_span")
+    out = {
+        "reference": ref,
+        "realized": None,
+        "drawdown": None,
+        "comparison": _reference_comparison(
+            baseline or {}, reference_scope="trend", current_scope="trend_and_carry"
+        ),
+    }
     df = _read_trades()
     if len(df):
         n = len(df)
@@ -2462,16 +2547,12 @@ def conformity():
     combined = _combined_equity(net_of_flows=True)  # drawdown hors apports
     if len(combined) > 2:
         dd_now = float(combined.iloc[-1] / combined.cummax().iloc[-1] - 1.0)
-        time_deeper = None
-        if ref:
-            fracs = ref["dd_time_fraction"]
-            # fraction du temps que le backtest a passée à un drawdown au moins aussi profond
-            keys = sorted(int(k) for k in fracs)
-            time_deeper = 1.0
-            for k in keys:
-                if dd_now < -k / 100:
-                    time_deeper = fracs[str(k)]
-        out["drawdown"] = {"current": dd_now, "backtest_time_at_least_as_deep": time_deeper}
+        # Trend-only bucket frequencies cannot qualify portfolio drawdown.
+        # Keep the legacy field nullable rather than invent an exact frequency.
+        out["drawdown"] = {
+            "current": dd_now,
+            "backtest_time_at_least_as_deep": None,
+        }
     return jsonify(out)
 
 
@@ -2499,7 +2580,12 @@ def yearly():
     """Performances annuelles du backtest (générées par scripts/make_yearly_reference.py)."""
     path = Path(__file__).parent / "yearly_reference.json"
     data = _read_json(path)
-    return jsonify(data if data else {"years": []})
+    data = dict(data or {"years": []})
+    data["generated_at"] = data.get("generated_at", data.get("generated"))
+    data["comparison"] = _reference_comparison(
+        data, reference_scope="trend_and_carry", current_scope="trend_and_carry"
+    )
+    return jsonify(data)
 
 
 @app.route("/api/metrics")
@@ -2508,32 +2594,59 @@ def metrics():
     return jsonify(_live_metrics())
 
 
+def _trade_date_bounds():
+    """UTC calendar dates include their day; ISO instants are exclusive upper bounds."""
+    bounds = []
+    for name in ("from", "to"):
+        raw = request.args.get(name)
+        if not raw:
+            bounds.append(None)
+            continue
+        try:
+            # Reject natural-language/partial dates and non-finite pandas timestamps.
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:T.+)?", raw):
+                raise ValueError("format")
+            stamp = pd.Timestamp(raw)
+            if pd.isna(stamp):
+                raise ValueError("missing")
+            stamp = stamp.tz_localize("UTC") if stamp.tzinfo is None else stamp.tz_convert("UTC")
+            if name == "to" and len(raw) == 10:
+                stamp += pd.Timedelta(days=1)
+            bounds.append(stamp)
+        except (ValueError, TypeError, OverflowError) as error:
+            raise ValueError(
+                f"Date {name} invalide : utiliser YYYY-MM-DD ou un instant ISO."
+            ) from error
+    if all(bound is not None for bound in bounds) and bounds[0] >= bounds[1]:
+        raise ValueError("La date de début doit précéder la borne de fin.")
+    return bounds
+
+
+def _filter_trades(df, bounds):
+    lower, upper = bounds
+    if "exit_ts" in df.columns:
+        timestamps = pd.to_datetime(df["exit_ts"], utc=True, errors="coerce")
+        mask = pd.Series(True, index=df.index)
+        if lower is not None:
+            mask &= timestamps >= lower
+        if upper is not None:
+            mask &= timestamps < upper
+        df = df[mask]
+    strategy = request.args.get("strategy")
+    if strategy and "strategy" in df.columns:
+        df = df[df["strategy"].astype(str) == strategy]
+    return df
+
+
 @app.route("/api/trades")
 def trades():
     """Trades clôturés, filtrables par date (from/to = ISO ou YYYY-MM-DD),
     par stratégie (strategy=trend_ls_20…) et paginables (limit, défaut 12)."""
-    df = _read_trades()
-    if not len(df):
-        return jsonify(
-            {
-                "stats": {"n": 0, "wins": 0, "pnl": 0.0},
-                "rows": [],
-                "limit": 12,
-                "offset": 0,
-                "returned": 0,
-                "has_more": False,
-            }
-        )
-    if "exit_ts" in df.columns:
-        et = pd.to_datetime(df["exit_ts"], utc=True, errors="coerce")
-        frm, to = request.args.get("from"), request.args.get("to")
-        if frm:
-            df = df[et >= pd.Timestamp(frm, tz="UTC")]
-        if to:
-            df = df[et <= pd.Timestamp(to, tz="UTC") + pd.Timedelta(days=1)]
-    strat = request.args.get("strategy")
-    if strat and "strategy" in df.columns:
-        df = df[df["strategy"].astype(str) == strat]
+    try:
+        bounds = _trade_date_bounds()
+    except ValueError as error:
+        return jsonify({"error": "INVALID_DATE_RANGE", "message": str(error)}), 400
+    df = _filter_trades(_read_trades(), bounds)
     stats = {
         "n": int(len(df)),
         "wins": int((df["pnl"] > 0).sum()) if len(df) else 0,
@@ -2559,6 +2672,7 @@ def trades():
             "offset": offset,
             "returned": len(rows),
             "has_more": offset + len(rows) < len(df),
+            "provenance": {"source_kind": _repository().source_kind},
         }
     )
 
@@ -2597,14 +2711,11 @@ def strategy_detail(name: str):
 @app.route("/api/trades.csv")
 def trades_csv():
     """Export brut des trades clôturés (téléchargement)."""
-    trades = _read_trades()
-    if not trades.empty and "exit_ts" in trades.columns:
-        et = pd.to_datetime(trades["exit_ts"], utc=True, errors="coerce")
-        frm, to = request.args.get("from"), request.args.get("to")
-        if frm:
-            trades = trades[et >= pd.Timestamp(frm, tz="UTC")]
-        if to:
-            trades = trades[et <= pd.Timestamp(to, tz="UTC") + pd.Timedelta(days=1)]
+    try:
+        bounds = _trade_date_bounds()
+    except ValueError as error:
+        return jsonify({"error": "INVALID_DATE_RANGE", "message": str(error)}), 400
+    trades = _filter_trades(_read_trades(), bounds)
     if trades.empty:
         return Response("aucun trade\n", mimetype="text/csv")
     return Response(

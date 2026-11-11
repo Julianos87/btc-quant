@@ -333,10 +333,31 @@ def test_exchange_numeric_stop_without_order_is_unprotected(tmp_path: Path) -> N
 
 def test_exchange_confirmed_stop_is_protected(tmp_path: Path) -> None:
     store = StateStore(tmp_path / "btcquant.db")
+    position = _open_position()
+    intent_id = "confirmed-stop-intent"
+    local_order_id = store.begin_order(
+        "trend",
+        "trend_ls_20",
+        intent_id,
+        "STOP",
+        "SELL",
+        position["qty"],
+        "test",
+        reference_price=position["stop_price"],
+    )
+    store.complete_order(local_order_id, status="OPEN", broker_order_id="exch-stop-1")
     store.save_engine_state(
         "trend",
         _trend_state(
-            ("trend_ls_20", _slot(_open_position(), stop_order_id="exch-stop-1")),
+            (
+                "trend_ls_20",
+                _slot(
+                    position,
+                    stop_order_id="exch-stop-1",
+                    stop_order_local_id=local_order_id,
+                    stop_intent_id=intent_id,
+                ),
+            ),
             stop_protection_mode=STOP_PROTECTION_EXCHANGE,
         ),
     )
@@ -347,17 +368,33 @@ def test_exchange_confirmed_stop_is_protected(tmp_path: Path) -> None:
 
 def test_exchange_replacement_previous_stop_id_preserves_protection(tmp_path: Path) -> None:
     store = StateStore(tmp_path / "btcquant.db")
+    position = _open_position()
+    intent_id = "replacement-stop-intent"
+    local_order_id = store.begin_order(
+        "trend",
+        "trend_ls_20",
+        intent_id,
+        "STOP",
+        "SELL",
+        position["qty"],
+        "test",
+        reference_price=position["stop_price"],
+    )
+    store.complete_order(local_order_id, status="OPEN", broker_order_id="old-stop")
     store.save_engine_state(
         "trend",
         _trend_state(
             (
                 "trend_ls_20",
                 _slot(
-                    _open_position(),
+                    position,
                     stop_order_id=None,
+                    stop_order_local_id=local_order_id,
+                    stop_intent_id=intent_id,
                     stop_transition={
                         "phase": "PLACING",
                         "previous_stop_id": "old-stop",
+                        "previous_local_order_id": local_order_id,
                     },
                 ),
             ),

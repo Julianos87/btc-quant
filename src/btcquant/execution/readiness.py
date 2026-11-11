@@ -126,6 +126,7 @@ _PROFILE_AVAILABILITY_INCIDENT_KINDS = frozenset(
     {
         "engine_stale",
         "engine_state_missing",
+        "engine_progression_stalled",
         "shadow_data_stale",
         "shadow_data_missing",
         "watchdog_check_failed",
@@ -156,7 +157,7 @@ def evaluate_service_readiness(
     from pathlib import Path
 
     from ..observability import Freshness
-    from .health import execution_safety_health
+    from .health import execution_safety_health, trend_progress_health
     from .shadow import ShadowStore
 
     current = now or datetime.now(UTC)
@@ -219,6 +220,11 @@ def evaluate_service_readiness(
             reasons.append("EXECUTION_SAFETY_FAIL")
         elif safety_health.status.value == "UNKNOWN":
             reasons.append("EXECUTION_SAFETY_UNKNOWN")
+        progress = trend_progress_health(store, now=current)
+        details["trend_progression"] = progress
+        if "trend" in cfg.required:
+            checks["trend_progression"] = progress["status"] == "FRESH"
+            reasons.extend(progress["reason_codes"])
         for engine in ("trend", "carry"):
             age = operational.engine_age_seconds(engine, now=current)
             observed_at = operational.engine_updated_at(engine)
@@ -237,6 +243,7 @@ def evaluate_service_readiness(
                 "age_seconds": age,
                 "observed_at": observed_at.isoformat() if observed_at else None,
                 "max_age_seconds": limit,
+                **({"progression": progress} if engine == "trend" else {}),
             }
             components.append(item)
             details[f"{engine}_age_seconds"] = age
@@ -306,6 +313,8 @@ def evaluate_service_readiness(
 
     required_checks = ["database", "no_critical_incident", "execution_safety"]
     required_checks.extend(f"{engine}_fresh" for engine in cfg.required if engine != "shadow")
+    if "trend" in cfg.required:
+        required_checks.append("trend_progression")
     if "shadow" in cfg.required:
         required_checks.append("shadow_fresh")
     ready = (

@@ -35,6 +35,7 @@ def _summary_fixture(
     ledger=_MISSING,
     trend_override=None,
     carry_override=None,
+    equity_history=None,
 ):
     """Build a read-only summary fixture without changing production state."""
 
@@ -72,8 +73,13 @@ def _summary_fixture(
         }
     store.save_engine_state("trend", trend_state)
     store.save_engine_state("carry", carry_state)
-    store.append_equity("trend", 6_000.0, now.isoformat())
-    store.append_equity("carry", 4_000.0, now.isoformat())
+    if equity_history is None:
+        store.append_equity("trend", 6_000.0, now.isoformat())
+        store.append_equity("carry", 4_000.0, now.isoformat())
+    else:
+        for engine, samples in equity_history.items():
+            for timestamp, amount in samples:
+                store.append_equity(engine, amount, timestamp.isoformat())
     if ledger is not _MISSING:
         monkeypatch.setattr(StateStore, "read_funding_ledger", lambda _self: ledger)
     if trend_override is not None or carry_override is not None:
@@ -292,10 +298,21 @@ def test_shadow_endpoint_and_prometheus_metrics(tmp_path, monkeypatch):
     assert "btcquant_shadow_last_success_age_seconds" in metrics_text
 
 
-def test_readyz_checks_engines_incidents_and_shadow_freshness(tmp_path, monkeypatch):
+def test_readyz_checks_engines_progress_incidents_and_shadow_freshness(tmp_path, monkeypatch):
     monkeypatch.setattr(dashboard_app, "STATE", tmp_path)
     store = StateStore(tmp_path / "btcquant.db")
-    store.save_engine_state("trend", {"slots": {}})
+    now = datetime.now(UTC)
+    bar_seconds = 4 * 60 * 60
+    latest_closed_bar = (int((now.timestamp() - 20) // bar_seconds) - 1) * bar_seconds
+    store.save_engine_state(
+        "trend",
+        {
+            "slots": {
+                name: {"last_bar_ts": datetime.fromtimestamp(latest_closed_bar, UTC).isoformat()}
+                for name in ("trend_ls_20", "trend_ls_55", "trend_ls_100")
+            }
+        },
+    )
     store.save_engine_state("carry", {"equity": 4000.0})
     ShadowStore(tmp_path / "execution-shadow.db").record_success(datetime.now(UTC))
     client = dashboard_app.app.test_client()
@@ -305,6 +322,19 @@ def test_readyz_checks_engines_incidents_and_shadow_freshness(tmp_path, monkeypa
     assert response.status_code == 200
     assert response.get_json()["status"] == "ready"
     assert "checks" not in response.get_json()
+
+    store.save_engine_state(
+        "trend",
+        {
+            "slots": {
+                name: {"last_bar_ts": "2026-10-28T04:00:00+00:00"}
+                for name in ("trend_ls_20", "trend_ls_55", "trend_ls_100")
+            }
+        },
+    )
+    blocked = client.get("/api/operational-health")
+    assert blocked.status_code == 503
+    assert blocked.get_json()["checks"]["trend_progression"] is False
 
     store.record_incident(
         "test:critical",
@@ -707,7 +737,7 @@ def test_summary_keeps_flat_and_stale_values_explicitly_unknown(tmp_path, monkey
         ("SOFTWARE", None, None, False, "SOFTWARE_STOP_ACTIVE", "ACTIVE", True),
         (None, None, None, False, "PROTECTION_MODE_UNKNOWN", "UNKNOWN", False),
         ("EXCHANGE", None, None, False, "EXCHANGE_STOP_MISSING", "UNSAFE", False),
-        ("EXCHANGE", "stop-1", None, False, "EXCHANGE_STOP_CONFIRMED", "ACTIVE", True),
+        ("EXCHANGE", "stop-1", None, False, "EXCHANGE_STOP_UNVERIFIED", "UNKNOWN", False),
         (
             "SOFTWARE",
             None,
@@ -1195,6 +1225,38 @@ def test_operational_journal_exposes_correlated_events_without_checkpoint_state(
         fee=0.02,
         broker_order_id="paper-1",
     )
+    with store._transaction() as connection:
+        stop_event_id = store._insert_event(
+            connection,
+            "trend",
+            "external_stop_fill_observed",
+            {"price": 110.0, "fee": 0.02},
+            "order",
+            "stop-1",
+            "false-stop-intent",
+        )
+        trade_event_id = store._insert_event(
+            connection,
+            "trend",
+            "trade_closed",
+            {"strategy": "trend_ls_20", "pnl": -1.2},
+            "strategy",
+            "trend_ls_20",
+            "false-stop-intent",
+        )
+        store._insert_event(
+            connection,
+            "trend",
+            "paper_trade_reversed",
+            {
+                "source_trade_event_id": trade_event_id,
+                "source_stop_event_id": stop_event_id,
+                "realized_pnl_excluded": -1.2,
+            },
+            "trade",
+            "1",
+            "false-stop-reversal",
+        )
 
     response = dashboard_app.app.test_client().get(
         "/api/operational-journal",
@@ -1209,6 +1271,12 @@ def test_operational_journal_exposes_correlated_events_without_checkpoint_state(
     assert event["reason"].startswith("signal valide")
     assert event["details"]["intent_id"] == "intent-dashboard-1"
     assert "state" not in event["details"]
+    reversed_sources = [
+        item for item in payload["events"] if item["event_type"] == "paper_trade_reversed_source"
+    ]
+    assert len(reversed_sources) == 2
+    assert all("pnl" not in item["details"] for item in reversed_sources)
+    assert all("annulée" in item["reason"] for item in reversed_sources)
     order = next(item for item in payload["orders"] if item["id"] == order_id)
     assert order["status"] == "PARTIAL"
     assert order["filled_qty"] == pytest.approx(0.1)
@@ -1310,3 +1378,26 @@ class DashboardOperationsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_summary_reports_daily_dollar_result_after_external_flows(tmp_path, monkeypatch):
+    now = datetime.now(UTC)
+    start = now - timedelta(minutes=3)
+    end = now - timedelta(minutes=1)
+    deposit_at = start + timedelta(minutes=1)
+    flows = pd.DataFrame(
+        [{"ts": pd.Timestamp(deposit_at), "trend_flow": 1_000.0, "carry_flow": 0.0}]
+    )
+    monkeypatch.setattr(dashboard_app, "_read_flows", lambda: flows)
+    summary = _summary_fixture(
+        tmp_path,
+        monkeypatch,
+        {"slots": {}},
+        equity_history={
+            "trend": [(start, 6_000.0), (end, 7_100.0)],
+            "carry": [(start, 4_000.0), (end, 4_050.0)],
+        },
+    )
+
+    assert summary["totals"]["day_pnl"] == pytest.approx(150.0)
+    assert summary["totals"]["day_pnl_pct"] == pytest.approx(0.015)

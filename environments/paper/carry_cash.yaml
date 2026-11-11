@@ -20,7 +20,7 @@ carry:
   borrow_rate_ann: 0.10
 
 # Scénario PAPER sans dette : spot et marge perp sont financés séparément.
-# La réserve économique de 2 % est conservée, sans être un frais comptabilisé.
+# Réserve économique fixe à 0 % ; distincte des 2 % de cash libre ci-dessous.
 carry_execution:
   model: two_leg_execution_v1
   financing_mode: paper_simulated

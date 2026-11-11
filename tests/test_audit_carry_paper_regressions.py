@@ -135,7 +135,7 @@ def test_restored_paper_stop_ids_never_collide_with_new_stops():
 
     new_id = broker.place_stop(3.0, 88.0, direction=1, client_order_id="new")
 
-    assert new_id == "paper-stop-8"
+    assert new_id.startswith("paper-stop-v2-")
     assert broker.protective_order_snapshot("paper-stop-1").requested_qty == pytest.approx(1.0)
     assert broker.protective_order_snapshot("paper-stop-7").requested_qty == pytest.approx(2.0)
     assert broker.protective_order_snapshot(new_id).requested_qty == pytest.approx(3.0)

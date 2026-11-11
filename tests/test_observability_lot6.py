@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -34,6 +35,18 @@ class FakeClock:
     def tick(self, seconds: float) -> None:
         self.mono += seconds
         self.now += timedelta(seconds=seconds)
+
+
+def fresh_trend_state(now: datetime | None = None) -> dict[str, object]:
+    current = now or datetime.now(UTC)
+    expected = (math.floor((current.timestamp() - 20) / 14_400) - 1) * 14_400
+    bar = datetime.fromtimestamp(expected, UTC).isoformat()
+    return {
+        "slots": {
+            name: {"last_bar_ts": bar, "position": None}
+            for name in ("trend_ls_20", "trend_ls_55", "trend_ls_100")
+        }
+    }
 
 
 def test_snapshot_separates_observation_and_transport_time() -> None:
@@ -159,8 +172,8 @@ def test_read_only_shadow_store_does_not_create_or_write(tmp_path: Path) -> None
 def test_service_readiness_defaults_to_required_trend_only(tmp_path: Path) -> None:
     database = tmp_path / "btcquant.db"
     store = StateStore(database)
-    store.save_engine_state("trend", {"slots": {}})
     now = datetime.now(UTC)
+    store.save_engine_state("trend", fresh_trend_state(now))
     payload = evaluate_service_readiness(database, tmp_path / "missing-shadow.db", now=now)
     assert payload["kind"] == "SERVICE_READINESS"
     assert payload["ready"] is True
@@ -173,7 +186,7 @@ def test_service_readiness_defaults_to_required_trend_only(tmp_path: Path) -> No
 def test_service_readiness_optional_and_required_stale_components(tmp_path: Path) -> None:
     database = tmp_path / "btcquant.db"
     store = StateStore(database)
-    store.save_engine_state("trend", {"slots": {}})
+    store.save_engine_state("trend", fresh_trend_state())
     store.save_engine_state("carry", {"equity": 4000.0})
     stale_at = (datetime.now(UTC) - timedelta(seconds=1300)).isoformat()
     with sqlite3.connect(database) as connection:
@@ -189,7 +202,7 @@ def test_service_readiness_optional_and_required_stale_components(tmp_path: Path
     assert optional["ready"] is False
     assert any(reason.startswith("REQUIRED_TREND_STALE") for reason in optional["reason_codes"])
 
-    store.save_engine_state("trend", {"slots": {}})
+    store.save_engine_state("trend", fresh_trend_state())
     optional = evaluate_service_readiness(database)
     assert optional["ready"] is True
     carry = next(item for item in optional["components"] if item["name"] == "carry")
@@ -243,7 +256,7 @@ def test_dashboard_read_paths_do_not_modify_trading_db(tmp_path: Path, monkeypat
     monkeypatch.setattr(dashboard, "STATE", tmp_path)
     monkeypatch.setattr(dashboard, "_cached", lambda *_args: None)
     store = StateStore(tmp_path / "btcquant.db")
-    store.save_engine_state("trend", {"slots": {}})
+    store.save_engine_state("trend", fresh_trend_state())
     store.save_engine_state("carry", {"equity": 4000.0})
     before = hashlib.sha256((tmp_path / "btcquant.db").read_bytes()).hexdigest()
     client = dashboard.app.test_client()
@@ -299,7 +312,7 @@ def test_fx_failure_does_not_break_usd_summary_or_service_readiness(
     monkeypatch.setattr(dashboard, "_cache_snapshots", {})
     monkeypatch.setattr(dashboard, "_cached", lambda *_args: None)
     store = StateStore(tmp_path / "btcquant.db")
-    store.save_engine_state("trend", {"slots": {}})
+    store.save_engine_state("trend", fresh_trend_state())
     store.save_engine_state("carry", {"equity": 4000.0})
     client = dashboard.app.test_client()
     summary = client.get("/api/summary")
@@ -671,13 +684,14 @@ def test_summary_safety_never_ignores_unprotected_position(tmp_path: Path, monke
 def test_required_shadow_fresh_is_ready(tmp_path: Path) -> None:
     database = tmp_path / "btcquant.db"
     store = StateStore(database)
-    store.save_engine_state("trend", {"slots": {}})
+    now = datetime(2026, 8, 13, 12, tzinfo=UTC)
+    store.save_engine_state("trend", fresh_trend_state(now))
     shadow = tmp_path / "execution-shadow.db"
-    ShadowStore(shadow).record_success(datetime(2026, 8, 13, 12, tzinfo=UTC))
+    ShadowStore(shadow).record_success(now)
     payload = evaluate_service_readiness(
         database,
         shadow,
-        now=datetime(2026, 8, 13, 12, tzinfo=UTC),
+        now=now,
         profile=ServiceComponentProfile(required=("trend", "shadow"), optional=("carry",)),
     )
     assert payload["checks"]["shadow_fresh"] is True
