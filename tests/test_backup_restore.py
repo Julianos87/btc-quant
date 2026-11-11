@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import sqlite3
 import tarfile
 from pathlib import Path
@@ -108,10 +109,18 @@ def test_restore_exposes_unresolved_external_effects(tmp_path):
 
 
 @pytest.mark.parametrize("linked", [True, False])
-def test_restore_only_exempts_a_valid_open_paper_stop_linked_to_position(tmp_path, linked):
+@pytest.mark.parametrize("identity", ["legacy", "v2", "wrong-intent", "malformed-v2"])
+def test_restore_only_exempts_a_valid_open_paper_stop_linked_to_position(
+    tmp_path, linked, identity
+):
     state = tmp_path / ("linked" if linked else "unlinked") / "state"
     store = StateStore(state / "btcquant.db")
     broker_order_id = "paper-stop-1"
+    if identity in {"v2", "wrong-intent"}:
+        intent = "paper-stop-intent" if identity == "v2" else "other-intent"
+        broker_order_id = "paper-stop-v2-" + hashlib.sha256(intent.encode()).hexdigest()
+    elif identity == "malformed-v2":
+        broker_order_id = "paper-stop-v2-invalid"
     store.save_engine_state(
         "trend",
         {
@@ -153,8 +162,9 @@ def test_restore_only_exempts_a_valid_open_paper_stop_linked_to_position(tmp_pat
 
     result = verify_archive(archive)
 
-    assert result["unresolved_orders"] == (0 if linked else 1)
-    assert result["restart_safe"] is linked
+    safe = linked and identity in {"legacy", "v2"}
+    assert result["unresolved_orders"] == (0 if safe else 1)
+    assert result["restart_safe"] is safe
 
 
 def test_legacy_sqlite_backup_is_readonly_and_checks_source_and_destination(

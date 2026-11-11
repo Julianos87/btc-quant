@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 
-_PAPER_STOP_ID = re.compile(r"paper-stop-[0-9]+\Z")
+_PAPER_STOP_ID = re.compile(r"paper-stop-(?:[0-9]+|v2-[0-9a-f]{64})\Z")
 _BACKUP_NAME = re.compile(r"state-[0-9]{8}-[0-9]{4}\.tar\.gz\.enc\Z")
 _VERIFICATION_SUFFIX = ".verification.json"
 _VERIFICATION_CHECKS = {
@@ -102,6 +102,16 @@ def _unresolved_order_count(
             and order["external_state"] == "OPEN"
             and isinstance(order["broker_order_id"], str)
             and _PAPER_STOP_ID.fullmatch(order["broker_order_id"]) is not None
+            and (
+                not order["broker_order_id"].startswith("paper-stop-v2-")
+                or (
+                    "intent_id" in order_columns
+                    and isinstance(order["intent_id"], str)
+                    and order["broker_order_id"]
+                    == "paper-stop-v2-"
+                    + hashlib.sha256(order["intent_id"].encode("utf-8")).hexdigest()
+                )
+            )
             and (
                 str(order["engine"]),
                 str(order["slot"]),
